@@ -1,0 +1,28 @@
+# Node / Electron
+node_modules/
+dist/
+build/
+out/
+release/
+
+# Logs
+*.log
+
+# Env files
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Electron build artifacts
+*.exe
+*.zip
+*.blockmap
+
+# Frontend build (optional if you rebuild each time)
+frontend/build/

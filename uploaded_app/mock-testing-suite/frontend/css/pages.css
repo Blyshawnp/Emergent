@@ -1,0 +1,250 @@
+/* ================================================================
+   Pages — screen-specific styles
+   ================================================================ */
+
+/* ── Home Dashboard ───────────────────────────────────────────── */
+.home-header {
+  margin-bottom: var(--space-xl);
+}
+
+.home-header h1 {
+  font-size: var(--font-size-2xl);
+  margin-bottom: 4px;
+}
+
+.stats-row {
+  display: flex;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xl);
+}
+
+.home-section {
+  margin-bottom: var(--space-xl);
+}
+
+.home-section h3 {
+  margin-bottom: var(--space-sm);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.recent-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 12px var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background var(--transition-fast);
+}
+.recent-row:last-child { border-bottom: none; }
+.recent-row:hover { background: var(--bg-card-hover); }
+
+.recent-date {
+  min-width: 160px;
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.recent-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.home-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  margin-top: var(--space-2xl);
+  flex-wrap: wrap;
+}
+
+/* ── Generic Page Header ──────────────────────────────────────── */
+.page-header {
+  margin-bottom: var(--space-xl);
+}
+
+.page-header h1 {
+  font-size: var(--font-size-2xl);
+  margin-bottom: 4px;
+}
+
+.page-header p {
+  color: var(--text-secondary);
+}
+
+/* ── Two Column Split (Call Setup + Scenario) ─────────────────── */
+.split-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+
+@media (max-width: 1100px) {
+  .split-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Payment Simulation Cards ─────────────────────────────────── */
+.payment-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+}
+
+.payment-card {
+  padding: var(--space-lg);
+  border-radius: var(--radius-md);
+}
+
+.payment-card-cc {
+  background: var(--bg-payment-cc);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.payment-card-eft {
+  background: var(--bg-payment-eft);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+/* ── Result Buttons (Pass / Fail) ─────────────────────────────── */
+.result-btns {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: center;
+  padding: var(--space-md) 0;
+}
+
+.result-btn {
+  width: 180px;
+  height: 48px;
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: var(--font-size-base);
+  font-weight: 700;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.result-btn:hover { border-color: var(--text-secondary); }
+
+.result-btn.selected-pass {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: white;
+}
+
+.result-btn.selected-fail {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: white;
+}
+
+/* ── Coaching / Fail Checkbox Grid ────────────────────────────── */
+.coaching-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg) var(--space-2xl);
+}
+
+.coaching-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.coaching-group .helper-text {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  margin-left: 26px;
+  margin-top: -2px;
+}
+
+/* ── Stub page style ──────────────────────────────────────────── */
+.stub-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.stub-page h1 {
+  font-size: var(--font-size-2xl);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-sm);
+}
+
+.stub-page p {
+  font-size: var(--font-size-base);
+}
+
+/* ── Review Screen ────────────────────────────────────────────── */
+.review-textarea {
+  width: 100%;
+  padding: 14px 16px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  resize: vertical;
+}
+.review-textarea:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  outline: none;
+}
+
+.review-btn-row {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+/* ── History Screen ───────────────────────────────────────────── */
+.hist-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.hist-table thead th {
+  text-align: left;
+  padding: 10px var(--space-lg);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.hist-table tbody tr {
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background var(--transition-fast);
+}
+.hist-table tbody tr:last-child { border-bottom: none; }
+.hist-table tbody tr:hover { background: var(--bg-card-hover); }
+.hist-table td {
+  padding: 10px var(--space-lg);
+  font-size: var(--font-size-sm);
+}
+.hist-date {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.hist-name { font-weight: 600; }
+.hist-tester { color: var(--text-secondary); }

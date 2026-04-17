@@ -1,0 +1,73 @@
+{
+  "name": "mock-testing-suite",
+  "version": "2.5.0",
+  "description": "Mock Testing Suite — ACD Direct Certification Testing Tool",
+  "main": "src/main.js",
+  "author": "Shawn P. Bly",
+  "license": "PROPRIETARY",
+  "scripts": {
+    "start": "electron .",
+    "build:react": "cd ../frontend && yarn build",
+    "build:win": "electron-builder --win --x64",
+    "build": "npm run build:react && npm run build:win",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0"
+  },
+  "devDependencies": {
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.acddirect.mocktestingsuite",
+    "productName": "Mock Testing Suite",
+    "copyright": "Copyright © 2026 ACD Direct / Shawn P. Bly",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/build",
+        "to": "frontend",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": ["**/*", "!__pycache__/**", "!*.pyc", "!.env"]
+      },
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "publisherName": "ACD Direct"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mock Testing Suite"
+    }
+  }
+}

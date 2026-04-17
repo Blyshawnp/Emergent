@@ -1,0 +1,189 @@
+===============================================================================
+ MOCK TESTING SUITE v2.5.0 — ADMIN SETUP GUIDE
+ For the Developer / Administrator Only
+===============================================================================
+
+This document explains how to set up and manage all backend integrations,
+default data, and deployment for the Mock Testing Suite.
+
+===============================================================================
+ 1. TICKER (Google Doc)
+===============================================================================
+
+The ticker bar at the top of the app fetches messages from a Google Doc.
+
+  DOC URL: https://docs.google.com/document/d/1kRJMSd-1qK3qU6jDYr30HeNglrqTiF0tF5fiYEhpP80
+
+  HOW IT WORKS:
+  - The backend fetches the doc every 5 minutes (cached).
+  - Each numbered line becomes a separate ticker message.
+  - The numbering (e.g., "1.", "2.") is stripped automatically.
+  - Messages are separated by a diamond symbol in the ticker.
+
+  TO UPDATE TICKER MESSAGES:
+  1. Open the Google Doc above.
+  2. Edit the numbered list. Each line = one ticker message.
+  3. Changes appear in the app within 5 minutes.
+
+  IF THE DOC IS UNAVAILABLE:
+  - The app falls back to default messages defined in server.py TICKER_MESSAGES.
+
+  CODE LOCATION: /app/backend/server.py → TICKER_DOC_URL, _fetch_ticker_from_doc()
+
+===============================================================================
+ 2. AUTO-UPDATER (Google Doc)
+===============================================================================
+
+The app checks for updates on startup by reading a Google Doc.
+
+  DOC URL: https://docs.google.com/document/d/1_5L1LS6i5bYWxRYUiBrmaVonbQq9nEhY68XrL5G9c1w
+
+  FORMAT (put these lines in the doc):
+  VERSION=2.6.0
+  URL=https://your-hosting.com/MockTestingSuite-Setup-2.6.0.exe
+  NOTES=Bug fixes, new features, improved scenario generation.
+
+  HOW IT WORKS:
+  - On startup, the Electron app fetches this doc.
+  - If VERSION is higher than the current (2.5.0), a dialog appears.
+  - If URL is provided, clicking "Download Update" opens the browser.
+  - The tester is NOT shown this doc URL anywhere in the app.
+
+  TO PUBLISH AN UPDATE:
+  1. Build the new version (see Section 7).
+  2. Upload the installer .exe to your hosting.
+  3. Update the Google Doc with the new VERSION, URL, and NOTES.
+  4. All running app instances will see the update on next launch.
+
+  CODE LOCATION: /app/desktop/src/main.js → UPDATE_DOC_URL, checkForUpdates()
+
+===============================================================================
+ 3. DEFAULT CALLERS, SHOWS, DISCORD POSTS
+===============================================================================
+
+All default data is defined in /app/backend/server.py.
+
+  CALLERS:
+  - NEW_DONORS — shown when "New Donor" call type is selected
+  - EXISTING_MEMBERS — shown for "Existing Member" types
+  - INCREASE_SUSTAINING — shown for "Increase" types
+  - Format: ["First", "Last", "Address", "City", "State", "Zip", "Phone", "Email"]
+
+  SHOWS:
+  - SHOWS — format: ["Show Name", "One-Time $", "Monthly $", "Gift Description"]
+
+  DISCORD TEMPLATES:
+  - DISCORD_TEMPLATES — format: ["Trigger Name", "Message Text"]
+
+  DISCORD SCREENSHOTS:
+  - DISCORD_SCREENSHOTS — format: {"title": "...", "image_url": "/filename.png"}
+  - Image files go in /frontend/public/
+
+  TO UPDATE DEFAULTS:
+  1. Edit the arrays in server.py.
+  2. Delete the "app_settings" document from MongoDB to force re-creation.
+     OR: The startup migration will add new fields automatically.
+
+===============================================================================
+ 4. CERT FORM & SHEET URLS
+===============================================================================
+
+  DEFAULT CERT FORM URL:
+  https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl
+
+  DEFAULT CERT SHEET URL:
+  https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg
+
+  These are set in server.py → DEFAULT_FORM_URL and DEFAULT_CERT_SHEET_URL.
+  Testers can change them in Settings → General.
+
+===============================================================================
+ 5. HELP SCREEN FAQ
+===============================================================================
+
+  The FAQ is defined in /app/frontend/src/pages/HelpPage.jsx → FaqTab component.
+  To add/edit questions, modify the <FAQ> components in that file.
+
+  For dynamic FAQ from a Google Doc, you could add a similar fetch mechanism
+  as the ticker (fetch doc, parse lines, display as FAQ items).
+
+===============================================================================
+ 6. GEMINI AI INTEGRATION
+===============================================================================
+
+  When enabled in Settings, Gemini AI rewrites coaching/fail summaries.
+
+  SETUP (for testers):
+  1. Go to aistudio.google.com
+  2. Get API Key → Create API Key
+  3. Paste in Settings → Gemini AI → API Key
+  4. Enable the checkbox
+  5. Optionally customize the prompts
+
+  CODE: The prompts are stored in settings as gemini_coaching_prompt
+  and gemini_fail_prompt. Defaults are in SettingsPage.jsx → GeminiTab.
+
+===============================================================================
+ 7. BUILDING THE DESKTOP APP
+===============================================================================
+
+  PREREQUISITES:
+  - Node.js 18+ (for Electron)
+  - Python 3.10+ (for the backend)
+  - MongoDB (local or Atlas connection string)
+  - Windows 10/11 (for building the installer)
+
+  BUILD STEPS:
+  1. cd /app/frontend && yarn build
+     (Creates the production React build in /app/frontend/build/)
+
+  2. cd /app/desktop && npm install
+     (Installs Electron and electron-builder)
+
+  3. cd /app/desktop && npm run build:win
+     (Builds the Windows NSIS installer)
+
+  4. The installer will be in /app/desktop/dist/
+     File: Mock Testing Suite Setup 2.5.0.exe
+
+  NOTES:
+  - The installer bundles the React frontend build + Python backend files.
+  - The backend requires Python and MongoDB to be installed on the target machine.
+  - For a fully standalone build, use PyInstaller to bundle Python:
+    cd /app/backend && pyinstaller --onefile server.py
+    Then modify main.js to run the .exe instead of "python -m uvicorn".
+
+===============================================================================
+ 8. MONGODB
+===============================================================================
+
+  COLLECTIONS:
+  - settings  — app configuration (single document, _id: "app_settings")
+  - sessions  — active session (single document, _id: "active_session")
+  - history   — completed sessions (one document per session)
+
+  DEFAULT DB NAME: mock_testing_suite
+  DEFAULT MONGO URL: mongodb://localhost:27017
+
+  For MongoDB Atlas:
+  - Set MONGO_URL in /app/backend/.env to your Atlas connection string.
+  - Make sure the DB user has readWrite access.
+
+===============================================================================
+ 9. GOOGLE SHEETS INTEGRATION
+===============================================================================
+
+  SETUP (for testers):
+  1. Create a Google Cloud project
+  2. Enable Google Sheets API + Google Drive API
+  3. Create Service Account → Download JSON key
+  4. Share the target spreadsheet with the service account's client_email
+  5. Copy the Spreadsheet ID from the URL
+  6. Enter in Settings → Google Sheets
+
+  SHEET ID LOCATION IN URL:
+  https://docs.google.com/spreadsheets/d/[THIS_IS_THE_ID]/edit
+  
+  On first save, the app creates headers and locks the header row.
+
+===============================================================================

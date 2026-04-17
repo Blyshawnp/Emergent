@@ -1,0 +1,163 @@
+/* ================================================================
+   Mock Testing Suite — Design Tokens
+   Supports [data-theme="dark"] and [data-theme="light"]
+   ================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Typography */
+  --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-base: 0.9375rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.375rem;
+  --font-size-2xl: 1.75rem;
+  --font-size-3xl: 2.25rem;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Sidebar */
+  --sidebar-width: 230px;
+
+  /* Transitions */
+  --transition-fast: 120ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 350ms ease;
+
+  /* Semantic — shared across themes */
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-active: #1e40af;
+
+  --color-success: #16a34a;
+  --color-success-hover: #15803d;
+
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+
+  --color-warning: #f59e0b;
+  --color-info: #0ea5e9;
+}
+
+/* ================================================================
+   DARK THEME (default)
+   ================================================================ */
+[data-theme="dark"] {
+  --bg-app: #0f1117;
+  --bg-sidebar: #0d1b3e;
+  --bg-sidebar-hover: #162d5a;
+  --bg-sidebar-active: #e94560;
+  --bg-content: #151921;
+  --bg-card: #1c2030;
+  --bg-card-hover: #232840;
+  --bg-input: #0f1424;
+  --bg-footer: #1c2030;
+  --bg-modal: #1c2030;
+  --bg-tooltip: #2a3050;
+
+  --border-subtle: #2a2f42;
+  --border-default: #333a52;
+  --border-strong: #4a5270;
+
+  --text-primary: #f0f2f7;
+  --text-secondary: #94a0be;
+  --text-tertiary: #5e6888;
+  --text-inverse: #0f1117;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.6);
+
+  /* Scenario card (green) */
+  --bg-scenario: #0a2e1a;
+  --border-scenario: #22c55e;
+  --text-scenario: #bbf7d0;
+
+  /* Fail card (red) */
+  --bg-fail-card: #2e0f13;
+  --border-fail-card: #dc2626;
+
+  /* Payment cards */
+  --bg-payment-cc: #1a1f40;
+  --bg-payment-eft: #2e1f0a;
+
+  /* Banner states */
+  --bg-banner-pass: #052e16;
+  --border-banner-pass: #22c55e;
+  --text-banner-pass: #86efac;
+
+  --bg-banner-fail: #2e0f13;
+  --border-banner-fail: #ef4444;
+  --text-banner-fail: #fca5a5;
+
+  --bg-banner-incomplete: #2e1f0a;
+  --border-banner-incomplete: #f59e0b;
+  --text-banner-incomplete: #fcd34d;
+}
+
+/* ================================================================
+   LIGHT THEME
+   ================================================================ */
+[data-theme="light"] {
+  --bg-app: #f5f7fa;
+  --bg-sidebar: #1e3a6e;
+  --bg-sidebar-hover: #2a4f8e;
+  --bg-sidebar-active: #e94560;
+  --bg-content: #f0f2f6;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8f9fb;
+  --bg-input: #f5f7fa;
+  --bg-footer: #ffffff;
+  --bg-modal: #ffffff;
+  --bg-tooltip: #374151;
+
+  --border-subtle: #e5e7eb;
+  --border-default: #d1d5db;
+  --border-strong: #9ca3af;
+
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+  --text-inverse: #ffffff;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+
+  --bg-scenario: #ecfdf5;
+  --border-scenario: #22c55e;
+  --text-scenario: #14532d;
+
+  --bg-fail-card: #fef2f2;
+  --border-fail-card: #ef4444;
+
+  --bg-payment-cc: #eef2ff;
+  --bg-payment-eft: #fffbeb;
+
+  --bg-banner-pass: #dcfce7;
+  --border-banner-pass: #22c55e;
+  --text-banner-pass: #166534;
+
+  --bg-banner-fail: #fee2e2;
+  --border-banner-fail: #ef4444;
+  --text-banner-fail: #991b1b;
+
+  --bg-banner-incomplete: #ffedd5;
+  --border-banner-incomplete: #f97316;
+  --text-banner-incomplete: #9a3412;
+}

@@ -1,0 +1,71 @@
+/* ================================================================
+   Base — resets, body, scrollbar, focus
+   ================================================================ */
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-body);
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-primary);
+  color: white;
+}
+
+/* Typography helpers */
+h1 { font-size: var(--font-size-2xl); font-weight: 700; }
+h2 { font-size: var(--font-size-xl); font-weight: 700; }
+h3 { font-size: var(--font-size-lg); font-weight: 600; }
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+/* Utility */
+.text-muted { color: var(--text-secondary); }
+.text-sm { font-size: var(--font-size-sm); }
+.text-xs { font-size: var(--font-size-xs); }
+.text-center { text-align: center; }
+.font-bold { font-weight: 700; }
+.font-mono { font-family: var(--font-mono); }
+.mt-sm { margin-top: var(--space-sm); }
+.mt-md { margin-top: var(--space-md); }
+.mt-lg { margin-top: var(--space-lg); }
+.mb-md { margin-bottom: var(--space-md); }
+.gap-sm { gap: var(--space-sm); }
+.gap-md { gap: var(--space-md); }
+
+/* Transition for theme switching */
+body, .sidebar, .content-area, .card, .footer-bar, input, select, textarea, button {
+  transition: background-color var(--transition-base), color var(--transition-base), border-color var(--transition-base);
+}

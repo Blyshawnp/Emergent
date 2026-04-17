@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mock Testing Suite</title>
+  <link rel="icon" href="/static/assets/favicon.ico">
+  <link rel="stylesheet" href="/static/css/variables.css">
+  <link rel="stylesheet" href="/static/css/base.css">
+  <link rel="stylesheet" href="/static/css/layout.css">
+  <link rel="stylesheet" href="/static/css/components.css">
+  <link rel="stylesheet" href="/static/css/pages.css">
+</head>
+<body>
+
+  <!-- ═══ NEWS TICKER — pinned to top ═══ -->
+  <div class="ticker-bar" id="ticker-bar">
+    <div class="ticker-track" id="ticker-track">
+      <span class="ticker-content" id="ticker-content">Loading…</span>
+    </div>
+  </div>
+
+  <!-- ═══ APP SHELL ═══ -->
+  <div id="app-shell">
+
+    <!-- ── LEFT SIDEBAR ── -->
+    <aside class="sidebar" id="sidebar">
+
+      <div class="sidebar-brand">
+        <div class="sidebar-logo" id="sidebar-logo"></div>
+        <div class="sidebar-title">Mock Testing<br>Suite</div>
+        <div class="sidebar-version">v3.0</div>
+      </div>
+
+      <!-- Primary Navigation -->
+      <nav class="sidebar-nav" id="sidebar-nav">
+        <button class="nav-btn active" data-page="home">
+          <span class="nav-icon">🏠</span><span class="nav-label">Home</span>
+        </button>
+        <button class="nav-btn" data-page="basics">
+          <span class="nav-icon">📋</span><span class="nav-label">The Basics</span>
+        </button>
+        <button class="nav-btn" data-page="calls">
+          <span class="nav-icon">📞</span><span class="nav-label">Calls</span>
+        </button>
+        <button class="nav-btn" data-page="suptransfer">
+          <span class="nav-icon">🔄</span><span class="nav-label">Sup Transfer</span>
+        </button>
+        <button class="nav-btn" data-page="review">
+          <span class="nav-icon">📝</span><span class="nav-label">Review</span>
+        </button>
+        <button class="nav-btn" data-page="history">
+          <span class="nav-icon">📊</span><span class="nav-label">History</span>
+        </button>
+        <button class="nav-btn" data-page="settings">
+          <span class="nav-icon">⚙️</span><span class="nav-label">Settings</span>
+        </button>
+        <button class="nav-btn" data-page="help">
+          <span class="nav-icon">❓</span><span class="nav-label">Help</span>
+        </button>
+      </nav>
+
+      <!-- Divider -->
+      <div class="sidebar-divider"></div>
+
+      <!-- External Links -->
+      <div class="sidebar-links">
+        <button class="link-btn" id="btn-discord-post" data-tooltip="Copy a Discord message template">
+          <span class="nav-icon">💬</span><span class="nav-label">Discord Post</span>
+        </button>
+        <button class="link-btn" id="btn-tracker-sheet" data-tooltip="Open your personal tracking spreadsheet">
+          <span class="nav-icon">📊</span><span class="nav-label">My Tracker Sheet</span>
+        </button>
+        <button class="link-btn" id="btn-cert-sheet" data-tooltip="Open the Cert Spreadsheet in browser">
+          <span class="nav-icon">📑</span><span class="nav-label">Cert Spreadsheet</span>
+        </button>
+      </div>
+
+      <!-- Exit -->
+      <div class="sidebar-footer">
+        <button class="exit-btn" id="btn-exit" data-tooltip="Close Mock Testing Suite">
+          Exit App
+        </button>
+      </div>
+    </aside>
+
+    <!-- ── MAIN CONTENT ── -->
+    <main class="content-area">
+      <div id="page-content" class="page-content"></div>
+      <div id="page-footer" class="footer-bar"></div>
+      <div class="status-bar">
+        <span id="status-text"></span>
+        <span class="status-spacer"></span>
+        <span id="status-version">Mock Testing Suite v3.0 — By Shawn P. Bly</span>
+      </div>
+    </main>
+  </div>
+
+  <!-- ═══ DISCORD POPUP MODAL ═══ -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" id="discord-modal">
+      <div class="modal-header">
+        <h2>Discord Post Templates</h2>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="discord-list">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
