@@ -48,10 +48,11 @@ export default function ReviewPage({ onNavigate }) {
         const { session: s } = await api.getCurrentSession();
         if (cancelled) return;
         if (!s || !s.candidate_name) { setSession(null); setLoading(false); return; }
-        const finalStatus = computeFinalStatus(s);
-        setSession({ ...s, final_status: finalStatus });
+        const finalStatus = s.final_status || computeFinalStatus(s);
+        const resolvedSession = { ...s, final_status: finalStatus };
+        setSession(resolvedSession);
 
-        if (s.final_status !== finalStatus) {
+        if (!s.final_status) {
           await api.updateSession({ final_status: finalStatus });
         }
 
@@ -82,7 +83,7 @@ export default function ReviewPage({ onNavigate }) {
   const s2r = (s.sup_transfer_2 || {}).result;
   const newbie = s.newbie_shift_data;
 
-  const finalStatus = computeFinalStatus(s);
+  const finalStatus = s.final_status || computeFinalStatus(s);
   let bannerClass, bannerText;
   if (finalStatus === 'Pass') { bannerClass = 'banner-pass'; bannerText = 'SESSION PASSED'; }
   else if (finalStatus === 'Incomplete') { bannerClass = 'banner-incomplete'; bannerText = 'SESSION INCOMPLETE — Pending Newbie Shift'; }

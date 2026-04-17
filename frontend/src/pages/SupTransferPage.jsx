@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
@@ -60,15 +60,36 @@ export default function SupTransferPage({ onNavigate }) {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = document.querySelector('[data-testid="page-content"]');
     if (el) {
-      el.scrollTo({ top: 0, behavior: 'smooth' });
+      el.scrollTop = 0;
     }
+    window.scrollTo(0, 0);
   }, [transferNum]);
 
   const shows = settings.shows || defaults.shows || [];
-  const callers = useMemo(() => settings.donors_existing || defaults.donors_existing || [], [settings.donors_existing, defaults.donors_existing]);
+  const callers = useMemo(() => {
+    const allCallers = [
+      ...(settings.donors_new || defaults.donors_new || []),
+      ...(settings.donors_existing || defaults.donors_existing || []),
+      ...(settings.donors_increase || defaults.donors_increase || []),
+    ];
+    const seen = new Set();
+    return allCallers.filter((caller) => {
+      const key = `${caller[0] || ''}|${caller[1] || ''}|${caller[7] || ''}|${caller[8] || ''}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [
+    settings.donors_new,
+    defaults.donors_new,
+    settings.donors_existing,
+    defaults.donors_existing,
+    settings.donors_increase,
+    defaults.donors_increase,
+  ]);
   const callerIdx = Math.max(0, callers.findIndex(c => `${c[0]} ${c[1]}` === setup.caller));
   const currentCaller = useMemo(() => callers[callerIdx] || callers[0] || [], [callers, callerIdx]);
 

@@ -121,8 +121,13 @@ export default function HomePage({ onNavigate }) {
       return;
     }
 
+    if (history.length === 0) {
+      await modal.warning('No Prior Sessions', 'There are no saved mock-call sessions to resume yet.');
+      return;
+    }
+
     if (resumableHistory.length === 0) {
-      await modal.warning('No Matching Sessions', `No prior mock-call sessions were found for tester <b>${testerName}</b>.`);
+      await modal.warning('No Resumable Sessions', `No prior mock-call sessions were found for tester <b>${testerName}</b>.`);
       return;
     }
 

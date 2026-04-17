@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "build:react": "cd ../frontend && yarn build",
-    "build:win": "npm run build:react && electron-builder --win --x64",
+    "build:backend": "powershell -ExecutionPolicy Bypass -File ../backend/build-backend.ps1",
+    "build:win": "npm run build:react && npm run build:backend && electron-builder --win --x64",
     "build": "npm run build:win",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -38,9 +39,18 @@
         "filter": ["**/*"]
       },
       {
-        "from": "../backend",
-        "to": "backend",
-        "filter": ["**/*", "!__pycache__/**", "!*.pyc", "!.env"]
+        "from": "../backend/dist/backend.exe",
+        "to": "backend/backend.exe"
+      },
+      {
+        "from": "../backend/drivers",
+        "to": "backend/drivers",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../backend/mongodb",
+        "to": "mongodb",
+        "filter": ["**/*"]
       },
       {
         "from": "assets",

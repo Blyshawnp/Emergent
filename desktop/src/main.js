@@ -17,6 +17,7 @@ const isDev = !app.isPackaged;
 let mainWindow = null;
 let tray = null;
 let backendProcess = null;
+let mongoProcess = null;
 let backendLaunchError = null;
 let backendLogTail = [];
 let backendCommandLabel = '';
@@ -38,6 +39,13 @@ function getBackendPath(subpath = '') {
     return path.join(path.resolve(__dirname, '..', '..', 'backend'), subpath);
   }
   return path.join(process.resourcesPath, 'backend', subpath);
+}
+
+function getMongoPath(subpath = '') {
+  if (isDev) {
+    return path.join(path.resolve(__dirname, '..', '..', 'backend', 'mongodb'), subpath);
+  }
+  return path.join(process.resourcesPath, 'mongodb', subpath);
 }
 
 function getFrontendPath(subpath = '') {
@@ -95,14 +103,19 @@ function getBackendFailureMessage(reason) {
     details.push(`Backend command: ${backendCommandLabel}`);
   }
 
-  const backendDir = getBackendPath();
-  details.push(`Backend path: ${backendDir}`);
+  details.push(`Backend path: ${getBackendPath()}`);
+
+  if (!isDev) {
+    details.push(`MongoDB path: ${getMongoPath()}`);
+  }
 
   if (backendLogTail.length > 0) {
     details.push(`Recent backend output:\n${backendLogTail.join('\n')}`);
   }
 
-  details.push('Verify that Python 3.10+ and MongoDB are installed and available to the packaged app.');
+  details.push(isDev
+    ? 'Verify that Python 3.10+ and MongoDB are installed and available to the development app.'
+    : 'Verify that the packaged backend.exe, browser driver, and bundled MongoDB files are present in resources.');
 
   return details.join('\n\n');
 }
@@ -165,7 +178,109 @@ function resolvePythonLauncher() {
 // ═══════════════════════════════════════════════════════════════
 // BACKEND SERVER
 // ═══════════════════════════════════════════════════════════════
+function waitForTcpPort(port, retries = 40) {
+  return new Promise((resolve, reject) => {
+    const net = require('net');
+
+    const attempt = (remaining) => {
+      const socket = net.createConnection({ host: '127.0.0.1', port }, () => {
+        socket.destroy();
+        resolve();
+      });
+
+      socket.on('error', () => {
+        socket.destroy();
+        if (remaining <= 0) {
+          reject(new Error(`TCP port ${port} did not open before startup timed out.`));
+        } else {
+          setTimeout(() => attempt(remaining - 1), 500);
+        }
+      });
+    };
+
+    attempt(retries);
+  });
+}
+
+function startBundledMongo() {
+  const mongoExe = getMongoPath(path.join('bin', 'mongod.exe'));
+  requireRuntimePath(mongoExe, 'Bundled MongoDB executable');
+
+  const dataDir = path.join(app.getPath('userData'), 'mongodb-data');
+  const logPath = path.join(app.getPath('userData'), 'mongodb.log');
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  mongoProcess = spawn(mongoExe, [
+    '--dbpath', dataDir,
+    '--bind_ip', '127.0.0.1',
+    '--port', '27017',
+    '--logpath', logPath,
+    '--logappend',
+    '--quiet'
+  ], {
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  mongoProcess.stdout.on('data', (data) => appendBackendLog(`[MONGO] ${data.toString().trim()}`));
+  mongoProcess.stderr.on('data', (data) => appendBackendLog(`[MONGO] ${data.toString().trim()}`));
+  mongoProcess.on('error', (err) => {
+    backendLaunchError = err;
+    console.error('[MONGO] Failed to start:', err.message);
+  });
+  mongoProcess.on('exit', (code) => {
+    if (!app.isQuitting && code !== 0 && code !== null) {
+      backendLaunchError = new Error(`Bundled MongoDB exited with code ${code}.`);
+    }
+  });
+
+  return waitForTcpPort(27017);
+}
+
 function startBackend() {
+  if (!isDev) {
+    const backendExe = getBackendPath('backend.exe');
+    requireRuntimePath(backendExe, 'Bundled backend executable');
+    requireRuntimePath(getBackendPath('drivers'), 'Bundled browser drivers directory');
+
+    backendLaunchError = null;
+    backendLogTail = [];
+    backendCommandLabel = backendExe;
+
+    backendProcess = spawn(backendExe, [], {
+      cwd: getBackendPath(),
+      env: {
+        ...process.env,
+        BACKEND_PORT: String(BACKEND_PORT),
+        MONGO_URL: 'mongodb://127.0.0.1:27017',
+        DB_NAME: store.get('db_name', 'mock_testing_suite'),
+        BROWSER_DRIVER_DIR: getBackendPath('drivers'),
+        APP_RESOURCES_PATH: process.resourcesPath
+      },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    backendProcess.stdout.on('data', (data) => appendBackendLog(data.toString().trim()));
+    backendProcess.stderr.on('data', (data) => appendBackendLog(data.toString().trim()));
+    backendProcess.on('error', (err) => {
+      backendLaunchError = err;
+      console.error('[BACKEND] Failed to start:', err.message);
+      if (!app.isQuitting) {
+        dialog.showErrorBox('Startup Error', getBackendFailureMessage(`The backend executable could not be started.\n${err.message}`));
+      }
+    });
+    backendProcess.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        backendLaunchError = new Error(`Backend executable exited with code ${code}.`);
+      }
+      if (!app.isQuitting && code !== 0 && code !== null && mainWindow) {
+        dialog.showErrorBox('Backend Error', getBackendFailureMessage(`The backend executable stopped unexpectedly (exit code ${code}).`));
+      }
+    });
+    return;
+  }
+
   const backendDir = getBackendPath();
   requireRuntimePath(backendDir, 'Backend directory');
   requireRuntimePath(path.join(backendDir, 'server.py'), 'Backend entry file');
@@ -237,6 +352,13 @@ function stopBackend() {
       backendProcess.kill();
     }
     backendProcess = null;
+  }
+
+  if (mongoProcess) {
+    if (!mongoProcess.killed) {
+      mongoProcess.kill();
+    }
+    mongoProcess = null;
   }
 }
 
@@ -489,6 +611,9 @@ app.whenReady().then(async () => {
   console.log(`[APP] Mock Testing Suite v${APP_VERSION} starting...`);
 
   try {
+    if (!isDev) {
+      await startBundledMongo();
+    }
     startBackend();
     await waitForBackend();
     console.log('[APP] Backend is ready');
