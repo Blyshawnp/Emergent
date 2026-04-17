@@ -4,17 +4,21 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import { playError } from '../utils/buzz';
 
+const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
+
 export default function BasicsPage({ onNavigate }) {
   const modal = useModal();
   const [settings, setSettings] = useState({});
   const [techOpen, setTechOpen] = useState(false);
+  const [supervisorOnlyMode, setSupervisorOnlyMode] = useState(false);
   const [form, setForm] = useState({
-    candidate_name: '', tester_name: '', pronoun: '', final_attempt: false,
+    candidate_name: '', tester_name: '', final_attempt: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
     vpn_on: null, vpn_off: null, chrome_default: null, extensions_disabled: null, popups_allowed: null,
   });
 
   useEffect(() => {
+    setSupervisorOnlyMode(window.sessionStorage.getItem(SUP_ONLY_MODE_KEY) === '1');
     api.getSettings().then(s => {
       setSettings(s);
       setForm(f => ({ ...f, tester_name: s.tester_name || '' }));
@@ -26,7 +30,8 @@ export default function BasicsPage({ onNavigate }) {
   const autoFail = async (reason) => {
     if (!form.candidate_name.trim()) { await modal.warning('Missing Info', 'Enter the Candidate Name first.'); return; }
     playError();
-    const data = { ...form, auto_fail_reason: reason, final_status: 'Fail' };
+    const data = { ...form, supervisor_only: supervisorOnlyMode, auto_fail_reason: reason, final_status: 'Fail' };
+    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
     await api.startSession(data);
     onNavigate('review');
   };
@@ -44,28 +49,52 @@ export default function BasicsPage({ onNavigate }) {
       if (!d.headset_usb) reasons.push('Wrong headset (not USB)');
       if (!d.noise_cancel) reasons.push('Wrong headset (not noise cancelling)');
       const yes = await modal.confirm('Headset Issue', `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`);
-      if (yes) { await api.startSession({ ...d, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' }); onNavigate('review'); }
+      if (yes) {
+        window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' });
+        onNavigate('review');
+      }
       return;
     }
     if (d.vpn_on && d.vpn_off === false) {
       const yes = await modal.confirm('VPN Issue', 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?');
-      if (yes) { await api.startSession({ ...d, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' }); onNavigate('review'); }
+      if (yes) {
+        window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' });
+        onNavigate('review');
+      }
       return;
     }
     if (d.chrome_default === false) {
       const fixed = await modal.confirm('Browser Issue', 'The browser must be set as default so that DTE login functions properly.<br><br>Were they able to fix it?');
-      if (!fixed) { await api.startSession({ ...d, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' }); onNavigate('review'); return; }
+      if (!fixed) {
+        window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' });
+        onNavigate('review');
+        return;
+      }
     }
     if (d.extensions_disabled === false) {
       const fixed = await modal.confirm('Browser Issue', 'Browser extensions must be disabled so they do not interfere with the script.<br><br>Were they able to fix it?');
-      if (!fixed) { await api.startSession({ ...d, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' }); onNavigate('review'); return; }
+      if (!fixed) {
+        window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' });
+        onNavigate('review');
+        return;
+      }
     }
     if (d.popups_allowed === false) {
       const fixed = await modal.confirm('Browser Issue', 'Necessary pop-ups must be allowed so the script can pop correctly.<br><br>Were they able to fix it?');
-      if (!fixed) { await api.startSession({ ...d, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' }); onNavigate('review'); return; }
+      if (!fixed) {
+        window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' });
+        onNavigate('review');
+        return;
+      }
     }
-    await api.startSession(d);
-    onNavigate('calls');
+    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+    await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, time_for_sup: supervisorOnlyMode ? true : null });
+    onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
   };
 
   const RadioGroup = ({ name, value, onChange }) => (
@@ -82,27 +111,15 @@ export default function BasicsPage({ onNavigate }) {
         <h3 style={{ marginBottom: 8 }}>Session Information</h3>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label className="text-sm font-bold" style={{ minWidth: 110 }}>Tester</label>
-            <input type="text" value={form.tester_name} readOnly style={{ flex: 1, opacity: 0.7 }} data-testid="basics-tester" />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <label className="text-sm font-bold" style={{ minWidth: 130 }}>Candidate Name</label>
             <input type="text" value={form.candidate_name} onChange={e => set('candidate_name', e.target.value)} placeholder="Required" style={{ flex: 1 }} data-testid="basics-candidate" />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label className="text-sm font-bold" style={{ minWidth: 110 }}>Pronouns</label>
+            <label className="text-sm font-bold" style={{ minWidth: 130, color: 'var(--color-danger)', fontWeight: 800 }}>Final Attempt</label>
             <div>
-              <select value={form.pronoun} onChange={e => set('pronoun', e.target.value)} style={{ width: 100 }} data-testid="basics-pronoun">
-                <option value=""></option><option>She</option><option>He</option><option>They</option>
-              </select>
-              <div className="text-xs text-muted" style={{ marginTop: 2 }}>Optional — for accurate summaries</div>
+              <RadioGroup name="b-final-attempt" value={form.final_attempt} onChange={v => set('final_attempt', v)} />
+              <div className="text-xs" style={{ marginTop: 2, color: 'var(--color-danger)', fontWeight: 800 }}>Select Yes only if this is the candidate&apos;s last allowed attempt.</div>
             </div>
-          </div>
-          <div>
-            <label className="checkbox-label">
-              <input type="checkbox" checked={form.final_attempt} onChange={e => set('final_attempt', e.target.checked)} data-testid="basics-final" />
-              <span style={{ color: 'var(--color-danger)', fontWeight: 700 }}>FINAL ATTEMPT</span>
-            </label>
           </div>
         </div>
       </div>

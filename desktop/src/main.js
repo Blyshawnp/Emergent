@@ -2,7 +2,7 @@
  * Mock Testing Suite — Electron Main Process
  * Manages the application window, system tray, backend server, and auto-updates.
  */
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
@@ -20,6 +20,8 @@ let backendProcess = null;
 let backendLaunchError = null;
 let backendLogTail = [];
 let backendCommandLabel = '';
+let isHandlingCloseConfirmation = false;
+let hasUnsavedChanges = false;
 
 // ═══════════════════════════════════════════════════════════════
 // PATHS
@@ -302,10 +304,12 @@ function createMainWindow() {
   });
 
   mainWindow.on('close', (e) => {
-    if (tray) {
-      e.preventDefault();
-      mainWindow.hide();
+    if (app.isQuitting || isHandlingCloseConfirmation) {
+      return;
     }
+
+    e.preventDefault();
+    promptForQuitConfirmation();
   });
 
   mainWindow.on('closed', () => {
@@ -334,6 +338,45 @@ function createMainWindow() {
   });
 }
 
+async function promptForQuitConfirmation(parentWindow = mainWindow) {
+  if (app.isQuitting || isHandlingCloseConfirmation) {
+    return false;
+  }
+
+  if (!hasUnsavedChanges) {
+    tray = null;
+    app.isQuitting = true;
+    stopBackend();
+    app.quit();
+    return true;
+  }
+
+  isHandlingCloseConfirmation = true;
+
+  try {
+    const { response } = await dialog.showMessageBox(parentWindow || null, {
+      type: 'question',
+      buttons: ['Yes', 'No'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Exit App',
+      message: 'You have unsaved work. Are you sure you want to exit?'
+    });
+
+    if (response !== 0) {
+      return false;
+    }
+
+    tray = null;
+    app.isQuitting = true;
+    stopBackend();
+    app.quit();
+    return true;
+  } finally {
+    isHandlingCloseConfirmation = false;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // SYSTEM TRAY
 // ═══════════════════════════════════════════════════════════════
@@ -358,6 +401,27 @@ function createTray() {
   tray.setContextMenu(contextMenu);
   tray.on('double-click', () => { if (mainWindow) mainWindow.show(); });
 }
+
+// ═══════════════════════════════════════════════════════════════
+// IPC
+// ═══════════════════════════════════════════════════════════════
+ipcMain.handle('app:quit', () => {
+  return promptForQuitConfirmation();
+});
+
+ipcMain.handle('app:setUnsavedChanges', (_event, value) => {
+  hasUnsavedChanges = Boolean(value);
+  return { ok: true };
+});
+
+ipcMain.handle('shell:openExternal', async (_event, url) => {
+  if (!isSafeExternalUrl(url)) {
+    throw new Error('Blocked unsafe external URL.');
+  }
+
+  await shell.openExternal(url);
+  return { ok: true };
+});
 
 // ═══════════════════════════════════════════════════════════════
 // AUTO-UPDATE CHECK (from Google Doc)

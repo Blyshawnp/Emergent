@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 
@@ -23,6 +23,7 @@ export default function SettingsPage({ onNavigate }) {
   const [s, setS] = useState({});
   const [defaults, setDefaults] = useState({});
   const [loading, setLoading] = useState(true);
+  const savedSnapshotRef = useRef('');
 
   useEffect(() => {
     let cancelled = false;
@@ -32,6 +33,7 @@ export default function SettingsPage({ onNavigate }) {
         if (cancelled) return;
         setS(settings);
         setDefaults(defs);
+        savedSnapshotRef.current = JSON.stringify(settings);
       } catch (_err) {
         // Settings load failed
       }
@@ -40,11 +42,21 @@ export default function SettingsPage({ onNavigate }) {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (loading || !window.electronAPI?.setUnsavedChanges) {
+      return;
+    }
+
+    const hasChanges = JSON.stringify(s) !== savedSnapshotRef.current;
+    window.electronAPI.setUnsavedChanges(hasChanges).catch(() => {});
+  }, [s, loading]);
+
   const set = useCallback((key, val) => setS(prev => ({ ...prev, [key]: val })), []);
 
   const handleSave = useCallback(async () => {
     try {
       await api.saveSettings(s);
+      savedSnapshotRef.current = JSON.stringify(s);
       await modal.alert('Settings Saved', 'Your settings have been saved successfully.');
     } catch (e) { await modal.error('Save Failed', e.message); }
   }, [s, modal]);

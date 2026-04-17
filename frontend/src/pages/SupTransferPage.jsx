@@ -38,6 +38,7 @@ export default function SupTransferPage({ onNavigate }) {
   const [fails, setFails] = useState({});
   const [failNotes, setFailNotes] = useState('');
   const [isFinal, setIsFinal] = useState(false);
+  const [isSupervisorOnly, setIsSupervisorOnly] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -48,7 +49,10 @@ export default function SupTransferPage({ onNavigate }) {
         if (cancelled) return;
         setDefaults(d); setSettings(s);
         const { session } = await api.getCurrentSession();
-        if (!cancelled && session) setIsFinal(session.final_attempt || false);
+        if (!cancelled && session) {
+          setIsFinal(session.final_attempt || false);
+          setIsSupervisorOnly(session.supervisor_only || false);
+        }
       } catch (err) {
         // Failed to load transfer setup data — page renders with empty dropdowns
       }
@@ -237,7 +241,7 @@ export default function SupTransferPage({ onNavigate }) {
       <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
 
       <div className="footer-bar" data-testid="sup-footer">
-        <button className="btn btn-muted btn-sm" onClick={() => { if (transferNum > 1) { setTransferNum(1); resetTransfer(); } else onNavigate('calls'); }} data-testid="sup-back">Back</button>
+        <button className="btn btn-muted btn-sm" onClick={() => { if (transferNum > 1) { setTransferNum(1); resetTransfer(); } else onNavigate(isSupervisorOnly ? 'basics' : 'calls'); }} data-testid="sup-back">Back</button>
         <button className="btn btn-danger btn-sm" onClick={async () => { playError(); await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' }); onNavigate('review'); }} data-testid="sup-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="sup-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />

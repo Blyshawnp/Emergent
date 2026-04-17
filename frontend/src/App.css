@@ -282,7 +282,7 @@ select { cursor: pointer; }
 .cmodal { background: var(--bg-modal); border: 1px solid var(--border-default); border-radius: var(--radius-lg); width: 440px; max-width: 90vw; padding: var(--space-xl) var(--space-xl) var(--space-lg); box-shadow: var(--shadow-lg); text-align: center; }
 .cmodal-icon { font-size: 36px; margin-bottom: var(--space-sm); }
 .cmodal-title { font-size: var(--font-size-lg); font-weight: 700; margin-bottom: var(--space-md); }
-.cmodal-body { font-size: var(--font-size-sm); color: var(--text-secondary); line-height: 1.6; margin-bottom: var(--space-lg); text-align: left; }
+.cmodal-body { font-size: var(--font-size-sm); color: var(--text-secondary); line-height: 1.6; margin-bottom: var(--space-lg); text-align: center; }
 .cmodal-btns { display: flex; justify-content: center; gap: var(--space-sm); }
 .cmodal-btns .btn { min-width: 100px; }
 

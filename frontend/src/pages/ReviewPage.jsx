@@ -106,9 +106,21 @@ export default function ReviewPage({ onNavigate }) {
   const handleFillForm = async () => {
     setFilling(true);
     try {
-      const r = await api.fillForm(coaching, fail);
-      if (r.ok) await modal.alert('Form', r.message);
-      else await modal.error('Form Fill Failed', r.message || 'Error');
+      if (window.electronAPI?.isElectron && window.electronAPI?.openExternal) {
+        const settings = await api.getSettings();
+        const formUrl = (settings?.form_url || '').trim();
+
+        if (!formUrl) {
+          await modal.error('Form Fill Failed', 'No Cert Form URL is configured in Settings.');
+        } else {
+          await window.electronAPI.openExternal(formUrl);
+          await modal.alert('Form Opened', 'The Cert Form was opened from the desktop app.');
+        }
+      } else {
+        const r = await api.fillForm(coaching, fail);
+        if (r.ok) await modal.alert('Form', r.message);
+        else await modal.error('Form Fill Failed', r.message || 'Error');
+      }
     } catch (e) { await modal.error('Error', e.message); }
     setFilling(false);
   };

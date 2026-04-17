@@ -13,6 +13,8 @@ import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import HelpPage from './pages/HelpPage';
 
+const LOGO_SRC = 'logo.png';
+
 const NAV_ITEMS = [
   { key: 'home', label: 'Home', emoji: '\uD83C\uDFE0' },
   { key: 'basics', label: 'The Basics', emoji: '\uD83D\uDCCB' },
@@ -23,6 +25,8 @@ const NAV_ITEMS = [
   { key: 'settings', label: 'Settings', emoji: '\u2699\uFE0F' },
   { key: 'help', label: 'Help', emoji: '\u2753' },
 ];
+
+const UNSAVED_TRACKED_PAGES = new Set(['setup', 'basics', 'calls', 'suptransfer', 'newbieshift', 'review']);
 
 function PageRouter({ page, navigate }) {
   const props = { onNavigate: navigate };
@@ -51,6 +55,7 @@ function App() {
   useEffect(() => {
     const saved = localStorage.getItem('mts-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', saved);
+    window.electronAPI?.setUnsavedChanges?.(false).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -83,6 +88,38 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (!UNSAVED_TRACKED_PAGES.has(page)) {
+      return undefined;
+    }
+
+    const markUnsaved = (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+
+      const isFormControl = target.matches('input, select, textarea');
+      if (!isFormControl) {
+        return;
+      }
+
+      if (target.hasAttribute('readonly') || target.hasAttribute('disabled')) {
+        return;
+      }
+
+      window.electronAPI?.setUnsavedChanges?.(true).catch(() => {});
+    };
+
+    document.addEventListener('input', markUnsaved, true);
+    document.addEventListener('change', markUnsaved, true);
+
+    return () => {
+      document.removeEventListener('input', markUnsaved, true);
+      document.removeEventListener('change', markUnsaved, true);
+    };
+  }, [page]);
+
   const navigate = useCallback((p) => {
     setPage(p);
     if (page === 'settings') {
@@ -91,14 +128,14 @@ function App() {
   }, [page]);
 
   const handleExit = useCallback(() => {
-    const root = document.getElementById('root');
-    if (root) {
-      while (root.firstChild) root.removeChild(root.firstChild);
-      const msg = document.createElement('div');
-      msg.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100vh;color:#888;';
-      msg.textContent = 'You can close this window now.';
-      root.appendChild(msg);
+    if (window.electronAPI?.quitApp) {
+      window.electronAPI.quitApp().catch((err) => {
+        console.error('[APP] Failed to quit desktop app:', err);
+      });
+      return;
     }
+
+    window.close();
   }, []);
 
   const tickerContent = tickerMessages.length > 0
@@ -116,7 +153,7 @@ function App() {
         <div className="app-shell">
           <aside className="sidebar" data-testid="sidebar">
             <div className="sidebar-brand">
-              <img src="/logo.png" alt="ACD" className="sidebar-logo-img" />
+              <img src={LOGO_SRC} alt="ACD" className="sidebar-logo-img" />
               <div className="sidebar-title">Mock Testing<br />Suite</div>
               <div className="sidebar-version">v2.5.0</div>
             </div>

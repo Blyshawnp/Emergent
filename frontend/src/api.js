@@ -12,6 +12,12 @@ function getBackendUrl() {
 const BACKEND_URL = getBackendUrl();
 const BASE = `${BACKEND_URL}/api`;
 
+function setUnsavedChanges(value) {
+  if (window.electronAPI?.setUnsavedChanges) {
+    window.electronAPI.setUnsavedChanges(value).catch(() => {});
+  }
+}
+
 async function request(method, path, body = null) {
   const opts = {
     method,
@@ -24,18 +30,24 @@ async function request(method, path, body = null) {
   return res.data;
 }
 
+async function savedRequest(method, path, body = null) {
+  const data = await request(method, path, body);
+  setUnsavedChanges(false);
+  return data;
+}
+
 const api = {
   getSettings: () => request('GET', '/settings'),
-  saveSettings: (data) => request('PUT', '/settings', data),
+  saveSettings: (data) => savedRequest('PUT', '/settings', data),
   getDefaults: () => request('GET', '/settings/defaults'),
-  completeSetup: (data) => request('POST', '/settings/complete-setup', data),
+  completeSetup: (data) => savedRequest('POST', '/settings/complete-setup', data),
   getCurrentSession: () => request('GET', '/session/current'),
-  startSession: (data) => request('POST', '/session/start', data),
-  updateSession: (data) => request('PUT', '/session/update', data),
-  saveCall: (data) => request('POST', '/session/call', data),
-  saveSupTransfer: (data) => request('POST', '/session/sup', data),
-  finishSessionSimple: () => request('POST', '/session/finish'),
-  discardSession: () => request('POST', '/session/discard'),
+  startSession: (data) => savedRequest('POST', '/session/start', data),
+  updateSession: (data) => savedRequest('PUT', '/session/update', data),
+  saveCall: (data) => savedRequest('POST', '/session/call', data),
+  saveSupTransfer: (data) => savedRequest('POST', '/session/sup', data),
+  finishSessionSimple: () => savedRequest('POST', '/session/finish'),
+  discardSession: () => savedRequest('POST', '/session/discard'),
   getHistory: () => request('GET', '/history'),
   getHistoryStats: () => request('GET', '/history/stats'),
   clearHistory: () => request('DELETE', '/history'),
@@ -43,7 +55,7 @@ const api = {
   generateSummaries: () => request('POST', '/gemini/summaries'),
   regenerateSummary: (type) => request('POST', '/gemini/regenerate', { type }),
   fillForm: (coaching, fail) => request('POST', '/form/fill', { coaching, fail_reason: fail }),
-  finishSession: (coaching, fail) => request('POST', '/finish-session', { coaching_summary: coaching, fail_summary: fail }),
+  finishSession: (coaching, fail) => savedRequest('POST', '/finish-session', { coaching_summary: coaching, fail_summary: fail }),
   checkForUpdate: () => request('GET', '/update'),
 };
 
