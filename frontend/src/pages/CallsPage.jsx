@@ -69,20 +69,20 @@ function ScenarioCard({ currentCaller, callSetup, randFlags, donations, onRegene
 
   return (
     <div className="card card-scenario" data-testid="scenario-card">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ color: 'var(--border-scenario)', margin: 0 }}>SCENARIO</h3>
         <button className="btn btn-ghost btn-sm" onClick={onRegenerate} data-testid="scenario-regen" title="Re-roll random variables">{'\uD83D\uDD04'} Regenerate</button>
       </div>
-      <p style={{ lineHeight: 1.6, marginBottom: 12 }}>
+      <p style={{ lineHeight: 1.7, marginBottom: 16 }}>
         <b>For this call you will portray {fullName}.</b> {fname} is {donorType} wishing to {action} {donation} to support {callSetup.show}.
       </p>
-      <div style={{ lineHeight: 1.8, fontSize: 'var(--font-size-sm)' }}>
-        {gift && <div>&bull; <b>Thank You Gift:</b> {gift}</div>}
-        <div>&bull; <b>Phone Type:</b> {randFlags.phone}</div>
-        {randFlags.phone === 'Mobile' && <div>&bull; <b>Text Messages:</b> {randFlags.sms}</div>}
-        <div>&bull; <b>E-Newsletter:</b> {randFlags.enews}</div>
-        <div>&bull; <b>Cover $6 Shipping:</b> {randFlags.ship}</div>
-        {!isOneTime && <div>&bull; <b>Cover CC Processing Fee:</b> {randFlags.ccfee}</div>}
+      <div className="scenario-vars">
+        {gift && <div className="scenario-var"><span className="scenario-var-label">Thank You Gift:</span><span className="scenario-var-value scenario-highlight">{gift}</span></div>}
+        <div className="scenario-var"><span className="scenario-var-label">Phone Type:</span><span className={`scenario-var-value scenario-highlight ${randFlags.phone === 'Mobile' ? 'scenario-yes' : 'scenario-no'}`}>{randFlags.phone}</span></div>
+        {randFlags.phone === 'Mobile' && <div className="scenario-var"><span className="scenario-var-label">Text Messages:</span><span className={`scenario-var-value ${randFlags.sms === 'Yes' ? 'scenario-yes' : 'scenario-no'}`}>{randFlags.sms}</span></div>}
+        <div className="scenario-var"><span className="scenario-var-label">E-Newsletter:</span><span className={`scenario-var-value ${randFlags.enews === 'Yes' ? 'scenario-yes' : 'scenario-no'}`}>{randFlags.enews}</span></div>
+        <div className="scenario-var"><span className="scenario-var-label">Cover $6 Shipping:</span><span className={`scenario-var-value ${randFlags.ship === 'Yes' ? 'scenario-yes' : 'scenario-no'}`}>{randFlags.ship}</span></div>
+        {!isOneTime && <div className="scenario-var"><span className="scenario-var-label">Cover CC Processing Fee:</span><span className={`scenario-var-value ${randFlags.ccfee === 'Yes' ? 'scenario-yes' : 'scenario-no'}`}>{randFlags.ccfee}</span></div>}
       </div>
     </div>
   );
@@ -225,7 +225,7 @@ export default function CallsPage({ onNavigate }) {
     <div data-testid="calls-page">
       <h1 style={{ marginBottom: 24 }}>Call #{callNum}</h1>
       <div className="split-layout">
-        <div className="card">
+        <div className="card setup-card">
           <h3 style={{ marginBottom: 16 }}>Call Setup</h3>
           <div className="form-row"><label>Call Type</label>
             <select value={callSetup.type} onChange={e => { setCallSetup(p => ({ ...p, type: e.target.value })); rollRandom(); }} data-testid="call-type">

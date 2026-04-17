@@ -18,12 +18,12 @@ function setUnsavedChanges(value) {
   }
 }
 
-async function request(method, path, body = null) {
+async function request(method, path, body = null, timeout = 15000) {
   const opts = {
     method,
     url: `${BASE}${path}`,
     headers: { 'Content-Type': 'application/json' },
-    timeout: 15000,
+    timeout,
   };
   if (body !== null) opts.data = body;
   const res = await axios(opts);
@@ -54,7 +54,7 @@ const api = {
   getTicker: () => request('GET', '/ticker'),
   generateSummaries: () => request('POST', '/gemini/summaries'),
   regenerateSummary: (type) => request('POST', '/gemini/regenerate', { type }),
-  fillForm: (coaching, fail) => request('POST', '/form/fill', { coaching, fail_reason: fail }),
+  fillForm: (coaching, fail) => request('POST', '/form/fill', { coaching, fail_reason: fail }, 120000),
   finishSession: (coaching, fail) => savedRequest('POST', '/finish-session', { coaching_summary: coaching, fail_summary: fail }),
   checkForUpdate: () => request('GET', '/update'),
 };

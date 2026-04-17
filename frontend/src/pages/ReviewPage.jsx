@@ -2,6 +2,36 @@ import React, { useState, useEffect } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 
+function computeFinalStatus(session) {
+  if (!session) return 'Fail';
+
+  const autoFail = session.auto_fail_reason;
+  const supOnly = session.supervisor_only || false;
+  const callsPassed = [
+    (session.call_1 || {}).result,
+    (session.call_2 || {}).result,
+    (session.call_3 || {}).result,
+  ].filter((result) => result === 'Pass').length;
+  const supsPassed = [
+    (session.sup_transfer_1 || {}).result,
+    (session.sup_transfer_2 || {}).result,
+  ].filter((result) => result === 'Pass').length;
+  const newbie = session.newbie_shift_data;
+
+  let finalStatus = 'Fail';
+  if (!autoFail) {
+    if (supOnly) {
+      if (supsPassed >= 1) finalStatus = 'Pass';
+      else if (newbie) finalStatus = 'Incomplete';
+    } else if (callsPassed >= 2) {
+      if (supsPassed >= 1) finalStatus = 'Pass';
+      else if (newbie) finalStatus = 'Incomplete';
+    }
+  }
+
+  return finalStatus;
+}
+
 export default function ReviewPage({ onNavigate }) {
   const modal = useModal();
   const [session, setSession] = useState(null);
@@ -18,35 +48,12 @@ export default function ReviewPage({ onNavigate }) {
         const { session: s } = await api.getCurrentSession();
         if (cancelled) return;
         if (!s || !s.candidate_name) { setSession(null); setLoading(false); return; }
-        setSession(s);
+        const finalStatus = computeFinalStatus(s);
+        setSession({ ...s, final_status: finalStatus });
 
-        // Calculate final status
-        const autoFail = s.auto_fail_reason;
-        const supOnly = s.supervisor_only || false;
-        const callsPassed = [
-          (s.call_1 || {}).result,
-          (s.call_2 || {}).result,
-          (s.call_3 || {}).result,
-        ].filter(r => r === 'Pass').length;
-        const supsPassed = [
-          (s.sup_transfer_1 || {}).result,
-          (s.sup_transfer_2 || {}).result,
-        ].filter(r => r === 'Pass').length;
-        const newbie = s.newbie_shift_data;
-
-        let finalStatus = 'Fail';
-        if (!autoFail) {
-          if (supOnly) {
-            if (supsPassed >= 1) finalStatus = 'Pass';
-            else if (newbie) finalStatus = 'Incomplete';
-          } else {
-            if (callsPassed >= 2) {
-              if (supsPassed >= 1) finalStatus = 'Pass';
-              else if (newbie) finalStatus = 'Incomplete';
-            }
-          }
+        if (s.final_status !== finalStatus) {
+          await api.updateSession({ final_status: finalStatus });
         }
-        await api.updateSession({ final_status: finalStatus });
 
         // Generate summaries
         const summaries = await api.generateSummaries();
@@ -73,11 +80,9 @@ export default function ReviewPage({ onNavigate }) {
   const c3r = (s.call_3 || {}).result;
   const s1r = (s.sup_transfer_1 || {}).result;
   const s2r = (s.sup_transfer_2 || {}).result;
-  const callsPassed = [c1r, c2r, c3r].filter(r => r === 'Pass').length;
-  const supsPassed = [s1r, s2r].filter(r => r === 'Pass').length;
   const newbie = s.newbie_shift_data;
 
-  let finalStatus = s.final_status || 'Fail';
+  const finalStatus = computeFinalStatus(s);
   let bannerClass, bannerText;
   if (finalStatus === 'Pass') { bannerClass = 'banner-pass'; bannerText = 'SESSION PASSED'; }
   else if (finalStatus === 'Incomplete') { bannerClass = 'banner-incomplete'; bannerText = 'SESSION INCOMPLETE — Pending Newbie Shift'; }
@@ -106,21 +111,9 @@ export default function ReviewPage({ onNavigate }) {
   const handleFillForm = async () => {
     setFilling(true);
     try {
-      if (window.electronAPI?.isElectron && window.electronAPI?.openExternal) {
-        const settings = await api.getSettings();
-        const formUrl = (settings?.form_url || '').trim();
-
-        if (!formUrl) {
-          await modal.error('Form Fill Failed', 'No Cert Form URL is configured in Settings.');
-        } else {
-          await window.electronAPI.openExternal(formUrl);
-          await modal.alert('Form Opened', 'The Cert Form was opened from the desktop app.');
-        }
-      } else {
-        const r = await api.fillForm(coaching, fail);
-        if (r.ok) await modal.alert('Form', r.message);
-        else await modal.error('Form Fill Failed', r.message || 'Error');
-      }
+      const r = await api.fillForm(coaching, fail);
+      if (r.ok) await modal.alert('Form Filled', r.message);
+      else await modal.error('Form Fill Failed', r.message || 'Error');
     } catch (e) { await modal.error('Error', e.message); }
     setFilling(false);
   };

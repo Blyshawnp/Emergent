@@ -2,6 +2,7 @@ fastapi
 uvicorn
 motor
 python-dotenv
+selenium
 
 google-generativeai
 google-api-python-client

@@ -5,11 +5,26 @@ import { useModal } from '../components/ModalProvider';
 const LOGO_SRC = 'logo.png';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 
-function canResumeForSupTransfer(entry, testerName) {
-  const matchesTester = (entry.tester_name || '').trim().toLowerCase() === (testerName || '').trim().toLowerCase();
-  const hasMockCalls = Boolean(entry.call_1 || entry.call_2 || entry.call_3);
-  const hasSupTransfers = Boolean(entry.sup_transfer_1 || entry.sup_transfer_2);
-  return matchesTester && hasMockCalls && !hasSupTransfers;
+function normalizeName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function hasSavedCallResult(call) {
+  return Boolean(call && call.result);
+}
+
+function hasSavedSupTransferResult(transfer) {
+  return Boolean(transfer && transfer.result);
+}
+
+function canResumeForSupTransfer(entry, testerNames) {
+  const storedTesterName = normalizeName(entry.tester_name);
+  const matchesTester = testerNames.some((name) => storedTesterName && storedTesterName === normalizeName(name));
+  const hasMockCalls = [entry.call_1, entry.call_2, entry.call_3].some(hasSavedCallResult);
+  const hasCompletedSupTransfers = [entry.sup_transfer_1, entry.sup_transfer_2].some(hasSavedSupTransferResult);
+  const isMockCallSession = !entry.supervisor_only;
+
+  return matchesTester && isMockCallSession && hasMockCalls && !hasCompletedSupTransfers;
 }
 
 function buildResumedSession(entry) {
@@ -52,11 +67,12 @@ export default function HomePage({ onNavigate }) {
   const [resumeEntry, setResumeEntry] = useState(null);
 
   const testerName = settings.tester_name || '';
+  const testerNames = [settings.tester_name, settings.display_name].filter(Boolean);
   const resumableHistory = useMemo(
     () => history
-      .filter((entry) => canResumeForSupTransfer(entry, testerName))
+      .filter((entry) => canResumeForSupTransfer(entry, testerNames))
       .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')),
-    [history, testerName]
+    [history, testerNames]
   );
 
   useEffect(() => {

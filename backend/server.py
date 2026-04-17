@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
+from services.form_filler import fill_form as fill_cert_form
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -341,6 +342,61 @@ def _is_fail_na(session):
     return calls_passed >= 2 and (sups_passed >= 1 or newbie)
 
 
+def compute_final_status(session):
+    auto_fail = session.get("auto_fail_reason")
+    sup_only = session.get("supervisor_only", False)
+    calls_passed = sum(1 for i in range(1, 4) if (session.get(f"call_{i}") or {}).get("result") == "Pass")
+    sups_passed = sum(1 for i in range(1, 3) if (session.get(f"sup_transfer_{i}") or {}).get("result") == "Pass")
+    newbie = session.get("newbie_shift_data")
+
+    final_status = "Fail"
+    if not auto_fail:
+        if sup_only:
+            if sups_passed >= 1:
+                final_status = "Pass"
+            elif newbie is not None:
+                final_status = "Incomplete"
+        elif calls_passed >= 2:
+            if sups_passed >= 1:
+                final_status = "Pass"
+            elif newbie is not None:
+                final_status = "Incomplete"
+
+    return final_status
+
+
+def normalize_history_status(entry):
+    explicit_status = entry.get("status")
+    if explicit_status in {"Pass", "Fail", "Incomplete", "NC/NS"}:
+        return explicit_status
+
+    explicit_final_status = entry.get("final_status")
+    if explicit_final_status in {"Pass", "Fail", "Incomplete"}:
+        return explicit_final_status
+
+    computed_status = compute_final_status(entry)
+    if computed_status != "Fail":
+        return computed_status
+
+    if entry.get("auto_fail_reason"):
+        auto_fail = (entry.get("auto_fail_reason") or "").strip().lower()
+        if auto_fail.startswith("nc"):
+            return "NC/NS"
+        return "Fail"
+
+    call_fails = sum(1 for i in range(1, 4) if (entry.get(f"call_{i}") or {}).get("result") == "Fail")
+    sup_fails = sum(1 for i in range(1, 3) if (entry.get(f"sup_transfer_{i}") or {}).get("result") == "Fail")
+    sup_only = entry.get("supervisor_only", False)
+
+    if call_fails >= 2:
+        return "Fail"
+
+    if sup_only and entry.get("final_attempt") and sup_fails >= 2:
+        return "Fail"
+
+    return "Incomplete"
+
+
 def build_clean_coaching(session):
     name = session.get("candidate_name", "Candidate")
     auto_fail = session.get("auto_fail_reason")
@@ -366,6 +422,116 @@ def generate_summaries(session, api_key=""):
     coaching = build_clean_coaching(session)
     fail = "N/A" if _is_fail_na(session) else build_clean_fail(session)
     return {"coaching": coaching, "fail": fail}
+
+
+def _count_results(session, prefix, total, target):
+    return sum(1 for i in range(1, total + 1) if (session.get(f"{prefix}_{i}") or {}).get("result") == target)
+
+
+def _format_newbie_shift_for_form(session):
+    newbie = session.get("newbie_shift_data")
+    if not newbie:
+        return "N/A"
+    parts = [newbie.get("newbie_date", "").strip(), "at", newbie.get("newbie_time", "").strip(), newbie.get("newbie_tz", "").strip()]
+    return " ".join(part for part in parts if part).strip() or "N/A"
+
+
+def _map_auto_fail_for_form(auto_fail_reason):
+    reason = (auto_fail_reason or "").strip().lower()
+    if not reason:
+        return "N/A"
+    if "nc/ns" in reason or "nc / ns" in reason:
+        return "NC/NS"
+    if "stopped responding" in reason:
+        return "Stopped responding in chat"
+    if "unable to turn off vpn" in reason or "vpn" in reason:
+        return "Unable to turn off VPN"
+    if "wrong headset" in reason and "usb" in reason:
+        return "Wrong headset (not USB)"
+    if "wrong headset" in reason and "noise" in reason:
+        return "Wrong headset (not noise cancelling)"
+    if "not ready for session" in reason:
+        return "Not ready for session (incorrect settings, can't get logged in to programs)"
+    return "N/A"
+
+
+def _map_tech_issue_for_form(session):
+    current = session.get("tech_issue")
+    logs = [entry.get("issue", "") for entry in session.get("tech_issues_log", []) if isinstance(entry, dict)]
+    candidates = [current, *reversed(logs)]
+
+    for candidate in candidates:
+        issue = (candidate or "").strip()
+        lowered = issue.lower()
+        if not issue or issue == "N/A":
+            continue
+        if lowered.startswith("other:"):
+            other_text = issue.split(":", 1)[1].strip() or "Other"
+            return {"choice": "Other", "other_text": other_text}
+        if "no script pop" in lowered:
+            return {"choice": "No script pop", "other_text": ""}
+        if "calls would not route" in lowered:
+            return {"choice": "Calls would not route", "other_text": ""}
+        if "discord issues" in lowered:
+            return {"choice": "Discord issues", "other_text": ""}
+        if "internet speed" in lowered:
+            return {"choice": "Internet speed issues", "other_text": ""}
+
+    return {"choice": "N/A", "other_text": ""}
+
+
+def _is_form_fail_session(session):
+    if session.get("auto_fail_reason"):
+        return False
+    if session.get("supervisor_only", False):
+        return _count_results(session, "sup_transfer", 2, "Fail") >= 2
+    return _count_results(session, "call", 3, "Fail") >= 2
+
+
+def build_form_fill_payload(session, settings, coaching_summary="", fail_summary=""):
+    sup_only = session.get("supervisor_only", False)
+    newbie = session.get("newbie_shift_data")
+    calls_passed = _count_results(session, "call", 3, "Pass")
+    calls_failed = _count_results(session, "call", 3, "Fail")
+    sups_passed = _count_results(session, "sup_transfer", 2, "Pass")
+    sups_failed = _count_results(session, "sup_transfer", 2, "Fail")
+    sup_attempts = sups_passed + sups_failed
+    final_status = compute_final_status(session)
+    tech_issue = _map_tech_issue_for_form(session)
+    summaries = generate_summaries(session)
+
+    mock_complete = "No"
+    if not sup_only and (calls_passed >= 2 or calls_failed >= 2):
+        mock_complete = "Yes"
+
+    sup_complete = "No"
+    if not newbie:
+        if sup_only and sup_attempts >= 1:
+            sup_complete = "Yes"
+        elif not sup_only and (sups_passed >= 1 or sups_failed >= 2):
+            sup_complete = "Yes"
+
+    all_complete = "Yes" if not newbie and (session.get("auto_fail_reason") or final_status in {"Pass", "Fail"}) else "No"
+
+    fail_reason = "N/A"
+    if _is_form_fail_session(session):
+        fail_reason = (fail_summary or "").strip() or summaries["fail"]
+
+    return {
+        "tester_name": (session.get("tester_name") or settings.get("tester_name") or settings.get("display_name") or "").strip(),
+        "candidate_name": (session.get("candidate_name") or "").strip(),
+        "skills": ["Supervisor Transfer"] if sup_only else ["Mock Calls", "Supervisor Transfer"],
+        "mock_complete": mock_complete,
+        "sup_complete": sup_complete,
+        "all_complete": all_complete,
+        "newbie_shift": _format_newbie_shift_for_form(session),
+        "auto_fail": _map_auto_fail_for_form(session.get("auto_fail_reason")),
+        "headset": (session.get("headset_brand") or "N/A").strip() or "N/A",
+        "tech_issue_choice": tech_issue["choice"],
+        "tech_issue_other": tech_issue["other_text"],
+        "coaching": (coaching_summary or "").strip() or summaries["coaching"],
+        "fail_reason": fail_reason,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -508,12 +674,14 @@ async def finish_session_simple():
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {"ok": False, "error": "No active session"}
+    final_status = doc.get("final_status") or compute_final_status(doc)
     record = {
+        **doc,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M %p"),
         "candidate": doc.get("candidate_name", "Unknown"),
         "tester_name": doc.get("tester_name", ""),
-        "status": doc.get("final_status", "Fail"),
-        **doc,
+        "final_status": final_status,
+        "status": final_status,
     }
     await db.history.insert_one(record)
     await db.sessions.delete_one({"_id": "active_session"})
@@ -532,17 +700,23 @@ async def discard_session():
 @api_router.get("/history")
 async def get_history():
     docs = await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500)
+    for doc in docs:
+        normalized_status = normalize_history_status(doc)
+        doc["status"] = normalized_status
+        if normalized_status != "NC/NS":
+            doc["final_status"] = doc.get("final_status") or normalized_status
     return docs
 
 
 @api_router.get("/history/stats")
 async def get_history_stats():
-    docs = await db.history.find({}, {"_id": 0, "status": 1}).to_list(5000)
+    docs = await db.history.find({}, {"_id": 0}).to_list(5000)
     total = len(docs)
-    passes = sum(1 for d in docs if d.get("status") == "Pass")
-    fails = sum(1 for d in docs if d.get("status") == "Fail")
-    ncns = sum(1 for d in docs if d.get("status") == "NC/NS" or (d.get("auto_fail_reason") or "").lower().startswith("nc"))
-    incomplete = sum(1 for d in docs if d.get("status") == "Incomplete")
+    normalized_statuses = [normalize_history_status(doc) for doc in docs]
+    passes = sum(1 for status in normalized_statuses if status == "Pass")
+    fails = sum(1 for status in normalized_statuses if status == "Fail")
+    ncns = sum(1 for status in normalized_statuses if status == "NC/NS")
+    incomplete = sum(1 for status in normalized_statuses if status == "Incomplete")
     pass_rate = round((passes / total * 100) if total > 0 else 0, 1)
     return {"total": total, "passes": passes, "fails": fails, "ncns": ncns, "incomplete": incomplete, "pass_rate": pass_rate}
 
@@ -633,14 +807,16 @@ async def finish_all(payload: dict):
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {"ok": False, "error": "No active session"}
+    final_status = doc.get("final_status") or compute_final_status(doc)
     record = {
+        **doc,
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M %p"),
         "candidate": doc.get("candidate_name", "Unknown"),
         "tester_name": doc.get("tester_name", ""),
-        "status": doc.get("final_status", "Fail"),
+        "final_status": final_status,
+        "status": final_status,
         "coaching_summary": payload.get("coaching_summary", ""),
         "fail_summary": payload.get("fail_summary", ""),
-        **doc,
     }
     await db.history.insert_one(record)
     await db.sessions.delete_one({"_id": "active_session"})
@@ -662,7 +838,22 @@ async def update_status():
 
 @api_router.post("/form/fill")
 async def fill_form(payload: dict):
-    return {"ok": True, "message": "Form filling is available in the desktop version. In the web version, use the Copy buttons to copy summaries."}
+    session = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
+    if not session:
+        return {"ok": False, "message": "No active session was found to send to the Cert Form."}
+
+    settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0}) or {}
+    form_url = (settings.get("form_url") or DEFAULT_FORM_URL or "").strip()
+    if not form_url:
+        return {"ok": False, "message": "No Cert Form URL is configured in Settings."}
+
+    form_payload = build_form_fill_payload(
+        session,
+        settings,
+        payload.get("coaching", ""),
+        payload.get("fail_reason", ""),
+    )
+    return fill_cert_form(form_url, form_payload)
 
 
 @api_router.get("/")

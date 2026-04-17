@@ -183,6 +183,27 @@ select { cursor: pointer; }
 .form-row label { min-width: 200px; font-weight: 600; font-size: var(--font-size-sm); color: var(--text-secondary); }
 .form-row input, .form-row select { max-width: 320px; }
 
+/* Narrow setup labels so call/transfer dropdowns use the card width more efficiently */
+.setup-card .form-row {
+  gap: var(--space-sm);
+  margin-bottom: 12px;
+}
+
+.setup-card .form-row:last-child {
+  margin-bottom: 0;
+}
+
+.setup-card .form-row label {
+  min-width: 88px;
+}
+
+.setup-card .form-row input,
+.setup-card .form-row select {
+  flex: 1;
+  max-width: none;
+  min-width: 0;
+}
+
 /* Tabs */
 .tabs-header { display: flex; gap: 2px; border-bottom: 1px solid var(--border-subtle); margin-bottom: var(--space-lg); }
 .tab-btn { padding: 10px 20px; background: transparent; color: var(--text-secondary); border: none; border-bottom: 3px solid transparent; font-family: var(--font-body); font-size: var(--font-size-sm); font-weight: 600; cursor: pointer; transition: all var(--transition-fast); }

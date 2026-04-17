@@ -60,6 +60,13 @@ export default function SupTransferPage({ onNavigate }) {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    const el = document.querySelector('[data-testid="page-content"]');
+    if (el) {
+      el.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [transferNum]);
+
   const shows = settings.shows || defaults.shows || [];
   const callers = useMemo(() => settings.donors_existing || defaults.donors_existing || [], [settings.donors_existing, defaults.donors_existing]);
   const callerIdx = Math.max(0, callers.findIndex(c => `${c[0]} ${c[1]}` === setup.caller));
@@ -121,8 +128,6 @@ export default function SupTransferPage({ onNavigate }) {
         setTransferNum(2);
         resetTransfer();
         regenSupFlags();
-        const el = document.querySelector('[data-testid="page-content"]');
-        if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } else {
       if (result === 'Fail') {
@@ -150,7 +155,7 @@ export default function SupTransferPage({ onNavigate }) {
       </div>
 
       <div className="split-layout">
-        <div className="card">
+        <div className="card setup-card">
           <h3 style={{ marginBottom: 16 }}>Call Setup</h3>
           <div className="form-row"><label>Caller</label>
             <select value={setup.caller} onChange={e => setSetup(p => ({ ...p, caller: e.target.value }))} data-testid="sup-caller">
@@ -183,11 +188,6 @@ export default function SupTransferPage({ onNavigate }) {
                 {supRandFlags.phone === 'Mobile' && <div className="scenario-var"><span className="scenario-var-label">SMS Opt-In:</span><span className={`scenario-var-value ${supRandFlags.sms === 'Yes' ? 'scenario-yes' : 'scenario-no'}`}>{supRandFlags.sms}</span></div>}
                 <div className="scenario-var"><span className="scenario-var-label">E-Newsletter:</span><span className={`scenario-var-value ${supRandFlags.enews === 'Yes' ? 'scenario-yes' : 'scenario-no'}`}>{supRandFlags.enews}</span></div>
                 <div className="scenario-var"><span className="scenario-var-label">Cover $6 Shipping:</span><span className={`scenario-var-value ${supRandFlags.ship === 'Yes' ? 'scenario-yes' : 'scenario-no'}`}>{supRandFlags.ship}</span></div>
-              </div>
-              <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid rgba(34,197,94,0.2)' }}>
-                <div className="text-sm"><b>{currentCaller[0]} {currentCaller[1]}</b></div>
-                <div className="text-xs text-muted">{currentCaller[2]}, {currentCaller[3]}, {currentCaller[4]} {currentCaller[5]}</div>
-                <div className="text-xs text-muted">Phone: {currentCaller[6]} | Email: {currentCaller[7]}</div>
               </div>
             </>
           ) : <p className="text-muted">Select caller, show, and reason.</p>}
