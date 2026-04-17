@@ -134,21 +134,28 @@ All default data is defined in /app/backend/server.py.
   - Windows 10/11 (for building the installer)
 
   BUILD STEPS:
-  1. cd /app/frontend && yarn build
-     (Creates the production React build in /app/frontend/build/)
-
-  2. cd /app/desktop && npm install
+  1. cd /app/desktop && npm install
      (Installs Electron and electron-builder)
 
-  3. cd /app/desktop && npm run build:win
-     (Builds the Windows NSIS installer)
+  2. cd /app/desktop && npm run build:win
+     (Builds the production React frontend first, then builds the Windows NSIS installer)
 
-  4. The installer will be in /app/desktop/dist/
+  3. The installer will be in /app/desktop/dist/
      File: Mock Testing Suite Setup 2.5.0.exe
 
   NOTES:
   - The installer bundles the React frontend build + Python backend files.
+  - In production, Electron loads frontend files from:
+      /resources/frontend/
+    and starts the backend from:
+      /resources/backend/server.py
+  - In development, Electron loads the backend from:
+      /app/backend/server.py
   - The backend requires Python and MongoDB to be installed on the target machine.
+  - On Windows, the app looks for the Python launcher in this order:
+      1. py -3
+      2. python
+    Windows Store alias paths are ignored because they are not reliable for packaged startup.
   - For a fully standalone build, use PyInstaller to bundle Python:
     cd /app/backend && pyinstaller --onefile server.py
     Then modify main.js to run the .exe instead of "python -m uvicorn".

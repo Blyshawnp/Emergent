@@ -8,8 +8,8 @@
   "scripts": {
     "start": "electron .",
     "build:react": "cd ../frontend && yarn build",
-    "build:win": "electron-builder --win --x64",
-    "build": "npm run build:react && npm run build:win",
+    "build:win": "npm run build:react && electron-builder --win --x64",
+    "build": "npm run build:win",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

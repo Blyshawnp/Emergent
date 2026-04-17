@@ -3,8 +3,9 @@
  * Manages the application window, system tray, backend server, and auto-updates.
  */
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron');
+const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const http = require('http');
 const Store = require('electron-store');
 
@@ -16,17 +17,36 @@ const isDev = !app.isPackaged;
 let mainWindow = null;
 let tray = null;
 let backendProcess = null;
+let backendLaunchError = null;
+let backendLogTail = [];
+let backendCommandLabel = '';
 
 // ═══════════════════════════════════════════════════════════════
 // PATHS
 // ═══════════════════════════════════════════════════════════════
-function getResourcePath(subpath) {
-  if (isDev) return path.join(__dirname, '..', subpath);
+function getDesktopPath(subpath = '') {
+  if (isDev) {
+    return path.join(path.resolve(__dirname, '..'), subpath);
+  }
   return path.join(process.resourcesPath, subpath);
 }
 
+function getBackendPath(subpath = '') {
+  if (isDev) {
+    return path.join(path.resolve(__dirname, '..', '..', 'backend'), subpath);
+  }
+  return path.join(process.resourcesPath, 'backend', subpath);
+}
+
+function getFrontendPath(subpath = '') {
+  if (isDev) {
+    return path.join(path.resolve(__dirname, '..', '..', 'frontend', 'build'), subpath);
+  }
+  return path.join(process.resourcesPath, 'frontend', subpath);
+}
+
 function getAssetPath(filename) {
-  return path.join(getResourcePath('assets'), filename);
+  return path.join(getDesktopPath('assets'), filename);
 }
 
 function isSafeExternalUrl(value, allowedProtocols = ['http:', 'https:', 'mailto:']) {
@@ -54,14 +74,110 @@ function compareVersions(left, right) {
   return 0;
 }
 
+function appendBackendLog(line) {
+  if (!line) return;
+  backendLogTail.push(line);
+  if (backendLogTail.length > 12) {
+    backendLogTail = backendLogTail.slice(-12);
+  }
+}
+
+function getBackendFailureMessage(reason) {
+  const details = [];
+
+  if (reason) {
+    details.push(reason);
+  }
+
+  if (backendCommandLabel) {
+    details.push(`Backend command: ${backendCommandLabel}`);
+  }
+
+  const backendDir = getBackendPath();
+  details.push(`Backend path: ${backendDir}`);
+
+  if (backendLogTail.length > 0) {
+    details.push(`Recent backend output:\n${backendLogTail.join('\n')}`);
+  }
+
+  details.push('Verify that Python 3.10+ and MongoDB are installed and available to the packaged app.');
+
+  return details.join('\n\n');
+}
+
+function requireRuntimePath(targetPath, label) {
+  if (!fs.existsSync(targetPath)) {
+    throw new Error(`${label} was not found at:\n${targetPath}`);
+  }
+}
+
+function resolveWindowsCommand(name, { rejectWindowsApps = false } = {}) {
+  const lookup = spawnSync('where.exe', [name], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+
+  if (lookup.status !== 0) {
+    return null;
+  }
+
+  const matches = lookup.stdout
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => !rejectWindowsApps || !entry.toLowerCase().includes('\\windowsapps\\'));
+
+  return matches[0] || null;
+}
+
+function resolvePythonLauncher() {
+  if (process.platform === 'win32') {
+    const pyLauncher = resolveWindowsCommand('py');
+    if (pyLauncher) {
+      return {
+        command: pyLauncher,
+        args: ['-3'],
+        label: 'py -3',
+      };
+    }
+
+    const pythonLauncher = resolveWindowsCommand('python', { rejectWindowsApps: true });
+    if (pythonLauncher) {
+      return {
+        command: pythonLauncher,
+        args: [],
+        label: pythonLauncher,
+      };
+    }
+
+    throw new Error('Python 3 was not found on PATH. Install Python 3.10+ and ensure the launcher is available to the app.');
+  }
+
+  return {
+    command: 'python3',
+    args: [],
+    label: 'python3',
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════
 // BACKEND SERVER
 // ═══════════════════════════════════════════════════════════════
 function startBackend() {
-  const backendDir = getResourcePath('backend');
-  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+  const backendDir = getBackendPath();
+  requireRuntimePath(backendDir, 'Backend directory');
+  requireRuntimePath(path.join(backendDir, 'server.py'), 'Backend entry file');
+
+  const launcher = resolvePythonLauncher();
+  const pythonCmd = launcher.command;
+  const pythonArgs = launcher.args;
+
+  backendLaunchError = null;
+  backendLogTail = [];
+  backendCommandLabel = `${launcher.label} -m uvicorn server:app --host 127.0.0.1 --port ${BACKEND_PORT}`;
 
   backendProcess = spawn(pythonCmd, [
+    ...pythonArgs,
     '-m', 'uvicorn', 'server:app',
     '--host', '127.0.0.1',
     '--port', String(BACKEND_PORT),
@@ -74,32 +190,41 @@ function startBackend() {
       DB_NAME: store.get('db_name', 'mock_testing_suite'),
       PYTHONUNBUFFERED: '1'
     },
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
   });
 
   backendProcess.stdout.on('data', (data) => {
-    console.log(`[BACKEND] ${data.toString().trim()}`);
+    const message = data.toString().trim();
+    appendBackendLog(message);
+    console.log(`[BACKEND] ${message}`);
   });
 
   backendProcess.stderr.on('data', (data) => {
     const msg = data.toString().trim();
+    appendBackendLog(msg);
     if (msg && !msg.includes('INFO:')) console.error(`[BACKEND] ${msg}`);
   });
 
   backendProcess.on('error', (err) => {
+    backendLaunchError = err;
     console.error('[BACKEND] Failed to start:', err.message);
     if (!app.isQuitting) {
       dialog.showErrorBox(
         'Startup Error',
-        'The backend server could not be started. Please make sure Python and MongoDB are installed and available on this PC.'
+        getBackendFailureMessage(`The backend server process could not be started.\n${err.message}`)
       );
     }
   });
 
   backendProcess.on('exit', (code) => {
     console.log(`[BACKEND] Process exited with code ${code}`);
+    if (code !== 0 && code !== null) {
+      backendLaunchError = new Error(`Backend exited with code ${code}.`);
+    }
+
     if (!app.isQuitting && code !== 0 && code !== null && mainWindow) {
-      dialog.showErrorBox('Backend Error', 'The backend server has stopped unexpectedly. The app may not function correctly.');
+      dialog.showErrorBox('Backend Error', getBackendFailureMessage(`The backend server stopped unexpectedly (exit code ${code}).`));
     }
   });
 }
@@ -116,7 +241,20 @@ function stopBackend() {
 function waitForBackend(retries = 30) {
   return new Promise((resolve, reject) => {
     const attempt = (remaining) => {
-      if (remaining <= 0) return reject(new Error('Backend failed to start'));
+      if (backendLaunchError) {
+        return reject(new Error(getBackendFailureMessage(backendLaunchError.message)));
+      }
+
+      if (!backendProcess) {
+        return reject(new Error(getBackendFailureMessage('Backend process was not created.')));
+      }
+
+      if (backendProcess.exitCode !== null) {
+        return reject(new Error(getBackendFailureMessage(`Backend exited with code ${backendProcess.exitCode}.`)));
+      }
+
+      if (remaining <= 0) return reject(new Error(getBackendFailureMessage('Backend did not respond before startup timed out.')));
+
       const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/api/`, (res) => {
         if (res.statusCode === 200) resolve();
         else setTimeout(() => attempt(remaining - 1), 500);
@@ -154,7 +292,8 @@ function createMainWindow() {
   if (isDev) {
     mainWindow.loadURL('http://localhost:3000');
   } else {
-    const frontendPath = path.join(getResourcePath('frontend'), 'index.html');
+    const frontendPath = getFrontendPath('index.html');
+    requireRuntimePath(frontendPath, 'Packaged frontend index');
     mainWindow.loadFile(frontendPath);
   }
 
@@ -285,13 +424,12 @@ process.on('unhandledRejection', (reason) => {
 app.whenReady().then(async () => {
   console.log(`[APP] Mock Testing Suite v${APP_VERSION} starting...`);
 
-  // Start backend
-  startBackend();
   try {
+    startBackend();
     await waitForBackend();
     console.log('[APP] Backend is ready');
   } catch (err) {
-    dialog.showErrorBox('Startup Error', 'Could not start the backend server. Please make sure Python and MongoDB are installed.');
+    dialog.showErrorBox('Startup Error', err.message);
     app.quit();
     return;
   }
