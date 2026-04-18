@@ -28,6 +28,13 @@ const NAV_ITEMS = [
 
 const UNSAVED_TRACKED_PAGES = new Set(['setup', 'basics', 'calls', 'suptransfer', 'newbieshift', 'review']);
 
+function resolveScreenshotUrl(imageUrl) {
+  const value = String(imageUrl || '').trim();
+  if (!value) return '';
+  if (/^(https?:|data:|blob:)/i.test(value)) return value;
+  return value.replace(/^\/+/, '');
+}
+
 function PageRouter({ page, navigate }) {
   const props = { onNavigate: navigate };
   switch (page) {
@@ -264,16 +271,17 @@ function DiscordRow({ title, message }) {
 
 function DiscordScreenshotRow({ title, imageUrl }) {
   const [copied, setCopied] = useState(false);
+  const resolvedImageUrl = resolveScreenshotUrl(imageUrl);
   const handleCopy = async () => {
     try {
-      const resp = await fetch(imageUrl);
+      const resp = await fetch(resolvedImageUrl);
       const blob = await resp.blob();
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch (_e) {
       // Fallback: open image in new tab
-      window.open(imageUrl, '_blank');
+      window.open(resolvedImageUrl, '_blank');
     }
   };
   return (
@@ -282,7 +290,7 @@ function DiscordScreenshotRow({ title, imageUrl }) {
         <div className="discord-title">{title}</div>
         <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={handleCopy}>{copied ? 'Copied!' : 'Copy Image'}</button>
       </div>
-      <img src={imageUrl} alt={title} style={{ width: '100%', maxHeight: 300, objectFit: 'contain', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }} />
+      <img src={resolvedImageUrl} alt={title} style={{ width: '100%', maxHeight: 300, objectFit: 'contain', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }} />
     </div>
   );
 }

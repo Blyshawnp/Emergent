@@ -55,8 +55,7 @@ function HowToTab() {
         <ul>
           <li><b>Tester Name</b> — Auto-filled from your settings</li>
           <li><b>Candidate Name</b> — Type the candidate's full name (required)</li>
-          <li><b>Pronouns</b> — Optional, used for accurate coaching summaries</li>
-          <li><b>Final Attempt</b> — Check if this is their last allowed mock session</li>
+          <li><b>Final Attempt</b> — Mark whether this is the candidate's last allowed mock session</li>
           <li><b>Headset</b> — Must be USB with noise-cancelling microphone. If not, auto-fails</li>
           <li><b>VPN</b> — If they have one, they must turn it off. If they can't, auto-fails</li>
           <li><b>Browser</b> — Must be default, extensions off, pop-ups allowed</li>
@@ -90,6 +89,16 @@ function HowToTab() {
           <li>Post "WXYZ Supervisor Test Call Being Queued" in Discord Stars channel</li>
           <li>Call the WXYZ number: <b>1-828-630-7006</b></li>
           <li>Pass Transfer 1 → done (go to Review). Fail both → Newbie Shift.</li>
+        </ul>
+      </Section>
+
+      <Section title="Smart Resume for Supervisor Transfer Only">
+        <p>The Smart Resume flow helps you continue a candidate into Supervisor Transfer when the mock calls were already completed in an earlier session.</p>
+        <ul>
+          <li><b>When it appears</b> — Click <b>Supervisor Transfer Only</b> from Home, then answer <b>Yes</b> when asked if you previously conducted the mock session for that candidate.</li>
+          <li><b>How it finds sessions</b> — The app looks through saved history for prior mock-call sessions tied to the current tester name in Settings. It only shows sessions that already have mock call results and have not already completed supervisor transfers.</li>
+          <li><b>What you’ll see</b> — If matching sessions exist, a resume picker opens so you can choose the right candidate. If none exist, the app tells you there are no resumable sessions for that tester.</li>
+          <li><b>How to continue</b> — Select the candidate, confirm the prompt, and the app restores the earlier Basics and mock-call data, then opens directly on <b>Supervisor Transfer #1</b>.</li>
         </ul>
       </Section>
 
@@ -145,7 +154,11 @@ function FlowsTab() {
         <p><b>Pass conditions:</b> 2 passed calls (1 New Donor + 1 Existing) AND 1 passed Sup Transfer.</p>
       </Section>
       <Section title="Supervisor Transfer Only">
-        <p>Used when the candidate previously completed mock calls but ran out of time for Sup Transfers. This skips straight to the Sup Transfer screen.</p>
+        <p>Used when the candidate previously completed mock calls but still needs supervisor transfers.</p>
+        <ul>
+          <li>If you answer <b>No</b> to the resume prompt, the app starts a fresh Supervisor Transfer Only flow through Basics and then routes straight to Supervisor Transfer.</li>
+          <li>If you answer <b>Yes</b>, Smart Resume searches your saved history for prior mock-call sessions completed by the current tester and lets you continue the correct candidate into Supervisor Transfer.</li>
+        </ul>
       </Section>
       <Section title="Newbie Shift (Incomplete)">
         <p>If the candidate fails both Sup Transfers or can't complete due to tech issues, a Newbie Shift is scheduled. The session is marked "Incomplete" rather than "Fail".</p>
@@ -228,7 +241,8 @@ function FaqTab() {
       <FAQ q="Can I go back and change something?" a='Yes — click "Back" on any screen. Your data is saved as you go.' />
       <FAQ q="What if I forget to select coaching?" a="The app will ask you to confirm if you want to continue without coaching." />
       <FAQ q='How do I do a Supervisor Transfer ONLY session?' a='On the Home screen, click "Supervisor Transfer Only". This skips Mock Calls.' />
-      <FAQ q='What does "Final Attempt" mean?' a="If this is the candidate's last allowed attempt, check the box. The tech issue messaging changes accordingly." />
+      <FAQ q='What does "Final Attempt" mean?' a="Use this on The Basics screen when the candidate is on their last allowed attempt. The app uses it in the session flow and messaging." />
+      <FAQ q='How does Smart Resume find a candidate for Supervisor Transfer Only?' a='It searches saved history for prior mock-call sessions that belong to the current tester, already have mock call results, and do not already have completed supervisor transfers.' />
       <FAQ q="What if 2 calls fail?" a="The session ends immediately and goes to Review. They should reschedule within 24 hours." />
       <FAQ q="Where is my data stored?" a="In the app's local database. Nothing goes online unless Google Sheets is enabled." />
       <FAQ q="How do I customize the Discord templates?" a='Go to Settings → Discord tab. You can add, edit, and remove both message templates and screenshot images.' />

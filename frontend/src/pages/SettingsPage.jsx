@@ -17,6 +17,13 @@ const TABS = [
 
 const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC'];
 
+function resolveScreenshotUrl(imageUrl) {
+  const value = String(imageUrl || '').trim();
+  if (!value) return '';
+  if (/^(https?:|data:|blob:)/i.test(value)) return value;
+  return value.replace(/^\/+/, '');
+}
+
 export default function SettingsPage({ onNavigate }) {
   const modal = useModal();
   const [tab, setTab] = useState('general');
@@ -102,6 +109,13 @@ function GeneralTab({ s, set }) {
       <SettingsRow label="Display Name"><input type="text" value={s.display_name || ''} onChange={e => set('display_name', e.target.value)} placeholder="Home screen greeting" style={{ maxWidth: 300 }} data-testid="settings-display" /></SettingsRow>
       <h3 style={{ margin: '24px 0 16px' }}>URLs</h3>
       <SettingsRow label="Cert Form URL"><input type="text" value={s.form_url || ''} onChange={e => set('form_url', e.target.value)} style={{ maxWidth: 500 }} data-testid="settings-form-url" /></SettingsRow>
+      <SettingsRow label="Form Fill Browser">
+        <select value={s.form_fill_browser || 'auto'} onChange={e => set('form_fill_browser', e.target.value)} style={{ maxWidth: 220 }} data-testid="settings-form-browser">
+          <option value="auto">Auto-detect fallback</option>
+          <option value="chrome">Chrome</option>
+          <option value="edge">Edge</option>
+        </select>
+      </SettingsRow>
       <SettingsRow label="Cert Sheet URL"><input type="text" value={s.cert_sheet_url || ''} onChange={e => set('cert_sheet_url', e.target.value)} style={{ maxWidth: 500 }} data-testid="settings-sheet-url" /></SettingsRow>
       <h3 style={{ margin: '24px 0 16px' }}>Theme</h3>
       <button className="btn btn-ghost btn-sm" onClick={() => {
@@ -302,7 +316,7 @@ function DiscordTab({ s, set }) {
   const add = () => set('discord_templates', [...discord, ['New Trigger', 'Message text here']]);
   const updateSS = (i, key, val) => set('discord_screenshots', screenshots.map((ss, idx) => idx === i ? { ...ss, [key]: val } : ss));
   const removeSS = (i) => set('discord_screenshots', screenshots.filter((_, idx) => idx !== i));
-  const addSS = () => set('discord_screenshots', [...screenshots, { title: 'New Screenshot', image_url: '/placeholder.png' }]);
+  const addSS = () => set('discord_screenshots', [...screenshots, { title: 'New Screenshot', image_url: 'placeholder.png' }]);
 
   return (
     <div className="card" data-testid="settings-discord">
@@ -331,7 +345,7 @@ function DiscordTab({ s, set }) {
             <div className="form-row" style={{ marginBottom: 8 }}><label style={{ minWidth: 80 }}>Title</label><input type="text" value={ss.title} onChange={e => updateSS(i, 'title', e.target.value)} /></div>
             <div className="form-row" style={{ marginBottom: 0 }}><label style={{ minWidth: 80 }}>Image URL</label><input type="text" value={ss.image_url} onChange={e => updateSS(i, 'image_url', e.target.value)} /></div>
           </div>
-          {ss.image_url && <img src={ss.image_url} alt={ss.title} style={{ width: 80, height: 60, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--border-subtle)' }} />}
+          {ss.image_url && <img src={resolveScreenshotUrl(ss.image_url)} alt={ss.title} style={{ width: 80, height: 60, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--border-subtle)' }} />}
           <button className="btn btn-danger btn-sm" onClick={() => removeSS(i)} title="Remove screenshot">X</button>
         </div>
       ))}

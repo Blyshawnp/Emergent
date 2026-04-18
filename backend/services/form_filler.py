@@ -46,41 +46,75 @@ def _build_chromium_options(options):
 
 def _resolve_driver_dir():
     explicit = os.environ.get("BROWSER_DRIVER_DIR", "").strip()
-    if explicit:
+    if explicit and os.path.isdir(explicit):
         return explicit
 
+    resources_root = os.environ.get("APP_RESOURCES_PATH", "").strip()
+    if resources_root:
+        packaged_dir = os.path.join(resources_root, "backend", "drivers")
+        if os.path.isdir(packaged_dir):
+            return packaged_dir
+
     if getattr(sys, "frozen", False):
-        return os.path.join(os.path.dirname(sys.executable), "drivers")
+        frozen_dir = os.path.join(os.path.dirname(sys.executable), "drivers")
+        if os.path.isdir(frozen_dir):
+            return frozen_dir
 
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), "drivers")
 
 
-def _create_driver():
+def _resolve_browser_order(preferred_browser: str):
+    browser = _normalize_key(preferred_browser or "auto")
+    if browser == "chrome":
+        return ["chrome", "edge"]
+    if browser == "edge":
+        return ["edge", "chrome"]
+    return ["chrome", "edge"]
+
+
+def _create_driver(preferred_browser: str = "auto"):
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service as ChromeService
     from selenium.webdriver.edge.service import Service as EdgeService
 
     driver_dir = _resolve_driver_dir()
     errors = []
-    chrome_driver = os.path.join(driver_dir, "chromedriver.exe")
-    edge_driver = os.path.join(driver_dir, "msedgedriver.exe")
+    drivers = {
+        "chrome": {
+            "display": "Chrome",
+            "path": os.path.join(driver_dir, "chromedriver.exe"),
+            "factory": lambda driver_path: webdriver.Chrome(
+                service=ChromeService(executable_path=driver_path),
+                options=_build_chromium_options(webdriver.ChromeOptions()),
+            ),
+        },
+        "edge": {
+            "display": "Edge",
+            "path": os.path.join(driver_dir, "msedgedriver.exe"),
+            "factory": lambda driver_path: webdriver.Edge(
+                service=EdgeService(executable_path=driver_path),
+                options=_build_chromium_options(webdriver.EdgeOptions()),
+            ),
+        },
+    }
 
-    if os.path.exists(chrome_driver):
+    browser_order = _resolve_browser_order(preferred_browser)
+    logger.info("Starting browser automation with preference '%s' from '%s'", preferred_browser or "auto", driver_dir)
+
+    for browser_key in browser_order:
+        config = drivers[browser_key]
+        driver_path = config["path"]
+        if not os.path.exists(driver_path):
+            errors.append(f"{config['display']}: missing driver at {driver_path}")
+            continue
+
+        logger.info("Attempting to launch %s using %s", config["display"], driver_path)
         try:
-            driver = webdriver.Chrome(service=ChromeService(executable_path=chrome_driver), options=_build_chromium_options(webdriver.ChromeOptions()))
-            return driver, "Chrome"
+            driver = config["factory"](driver_path)
+            return driver, config["display"]
         except Exception as exc:
-            errors.append(f"Chrome: {exc}")
-
-    if os.path.exists(edge_driver):
-        try:
-            driver = webdriver.Edge(service=EdgeService(executable_path=edge_driver), options=_build_chromium_options(webdriver.EdgeOptions()))
-            return driver, "Edge"
-        except Exception as exc:
-            errors.append(f"Edge: {exc}")
-
-    if not errors:
-        errors.append(f"No packaged browser driver was found in '{driver_dir}'.")
+            logger.exception("Failed to launch %s browser automation", config["display"])
+            errors.append(f"{config['display']}: {exc}")
 
     raise RuntimeError("Could not launch a supported browser for form automation. " + " | ".join(errors))
 
@@ -228,7 +262,7 @@ def _select_tech_issue(driver, choice: str, other_text: str, wait):
     _select_single_choice(driver, QUESTION_NAMES["tech_issue"], choice, wait, "Script or Technical Issues")
 
 
-def fill_form(form_url: str, data: dict) -> dict:
+def fill_form(form_url: str, data: dict, preferred_browser: str = "auto") -> dict:
     try:
         from selenium.common.exceptions import WebDriverException
     except ImportError:
@@ -242,7 +276,7 @@ def fill_form(form_url: str, data: dict) -> dict:
 
     try:
         logger.info("Starting Microsoft Forms automation")
-        driver, browser_name = _create_driver()
+        driver, browser_name = _create_driver(preferred_browser)
         driver.set_page_load_timeout(60)
         driver.get(form_url)
         wait = _wait_for_form(driver)

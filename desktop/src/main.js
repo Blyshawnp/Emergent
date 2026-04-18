@@ -465,14 +465,6 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
     return false;
   }
 
-  if (!hasUnsavedChanges) {
-    tray = null;
-    app.isQuitting = true;
-    stopBackend();
-    app.quit();
-    return true;
-  }
-
   isHandlingCloseConfirmation = true;
 
   try {
@@ -481,8 +473,10 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
       buttons: ['Yes', 'No'],
       defaultId: 1,
       cancelId: 1,
-      title: 'Exit App',
-      message: 'You have unsaved work. Are you sure you want to exit?'
+      title: 'Close App',
+      message: hasUnsavedChanges
+        ? 'You have unsaved work. Are you sure you want to close the app?'
+        : 'Are you sure you want to close the app?'
     });
 
     if (response !== 0) {
@@ -512,11 +506,7 @@ function createTray() {
     { type: 'separator' },
     { label: 'Show App', click: () => { if (mainWindow) mainWindow.show(); } },
     { type: 'separator' },
-    { label: 'Quit', click: () => {
-      tray = null;
-      stopBackend();
-      app.quit();
-    }}
+    { label: 'Quit', click: () => { promptForQuitConfirmation(); }}
   ]);
 
   tray.setToolTip(`Mock Testing Suite v${APP_VERSION}`);

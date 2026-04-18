@@ -176,7 +176,7 @@ export default function ReviewPage({ onNavigate }) {
 
       <div className="footer-bar" data-testid="review-footer">
         <span className="spacer" />
-        <button className="btn btn-warning" onClick={handleFillForm} disabled={filling} data-testid="review-fill-form">{filling ? 'Working...' : 'Fill Form'}</button>
+        <button className="btn btn-warning btn-lg" onClick={handleFillForm} disabled={filling} data-testid="review-fill-form">{filling ? 'Working...' : 'Fill Form'}</button>
         <button className="btn btn-success btn-lg" onClick={handleFinish} disabled={finishing} data-testid="review-finish">{finishing ? 'Saving...' : 'Save & Finish Session'}</button>
       </div>
     </div>

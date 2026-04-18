@@ -141,6 +141,7 @@ DEFAULT_SETTINGS = {
     "tutorial_completed": False,
     "tester_name": "",
     "display_name": "",
+    "form_fill_browser": "auto",
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
     "theme": "dark",
@@ -395,6 +396,34 @@ def normalize_history_status(entry):
         return "Fail"
 
     return "Incomplete"
+
+
+def _format_local_history_timestamp(timestamp_dt):
+    local_dt = timestamp_dt.astimezone()
+    return {
+        "timestamp": local_dt.strftime("%Y-%m-%d %I:%M %p"),
+        "timestamp_iso": local_dt.isoformat(),
+    }
+
+
+def _normalize_history_timestamp(entry):
+    timestamp_iso = (entry.get("timestamp_iso") or "").strip()
+    if timestamp_iso:
+        try:
+            entry.update(_format_local_history_timestamp(datetime.fromisoformat(timestamp_iso)))
+            return
+        except ValueError:
+            pass
+
+    timestamp_text = (entry.get("timestamp") or "").strip()
+    if not timestamp_text:
+        return
+
+    try:
+        legacy_dt = datetime.strptime(timestamp_text, "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone.utc)
+        entry.update(_format_local_history_timestamp(legacy_dt))
+    except ValueError:
+        return
 
 
 def build_clean_coaching(session):
@@ -675,9 +704,10 @@ async def finish_session_simple():
     if not doc:
         return {"ok": False, "error": "No active session"}
     final_status = doc.get("final_status") or compute_final_status(doc)
+    timestamp_fields = _format_local_history_timestamp(datetime.now(timezone.utc))
     record = {
         **doc,
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M %p"),
+        **timestamp_fields,
         "candidate": doc.get("candidate_name", "Unknown"),
         "tester_name": doc.get("tester_name", ""),
         "final_status": final_status,
@@ -701,6 +731,7 @@ async def discard_session():
 async def get_history():
     docs = await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500)
     for doc in docs:
+        _normalize_history_timestamp(doc)
         normalized_status = normalize_history_status(doc)
         doc["status"] = normalized_status
         if normalized_status != "NC/NS":
@@ -808,9 +839,10 @@ async def finish_all(payload: dict):
     if not doc:
         return {"ok": False, "error": "No active session"}
     final_status = doc.get("final_status") or compute_final_status(doc)
+    timestamp_fields = _format_local_history_timestamp(datetime.now(timezone.utc))
     record = {
         **doc,
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %I:%M %p"),
+        **timestamp_fields,
         "candidate": doc.get("candidate_name", "Unknown"),
         "tester_name": doc.get("tester_name", ""),
         "final_status": final_status,
@@ -853,7 +885,7 @@ async def fill_form(payload: dict):
         payload.get("coaching", ""),
         payload.get("fail_reason", ""),
     )
-    return fill_cert_form(form_url, form_payload)
+    return fill_cert_form(form_url, form_payload, settings.get("form_fill_browser", "auto"))
 
 
 @api_router.get("/")
