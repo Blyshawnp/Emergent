@@ -20,10 +20,6 @@ from services.form_filler import fill_form as fill_cert_form
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -31,6 +27,20 @@ logger = logging.getLogger(__name__)
 # CONSTANTS / DEFAULTS
 # ══════════════════════════════════════════════════════════════════
 APP_VERSION = "2.5.0"
+DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
+DEFAULT_DB_NAME = "mock_testing_suite"
+
+mongo_url = (os.getenv("MONGO_URL") or DEFAULT_MONGO_URL).strip() or DEFAULT_MONGO_URL
+db_name = (os.getenv("DB_NAME") or DEFAULT_DB_NAME).strip() or DEFAULT_DB_NAME
+
+if not os.getenv("MONGO_URL"):
+    logger.warning("[STARTUP] MONGO_URL was not set. Using default %s", DEFAULT_MONGO_URL)
+
+if not os.getenv("DB_NAME"):
+    logger.warning("[STARTUP] DB_NAME was not set. Using default %s", DEFAULT_DB_NAME)
+
+client = AsyncIOMotorClient(mongo_url)
+db = client[db_name]
 
 CALL_TYPES = [
     "New Donor - One Time Donation",
