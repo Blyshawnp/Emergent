@@ -5,7 +5,7 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 const http = require('http');
 const Store = require('electron-store');
 
@@ -23,6 +23,7 @@ let backendLogTail = [];
 let backendCommandLabel = '';
 let isHandlingCloseConfirmation = false;
 let hasUnsavedChanges = false;
+let hasRegisteredProcessCleanupHandlers = false;
 
 // ═══════════════════════════════════════════════════════════════
 // PATHS
@@ -175,6 +176,51 @@ function resolvePythonLauncher() {
   };
 }
 
+function killChildProcessTree(child, label) {
+  if (!child || !child.pid) {
+    return;
+  }
+
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } else {
+      child.kill('SIGTERM');
+    }
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    if (!/not found|no running instance|has terminated/i.test(message)) {
+      console.warn(`[APP] Failed to stop ${label}: ${message}`);
+    }
+  }
+}
+
+function registerProcessCleanupHandlers() {
+  if (hasRegisteredProcessCleanupHandlers) {
+    return;
+  }
+
+  const cleanup = () => {
+    app.isQuitting = true;
+    stopBackend();
+  };
+
+  process.on('exit', cleanup);
+  process.on('SIGINT', () => {
+    cleanup();
+    process.exit(0);
+  });
+  process.on('SIGTERM', () => {
+    cleanup();
+    process.exit(0);
+  });
+
+  hasRegisteredProcessCleanupHandlers = true;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // BACKEND SERVER
 // ═══════════════════════════════════════════════════════════════
@@ -227,8 +273,10 @@ function startBundledMongo() {
   mongoProcess.on('error', (err) => {
     backendLaunchError = err;
     console.error('[MONGO] Failed to start:', err.message);
+    mongoProcess = null;
   });
   mongoProcess.on('exit', (code) => {
+    mongoProcess = null;
     if (!app.isQuitting && code !== 0 && code !== null) {
       backendLaunchError = new Error(`Bundled MongoDB exited with code ${code}.`);
     }
@@ -265,12 +313,14 @@ function startBackend() {
     backendProcess.stderr.on('data', (data) => appendBackendLog(data.toString().trim()));
     backendProcess.on('error', (err) => {
       backendLaunchError = err;
+      backendProcess = null;
       console.error('[BACKEND] Failed to start:', err.message);
       if (!app.isQuitting) {
         dialog.showErrorBox('Startup Error', getBackendFailureMessage(`The backend executable could not be started.\n${err.message}`));
       }
     });
     backendProcess.on('exit', (code) => {
+      backendProcess = null;
       if (code !== 0 && code !== null) {
         backendLaunchError = new Error(`Backend executable exited with code ${code}.`);
       }
@@ -325,6 +375,7 @@ function startBackend() {
 
   backendProcess.on('error', (err) => {
     backendLaunchError = err;
+    backendProcess = null;
     console.error('[BACKEND] Failed to start:', err.message);
     if (!app.isQuitting) {
       dialog.showErrorBox(
@@ -335,6 +386,7 @@ function startBackend() {
   });
 
   backendProcess.on('exit', (code) => {
+    backendProcess = null;
     console.log(`[BACKEND] Process exited with code ${code}`);
     if (code !== 0 && code !== null) {
       backendLaunchError = new Error(`Backend exited with code ${code}.`);
@@ -348,16 +400,12 @@ function startBackend() {
 
 function stopBackend() {
   if (backendProcess) {
-    if (!backendProcess.killed) {
-      backendProcess.kill();
-    }
+    killChildProcessTree(backendProcess, 'backend process');
     backendProcess = null;
   }
 
   if (mongoProcess) {
-    if (!mongoProcess.killed) {
-      mongoProcess.kill();
-    }
+    killChildProcessTree(mongoProcess, 'MongoDB process');
     mongoProcess = null;
   }
 }
@@ -599,6 +647,7 @@ process.on('unhandledRejection', (reason) => {
 
 app.whenReady().then(async () => {
   console.log(`[APP] Mock Testing Suite v${APP_VERSION} starting...`);
+  registerProcessCleanupHandlers();
 
   try {
     if (!isDev) {
@@ -608,6 +657,7 @@ app.whenReady().then(async () => {
     await waitForBackend();
     console.log('[APP] Backend is ready');
   } catch (err) {
+    stopBackend();
     dialog.showErrorBox('Startup Error', err.message);
     app.quit();
     return;
