@@ -30,14 +30,20 @@ APP_VERSION = "2.5.0"
 DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
 DEFAULT_DB_NAME = "mock_testing_suite"
 
-mongo_url = (os.getenv("MONGO_URL") or DEFAULT_MONGO_URL).strip() or DEFAULT_MONGO_URL
-db_name = (os.getenv("DB_NAME") or DEFAULT_DB_NAME).strip() or DEFAULT_DB_NAME
+mongo_url = (os.getenv("MONGO_URL") or "").strip()
+db_name = (os.getenv("DB_NAME") or "").strip()
 
-if not os.getenv("MONGO_URL"):
-    logger.warning("[STARTUP] MONGO_URL was not set. Using default %s", DEFAULT_MONGO_URL)
+if mongo_url:
+    logger.info("[STARTUP] MONGO_URL loaded from environment.")
+else:
+    mongo_url = DEFAULT_MONGO_URL
+    logger.warning("[STARTUP] MONGO_URL was not set. Using fallback %s", DEFAULT_MONGO_URL)
 
-if not os.getenv("DB_NAME"):
-    logger.warning("[STARTUP] DB_NAME was not set. Using default %s", DEFAULT_DB_NAME)
+if db_name:
+    logger.info("[STARTUP] DB_NAME loaded from environment.")
+else:
+    db_name = DEFAULT_DB_NAME
+    logger.warning("[STARTUP] DB_NAME was not set. Using fallback %s", DEFAULT_DB_NAME)
 
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
