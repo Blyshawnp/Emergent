@@ -9,7 +9,6 @@ export default function SetupPage({ onNavigate }) {
   const [last, setLast] = useState('');
   const [display, setDisplay] = useState('');
   const [formUrl, setFormUrl] = useState('https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturlask');
-  const [sheetUrl, setSheetUrl] = useState('');
 
   const steps = [
     // Step 0 - Welcome
@@ -34,7 +33,6 @@ export default function SetupPage({ onNavigate }) {
           <p className="setup-sub">Pre-filled for you. Change only if needed.</p>
           <div className="card setup-card">
             <div className="form-row"><label>Cert Form URL</label><input type="text" value={formUrl} onChange={e => setFormUrl(e.target.value)} data-testid="setup-form-url" /></div>
-            <div className="form-row"><label>Cert Sheet URL</label><input type="text" value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} placeholder="Optional" data-testid="setup-sheet-url" /></div>
           </div>
         </div>
       </div>
@@ -47,7 +45,6 @@ export default function SetupPage({ onNavigate }) {
           <p className="setup-sub">Enable these anytime in the Settings tab.</p>
           <div className="card setup-card" style={{ textAlign: 'left', lineHeight: 1.8 }}>
             <p><strong>Gemini AI</strong> — Generates clean, professional coaching summaries from your checkboxes.</p>
-            <p><strong>Google Sheets</strong> — Automatically backs up every session to a team spreadsheet.</p>
             <p><strong>Google Calendar</strong> — Adds Newbie Shifts to your calendar with one click.</p>
             <p className="text-muted text-sm" style={{ marginTop: 12 }}>Step-by-step setup guides are in the Help tab.</p>
           </div>
@@ -71,7 +68,6 @@ export default function SetupPage({ onNavigate }) {
           tester_name: `${first.trim()} ${last.trim()}`,
           display_name: display.trim() || first.trim(),
           form_url: formUrl.trim(),
-          cert_sheet_url: sheetUrl.trim(),
         });
         onNavigate('home');
         window.location.reload();

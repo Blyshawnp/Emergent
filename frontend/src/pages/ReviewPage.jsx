@@ -61,9 +61,14 @@ export default function ReviewPage({ onNavigate }) {
         if (!cancelled) {
           setCoaching(summaries.coaching || '');
           setFail(summaries.fail || '');
+          if (summaries.error) {
+            await modal.error('Gemini Summary Error', summaries.error);
+          }
         }
-      } catch (_err) {
-        // Session load or summary generation failed — handled by loading/empty state
+      } catch (err) {
+        if (!cancelled) {
+          await modal.error('Summary Generation Failed', err.message || 'Unable to generate summaries.');
+        }
       }
       if (!cancelled) setLoading(false);
     })();
@@ -124,7 +129,7 @@ export default function ReviewPage({ onNavigate }) {
     setFinishing(true);
     try {
       const r = await api.finishSession(coaching, fail);
-      if (r.ok) { await modal.alert('Session Saved', 'Your session has been saved successfully!'); onNavigate('home'); }
+      if (r.ok) { await modal.alert('Session Saved', r.message || 'Your session has been saved successfully!'); onNavigate('home'); }
       else { await modal.error('Error', r.error || 'Unknown'); }
     } catch (e) { await modal.error('Error', e.message); }
     setFinishing(false);

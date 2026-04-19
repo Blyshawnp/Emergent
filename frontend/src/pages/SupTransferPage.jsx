@@ -40,6 +40,7 @@ export default function SupTransferPage({ onNavigate }) {
   const [isFinal, setIsFinal] = useState(false);
   const [isSupervisorOnly, setIsSupervisorOnly] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [candidateName, setCandidateName] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +53,7 @@ export default function SupTransferPage({ onNavigate }) {
         if (!cancelled && session) {
           setIsFinal(session.final_attempt || false);
           setIsSupervisorOnly(session.supervisor_only || false);
+          setCandidateName(session.candidate_name || '');
         }
       } catch (err) {
         // Failed to load transfer setup data — page renders with empty dropdowns
@@ -163,7 +165,14 @@ export default function SupTransferPage({ onNavigate }) {
 
   return (
     <div data-testid="suptransfer-page">
-      <h1 style={{ marginBottom: 8 }}>Supervisor Transfer #{transferNum}</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 8 }}>
+        <h1 style={{ marginBottom: 0 }}>Supervisor Transfer #{transferNum}</h1>
+        {candidateName && (
+          <div className="text-sm text-muted" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+            <b>Candidate:</b> {candidateName}
+          </div>
+        )}
+      </div>
       <div className="card" style={{ textAlign: 'center', marginBottom: 16, padding: 16, background: 'var(--color-primary)', border: 'none' }}>
         <div style={{ color: 'white', fontWeight: 700, fontSize: '1.125rem' }}>Call Corp WXYZ Test Transfer #: 1-828-630-7006</div>
       </div>

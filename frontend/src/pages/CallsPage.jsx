@@ -144,6 +144,7 @@ export default function CallsPage({ onNavigate }) {
   const [failNotes, setFailNotes] = useState('');
   const [randFlags, setRandFlags] = useState({});
   const [isFinal, setIsFinal] = useState(false);
+  const [candidateName, setCandidateName] = useState('');
 
   const rollRandom = useCallback(() => {
     setRandFlags(generateRandomFlags());
@@ -162,7 +163,10 @@ export default function CallsPage({ onNavigate }) {
         if (types.length) setCallSetup(prev => ({ ...prev, type: types[0] }));
         if (shows.length) setCallSetup(prev => ({ ...prev, show: shows[0][0] }));
         const { session } = await api.getCurrentSession();
-        if (!cancelled && session) setIsFinal(session.final_attempt || false);
+        if (!cancelled && session) {
+          setIsFinal(session.final_attempt || false);
+          setCandidateName(session.candidate_name || '');
+        }
       } catch (err) {
         // Failed to load defaults/settings — page will render with empty dropdowns
       }
@@ -223,7 +227,14 @@ export default function CallsPage({ onNavigate }) {
 
   return (
     <div data-testid="calls-page">
-      <h1 style={{ marginBottom: 24 }}>Call #{callNum}</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
+        <h1 style={{ marginBottom: 0 }}>Call #{callNum}</h1>
+        {candidateName && (
+          <div className="text-sm text-muted" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+            <b>Candidate:</b> {candidateName}
+          </div>
+        )}
+      </div>
       <div className="split-layout">
         <div className="card setup-card">
           <h3 style={{ marginBottom: 16 }}>Call Setup</h3>

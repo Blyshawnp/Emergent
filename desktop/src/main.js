@@ -11,6 +11,7 @@ const Store = require('electron-store');
 
 const store = new Store();
 const APP_VERSION = '2.5.0';
+const APP_ID = 'com.acddirect.mocktestingsuite';
 const BACKEND_PORT = 8600;
 const isDev = !app.isPackaged;
 
@@ -58,6 +59,13 @@ function getFrontendPath(subpath = '') {
 
 function getAssetPath(filename) {
   return path.join(getDesktopPath('assets'), filename);
+}
+
+function getAppIconPath() {
+  if (process.platform === 'win32') {
+    return getAssetPath('icon.ico');
+  }
+  return getAssetPath('icon.png');
 }
 
 function isSafeExternalUrl(value, allowedProtocols = ['http:', 'https:', 'mailto:']) {
@@ -442,7 +450,7 @@ function waitForBackend(retries = 30) {
 // WINDOW
 // ═══════════════════════════════════════════════════════════════
 function createMainWindow() {
-  const iconPath = getAssetPath('icon.png');
+  const iconPath = getAppIconPath();
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -545,7 +553,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
 // SYSTEM TRAY
 // ═══════════════════════════════════════════════════════════════
 function createTray() {
-  const iconPath = getAssetPath('icon.png');
+  const iconPath = getAppIconPath();
   const trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
   tray = new Tray(trayIcon);
 
@@ -647,6 +655,9 @@ process.on('unhandledRejection', (reason) => {
 
 app.whenReady().then(async () => {
   console.log(`[APP] Mock Testing Suite v${APP_VERSION} starting...`);
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(APP_ID);
+  }
   registerProcessCleanupHandlers();
 
   try {

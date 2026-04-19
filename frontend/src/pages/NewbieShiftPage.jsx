@@ -77,7 +77,14 @@ export default function NewbieShiftPage({ onNavigate }) {
 
   return (
     <div data-testid="newbieshift-page">
-      <h1 style={{ marginBottom: 24 }}>Schedule Newbie Shift</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
+        <h1 style={{ marginBottom: 0 }}>Schedule Newbie Shift</h1>
+        {candidateName && (
+          <div className="text-sm text-muted" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+            <b>Candidate:</b> {candidateName}
+          </div>
+        )}
+      </div>
       <div className="card" style={{ padding: 48 }}>
         <div style={{ display: 'flex', gap: 32, justifyContent: 'center', flexWrap: 'wrap' }}>
           <div>

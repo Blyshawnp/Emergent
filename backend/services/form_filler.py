@@ -44,23 +44,37 @@ def _build_chromium_options(options):
     return options
 
 
-def _resolve_driver_dir():
+def _resolve_driver_directories():
+    directories = []
+
+    def add_directory(candidate):
+        normalized = os.path.normcase(os.path.abspath(candidate))
+        if os.path.isdir(candidate) and normalized not in directories:
+            directories.append(normalized)
+
     explicit = os.environ.get("BROWSER_DRIVER_DIR", "").strip()
-    if explicit and os.path.isdir(explicit):
-        return explicit
+    if explicit:
+        add_directory(explicit)
 
     resources_root = os.environ.get("APP_RESOURCES_PATH", "").strip()
     if resources_root:
-        packaged_dir = os.path.join(resources_root, "backend", "drivers")
-        if os.path.isdir(packaged_dir):
-            return packaged_dir
+        add_directory(os.path.join(resources_root, "backend", "drivers"))
 
     if getattr(sys, "frozen", False):
-        frozen_dir = os.path.join(os.path.dirname(sys.executable), "drivers")
-        if os.path.isdir(frozen_dir):
-            return frozen_dir
+        add_directory(os.path.join(os.path.dirname(sys.executable), "drivers"))
 
-    return os.path.join(os.path.dirname(os.path.dirname(__file__)), "drivers")
+    add_directory(os.path.join(os.path.dirname(os.path.dirname(__file__)), "drivers"))
+    return directories
+
+
+def _resolve_driver_path(filename: str):
+    checked_paths = []
+    for directory in _resolve_driver_directories():
+        candidate = os.path.join(directory, filename)
+        checked_paths.append(candidate)
+        if os.path.isfile(candidate):
+            return candidate, checked_paths
+    return "", checked_paths
 
 
 def _resolve_browser_order(preferred_browser: str):
@@ -77,12 +91,11 @@ def _create_driver(preferred_browser: str = "auto"):
     from selenium.webdriver.chrome.service import Service as ChromeService
     from selenium.webdriver.edge.service import Service as EdgeService
 
-    driver_dir = _resolve_driver_dir()
     errors = []
     drivers = {
         "chrome": {
             "display": "Chrome",
-            "path": os.path.join(driver_dir, "chromedriver.exe"),
+            "filename": "chromedriver.exe",
             "factory": lambda driver_path: webdriver.Chrome(
                 service=ChromeService(executable_path=driver_path),
                 options=_build_chromium_options(webdriver.ChromeOptions()),
@@ -90,7 +103,7 @@ def _create_driver(preferred_browser: str = "auto"):
         },
         "edge": {
             "display": "Edge",
-            "path": os.path.join(driver_dir, "msedgedriver.exe"),
+            "filename": "msedgedriver.exe",
             "factory": lambda driver_path: webdriver.Edge(
                 service=EdgeService(executable_path=driver_path),
                 options=_build_chromium_options(webdriver.EdgeOptions()),
@@ -99,13 +112,17 @@ def _create_driver(preferred_browser: str = "auto"):
     }
 
     browser_order = _resolve_browser_order(preferred_browser)
-    logger.info("Starting browser automation with preference '%s' from '%s'", preferred_browser or "auto", driver_dir)
+    logger.info(
+        "Starting browser automation with preference '%s'. Driver directories: %s",
+        preferred_browser or "auto",
+        ", ".join(_resolve_driver_directories()) or "none found",
+    )
 
     for browser_key in browser_order:
         config = drivers[browser_key]
-        driver_path = config["path"]
-        if not os.path.exists(driver_path):
-            errors.append(f"{config['display']}: missing driver at {driver_path}")
+        driver_path, checked_paths = _resolve_driver_path(config["filename"])
+        if not driver_path:
+            errors.append(f"{config['display']}: missing {config['filename']} (checked: {', '.join(checked_paths) or 'no driver directories found'})")
             continue
 
         logger.info("Attempting to launch %s using %s", config["display"], driver_path)
