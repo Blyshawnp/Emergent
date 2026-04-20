@@ -12,6 +12,7 @@ import ReviewPage from './pages/ReviewPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import HelpPage from './pages/HelpPage';
+import { setSoundsEnabled } from './utils/sound';
 
 const LOGO_SRC = 'logo.png';
 
@@ -72,6 +73,7 @@ function App() {
         const s = await api.getSettings();
         if (cancelled) return;
         setSettings(s);
+        setSoundsEnabled(s.enable_sounds !== false);
         if (!s.setup_complete) setPage('setup');
       } catch (_err) {
         // Backend unreachable
@@ -130,7 +132,10 @@ function App() {
   const navigate = useCallback((p) => {
     setPage(p);
     if (page === 'settings') {
-      api.getSettings().then(s => setSettings(s)).catch(() => {});
+      api.getSettings().then(s => {
+        setSettings(s);
+        setSoundsEnabled(s.enable_sounds !== false);
+      }).catch(() => {});
     }
   }, [page]);
 
@@ -145,8 +150,12 @@ function App() {
     window.close();
   }, []);
 
-  const tickerContent = tickerMessages.length > 0
-    ? tickerMessages.join('  \u25C6  ')
+  const displayTickerMessages = tickerMessages
+    .map(message => String(message || '').replace(/^\d+[\.\)]\s+/, '').trim())
+    .filter(Boolean);
+
+  const tickerContent = displayTickerMessages.length > 0
+    ? displayTickerMessages.join('  \u25C6  ')
     : 'Welcome to Mock Testing Suite v3.0';
 
   return (
@@ -177,6 +186,9 @@ function App() {
             <div className="sidebar-actions">
               <button className="action-btn action-discord" onClick={() => setDiscordOpen(true)} data-testid="link-discord" title="Open Discord message templates">
                 <span className="action-emoji">{'\uD83D\uDCAC'}</span><span>Discord Post</span>
+              </button>
+              <button className="action-btn action-cert" onClick={() => { if (settings?.cert_sheet_url) window.open(settings.cert_sheet_url, '_blank'); }} data-testid="link-cert" title="Open Cert Spreadsheet">
+                <span className="action-emoji">{'\uD83D\uDCCA'}</span><span>Cert Spreadsheet</span>
               </button>
             </div>
             <div className="sidebar-footer">

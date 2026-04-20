@@ -126,12 +126,19 @@ function GeneralTab({ s, set }) {
       <SettingsRow label="Display Name"><input type="text" value={s.display_name || ''} onChange={e => set('display_name', e.target.value)} placeholder="Home screen greeting" style={{ maxWidth: 300 }} data-testid="settings-display" /></SettingsRow>
       <h3 style={{ margin: '24px 0 16px' }}>URLs</h3>
       <SettingsRow label="Cert Form URL"><input type="text" value={s.form_url || ''} onChange={e => set('form_url', e.target.value)} style={{ maxWidth: 500 }} data-testid="settings-form-url" /></SettingsRow>
+      <SettingsRow label="Cert Spreadsheet URL"><input type="text" value={s.cert_sheet_url || ''} onChange={e => set('cert_sheet_url', e.target.value)} style={{ maxWidth: 500 }} data-testid="settings-cert-sheet-url" /></SettingsRow>
       <SettingsRow label="Form Fill Browser">
         <select value={s.form_fill_browser || 'auto'} onChange={e => set('form_fill_browser', e.target.value)} style={{ maxWidth: 220 }} data-testid="settings-form-browser">
           <option value="auto">Auto-detect fallback</option>
           <option value="chrome">Chrome</option>
           <option value="edge">Edge</option>
         </select>
+      </SettingsRow>
+      <SettingsRow label="Sounds Enabled">
+        <label className="checkbox-label">
+          <input type="checkbox" checked={s.enable_sounds !== false} onChange={e => set('enable_sounds', e.target.checked)} data-testid="settings-sounds-enabled" />
+          <span>Play app sounds</span>
+        </label>
       </SettingsRow>
       <h3 style={{ margin: '24px 0 16px' }}>Theme</h3>
       <button className="btn btn-ghost btn-sm" onClick={() => {
@@ -394,35 +401,15 @@ function PaymentTab({ s, set }) {
 /* GEMINI TAB                                                      */
 /* ═══════════════════════════════════════════════════════════════ */
 function GeminiTab({ s, set }) {
-  const defaultCoachingPrompt = `You are a professional QA reviewer for a call center. Based on the coaching checkboxes selected during the mock call session, write a clear, concise coaching summary. Focus on what the candidate did well and what they need to improve. Keep it professional and constructive.\n\nExample output: "The candidate showed strong engagement but needs improvement in script navigation and verbatim reading. Coaching was given on showing appreciation after donation amount is given and using the Back/Next buttons instead of icons."`;
-  const defaultFailPrompt = `You are a professional QA reviewer for a call center. Based on the fail reasons selected during the mock call session, write a clear, concise reason for failure. Be direct but professional.\n\nExample output: "The candidate failed due to paraphrasing the script and volunteering information not on the script. Additionally, there were script navigation issues causing missed sections."`;
-  const geminiKeyConfigured = !!s.gemini_key_configured;
-  const geminiKeyPlaceholder = geminiKeyConfigured
-    ? 'API key already saved — enter a new key only to replace it'
-    : 'From aistudio.google.com';
-
   return (
     <div className="card" data-testid="settings-gemini">
       <label className="checkbox-label" style={{ marginBottom: 16 }}>
         <input type="checkbox" checked={s.enable_gemini || false} onChange={e => set('enable_gemini', e.target.checked)} data-testid="settings-gemini-on" />
         <span>Enable Gemini AI Summaries</span>
       </label>
-      <SettingsRow label="API Key"><input type="password" value={s.gemini_key || ''} onChange={e => set('gemini_key', e.target.value)} placeholder={geminiKeyPlaceholder} style={{ maxWidth: 400 }} data-testid="settings-gemini-key" autoComplete="off" /></SettingsRow>
-      <p className="text-muted text-sm" style={{ marginTop: 16 }}>
-        {geminiKeyConfigured
-          ? 'A Gemini API key is already saved. Leave the field blank to keep the current key, or paste a new one to replace it.'
-          : 'Go to aistudio.google.com > Get API Key > Create API Key > Paste above.'}
+      <p className="text-muted text-sm" style={{ marginTop: 8, lineHeight: 1.7 }}>
+        When enabled, Gemini generates clearer coaching and fail summaries from the checkboxes selected during the session review.
       </p>
-      {s.enable_gemini && (
-        <>
-          <h3 style={{ margin: '24px 0 12px' }}>Coaching Summary Prompt</h3>
-          <p className="text-muted text-xs" style={{ marginBottom: 8 }}>Instructions sent to Gemini when generating a coaching summary from checkboxes.</p>
-          <textarea rows={5} value={s.gemini_coaching_prompt || defaultCoachingPrompt} onChange={e => set('gemini_coaching_prompt', e.target.value)} style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px' }} data-testid="settings-gemini-coaching-prompt" />
-          <h3 style={{ margin: '24px 0 12px' }}>Reason for Fail Prompt</h3>
-          <p className="text-muted text-xs" style={{ marginBottom: 8 }}>Instructions sent to Gemini when generating a fail reason summary.</p>
-          <textarea rows={5} value={s.gemini_fail_prompt || defaultFailPrompt} onChange={e => set('gemini_fail_prompt', e.target.value)} style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px' }} data-testid="settings-gemini-fail-prompt" />
-        </>
-      )}
     </div>
   );
 }

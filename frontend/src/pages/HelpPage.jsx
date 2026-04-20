@@ -183,20 +183,8 @@ function IntegrationsTab() {
       <p>All integrations are optional. The app works perfectly without them.</p>
 
       <Section title="Gemini AI — Smart Summaries">
-        <p>Rewrites your coaching and fail summaries into clean, professional language using Google's Gemini AI.</p>
-        <ol>
-          <li>Go to <b>aistudio.google.com</b> in your browser</li>
-          <li>Sign in with your Google account</li>
-          <li>Click <b>"Get API Key"</b> in the left sidebar</li>
-          <li>Click <b>"Create API Key"</b></li>
-          <li>Select any Google Cloud project (or create a new one)</li>
-          <li>Copy the generated API key</li>
-          <li>In this app: Go to <b>Settings → Gemini AI</b></li>
-          <li>Check <b>"Enable Gemini AI Summaries"</b></li>
-          <li>Paste your API key in the "API Key" field</li>
-          <li>Click <b>"Save Settings"</b></li>
-        </ol>
-        <p>Once enabled, you can also customize the prompts that Gemini uses. The <b>Coaching Summary Prompt</b> and <b>Reason for Fail Prompt</b> textareas let you control exactly how Gemini writes the summaries.</p>
+        <p>When enabled, Gemini creates cleaner coaching and fail summaries based on the coaching and fail reason checkboxes you select during Review.</p>
+        <p>It does not change the pass/fail logic. It only rewrites the final summary text shown in Review.</p>
       </Section>
 
       <Section title="Google Calendar">
@@ -273,7 +261,7 @@ const TUTORIAL_STEPS = [
   { title: 'Mock Calls (Up to 3)', body: 'Grade calls using the Scenario Card. Select coaching checkboxes and Pass/Fail. 2 Passes (1 New + 1 Existing) moves to Sup Transfers. 2 Fails ends the session.' },
   { title: 'Supervisor Transfers', body: 'Test the candidate\'s transfer skills. Post the Discord message, call 1-828-630-7006, and grade. Pass 1 = done. Fail both = Newbie Shift.' },
   { title: 'Review & Submit', body: 'Review all results, edit summaries, fill the Cert Form, and save. The app calculates Pass/Fail/Incomplete automatically.' },
-  { title: 'Settings & Customization', body: 'Customize everything: Gemini AI prompts, Discord templates, caller data, shows, payment info, and more. All in the Settings tab.' },
+  { title: 'Settings & Customization', body: 'Customize app behavior, Gemini summaries, Discord templates, caller data, shows, payment info, and more. All in the Settings tab.' },
   { title: 'Need Help?', body: 'Check the Help tab anytime. The Support tab has direct links to email and Discord for getting help from the developer.' },
 ];
 

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import DOMPurify from 'dompurify';
+import { playSound } from '../utils/sound';
 
 const ModalContext = createContext(null);
 
@@ -26,8 +27,8 @@ export function ModalProvider({ children }) {
     });
   }, []);
 
-  const alert = useCallback((title, body, icon = 'check-circle') => {
-    return showModal({ type: 'alert', title, body, icon, buttons: [{ label: 'OK', cls: 'btn-primary', value: true }] });
+  const alert = useCallback((title, body, icon = 'check-circle', sound = 'popup') => {
+    return showModal({ type: 'alert', title, body, icon, sound, buttons: [{ label: 'OK', cls: 'btn-primary', value: true }] });
   }, [showModal]);
 
   const error = useCallback((title, body) => {
@@ -38,8 +39,8 @@ export function ModalProvider({ children }) {
     return showModal({ type: 'warning', title, body, icon: 'alert-triangle', buttons: [{ label: 'OK', cls: 'btn-primary', value: true }] });
   }, [showModal]);
 
-  const confirm = useCallback((title, body, icon = 'help-circle') => {
-    return showModal({ type: 'confirm', title, body, icon, buttons: [{ label: 'Yes', cls: 'btn-primary', value: true }, { label: 'No', cls: 'btn-muted', value: false }] });
+  const confirm = useCallback((title, body, icon = 'help-circle', sound = 'popup') => {
+    return showModal({ type: 'confirm', title, body, icon, sound, buttons: [{ label: 'Yes', cls: 'btn-primary', value: true }, { label: 'No', cls: 'btn-muted', value: false }] });
   }, [showModal]);
 
   const confirmDanger = useCallback((title, body) => {
@@ -56,6 +57,22 @@ export function ModalProvider({ children }) {
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [modal, closeModal]);
+
+  useEffect(() => {
+    if (!modal) return;
+
+    if (modal.sound) {
+      playSound(modal.sound);
+      return;
+    }
+
+    if (modal.type === 'warning' || modal.type === 'error' || modal.type === 'danger') {
+      playSound('warning');
+      return;
+    }
+
+    playSound('popup');
+  }, [modal]);
 
   return (
     <ModalContext.Provider value={{ alert, error, warning, confirm, confirmDanger, showModal }}>

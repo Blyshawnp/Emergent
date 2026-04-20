@@ -118,7 +118,9 @@ export default function ReviewPage({ onNavigate }) {
     setFilling(true);
     try {
       const r = await api.fillForm(coaching, fail);
-      if (r.ok) await modal.alert('Form Filled', r.message);
+      if (r.ok) {
+        await modal.alert('Form Filled', r.message, 'check-circle', 'success');
+      }
       else await modal.error('Form Fill Failed', r.message || 'Error');
     } catch (e) { await modal.error('Error', e.message); }
     setFilling(false);
@@ -129,7 +131,10 @@ export default function ReviewPage({ onNavigate }) {
     setFinishing(true);
     try {
       const r = await api.finishSession(coaching, fail);
-      if (r.ok) { await modal.alert('Session Saved', r.message || 'Your session has been saved successfully!'); onNavigate('home'); }
+      if (r.ok) {
+        await modal.alert('Session Saved', r.message || 'Your session has been saved successfully!', 'check-circle', 'success');
+        onNavigate('home');
+      }
       else { await modal.error('Error', r.error || 'Unknown'); }
     } catch (e) { await modal.error('Error', e.message); }
     setFinishing(false);

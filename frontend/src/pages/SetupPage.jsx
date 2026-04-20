@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
+import { playSound } from '../utils/sound';
 
 export default function SetupPage({ onNavigate }) {
   const modal = useModal();
@@ -9,6 +10,11 @@ export default function SetupPage({ onNavigate }) {
   const [last, setLast] = useState('');
   const [display, setDisplay] = useState('');
   const [formUrl, setFormUrl] = useState('https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturlask');
+  const [certSheetUrl, setCertSheetUrl] = useState('https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg');
+
+  useEffect(() => {
+    playSound('setup');
+  }, []);
 
   const steps = [
     // Step 0 - Welcome
@@ -33,6 +39,7 @@ export default function SetupPage({ onNavigate }) {
           <p className="setup-sub">Pre-filled for you. Change only if needed.</p>
           <div className="card setup-card">
             <div className="form-row"><label>Cert Form URL</label><input type="text" value={formUrl} onChange={e => setFormUrl(e.target.value)} data-testid="setup-form-url" /></div>
+            <div className="form-row"><label>Cert Spreadsheet URL</label><input type="text" value={certSheetUrl} onChange={e => setCertSheetUrl(e.target.value)} data-testid="setup-cert-sheet-url" /></div>
           </div>
         </div>
       </div>
@@ -68,6 +75,7 @@ export default function SetupPage({ onNavigate }) {
           tester_name: `${first.trim()} ${last.trim()}`,
           display_name: display.trim() || first.trim(),
           form_url: formUrl.trim(),
+          cert_sheet_url: certSheetUrl.trim(),
         });
         onNavigate('home');
         window.location.reload();

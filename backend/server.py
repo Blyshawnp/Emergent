@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 APP_VERSION = "2.5.0"
 DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
 DEFAULT_DB_NAME = "mock_testing_suite"
+DEFAULT_CERT_SHEET_URL = "https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg"
 
 mongo_url = (os.getenv("MONGO_URL") or "").strip()
 db_name = (os.getenv("DB_NAME") or "").strip()
@@ -62,6 +63,17 @@ def _content_file_candidates():
     return candidates
 
 
+def _runtime_config_candidates():
+    candidates = []
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    if resources_root:
+        candidates.append(Path(resources_root) / "backend" / "config" / "runtime_config.json")
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "config" / "runtime_config.json")
+    candidates.append(ROOT_DIR / "config" / "runtime_config.json")
+    return candidates
+
+
 def _load_external_content():
     for candidate in _content_file_candidates():
         try:
@@ -73,6 +85,21 @@ def _load_external_content():
         except Exception as exc:
             logger.warning("[CONTENT] Failed to load %s: %s", candidate, exc)
     logger.info("[CONTENT] Using built-in content defaults")
+    return {}
+
+
+@lru_cache(maxsize=1)
+def _load_backend_runtime_config():
+    for candidate in _runtime_config_candidates():
+        try:
+            if candidate.is_file():
+                with candidate.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info("[CONFIG] Loaded backend runtime config from %s", candidate)
+                return data
+        except Exception as exc:
+            logger.warning("[CONFIG] Failed to load %s: %s", candidate, exc)
+    logger.info("[CONFIG] No backend runtime config found")
     return {}
 
 CALL_TYPES = [
@@ -336,21 +363,9 @@ HELP_CONTENT = {
         {
             "title": "Gemini AI — Smart Summaries",
             "paragraphs": [
-                "Rewrites your coaching and fail summaries into clean, professional language using Google's Gemini AI."
+                "When enabled, Gemini creates clean coaching and fail summaries from the coaching and fail reason checkboxes you selected during the session."
             ],
-            "steps": [
-                "Go to <b>aistudio.google.com</b> in your browser",
-                "Sign in with your Google account",
-                "Click <b>\"Get API Key\"</b> in the left sidebar",
-                "Click <b>\"Create API Key\"</b>",
-                "Select any Google Cloud project (or create a new one)",
-                "Copy the generated API key",
-                "In this app: Go to <b>Settings → Gemini AI</b>",
-                "Check <b>\"Enable Gemini AI Summaries\"</b>",
-                "Paste your API key in the \"API Key\" field",
-                "Click <b>\"Save Settings\"</b>",
-            ],
-            "footer": "Once enabled, you can also customize the prompts that Gemini uses. The <b>Coaching Summary Prompt</b> and <b>Reason for Fail Prompt</b> textareas let you control exactly how Gemini writes the summaries.",
+            "footer": "Gemini uses the session's coaching and fail selections to write a cleaner summary automatically when Review loads.",
         },
         {
             "title": "Google Calendar",
@@ -399,9 +414,10 @@ DEFAULT_SETTINGS = {
     "display_name": "",
     "form_fill_browser": "auto",
     "form_url": DEFAULT_FORM_URL,
+    "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
+    "enable_sounds": True,
     "theme": "dark",
-    "enable_gemini": False,
-    "gemini_key": "",
+    "enable_gemini": True,
     "enable_calendar": False,
     "discord_templates": DISCORD_TEMPLATES,
     "discord_screenshots": DISCORD_SCREENSHOTS,
@@ -414,9 +430,7 @@ DEFAULT_SETTINGS = {
     "donors_increase": INCREASE_SUSTAINING,
 }
 
-SENSITIVE_SETTINGS_KEYS = {
-    "gemini_key",
-}
+SENSITIVE_SETTINGS_KEYS = set()
 
 ALLOWED_SETTINGS_KEYS = set(DEFAULT_SETTINGS.keys())
 PRESERVED_SETTINGS_KEYS_ON_RESTORE = {"setup_complete", "tutorial_completed"}
@@ -702,16 +716,27 @@ def build_clean_fail(session):
 
 
 DEFAULT_GEMINI_COACHING_PROMPT = (
-    "You are a professional QA reviewer for a call center. Based on the coaching "
-    "checkboxes selected during the mock call session, write a clear, concise coaching "
-    "summary. Focus on what the candidate did well and what they need to improve. Keep "
-    "it professional and constructive."
+    "You are writing an internal certification test call results summary for management. "
+    "Based on the coaching checkboxes selected during the mock certification session, "
+    "write a clear, concise, management-facing summary of what occurred during the test. "
+    "The summary must be objective, professional, and suitable for internal documentation. "
+    "Incorporate the selected coaching checklist items directly into the summary instead of "
+    "generalizing vaguely. Reference the specific coached items in plain language. Do not "
+    "address the candidate. Do not use second-person language such as 'you' or 'your'. Do "
+    "not give advice or instructions such as 'should', 'try to', or 'remember to'. Describe "
+    "the observed performance and the coaching provided during the session."
 )
 
 DEFAULT_GEMINI_FAIL_PROMPT = (
-    "You are a professional QA reviewer for a call center. Based on the fail reasons "
-    "selected during the mock call session, write a clear, concise reason for failure. "
-    "Be direct but professional."
+    "You are writing an internal certification test call failure summary for management. "
+    "Based on the fail reasons selected during the mock certification session, write a "
+    "clear, concise, management-facing summary of why the candidate did not pass. The "
+    "summary must be objective, professional, and suitable for internal documentation. "
+    "Incorporate the selected fail checklist items directly into the summary instead of "
+    "generalizing vaguely. Reference the specific fail reasons in plain language. Do not "
+    "address the candidate. Do not use second-person language such as 'you' or 'your'. Do "
+    "not give advice or instructions such as 'should', 'try to', or 'remember to'. State "
+    "what occurred during the session and any additional contributing issues."
 )
 
 PREFERRED_GEMINI_TEXT_MODELS = (
@@ -736,6 +761,23 @@ def _extract_gemini_text(response):
             if candidate_text:
                 return candidate_text
 
+    return ""
+
+
+@lru_cache(maxsize=1)
+def _get_backend_gemini_api_key() -> str:
+    env_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if env_key:
+        logger.info("[GEMINI] API key loaded from environment override")
+        return env_key
+
+    config = _load_backend_runtime_config()
+    config_key = (config.get("gemini_api_key") or "").strip()
+    if config_key:
+        logger.info("[GEMINI] API key loaded from backend runtime config")
+        return config_key
+
+    logger.warning("[GEMINI] No backend Gemini API key configured")
     return ""
 
 
@@ -1052,6 +1094,8 @@ async def complete_setup(payload: dict):
     }
     if "form_url" in payload:
         update_data["form_url"] = payload["form_url"]
+    if "cert_sheet_url" in payload:
+        update_data["cert_sheet_url"] = payload["cert_sheet_url"]
     await db.settings.update_one({"_id": "app_settings"}, {"$set": update_data}, upsert=True)
     return {"ok": True}
 
@@ -1211,7 +1255,7 @@ async def gen_summaries():
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
     api_key = ""
     if settings and settings.get("enable_gemini"):
-        api_key = settings.get("gemini_key", "")
+        api_key = _get_backend_gemini_api_key()
     result = generate_summaries(doc, api_key, settings)
     return result
 
@@ -1225,7 +1269,7 @@ async def regen_summary(payload: dict):
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
     api_key = ""
     if settings and settings.get("enable_gemini"):
-        api_key = settings.get("gemini_key", "")
+        api_key = _get_backend_gemini_api_key()
     result = generate_summaries(doc, api_key, settings)
     if result.get("error"):
         return {"ok": False, "error": result["error"], "text": result.get(summary_type, "")}

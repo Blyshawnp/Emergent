@@ -75,6 +75,18 @@ export default function NewbieShiftPage({ onNavigate }) {
     onNavigate('review');
   }, [getFormattedTime, getFormattedDate, tz, modal, onNavigate]);
 
+  const handleStoppedResponding = useCallback(async () => {
+    const confirmed = await modal.confirm(
+      'Confirm Auto-Fail',
+      `This will Automatically fail ${candidateName} and mark as Stopped Responding in Chat. Do you want to proceed?`,
+      'alert-triangle',
+      'warning'
+    );
+    if (!confirmed) return;
+    await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' });
+    onNavigate('review');
+  }, [candidateName, modal, onNavigate]);
+
   return (
     <div data-testid="newbieshift-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
@@ -123,7 +135,7 @@ export default function NewbieShiftPage({ onNavigate }) {
         <button className="btn btn-muted btn-sm" onClick={async () => {
           if (await modal.confirm('Confirm', 'Discard session and lose all progress?')) { await api.discardSession(); onNavigate('home'); }
         }} data-testid="newbie-discard" title="Discard this session completely">Discard</button>
-        <button className="btn btn-danger btn-sm" onClick={async () => { await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' }); onNavigate('review'); }} data-testid="newbie-stopped" title="Candidate stopped responding in Discord">Stopped Responding</button>
+        <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="newbie-stopped" title="Candidate stopped responding in Discord">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="newbie-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />
         <button className="btn btn-primary" onClick={handleContinue} data-testid="newbie-continue" title="Save newbie shift and go to review">Continue to Review</button>

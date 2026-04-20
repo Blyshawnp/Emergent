@@ -2,8 +2,6 @@ import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo } fro
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
-import { playError } from '../utils/buzz';
-
 const SUP_COACHING = [
   { label: 'Minimize dead air', helper: 'Maintain engagement throughout hold and transfer' },
   { label: 'Queue Not Changed', helper: 'Did not change queue to ACD Direct Supervisor' },
@@ -161,6 +159,18 @@ export default function SupTransferPage({ onNavigate }) {
     }
   };
 
+  const handleStoppedResponding = useCallback(async () => {
+    const confirmed = await modal.confirm(
+      'Confirm Auto-Fail',
+      `This will Automatically fail ${candidateName} and mark as Stopped Responding in Chat. Do you want to proceed?`,
+      'alert-triangle',
+      'warning'
+    );
+    if (!confirmed) return;
+    await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' });
+    onNavigate('review');
+  }, [candidateName, modal, onNavigate]);
+
   const toggle = (key, setter) => setter(prev => ({ ...prev, [key]: !prev[key] }));
 
   return (
@@ -272,7 +282,7 @@ export default function SupTransferPage({ onNavigate }) {
 
       <div className="footer-bar" data-testid="sup-footer">
         <button className="btn btn-muted btn-sm" onClick={() => { if (transferNum > 1) { setTransferNum(1); resetTransfer(); } else onNavigate(isSupervisorOnly ? 'basics' : 'calls'); }} data-testid="sup-back">Back</button>
-        <button className="btn btn-danger btn-sm" onClick={async () => { playError(); await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' }); onNavigate('review'); }} data-testid="sup-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
+        <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="sup-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="sup-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />
         <button className="btn btn-primary" onClick={handleContinue} data-testid="sup-continue">Continue</button>

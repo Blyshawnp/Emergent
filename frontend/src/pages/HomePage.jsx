@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
+import { playSound } from '../utils/sound';
 
 const LOGO_SRC = 'logo.png';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
@@ -88,6 +89,15 @@ export default function HomePage({ onNavigate }) {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    const testerNameForWelcome = settings.tester_name || settings.display_name || '';
+    if (!testerNameForWelcome) return;
+    if (window.sessionStorage.getItem('mts-welcome-sound-played') === '1') return;
+    playSound('welcome', testerNameForWelcome);
+    window.sessionStorage.setItem('mts-welcome-sound-played', '1');
+  }, [loading, settings]);
 
   if (loading) return <div className="page-loading">Loading...</div>;
 
