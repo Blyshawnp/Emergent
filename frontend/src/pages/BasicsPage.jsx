@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
-import { playError } from '../utils/buzz';
-
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 
 export default function BasicsPage({ onNavigate }) {
@@ -29,7 +27,16 @@ export default function BasicsPage({ onNavigate }) {
 
   const autoFail = async (reason) => {
     if (!form.candidate_name.trim()) { await modal.warning('Missing Info', 'Enter the Candidate Name first.'); return; }
-    playError();
+    let body = '';
+    if (reason === 'NC/NS') {
+      body = `This will Automatically fail ${form.candidate_name.trim()} and mark as a NC/NS. Do you want to proceed?`;
+    } else if (reason === 'Not Ready for Session') {
+      body = `This will Automatically fail ${form.candidate_name.trim()} and mark as Not Ready for Session. Do you want to proceed?`;
+    } else {
+      body = `This will Automatically fail ${form.candidate_name.trim()} and mark as Stopped Responding in Chat. Do you want to proceed?`;
+    }
+    const confirmed = await modal.confirm('Confirm Auto-Fail', body, 'alert-triangle', 'warning');
+    if (!confirmed) return;
     const data = { ...form, supervisor_only: supervisorOnlyMode, auto_fail_reason: reason, final_status: 'Fail' };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
     await api.startSession(data);
@@ -177,7 +184,7 @@ export default function BasicsPage({ onNavigate }) {
 
       <div className="footer-bar" data-testid="basics-footer">
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('NC/NS')} data-testid="basics-ncns" title="No Call / No Show — candidate did not join the session">NC / NS</button>
-        <button className="btn btn-danger btn-sm" onClick={() => autoFail('Not ready for session')} data-testid="basics-notready" title="Candidate was not prepared for the session (wrong setup, etc.)">Not Ready</button>
+        <button className="btn btn-danger btn-sm" onClick={() => autoFail('Not Ready for Session')} data-testid="basics-notready" title="Candidate was not prepared for the session (wrong setup, etc.)">Not Ready</button>
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('Stopped Responding in Chat')} data-testid="basics-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="basics-tech" title="Log a technical issue (internet, calls routing, script pop, etc.)">Tech Issue</button>
         <span className="spacer" />

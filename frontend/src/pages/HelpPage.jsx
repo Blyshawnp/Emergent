@@ -183,46 +183,8 @@ function IntegrationsTab() {
       <p>All integrations are optional. The app works perfectly without them.</p>
 
       <Section title="Gemini AI — Smart Summaries">
-        <p>Rewrites your coaching and fail summaries into clean, professional language using Google's Gemini AI.</p>
-        <ol>
-          <li>Go to <b>aistudio.google.com</b> in your browser</li>
-          <li>Sign in with your Google account</li>
-          <li>Click <b>"Get API Key"</b> in the left sidebar</li>
-          <li>Click <b>"Create API Key"</b></li>
-          <li>Select any Google Cloud project (or create a new one)</li>
-          <li>Copy the generated API key</li>
-          <li>In this app: Go to <b>Settings → Gemini AI</b></li>
-          <li>Check <b>"Enable Gemini AI Summaries"</b></li>
-          <li>Paste your API key in the "API Key" field</li>
-          <li>Click <b>"Save Settings"</b></li>
-        </ol>
-        <p>Once enabled, you can also customize the prompts that Gemini uses. The <b>Coaching Summary Prompt</b> and <b>Reason for Fail Prompt</b> textareas let you control exactly how Gemini writes the summaries.</p>
-      </Section>
-
-      <Section title="Google Sheets — Auto Backup">
-        <p>Automatically logs every completed session to a Google Spreadsheet.</p>
-        <ol>
-          <li>Go to <b>console.cloud.google.com</b></li>
-          <li>Create a new project (or select an existing one)</li>
-          <li>Go to <b>APIs & Services → Library</b></li>
-          <li>Search for and enable <b>"Google Sheets API"</b></li>
-          <li>Also enable <b>"Google Drive API"</b></li>
-          <li>Go to <b>APIs & Services → Credentials</b></li>
-          <li>Click <b>"Create Credentials" → "Service Account"</b></li>
-          <li>Give it a name (e.g., "MTS Backup") and click through</li>
-          <li>Click on the new service account → <b>"Keys" tab</b></li>
-          <li>Click <b>"Add Key" → "Create new key" → JSON</b></li>
-          <li>Save the downloaded file as <b>service_account.json</b></li>
-          <li>Open the JSON file and find the <b>"client_email"</b> field</li>
-          <li>Create or open a Google Sheet</li>
-          <li>Click <b>Share</b> and add the client_email with <b>Editor</b> access</li>
-          <li>Copy the <b>Spreadsheet ID</b> from the Sheet URL (the long string between /d/ and /edit)</li>
-          <li>In this app: Go to <b>Settings → Google Sheets</b></li>
-          <li>Check <b>"Enable Google Sheets Backup"</b></li>
-          <li>Paste the Spreadsheet ID</li>
-          <li>Click <b>"Save Settings"</b></li>
-        </ol>
-        <p>On the first saved session, the app will create headers in the sheet and lock the header row.</p>
+        <p>When enabled, Gemini creates cleaner coaching and fail summaries based on the coaching and fail reason checkboxes you select during Review.</p>
+        <p>It does not change the pass/fail logic. It only rewrites the final summary text shown in Review.</p>
       </Section>
 
       <Section title="Google Calendar">
@@ -244,7 +206,7 @@ function FaqTab() {
       <FAQ q='What does "Final Attempt" mean?' a="Use this on The Basics screen when the candidate is on their last allowed attempt. The app uses it in the session flow and messaging." />
       <FAQ q='How does Smart Resume find a candidate for Supervisor Transfer Only?' a='It searches saved history for prior mock-call sessions that belong to the current tester, already have mock call results, and do not already have completed supervisor transfers.' />
       <FAQ q="What if 2 calls fail?" a="The session ends immediately and goes to Review. They should reschedule within 24 hours." />
-      <FAQ q="Where is my data stored?" a="In the app's local database. Nothing goes online unless Google Sheets is enabled." />
+      <FAQ q="Where is my data stored?" a="In the app's local database." />
       <FAQ q="How do I customize the Discord templates?" a='Go to Settings → Discord tab. You can add, edit, and remove both message templates and screenshot images.' />
       <FAQ q="Can I edit the caller data and shows?" a='Yes — go to Settings. The Call Types, Shows, Callers, and Sup Reasons tabs let you fully customize all scenario data.' />
     </div>
@@ -299,7 +261,7 @@ const TUTORIAL_STEPS = [
   { title: 'Mock Calls (Up to 3)', body: 'Grade calls using the Scenario Card. Select coaching checkboxes and Pass/Fail. 2 Passes (1 New + 1 Existing) moves to Sup Transfers. 2 Fails ends the session.' },
   { title: 'Supervisor Transfers', body: 'Test the candidate\'s transfer skills. Post the Discord message, call 1-828-630-7006, and grade. Pass 1 = done. Fail both = Newbie Shift.' },
   { title: 'Review & Submit', body: 'Review all results, edit summaries, fill the Cert Form, and save. The app calculates Pass/Fail/Incomplete automatically.' },
-  { title: 'Settings & Customization', body: 'Customize everything: Gemini AI prompts, Discord templates, caller data, shows, payment info, and more. All in the Settings tab.' },
+  { title: 'Settings & Customization', body: 'Customize app behavior, Gemini summaries, Discord templates, caller data, shows, payment info, and more. All in the Settings tab.' },
   { title: 'Need Help?', body: 'Check the Help tab anytime. The Support tab has direct links to email and Discord for getting help from the developer.' },
 ];
 

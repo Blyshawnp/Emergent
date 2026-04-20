@@ -43,6 +43,11 @@
         "to": "backend/backend.exe"
       },
       {
+        "from": "../backend/config",
+        "to": "backend/config",
+        "filter": ["**/*"]
+      },
+      {
         "from": "../backend/drivers",
         "to": "backend/drivers",
         "filter": ["**/*"]

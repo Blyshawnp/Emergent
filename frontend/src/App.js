@@ -12,6 +12,7 @@ import ReviewPage from './pages/ReviewPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import HelpPage from './pages/HelpPage';
+import { setSoundsEnabled } from './utils/sound';
 
 const LOGO_SRC = 'logo.png';
 
@@ -72,6 +73,7 @@ function App() {
         const s = await api.getSettings();
         if (cancelled) return;
         setSettings(s);
+        setSoundsEnabled(s.enable_sounds !== false);
         if (!s.setup_complete) setPage('setup');
       } catch (_err) {
         // Backend unreachable
@@ -91,7 +93,7 @@ function App() {
       }
     };
     fetchTicker();
-    const interval = setInterval(fetchTicker, 90000);
+    const interval = setInterval(fetchTicker, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -130,7 +132,10 @@ function App() {
   const navigate = useCallback((p) => {
     setPage(p);
     if (page === 'settings') {
-      api.getSettings().then(s => setSettings(s)).catch(() => {});
+      api.getSettings().then(s => {
+        setSettings(s);
+        setSoundsEnabled(s.enable_sounds !== false);
+      }).catch(() => {});
     }
   }, [page]);
 
@@ -145,8 +150,12 @@ function App() {
     window.close();
   }, []);
 
-  const tickerContent = tickerMessages.length > 0
-    ? tickerMessages.join('  \u25C6  ') + '  \u25C6  ' + tickerMessages.join('  \u25C6  ')
+  const displayTickerMessages = tickerMessages
+    .map(message => String(message || '').replace(/^\d+[\.\)]\s+/, '').trim())
+    .filter(Boolean);
+
+  const tickerContent = displayTickerMessages.length > 0
+    ? displayTickerMessages.join('  \u25C6  ')
     : 'Welcome to Mock Testing Suite v3.0';
 
   return (
@@ -155,6 +164,7 @@ function App() {
         <div className="ticker-bar">
           <div className="ticker-track">
             <span className="ticker-content">{tickerContent}</span>
+            <span className="ticker-content" aria-hidden="true">{tickerContent}</span>
           </div>
         </div>
         <div className="app-shell">
@@ -166,7 +176,7 @@ function App() {
             </div>
             <nav className="sidebar-nav">
               {NAV_ITEMS.map(item => (
-                <button key={item.key} className={`nav-btn ${page === item.key ? 'active' : ''}`} onClick={() => navigate(item.key)} data-testid={`nav-${item.key}`}>
+                <button key={item.key} className={`nav-btn ${page === item.key ? 'active' : ''}`} onClick={() => navigate(item.key)} data-testid={`nav-${item.key}`} title={`Open ${item.label}`}>
                   <span className="nav-emoji">{item.emoji}</span>
                   <span className="nav-label">{item.label}</span>
                 </button>
@@ -177,17 +187,12 @@ function App() {
               <button className="action-btn action-discord" onClick={() => setDiscordOpen(true)} data-testid="link-discord" title="Open Discord message templates">
                 <span className="action-emoji">{'\uD83D\uDCAC'}</span><span>Discord Post</span>
               </button>
-              {settings?.enable_sheets && (
-                <button className="action-btn action-sheets" onClick={() => { if (settings.sheet_id) window.open(`https://docs.google.com/spreadsheets/d/${settings.sheet_id}`, '_blank'); }} data-testid="link-sheets" title="Open Google Sheets backup">
-                  <span className="action-emoji">+</span><span>Sheets</span>
-                </button>
-              )}
               <button className="action-btn action-cert" onClick={() => { if (settings?.cert_sheet_url) window.open(settings.cert_sheet_url, '_blank'); }} data-testid="link-cert" title="Open Cert Spreadsheet">
                 <span className="action-emoji">{'\uD83D\uDCCA'}</span><span>Cert Spreadsheet</span>
               </button>
             </div>
             <div className="sidebar-footer">
-              <button className="exit-btn" onClick={handleExit} data-testid="exit-btn">{'\uD83D\uDEAA'} Exit App</button>
+              <button className="exit-btn" onClick={handleExit} data-testid="exit-btn" title="Close the desktop app">{'\uD83D\uDEAA'} Exit App</button>
             </div>
           </aside>
 

@@ -40,6 +40,7 @@ const api = {
   getSettings: () => request('GET', '/settings'),
   saveSettings: (data) => savedRequest('PUT', '/settings', data),
   getDefaults: () => request('GET', '/settings/defaults'),
+  restoreSettingsDefaults: () => savedRequest('POST', '/settings/restore-defaults'),
   completeSetup: (data) => savedRequest('POST', '/settings/complete-setup', data),
   getCurrentSession: () => request('GET', '/session/current'),
   startSession: (data) => savedRequest('POST', '/session/start', data),

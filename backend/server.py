@@ -4,11 +4,13 @@ All routes in a single file for simplicity. Uses MongoDB for persistence.
 """
 import os
 import json
+import sys
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
+from functools import lru_cache
 
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
 APP_VERSION = "2.5.0"
 DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
 DEFAULT_DB_NAME = "mock_testing_suite"
+DEFAULT_CERT_SHEET_URL = "https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg"
 
 mongo_url = (os.getenv("MONGO_URL") or "").strip()
 db_name = (os.getenv("DB_NAME") or "").strip()
@@ -47,6 +50,57 @@ else:
 
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
+
+
+def _content_file_candidates():
+    candidates = []
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    if resources_root:
+        candidates.append(Path(resources_root) / "backend" / "content" / "app_content.json")
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "content" / "app_content.json")
+    candidates.append(ROOT_DIR / "content" / "app_content.json")
+    return candidates
+
+
+def _runtime_config_candidates():
+    candidates = []
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    if resources_root:
+        candidates.append(Path(resources_root) / "backend" / "config" / "runtime_config.json")
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "config" / "runtime_config.json")
+    candidates.append(ROOT_DIR / "config" / "runtime_config.json")
+    return candidates
+
+
+def _load_external_content():
+    for candidate in _content_file_candidates():
+        try:
+            if candidate.is_file():
+                with candidate.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info("[CONTENT] Loaded editable content from %s", candidate)
+                return data
+        except Exception as exc:
+            logger.warning("[CONTENT] Failed to load %s: %s", candidate, exc)
+    logger.info("[CONTENT] Using built-in content defaults")
+    return {}
+
+
+@lru_cache(maxsize=1)
+def _load_backend_runtime_config():
+    for candidate in _runtime_config_candidates():
+        try:
+            if candidate.is_file():
+                with candidate.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info("[CONFIG] Loaded backend runtime config from %s", candidate)
+                return data
+        except Exception as exc:
+            logger.warning("[CONFIG] Failed to load %s: %s", candidate, exc)
+    logger.info("[CONFIG] No backend runtime config found")
+    return {}
 
 CALL_TYPES = [
     "New Donor - One Time Donation",
@@ -136,7 +190,6 @@ AUTO_FAIL_REASONS = [
 
 TICKER_MESSAGES = [
     "Welcome to Mock Testing Suite v2.5.0",
-    "Reminder: Log out of Call Corp and Simple Script after each session",
     "Tip: Use the Discord Post button to quickly copy common messages",
     "Need help? Check the Help tab for step-by-step setup guides",
 ]
@@ -145,12 +198,214 @@ TICKER_DOC_URL = "https://docs.google.com/document/d/1kRJMSd-1qK3qU6jDYr30HeNglr
 UPDATE_DOC_URL = "https://docs.google.com/document/d/1_5L1LS6i5bYWxRYUiBrmaVonbQq9nEhY68XrL5G9c1w/export?format=txt"
 
 DEFAULT_FORM_URL = "https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl"
-DEFAULT_CERT_SHEET_URL = "https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg"
 
 DISCORD_SCREENSHOTS = [
     {"title": "Welcome New Agent", "image_url": "/welcome-new-agent.png"},
     {"title": "Welcome to Stars", "image_url": "/welcome-to-stars.png"},
 ]
+
+HELP_CONTENT = {
+    "howto": [
+        {
+            "title": "Home Screen",
+            "paragraphs": [
+                "The Home screen is your dashboard. It shows your stats (Total Sessions, Pass Rate, NC/NS Rate) and recent sessions."
+            ],
+            "bullets": [
+                "<b>Start New Session</b> — Begin a full mock call + supervisor transfer session",
+                "<b>Supervisor Transfer Only</b> — Used when a candidate previously ran out of time and only needs supervisor transfers",
+                "<b>Session History</b> — View all past sessions with search and detail views",
+            ],
+        },
+        {
+            "title": "The Basics Screen",
+            "paragraphs": [
+                "This is the first step in every session. You'll verify the candidate's setup.",
+                "<b>Footer buttons:</b>",
+            ],
+            "bullets": [
+                "<b>Tester Name</b> — Auto-filled from your settings",
+                "<b>Candidate Name</b> — Type the candidate's full name (required)",
+                "<b>Final Attempt</b> — Mark whether this is the candidate's last allowed mock session",
+                "<b>Headset</b> — Must be USB with noise-cancelling microphone. If not, auto-fails",
+                "<b>VPN</b> — If they have one, they must turn it off. If they can't, auto-fails",
+                "<b>Browser</b> — Must be default, extensions off, pop-ups allowed",
+                "<b style=\"color: var(--color-danger)\">NC/NS</b> — No Call / No Show. Instantly fails and goes to Review",
+                "<b style=\"color: var(--color-danger)\">Not Ready</b> — Candidate wasn't prepared for the session",
+                "<b style=\"color: var(--color-danger)\">Stopped Responding</b> — Candidate went silent in Discord",
+                "<b>Tech Issue</b> — Opens the Technical Issues dialog for troubleshooting",
+            ],
+        },
+        {
+            "title": "Calls Screen (Up to 3)",
+            "paragraphs": [
+                "You'll grade up to 3 mock calls. The scenario card shows you exactly who to portray.",
+                "<b>Routing logic:</b> 2 passes (1 New Donor + 1 Existing Member) → Sup Transfers. 2 fails → session ends. 1+1 → Call 3.",
+            ],
+            "bullets": [
+                "<b>Call Setup</b> — Select Call Type, Show, Caller, and Donation from the dropdowns",
+                "<b>Scenario Card</b> — Shows the caller's info, gift, and randomized variables (Phone Type, SMS, E-Newsletter, Shipping, CC Fee)",
+                "<b>Regenerate</b> — Re-rolls the random scenario variables without changing the call data",
+                "<b>Payment Simulation</b> — Shows the credit card and EFT info for the test call",
+                "<b>Pass/Fail</b> — Click PASS or FAIL after the call",
+                "<b>Coaching</b> — Select coaching checkboxes (required — if none selected, you'll be asked to confirm)",
+                "<b>Fail Reasons</b> — If FAIL, you must select at least one fail reason",
+            ],
+        },
+        {
+            "title": "Supervisor Transfer Screen (Up to 2)",
+            "paragraphs": [
+                "Tests the candidate's ability to transfer to a supervisor. Same coaching/fail flow as calls."
+            ],
+            "bullets": [
+                "Post \"WXYZ Supervisor Test Call Being Queued\" in Discord Stars channel",
+                "Call the WXYZ number: <b>1-828-630-7006</b>",
+                "Pass Transfer 1 → done (go to Review). Fail both → Newbie Shift.",
+            ],
+        },
+        {
+            "title": "Smart Resume for Supervisor Transfer Only",
+            "paragraphs": [
+                "The Smart Resume flow helps you continue a candidate into Supervisor Transfer when the mock calls were already completed in an earlier session."
+            ],
+            "bullets": [
+                "<b>When it appears</b> — Click <b>Supervisor Transfer Only</b> from Home, then answer <b>Yes</b> when asked if you previously conducted the mock session for that candidate.",
+                "<b>How it finds sessions</b> — The app looks through saved history for prior mock-call sessions tied to the current tester name in Settings. It only shows sessions that already have mock call results and have not already completed supervisor transfers.",
+                "<b>What you’ll see</b> — If matching sessions exist, a resume picker opens so you can choose the right candidate. If none exist, the app tells you there are no resumable sessions for that tester.",
+                "<b>How to continue</b> — Select the candidate, confirm the prompt, and the app restores the earlier Basics and mock-call data, then opens directly on <b>Supervisor Transfer #1</b>.",
+            ],
+        },
+        {
+            "title": "Newbie Shift Screen",
+            "paragraphs": [
+                "Only appears when the candidate needs a follow-up session. Pick a date, time, and timezone."
+            ],
+            "bullets": [
+                "Enter the date using the date picker or type in MM/DD/YYYY format",
+                "Enter time as H:MM (e.g. 10:30)",
+                "<b>Add to Google Calendar</b> — Creates an event titled \"Supervisor Test Call - [Candidate Name]\"",
+            ],
+        },
+        {
+            "title": "Review Screen",
+            "paragraphs": [
+                "Final review of the session. The Pass/Fail/Incomplete banner is calculated automatically."
+            ],
+            "bullets": [
+                "<b>Coaching Summary</b> — Generated from your coaching checkboxes (or Gemini AI if enabled)",
+                "<b>Fail Summary</b> — Generated from fail reasons (N/A for passing sessions)",
+                "<b>Copy</b> — Copies the summary text to your clipboard",
+                "<b>Regenerate</b> — Rebuilds the summary from checkbox data",
+                "<b>Fill Form</b> — Opens the Cert Form and maps session data to form fields",
+                "<b>Save & Finish</b> — Saves to history and clears the session",
+            ],
+        },
+        {
+            "title": "Discord Post Panel",
+            "paragraphs": [
+                "Click \"Discord Post\" in the sidebar to open the panel with two tabs:"
+            ],
+            "bullets": [
+                "<b>Templates</b> — Pre-written messages for Pass, Fail, Sup Intro, etc. Click \"Copy\" to copy to clipboard",
+                "<b>Screenshots</b> — Welcome images that can be copied to clipboard for Discord. Click \"Copy Image\" to copy",
+                "Both tabs are searchable",
+            ],
+        },
+        {
+            "title": "Tech Issue Button",
+            "paragraphs": [
+                "Available on every session screen. Opens a troubleshooting wizard:"
+            ],
+            "bullets": [
+                "<b>Internet Speed</b> — Asks for speed test results. Below 25 Mbps down / 10 Mbps up = fail",
+                "<b>Calls Won't Route</b> — Checks DTE status, then browser troubleshooting",
+                "<b>No Script Pop</b> — Browser troubleshooting steps",
+                "<b>Discord/Other</b> — Manual notes with resolution tracking",
+            ],
+        },
+    ],
+    "flows": [
+        {
+            "title": "Standard Full Session",
+            "paragraphs": [
+                "The Basics → Call 1 → Call 2 → (Call 3 if needed) → Sup Transfer 1 → (Sup Transfer 2 if needed) → Review → Save",
+                "<b>Pass conditions:</b> 2 passed calls (1 New Donor + 1 Existing) AND 1 passed Sup Transfer.",
+            ],
+        },
+        {
+            "title": "Supervisor Transfer Only",
+            "paragraphs": [
+                "Used when the candidate previously completed mock calls but still needs supervisor transfers."
+            ],
+            "bullets": [
+                "If you answer <b>No</b> to the resume prompt, the app starts a fresh Supervisor Transfer Only flow through Basics and then routes straight to Supervisor Transfer.",
+                "If you answer <b>Yes</b>, Smart Resume searches your saved history for prior mock-call sessions completed by the current tester and lets you continue the correct candidate into Supervisor Transfer.",
+            ],
+        },
+        {
+            "title": "Newbie Shift (Incomplete)",
+            "paragraphs": [
+                "If the candidate fails both Sup Transfers or can't complete due to tech issues, a Newbie Shift is scheduled. The session is marked \"Incomplete\" rather than \"Fail\"."
+            ],
+        },
+        {
+            "title": "Auto-Fail Scenarios",
+            "bullets": [
+                "<b>NC/NS</b> — No Call / No Show",
+                "<b>Stopped Responding</b> — Candidate went silent in Discord",
+                "<b>Not Ready</b> — Incorrect setup, can't log in",
+                "<b>Wrong Headset</b> — Not USB or not noise-cancelling",
+                "<b>VPN</b> — Using VPN and can't turn it off",
+            ],
+        },
+    ],
+    "integrations": [
+        {
+            "title": "Gemini AI — Smart Summaries",
+            "paragraphs": [
+                "When enabled, Gemini creates clean coaching and fail summaries from the coaching and fail reason checkboxes you selected during the session."
+            ],
+            "footer": "Gemini uses the session's coaching and fail selections to write a cleaner summary automatically when Review loads.",
+        },
+        {
+            "title": "Google Calendar",
+            "paragraphs": [
+                "The \"Add to Google Calendar\" button on the Newbie Shift screen creates a calendar event. No setup needed — it uses a Google Calendar URL template."
+            ],
+        },
+    ],
+    "faq": [
+        {"q": "What if the candidate stops responding?", "a": "Click the red \"Stopped Responding\" button. This instantly ends the session as a fail."},
+        {"q": "What if the candidate has technical issues?", "a": "Click \"Tech Issue\". The app walks you through troubleshooting: check DTE status, clear browsing data, re-login."},
+        {"q": "Can I go back and change something?", "a": "Yes — click \"Back\" on any screen. Your data is saved as you go."},
+        {"q": "What if I forget to select coaching?", "a": "The app will ask you to confirm if you want to continue without coaching."},
+        {"q": "How do I do a Supervisor Transfer ONLY session?", "a": "On the Home screen, click \"Supervisor Transfer Only\". This skips Mock Calls."},
+        {"q": "What does \"Final Attempt\" mean?", "a": "Use this on The Basics screen when the candidate is on their last allowed attempt. The app uses it in the session flow and messaging."},
+        {"q": "How does Smart Resume find a candidate for Supervisor Transfer Only?", "a": "It searches saved history for prior mock-call sessions that belong to the current tester, already have mock call results, and do not already have completed supervisor transfers."},
+        {"q": "What if 2 calls fail?", "a": "The session ends immediately and goes to Review. They should reschedule within 24 hours."},
+        {"q": "Where is my data stored?", "a": "In the app's local database."},
+        {"q": "How do I customize the Discord templates?", "a": "Go to Settings → Discord tab. You can add, edit, and remove both message templates and screenshot images."},
+        {"q": "Can I edit the caller data and shows?", "a": "Yes — go to Settings. The Call Types, Shows, Callers, and Sup Reasons tabs let you fully customize all scenario data."},
+    ],
+    "support": {
+        "intro": "Need help with the app? Reach out using one of these options:",
+        "email": "blyshawnp@gmail.com",
+        "discord_name": "shawnbly",
+        "discord_url": "https://discord.com/users/shawnbly",
+        "footer": "Include a description of the issue, what screen you were on, and any error messages you saw.",
+    },
+}
+
+EXTERNAL_CONTENT = _load_external_content()
+
+if isinstance(EXTERNAL_CONTENT.get("discord_templates"), list) and EXTERNAL_CONTENT["discord_templates"]:
+    DISCORD_TEMPLATES = EXTERNAL_CONTENT["discord_templates"]
+
+if isinstance(EXTERNAL_CONTENT.get("discord_screenshots"), list) and EXTERNAL_CONTENT["discord_screenshots"]:
+    DISCORD_SCREENSHOTS = EXTERNAL_CONTENT["discord_screenshots"]
+
+if isinstance(EXTERNAL_CONTENT.get("help"), dict) and EXTERNAL_CONTENT["help"]:
+    HELP_CONTENT = EXTERNAL_CONTENT["help"]
 
 DEFAULT_SETTINGS = {
     "setup_complete": False,
@@ -160,13 +415,9 @@ DEFAULT_SETTINGS = {
     "form_fill_browser": "auto",
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
+    "enable_sounds": True,
     "theme": "dark",
-    "enable_gemini": False,
-    "gemini_key": "",
-    "enable_sheets": False,
-    "sheet_id": "",
-    "worksheet": "Sheet1",
-    "service_account_path": "service_account.json",
+    "enable_gemini": True,
     "enable_calendar": False,
     "discord_templates": DISCORD_TEMPLATES,
     "discord_screenshots": DISCORD_SCREENSHOTS,
@@ -179,17 +430,18 @@ DEFAULT_SETTINGS = {
     "donors_increase": INCREASE_SUSTAINING,
 }
 
-SENSITIVE_SETTINGS_KEYS = {
-    "gemini_key",
-}
+SENSITIVE_SETTINGS_KEYS = set()
 
 ALLOWED_SETTINGS_KEYS = set(DEFAULT_SETTINGS.keys())
+PRESERVED_SETTINGS_KEYS_ON_RESTORE = {"setup_complete", "tutorial_completed"}
 
 
 def sanitize_settings(doc: Optional[dict]) -> dict:
     base = dict(DEFAULT_SETTINGS)
     if doc:
-        base.update(doc)
+        for key, value in doc.items():
+            if key in ALLOWED_SETTINGS_KEYS or key in SENSITIVE_SETTINGS_KEYS:
+                base[key] = value
     for key in SENSITIVE_SETTINGS_KEYS:
         base[key] = ""
         base[f"{key}_configured"] = bool(doc and doc.get(key))
@@ -463,10 +715,164 @@ def build_clean_fail(session):
     return "\n".join(fail_lines) if fail_lines else "N/A"
 
 
-def generate_summaries(session, api_key=""):
+DEFAULT_GEMINI_COACHING_PROMPT = (
+    "You are writing an internal certification test call results summary for management. "
+    "Based on the coaching checkboxes selected during the mock certification session, "
+    "write a clear, concise, management-facing summary of what occurred during the test. "
+    "The summary must be objective, professional, and suitable for internal documentation. "
+    "Incorporate the selected coaching checklist items directly into the summary instead of "
+    "generalizing vaguely. Reference the specific coached items in plain language. Do not "
+    "address the candidate. Do not use second-person language such as 'you' or 'your'. Do "
+    "not give advice or instructions such as 'should', 'try to', or 'remember to'. Describe "
+    "the observed performance and the coaching provided during the session."
+)
+
+DEFAULT_GEMINI_FAIL_PROMPT = (
+    "You are writing an internal certification test call failure summary for management. "
+    "Based on the fail reasons selected during the mock certification session, write a "
+    "clear, concise, management-facing summary of why the candidate did not pass. The "
+    "summary must be objective, professional, and suitable for internal documentation. "
+    "Incorporate the selected fail checklist items directly into the summary instead of "
+    "generalizing vaguely. Reference the specific fail reasons in plain language. Do not "
+    "address the candidate. Do not use second-person language such as 'you' or 'your'. Do "
+    "not give advice or instructions such as 'should', 'try to', or 'remember to'. State "
+    "what occurred during the session and any additional contributing issues."
+)
+
+PREFERRED_GEMINI_TEXT_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+)
+
+
+def _extract_gemini_text(response):
+    text = (getattr(response, "text", "") or "").strip()
+    if text:
+        return text
+
+    candidates = getattr(response, "candidates", None) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        parts = getattr(content, "parts", None) or []
+        for part in parts:
+            candidate_text = (getattr(part, "text", "") or "").strip()
+            if candidate_text:
+                return candidate_text
+
+    return ""
+
+
+@lru_cache(maxsize=1)
+def _get_backend_gemini_api_key() -> str:
+    env_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if env_key:
+        logger.info("[GEMINI] API key loaded from environment override")
+        return env_key
+
+    config = _load_backend_runtime_config()
+    config_key = (config.get("gemini_api_key") or "").strip()
+    if config_key:
+        logger.info("[GEMINI] API key loaded from backend runtime config")
+        return config_key
+
+    logger.warning("[GEMINI] No backend Gemini API key configured")
+    return ""
+
+
+@lru_cache(maxsize=8)
+def _select_supported_gemini_model(api_key: str) -> str:
+    if not api_key:
+        raise RuntimeError("Gemini is enabled, but no API key is saved.")
+
+    import google.generativeai as genai
+
+    genai.configure(api_key=api_key)
+
+    try:
+        models = list(genai.list_models())
+    except Exception as exc:
+        raise RuntimeError(f"Unable to list Gemini models for this API key: {exc}") from exc
+
+    supported = {}
+    for model in models:
+        name = (getattr(model, "name", "") or "").strip()
+        methods = set(getattr(model, "supported_generation_methods", []) or [])
+        if not name or "generateContent" not in methods:
+            continue
+        supported[name.split("/", 1)[-1]] = model
+
+    for preferred_model in PREFERRED_GEMINI_TEXT_MODELS:
+        if preferred_model in supported:
+            logger.info("[GEMINI] Using supported model %s", preferred_model)
+            return preferred_model
+
+    discovered = ", ".join(sorted(supported.keys())) or "none"
+    raise RuntimeError(
+        "No supported Gemini text model was found for generateContent. "
+        f"Available generateContent models for this API key: {discovered}"
+    )
+
+
+def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type):
+    if not api_key:
+        raise RuntimeError("Gemini is enabled, but no API key is saved.")
+
+    import google.generativeai as genai
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(_select_supported_gemini_model(api_key))
+    prompt = (
+        f"{prompt_template}\n\n"
+        f"Session notes:\n{source_text}\n\n"
+        "Return only the final summary text with no heading, markdown, or extra commentary."
+    )
+    response = model.generate_content(prompt)
+    text = _extract_gemini_text(response)
+    if not text:
+        raise RuntimeError(f"Gemini returned an empty {summary_type} summary.")
+    return text
+
+
+def generate_summaries(session, api_key="", settings=None):
     coaching = build_clean_coaching(session)
     fail = "N/A" if _is_fail_na(session) else build_clean_fail(session)
-    return {"coaching": coaching, "fail": fail}
+
+    use_gemini = bool(settings and settings.get("enable_gemini"))
+    if not use_gemini:
+        return {"coaching": coaching, "fail": fail}
+
+    coaching_prompt = (
+        (settings or {}).get("gemini_coaching_prompt") or DEFAULT_GEMINI_COACHING_PROMPT
+    )
+    fail_prompt = (
+        (settings or {}).get("gemini_fail_prompt") or DEFAULT_GEMINI_FAIL_PROMPT
+    )
+
+    try:
+        gemini_coaching = _generate_gemini_summary(
+            coaching,
+            coaching_prompt,
+            api_key,
+            "coaching",
+        ) if coaching != "No coaching data recorded." else coaching
+
+        gemini_fail = _generate_gemini_summary(
+            fail,
+            fail_prompt,
+            api_key,
+            "fail",
+        ) if fail != "N/A" else fail
+
+        return {"coaching": gemini_coaching, "fail": gemini_fail}
+    except Exception as exc:
+        logger.exception("[GEMINI] Summary generation failed: %s", exc)
+        return {
+            "coaching": coaching,
+            "fail": fail,
+            "error": f"Gemini summary generation failed: {exc}",
+        }
 
 
 def _count_results(session, prefix, total, target):
@@ -641,6 +1047,23 @@ async def save_settings(payload: dict):
     return {"ok": True}
 
 
+@api_router.post("/settings/restore-defaults")
+async def restore_settings_defaults():
+    existing = await db.settings.find_one({"_id": "app_settings"}) or {}
+    restored = dict(DEFAULT_SETTINGS)
+
+    for key in PRESERVED_SETTINGS_KEYS_ON_RESTORE:
+        if key in existing:
+            restored[key] = existing[key]
+
+    await db.settings.replace_one(
+        {"_id": "app_settings"},
+        {"_id": "app_settings", **restored},
+        upsert=True,
+    )
+    return {"ok": True, "settings": sanitize_settings(restored)}
+
+
 @api_router.get("/settings/defaults")
 async def get_defaults():
     return {
@@ -655,6 +1078,11 @@ async def get_defaults():
         "tech_issues": TECH_ISSUES,
         "auto_fail_reasons": AUTO_FAIL_REASONS,
     }
+
+
+@api_router.get("/help/content")
+async def get_help_content():
+    return HELP_CONTENT
 
 
 @api_router.post("/settings/complete-setup")
@@ -787,7 +1215,7 @@ async def _fetch_ticker_from_doc():
     The leading number+period is stripped. Falls back to defaults on error."""
     import time
     now = time.time()
-    if _ticker_cache["messages"] and (now - _ticker_cache["last_fetch"]) < 300:
+    if _ticker_cache["messages"] and (now - _ticker_cache["last_fetch"]) < 55:
         return _ticker_cache["messages"]
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -827,8 +1255,8 @@ async def gen_summaries():
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
     api_key = ""
     if settings and settings.get("enable_gemini"):
-        api_key = settings.get("gemini_key", "")
-    result = generate_summaries(doc, api_key)
+        api_key = _get_backend_gemini_api_key()
+    result = generate_summaries(doc, api_key, settings)
     return result
 
 
@@ -841,8 +1269,10 @@ async def regen_summary(payload: dict):
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
     api_key = ""
     if settings and settings.get("enable_gemini"):
-        api_key = settings.get("gemini_key", "")
-    result = generate_summaries(doc, api_key)
+        api_key = _get_backend_gemini_api_key()
+    result = generate_summaries(doc, api_key, settings)
+    if result.get("error"):
+        return {"ok": False, "error": result["error"], "text": result.get(summary_type, "")}
     return {"ok": True, "text": result.get(summary_type, "")}
 
 
@@ -866,9 +1296,10 @@ async def finish_all(payload: dict):
         "coaching_summary": payload.get("coaching_summary", ""),
         "fail_summary": payload.get("fail_summary", ""),
     }
+
     await db.history.insert_one(record)
     await db.sessions.delete_one({"_id": "active_session"})
-    return {"ok": True}
+    return {"ok": True, "message": "Session saved successfully!"}
 
 
 # ══════════════════════════════════════════════════════════════════

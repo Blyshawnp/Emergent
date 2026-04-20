@@ -2,8 +2,6 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
-import { playError } from '../utils/buzz';
-
 const CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
   { id: 'c-phonetics', label: 'Phonetics table provided to candidate' },
@@ -144,6 +142,7 @@ export default function CallsPage({ onNavigate }) {
   const [failNotes, setFailNotes] = useState('');
   const [randFlags, setRandFlags] = useState({});
   const [isFinal, setIsFinal] = useState(false);
+  const [candidateName, setCandidateName] = useState('');
 
   const rollRandom = useCallback(() => {
     setRandFlags(generateRandomFlags());
@@ -162,7 +161,10 @@ export default function CallsPage({ onNavigate }) {
         if (types.length) setCallSetup(prev => ({ ...prev, type: types[0] }));
         if (shows.length) setCallSetup(prev => ({ ...prev, show: shows[0][0] }));
         const { session } = await api.getCurrentSession();
-        if (!cancelled && session) setIsFinal(session.final_attempt || false);
+        if (!cancelled && session) {
+          setIsFinal(session.final_attempt || false);
+          setCandidateName(session.candidate_name || '');
+        }
       } catch (err) {
         // Failed to load defaults/settings — page will render with empty dropdowns
       }
@@ -221,9 +223,28 @@ export default function CallsPage({ onNavigate }) {
     }
   }, [result, fails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, modal, onNavigate, resetCall]);
 
+  const handleStoppedResponding = useCallback(async () => {
+    const confirmed = await modal.confirm(
+      'Confirm Auto-Fail',
+      `This will Automatically fail ${candidateName} and mark as Stopped Responding in Chat. Do you want to proceed?`,
+      'alert-triangle',
+      'warning'
+    );
+    if (!confirmed) return;
+    await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' });
+    onNavigate('review');
+  }, [candidateName, modal, onNavigate]);
+
   return (
     <div data-testid="calls-page">
-      <h1 style={{ marginBottom: 24 }}>Call #{callNum}</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
+        <h1 style={{ marginBottom: 0 }}>Call #{callNum}</h1>
+        {candidateName && (
+          <div className="text-sm text-muted" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+            <b>Candidate:</b> {candidateName}
+          </div>
+        )}
+      </div>
       <div className="split-layout">
         <div className="card setup-card">
           <h3 style={{ marginBottom: 16 }}>Call Setup</h3>
@@ -289,7 +310,7 @@ export default function CallsPage({ onNavigate }) {
 
       <div className="footer-bar" data-testid="calls-footer">
         <button className="btn btn-muted btn-sm" onClick={() => { if (callNum > 1) { setCallNum(n => n - 1); resetCall(); } else onNavigate('basics'); }} data-testid="calls-back">Back</button>
-        <button className="btn btn-danger btn-sm" onClick={async () => { playError(); await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' }); onNavigate('review'); }} data-testid="calls-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
+        <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="calls-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="calls-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />
         <button className="btn btn-primary" onClick={handleContinue} data-testid="calls-continue">Continue</button>
