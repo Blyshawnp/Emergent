@@ -19,7 +19,7 @@ This folder is a starter admin-content package for moving editable defaults out 
 
 ## Important runtime note
 
-These files are **not wired into the app yet**.
+These files are now the source of truth for the Google Sheet worksheet names used by the backend content loader.
 
 Current runtime sources are:
 
@@ -49,25 +49,9 @@ The files under:
 
 are reference docs only. They are not read by the frontend or backend at runtime.
 
-## Workbook sheets
+## Exact Google Sheet tab names
 
-The workbook contains:
-
-- `Discord Posts`
-- `Screenshots`
-- `Call Coaching`
-- `Call Fails`
-- `Callers New`
-- `Callers Existing`
-- `Callers Increase`
-- `Call Types`
-- `Shows`
-- `Sup Reasons`
-- `Sup Coaching`
-- `Sup Fails`
-- `Approved Headsets`
-
-The `csv-tabs/` folder contains matching files:
+The backend loader uses the exact `csv-tabs/` file base names as Google Sheet tab names:
 
 - `discord-posts.csv`
 - `screenshots.csv`
@@ -83,6 +67,24 @@ The `csv-tabs/` folder contains matching files:
 - `sup-fails.csv`
 - `approved-headsets.csv`
 
+That means the worksheet/tab names must be:
+
+- `discord-posts`
+- `screenshots`
+- `call-coaching`
+- `call-fails`
+- `callers-new`
+- `callers-existing`
+- `callers-increase`
+- `call-types`
+- `shows`
+- `sup-reasons`
+- `sup-coaching`
+- `sup-fails`
+- `approved-headsets`
+
+Do not replace these with display labels like `Discord Posts` or `Sup Reasons` unless the actual worksheet name matches exactly.
+
 ## Headset limitation
 
 The approved headset list is **not stored locally in the repo**. The app fetches it live from a Google Doc and parses it at runtime.
@@ -94,7 +96,7 @@ Because of that, the `Approved Headsets` worksheet in the workbook is a structur
 1. Open `mock-testing-suite-admin-content.xml` in Excel.
 2. Review or edit each worksheet.
 3. If you want a simpler import path, use the files in `csv-tabs/` instead of the XML workbook.
-4. In Google Sheets, create one tab per CSV and import each file into its matching tab.
+4. In Google Sheets, create one tab per CSV and import each file into its matching tab name exactly.
 5. Use `help-content.rtf` and `faq-content.rtf` as the starting point for Google Docs versions of Help and FAQ.
 6. Use `admin-master-guide.rtf` as the starting point for the admin-only Google Doc.
 7. Keep `backend/content/app_content.json` as the safest current runtime-editable master until a Google-backed import path is implemented.
@@ -108,6 +110,24 @@ Because of that, the `Approved Headsets` worksheet in the workbook is a structur
 5. Do not rename columns unless the future import code is updated to match.
 6. For multi-line Discord post messages, keep line breaks inside the cell.
 7. `ChildrenPipeDelimited` means multiple child items are stored in one cell separated by `|`.
+
+## Runtime configuration
+
+The backend can load this workbook from Google Sheets when `backend/config/runtime_config.json` contains either:
+
+- `admin_content_sheet_url`
+- `admin_content_sheet_id`
+
+It also accepts the fallback names:
+
+- `content_sheet_url`
+- `content_sheet_id`
+
+Each tab is fetched using the exact tab name with:
+
+- `https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/gviz/tq?tqx=out:csv&sheet={URL_ENCODED_TAB_NAME}`
+
+If a tab is missing or empty, the backend logs a warning and falls back to the local content defaults for that section.
 
 ## Google Docs notes
 

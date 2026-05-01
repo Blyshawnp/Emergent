@@ -90,8 +90,8 @@ export default function SupTransferPage({ onNavigate }) {
   }, [transferNum]);
 
   const shows = useMemo(() => settings.shows || defaults.shows || [], [settings.shows, defaults.shows]);
-  const supCoaching = defaults.sup_coaching || DEFAULT_SUP_COACHING;
-  const supFails = defaults.sup_fails || DEFAULT_SUP_FAILS;
+  const supCoaching = settings.sup_coaching || defaults.sup_coaching || DEFAULT_SUP_COACHING;
+  const supFails = settings.sup_fails || defaults.sup_fails || DEFAULT_SUP_FAILS;
   const supReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;
   const callers = useMemo(() => {
     const allCallers = [
@@ -239,6 +239,31 @@ export default function SupTransferPage({ onNavigate }) {
     onNavigate('review');
   }, [candidateName, modal, onNavigate]);
 
+  const handleSupervisorOnlyAutoFail = useCallback(async (reason) => {
+    if (!candidateName.trim()) {
+      await modal.warning('Missing Info', 'Enter the Candidate Name first.');
+      return;
+    }
+
+    let body = '';
+    if (reason === 'NC/NS') {
+      body = `This will Automatically fail ${candidateName.trim()} and mark as a NC/NS. Do you want to proceed?`;
+    } else {
+      body = `This will Automatically fail ${candidateName.trim()} and mark as Not Ready for Session. Do you want to proceed?`;
+    }
+
+    const confirmed = await modal.confirm('Confirm Auto-Fail', body, 'alert-triangle', 'warning');
+    if (!confirmed) return;
+
+    await api.updateSession({
+      auto_fail_reason: reason,
+      final_status: 'Fail',
+      current_sup_transfer_draft: null,
+      current_sup_transfer_num: null,
+    });
+    onNavigate('review');
+  }, [candidateName, modal, onNavigate]);
+
   const handleDiscardSession = useCallback(async () => {
     const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress?');
     if (!confirmed) return;
@@ -365,6 +390,12 @@ export default function SupTransferPage({ onNavigate }) {
       <div className="footer-bar" data-testid="sup-footer">
         <button className="btn btn-muted btn-sm" onClick={handleDiscardSession} data-testid="sup-discard">Discard Session</button>
         <button className="btn btn-muted btn-sm" onClick={() => { if (transferNum > 1) { setTransferNum(1); resetTransfer(); } else onNavigate(isSupervisorOnly ? 'basics' : 'calls'); }} data-testid="sup-back">Back</button>
+        {isSupervisorOnly && transferNum === 1 && (
+          <button className="btn btn-danger btn-sm" onClick={() => handleSupervisorOnlyAutoFail('NC/NS')} data-testid="sup-ncns" title="No Call / No Show — candidate did not join the supervisor transfer session">NC / NS</button>
+        )}
+        {isSupervisorOnly && transferNum === 1 && (
+          <button className="btn btn-danger btn-sm" onClick={() => handleSupervisorOnlyAutoFail('Not Ready for Session')} data-testid="sup-notready" title="Candidate was not prepared for the supervisor transfer session">Not Ready</button>
+        )}
         <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="sup-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="sup-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />

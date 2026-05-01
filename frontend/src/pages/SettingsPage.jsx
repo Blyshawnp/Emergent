@@ -70,7 +70,9 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
   const [loading, setLoading] = useState(true);
   const [checkingForUpdates, setCheckingForUpdates] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [sectionFeedback, setSectionFeedback] = useState({});
   const savedSnapshotRef = useRef('');
+  const feedbackTimersRef = useRef({});
 
   useEffect(() => {
     let cancelled = false;
@@ -99,13 +101,40 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
     window.electronAPI.setUnsavedChanges(hasChanges).catch(() => {});
   }, [s, loading]);
 
+  useEffect(() => () => {
+    Object.values(feedbackTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+  }, []);
+
   const set = useCallback((key, val) => setS(prev => ({ ...prev, [key]: val })), []);
+
+  const markSectionFeedback = useCallback((sectionKey, message) => {
+    if (!sectionKey) return;
+
+    setSectionFeedback((prev) => ({
+      ...prev,
+      [sectionKey]: message,
+    }));
+
+    if (feedbackTimersRef.current[sectionKey]) {
+      window.clearTimeout(feedbackTimersRef.current[sectionKey]);
+    }
+
+    feedbackTimersRef.current[sectionKey] = window.setTimeout(() => {
+      setSectionFeedback((prev) => {
+        const next = { ...prev };
+        delete next[sectionKey];
+        return next;
+      });
+      delete feedbackTimersRef.current[sectionKey];
+    }, 3200);
+  }, []);
 
   const handleSave = useCallback(async () => {
     try {
       await api.saveSettings(s);
       savedSnapshotRef.current = JSON.stringify(s);
       setHasUnsavedChanges(false);
+      setSectionFeedback({});
       await modal.showModal({
         type: 'alert',
         title: 'Settings Saved',
@@ -212,14 +241,21 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
         ))}
       </div>
 
+      {hasUnsavedChanges && (
+        <div className="settings-unsaved-banner" data-testid="settings-unsaved-banner">
+          <strong>Unsaved Changes</strong>
+          <span>List edits are only pending until you click Save Settings.</span>
+        </div>
+      )}
+
       {tab === 'general' && <GeneralTab s={s} set={set} />}
-      {tab === 'shows' && <ShowsTab s={s} set={set} defaults={defaults} />}
-      {tab === 'calltypes' && <CallTypesTab s={s} set={set} defaults={defaults} />}
-      {tab === 'callers' && <CallersTab s={s} set={set} defaults={defaults} />}
-      {tab === 'supreasons' && <SupReasonsTab s={s} set={set} defaults={defaults} />}
-      {tab === 'coaching' && <CoachingTab s={s} set={set} defaults={defaults} />}
-      {tab === 'failreasons' && <FailReasonsTab s={s} set={set} defaults={defaults} />}
-      {tab === 'discord' && <DiscordTab s={s} set={set} />}
+      {tab === 'shows' && <ShowsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.shows} onFeedback={markSectionFeedback} />}
+      {tab === 'calltypes' && <CallTypesTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.call_types} onFeedback={markSectionFeedback} />}
+      {tab === 'callers' && <CallersTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.callers} onFeedback={markSectionFeedback} />}
+      {tab === 'supreasons' && <SupReasonsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.sup_reasons} onFeedback={markSectionFeedback} />}
+      {tab === 'coaching' && <CoachingTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.coaching} onFeedback={markSectionFeedback} />}
+      {tab === 'failreasons' && <FailReasonsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.failreasons} onFeedback={markSectionFeedback} />}
+      {tab === 'discord' && <DiscordTab s={s} set={set} feedback={sectionFeedback.discord} onFeedback={markSectionFeedback} />}
       {tab === 'payment' && <PaymentTab s={s} set={set} />}
       {tab === 'gemini' && <GeminiTab s={s} set={set} />}
       {tab === 'calendar' && <CalendarTab s={s} set={set} />}
@@ -346,6 +382,16 @@ function normalizeCoachingItem(item = {}) {
   };
 }
 
+function PendingListFeedback({ message }) {
+  if (!message) return null;
+
+  return (
+    <div className="settings-pending-feedback" data-testid="settings-pending-feedback">
+      {message}
+    </div>
+  );
+}
+
 function AdminEditorLayout({
   title,
   description,
@@ -357,8 +403,10 @@ function AdminEditorLayout({
   onMoveUp,
   onMoveDown,
   onReset,
+  onApply,
   renderLabel,
   emptyText = 'Select an item to edit.',
+  feedback,
   children,
   testId,
 }) {
@@ -380,7 +428,7 @@ function AdminEditorLayout({
               <button
                 key={`${renderLabel(item, index)}-${index}`}
                 type="button"
-                className={`settings-admin-list-item ${index === selectedIndex ? 'active' : ''}`}
+                className={`settings-admin-list-item ${index === selectedIndex ? 'active' : ''} ${index === selectedIndex && feedback ? 'pending-highlight' : ''}`}
                 onClick={() => onSelect(index)}
               >
                 {renderLabel(item, index)}
@@ -388,6 +436,7 @@ function AdminEditorLayout({
             ))}
             {!items.length && <div className="settings-admin-empty">No items yet.</div>}
           </div>
+          <PendingListFeedback message={feedback} />
           <div className="settings-admin-list-actions">
             <button className="btn btn-primary btn-sm" onClick={onAdd}>Add</button>
             <button className="btn btn-danger btn-sm" onClick={onRemove} disabled={!items.length}>Remove</button>
@@ -396,7 +445,14 @@ function AdminEditorLayout({
           </div>
         </div>
         <div className="settings-admin-detail-pane">
-          {selectedItem ? children : <div className="settings-admin-empty">{emptyText}</div>}
+          {selectedItem ? (
+            <>
+              <div className="settings-admin-detail-actions">
+                <button className="btn btn-ghost btn-sm" onClick={onApply}>Apply to List</button>
+              </div>
+              {children}
+            </>
+          ) : <div className="settings-admin-empty">{emptyText}</div>}
         </div>
       </div>
     </div>
@@ -415,26 +471,33 @@ function useClampedSelection(items, selectedIndex, setSelectedIndex) {
   }, [items.length, selectedIndex, setSelectedIndex]);
 }
 
-function TextListEditor({ title, description, field, addLabel, s, set, defaults, testId }) {
+function TextListEditor({ title, description, field, addLabel, s, set, defaults, testId, feedback, onFeedback }) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const items = s[field] || defaults[field] || [];
   const selected = items[selectedIndex] || '';
   useClampedSelection(items, selectedIndex, setSelectedIndex);
 
-  const updateSelected = (value) => set(field, items.map((item, index) => index === selectedIndex ? value : item));
+  const updateSelected = (value) => {
+    set(field, items.map((item, index) => index === selectedIndex ? value : item));
+    onFeedback?.(field, 'Updated. Click Save Settings to keep changes.');
+  };
   const add = () => {
     set(field, [...items, addLabel]);
     setSelectedIndex(items.length);
+    onFeedback?.(field, 'Added. Click Save Settings to keep changes.');
   };
   const remove = () => {
     const next = items.filter((_, index) => index !== selectedIndex);
     set(field, next);
     setSelectedIndex(Math.max(0, selectedIndex - 1));
+    onFeedback?.(field, 'Removed. Click Save Settings to keep changes.');
   };
   const reorder = (direction) => {
     set(field, moveItem(items, selectedIndex, direction));
     setSelectedIndex(selectedIndex + direction);
+    onFeedback?.(field, 'List order updated. Click Save Settings to keep changes.');
   };
+  const apply = () => onFeedback?.(field, 'Applied to pending list. Click Save Settings to keep changes.');
 
   return (
     <AdminEditorLayout
@@ -447,8 +510,14 @@ function TextListEditor({ title, description, field, addLabel, s, set, defaults,
       onRemove={remove}
       onMoveUp={() => reorder(-1)}
       onMoveDown={() => reorder(1)}
-      onReset={() => { set(field, defaults[field] || []); setSelectedIndex(0); }}
+      onApply={apply}
+      onReset={() => {
+        set(field, defaults[field] || []);
+        setSelectedIndex(0);
+        onFeedback?.(field, 'Defaults restored. Click Save Settings to keep changes.');
+      }}
       renderLabel={(item) => item || 'Untitled'}
+      feedback={feedback}
       testId={testId}
     >
       <div className="settings-admin-field-grid">
@@ -464,7 +533,7 @@ function TextListEditor({ title, description, field, addLabel, s, set, defaults,
 /* ═══════════════════════════════════════════════════════════════ */
 /* SHOWS TAB                                                       */
 /* ═══════════════════════════════════════════════════════════════ */
-function ShowsTab({ s, set, defaults }) {
+function ShowsTab({ s, set, defaults, feedback, onFeedback }) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const shows = s.shows || defaults.shows || [];
   const selected = shows[selectedIndex] || [];
@@ -473,19 +542,24 @@ function ShowsTab({ s, set, defaults }) {
   const update = (fieldIndex, val) => {
     const next = shows.map((row, idx) => idx === selectedIndex ? row.map((c, ci) => ci === fieldIndex ? val : c) : row);
     set('shows', next);
+    onFeedback?.('shows', 'Updated. Click Save Settings to keep changes.');
   };
   const add = () => {
     set('shows', [...shows, ['New Show', '$0', '$0', 'Gift description']]);
     setSelectedIndex(shows.length);
+    onFeedback?.('shows', 'Added. Click Save Settings to keep changes.');
   };
   const remove = () => {
     set('shows', shows.filter((_, idx) => idx !== selectedIndex));
     setSelectedIndex(Math.max(0, selectedIndex - 1));
+    onFeedback?.('shows', 'Removed. Click Save Settings to keep changes.');
   };
   const reorder = (direction) => {
     set('shows', moveItem(shows, selectedIndex, direction));
     setSelectedIndex(selectedIndex + direction);
+    onFeedback?.('shows', 'List order updated. Click Save Settings to keep changes.');
   };
+  const apply = () => onFeedback?.('shows', 'Applied to pending list. Click Save Settings to keep changes.');
 
   return (
     <AdminEditorLayout
@@ -498,8 +572,14 @@ function ShowsTab({ s, set, defaults }) {
       onRemove={remove}
       onMoveUp={() => reorder(-1)}
       onMoveDown={() => reorder(1)}
-      onReset={() => { set('shows', defaults.shows || []); setSelectedIndex(0); }}
+      onApply={apply}
+      onReset={() => {
+        set('shows', defaults.shows || []);
+        setSelectedIndex(0);
+        onFeedback?.('shows', 'Defaults restored. Click Save Settings to keep changes.');
+      }}
       renderLabel={(row) => row?.[0] || 'Untitled Show'}
+      feedback={feedback}
       testId="settings-shows"
     >
       <div className="settings-admin-field-grid">
@@ -515,7 +595,7 @@ function ShowsTab({ s, set, defaults }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* CALL TYPES TAB                                                  */
 /* ═══════════════════════════════════════════════════════════════ */
-function CallTypesTab({ s, set, defaults }) {
+function CallTypesTab({ s, set, defaults, feedback, onFeedback }) {
   return (
     <TextListEditor
       title="Call Types"
@@ -525,6 +605,8 @@ function CallTypesTab({ s, set, defaults }) {
       s={s}
       set={set}
       defaults={defaults}
+      feedback={feedback}
+      onFeedback={onFeedback}
       testId="settings-calltypes"
     />
   );
@@ -533,7 +615,7 @@ function CallTypesTab({ s, set, defaults }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* SUP REASONS TAB                                                 */
 /* ═══════════════════════════════════════════════════════════════ */
-function SupReasonsTab({ s, set, defaults }) {
+function SupReasonsTab({ s, set, defaults, feedback, onFeedback }) {
   return (
     <TextListEditor
       title="Supervisor Transfer Reasons"
@@ -543,6 +625,8 @@ function SupReasonsTab({ s, set, defaults }) {
       s={s}
       set={set}
       defaults={defaults}
+      feedback={feedback}
+      onFeedback={onFeedback}
       testId="settings-supreasons"
     />
   );
@@ -551,7 +635,7 @@ function SupReasonsTab({ s, set, defaults }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* CALLERS TAB (conditional per call type)                        */
 /* ═══════════════════════════════════════════════════════════════ */
-function CallersTab({ s, set, defaults }) {
+function CallersTab({ s, set, defaults, feedback, onFeedback }) {
   const [category, setCategory] = useState('new');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const categories = [
@@ -568,19 +652,24 @@ function CallersTab({ s, set, defaults }) {
   const update = (fieldIndex, val) => {
     const next = callers.map((row, idx) => idx === selectedIndex ? row.map((c, ci) => ci === fieldIndex ? val : c) : row);
     set(field, next);
+    onFeedback?.('callers', 'Updated. Click Save Settings to keep changes.');
   };
   const add = () => {
     set(field, [...callers, ['First', 'Last', 'Address', 'City', 'ST', '00000', '000-000-0000', 'email@test.com']]);
     setSelectedIndex(callers.length);
+    onFeedback?.('callers', 'Added. Click Save Settings to keep changes.');
   };
   const remove = () => {
     set(field, callers.filter((_, idx) => idx !== selectedIndex));
     setSelectedIndex(Math.max(0, selectedIndex - 1));
+    onFeedback?.('callers', 'Removed. Click Save Settings to keep changes.');
   };
   const reorder = (direction) => {
     set(field, moveItem(callers, selectedIndex, direction));
     setSelectedIndex(selectedIndex + direction);
+    onFeedback?.('callers', 'List order updated. Click Save Settings to keep changes.');
   };
+  const apply = () => onFeedback?.('callers', 'Applied to pending list. Click Save Settings to keep changes.');
 
   const headers = ['First', 'Last', 'Address', 'City', 'State', 'Zip', 'Phone', 'Email'];
 
@@ -588,7 +677,17 @@ function CallersTab({ s, set, defaults }) {
     <div className="card" data-testid="settings-callers">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h3>Callers & Demographics</h3>
-        <button className="btn btn-ghost btn-sm" onClick={() => { set(field, defaults[field] || []); setSelectedIndex(0); }} title="Reset this category to defaults">Reset Defaults</button>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => {
+            set(field, defaults[field] || []);
+            setSelectedIndex(0);
+            onFeedback?.('callers', 'Defaults restored. Click Save Settings to keep changes.');
+          }}
+          title="Reset this category to defaults"
+        >
+          Reset Defaults
+        </button>
       </div>
       <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
         Each category maps to call types. <b>New Donors</b> appear when the tester picks a "New Donor" call type.
@@ -614,6 +713,7 @@ function CallersTab({ s, set, defaults }) {
             ))}
             {!callers.length && <div className="settings-admin-empty">No callers yet.</div>}
           </div>
+          <PendingListFeedback message={feedback} />
           <div className="settings-admin-list-actions">
             <button className="btn btn-primary btn-sm" onClick={add}>Add</button>
             <button className="btn btn-danger btn-sm" onClick={remove} disabled={!callers.length}>Remove</button>
@@ -623,21 +723,26 @@ function CallersTab({ s, set, defaults }) {
         </div>
         <div className="settings-admin-detail-pane">
           {callers.length ? (
-            <div className="settings-admin-field-grid">
-              {headers.map((label, fieldIndex) => (
-                <label key={label} className={`settings-admin-field ${fieldIndex === 2 || fieldIndex === 7 ? 'full' : ''}`}>
-                  <span>{label}</span>
-                  {fieldIndex === 4 ? (
-                    <select value={selected[fieldIndex] || ''} onChange={e => update(fieldIndex, e.target.value)}>
-                      <option value="">--</option>
-                      {US_STATES.map(st => <option key={st}>{st}</option>)}
-                    </select>
-                  ) : (
-                    <input type="text" value={selected[fieldIndex] || ''} onChange={e => update(fieldIndex, e.target.value)} />
-                  )}
-                </label>
-              ))}
-            </div>
+            <>
+              <div className="settings-admin-detail-actions">
+                <button className="btn btn-ghost btn-sm" onClick={apply}>Apply to List</button>
+              </div>
+              <div className="settings-admin-field-grid">
+                {headers.map((label, fieldIndex) => (
+                  <label key={label} className={`settings-admin-field ${fieldIndex === 2 || fieldIndex === 7 ? 'full' : ''}`}>
+                    <span>{label}</span>
+                    {fieldIndex === 4 ? (
+                      <select value={selected[fieldIndex] || ''} onChange={e => update(fieldIndex, e.target.value)}>
+                        <option value="">--</option>
+                        {US_STATES.map(st => <option key={st}>{st}</option>)}
+                      </select>
+                    ) : (
+                      <input type="text" value={selected[fieldIndex] || ''} onChange={e => update(fieldIndex, e.target.value)} />
+                    )}
+                  </label>
+                ))}
+              </div>
+            </>
           ) : (
             <div className="settings-admin-empty">Select a caller to edit.</div>
           )}
@@ -650,7 +755,7 @@ function CallersTab({ s, set, defaults }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* COACHING TAB                                                    */
 /* ═══════════════════════════════════════════════════════════════ */
-function CoachingTab({ s, set, defaults }) {
+function CoachingTab({ s, set, defaults, feedback, onFeedback }) {
   const [scope, setScope] = useState('call_coaching');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const items = s[scope] || defaults[scope] || [];
@@ -659,19 +764,24 @@ function CoachingTab({ s, set, defaults }) {
 
   const updateSelected = (patch) => {
     set(scope, items.map((item, index) => index === selectedIndex ? { ...item, ...patch } : item));
+    onFeedback?.('coaching', 'Updated. Click Save Settings to keep changes.');
   };
   const add = () => {
     set(scope, [...items, { id: `custom-${Date.now()}`, label: 'New Coaching Item', helper: '', children: [] }]);
     setSelectedIndex(items.length);
+    onFeedback?.('coaching', 'Added. Click Save Settings to keep changes.');
   };
   const remove = () => {
     set(scope, items.filter((_, index) => index !== selectedIndex));
     setSelectedIndex(Math.max(0, selectedIndex - 1));
+    onFeedback?.('coaching', 'Removed. Click Save Settings to keep changes.');
   };
   const reorder = (direction) => {
     set(scope, moveItem(items, selectedIndex, direction));
     setSelectedIndex(selectedIndex + direction);
+    onFeedback?.('coaching', 'List order updated. Click Save Settings to keep changes.');
   };
+  const apply = () => onFeedback?.('coaching', 'Applied to pending list. Click Save Settings to keep changes.');
 
   return (
     <div data-testid="settings-coaching">
@@ -689,8 +799,14 @@ function CoachingTab({ s, set, defaults }) {
         onRemove={remove}
         onMoveUp={() => reorder(-1)}
         onMoveDown={() => reorder(1)}
-        onReset={() => { set(scope, defaults[scope] || []); setSelectedIndex(0); }}
+        onApply={apply}
+        onReset={() => {
+          set(scope, defaults[scope] || []);
+          setSelectedIndex(0);
+          onFeedback?.('coaching', 'Defaults restored. Click Save Settings to keep changes.');
+        }}
         renderLabel={(item) => item?.label || 'Untitled Coaching Item'}
+        feedback={feedback}
         testId={`settings-${scope}`}
       >
         <div className="settings-admin-field-grid">
@@ -714,7 +830,7 @@ function CoachingTab({ s, set, defaults }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* FAIL REASONS TAB                                                */
 /* ═══════════════════════════════════════════════════════════════ */
-function FailReasonsTab({ s, set, defaults }) {
+function FailReasonsTab({ s, set, defaults, feedback, onFeedback }) {
   const [scope, setScope] = useState('call_fails');
 
   return (
@@ -732,6 +848,8 @@ function FailReasonsTab({ s, set, defaults }) {
         s={s}
         set={set}
         defaults={defaults}
+        feedback={feedback}
+        onFeedback={(_, message) => onFeedback?.('failreasons', message)}
         testId={`settings-${scope}`}
       />
     </div>
@@ -741,7 +859,7 @@ function FailReasonsTab({ s, set, defaults }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* DISCORD TAB                                                     */
 /* ═══════════════════════════════════════════════════════════════ */
-function DiscordTab({ s, set }) {
+function DiscordTab({ s, set, feedback, onFeedback }) {
   const modal = useModal();
   const [section, setSection] = useState('posts');
   const discord = s.discord_templates || [];
@@ -749,12 +867,28 @@ function DiscordTab({ s, set }) {
   const update = (i, field, val) => {
     const next = discord.map((item, idx) => idx === i ? (field === 0 ? [val, item[1]] : [item[0], val]) : item);
     set('discord_templates', next);
+    onFeedback?.('discord', 'Updated. Click Save Settings to keep changes.');
   };
-  const remove = (i) => set('discord_templates', discord.filter((_, idx) => idx !== i));
-  const add = () => set('discord_templates', [...discord, ['New Trigger', 'Message text here']]);
-  const updateSS = (i, key, val) => set('discord_screenshots', screenshots.map((ss, idx) => idx === i ? { ...ss, [key]: val } : ss));
-  const removeSS = (i) => set('discord_screenshots', screenshots.filter((_, idx) => idx !== i));
-  const addSS = () => set('discord_screenshots', [...screenshots, { title: 'New Screenshot', image_url: '' }]);
+  const remove = (i) => {
+    set('discord_templates', discord.filter((_, idx) => idx !== i));
+    onFeedback?.('discord', 'Removed. Click Save Settings to keep changes.');
+  };
+  const add = () => {
+    set('discord_templates', [...discord, ['New Trigger', 'Message text here']]);
+    onFeedback?.('discord', 'Added. Click Save Settings to keep changes.');
+  };
+  const updateSS = (i, key, val) => {
+    set('discord_screenshots', screenshots.map((ss, idx) => idx === i ? { ...ss, [key]: val } : ss));
+    onFeedback?.('discord', 'Updated. Click Save Settings to keep changes.');
+  };
+  const removeSS = (i) => {
+    set('discord_screenshots', screenshots.filter((_, idx) => idx !== i));
+    onFeedback?.('discord', 'Removed. Click Save Settings to keep changes.');
+  };
+  const addSS = () => {
+    set('discord_screenshots', [...screenshots, { title: 'New Screenshot', image_url: '' }]);
+    onFeedback?.('discord', 'Added. Click Save Settings to keep changes.');
+  };
   const uploadSS = async (i, file) => {
     if (!file) return;
     try {
@@ -764,6 +898,8 @@ function DiscordTab({ s, set }) {
       await modal.error('Image Upload Failed', error.message || 'Unable to load the selected image.');
     }
   };
+  const applyPosts = () => onFeedback?.('discord', 'Applied to pending list. Click Save Settings to keep changes.');
+  const applyScreenshots = () => onFeedback?.('discord', 'Applied to pending list. Click Save Settings to keep changes.');
 
   return (
     <div className="card" data-testid="settings-discord">
@@ -803,6 +939,10 @@ function DiscordTab({ s, set }) {
               <button className="btn btn-danger btn-sm" onClick={() => remove(i)} style={{ alignSelf: 'flex-start', marginTop: 18, flexShrink: 0 }} title="Remove template">X</button>
             </div>
           ))}
+          <div className="settings-admin-detail-actions">
+            <button className="btn btn-ghost btn-sm" onClick={applyPosts}>Apply to List</button>
+          </div>
+          <PendingListFeedback message={feedback} />
           <button className="btn btn-primary btn-sm" onClick={add} style={{ marginTop: 16 }} data-testid="settings-discord-add">+ Add Template</button>
         </>
       )}
@@ -835,6 +975,10 @@ function DiscordTab({ s, set }) {
               <button className="btn btn-danger btn-sm" onClick={() => removeSS(i)} title="Remove screenshot">X</button>
             </div>
           ))}
+          <div className="settings-admin-detail-actions">
+            <button className="btn btn-ghost btn-sm" onClick={applyScreenshots}>Apply to List</button>
+          </div>
+          <PendingListFeedback message={feedback} />
           <button className="btn btn-primary btn-sm" onClick={addSS} style={{ marginTop: 8 }} data-testid="settings-discord-ss-add">+ Add Screenshot</button>
         </>
       )}

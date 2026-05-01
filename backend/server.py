@@ -14,6 +14,8 @@ from typing import Optional
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from zoneinfo import ZoneInfo
+from urllib.parse import quote, urlparse
+from urllib.request import urlopen
 
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
@@ -296,6 +298,23 @@ def _content_file_candidates():
     return candidates
 
 
+CONTENT_SHEET_TAB_MAP = {
+    "call_types": "call-types",
+    "sup_reasons": "sup-reasons",
+    "shows": "shows",
+    "donors_new": "callers-new",
+    "donors_existing": "callers-existing",
+    "donors_increase": "callers-increase",
+    "discord_templates": "discord-posts",
+    "discord_screenshots": "screenshots",
+    "call_coaching": "call-coaching",
+    "call_fails": "call-fails",
+    "sup_coaching": "sup-coaching",
+    "sup_fails": "sup-fails",
+    "approved_headsets": "approved-headsets",
+}
+
+
 def _runtime_config_candidates():
     candidates = []
     resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
@@ -308,17 +327,217 @@ def _runtime_config_candidates():
 
 
 def _load_external_content():
+    local_content = {}
     for candidate in _content_file_candidates():
         try:
             if candidate.is_file():
                 with candidate.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
+                    local_content = json.load(f)
                 logger.info("[CONTENT] Loaded editable content from %s", candidate)
-                return data
+                break
         except Exception as exc:
             logger.warning("[CONTENT] Failed to load %s: %s", candidate, exc)
+
+    sheet_content = _load_google_sheet_content(_load_backend_runtime_config())
+    if sheet_content:
+        merged = {**local_content, **sheet_content}
+        logger.info("[CONTENT] Loaded Google Sheet overrides for: %s", ", ".join(sorted(sheet_content.keys())))
+        return merged
+
+    if local_content:
+        return local_content
+
     logger.info("[CONTENT] Using built-in content defaults")
     return {}
+
+
+def _extract_google_sheet_id(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", text)
+    if match:
+        return match.group(1)
+
+    parsed = urlparse(text)
+    if parsed.scheme or "/" in text:
+        return ""
+    return text
+
+
+def _resolve_content_sheet_id(runtime_config):
+    candidates = [
+        runtime_config.get("admin_content_sheet_id"),
+        runtime_config.get("admin_content_sheet_url"),
+        runtime_config.get("content_sheet_id"),
+        runtime_config.get("content_sheet_url"),
+    ]
+
+    for candidate in candidates:
+        sheet_id = _extract_google_sheet_id(candidate)
+        if sheet_id:
+            return sheet_id
+    return ""
+
+
+def _fetch_google_sheet_tab_csv(sheet_id, tab_name):
+    encoded_tab_name = quote(tab_name, safe="")
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_tab_name}"
+    with urlopen(url, timeout=10) as response:
+        return response.read().decode("utf-8-sig")
+
+
+def _parse_google_sheet_text_list(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    items = []
+    for row in reader:
+        if not isinstance(row, dict):
+            continue
+        values = [str(value or "").strip() for value in row.values()]
+        first_value = next((value for value in values if value), "")
+        if first_value:
+            items.append(first_value)
+    return items
+
+
+def _parse_google_sheet_shows(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    items = []
+    for row in reader:
+        show_name = str((row or {}).get("ShowName") or "").strip()
+        if not show_name:
+            continue
+        items.append([
+            show_name,
+            str((row or {}).get("OneTimeAmount") or "").strip(),
+            str((row or {}).get("MonthlyAmount") or "").strip(),
+            str((row or {}).get("Gift") or "").strip(),
+        ])
+    return items
+
+
+def _parse_google_sheet_callers(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    items = []
+    for row in reader:
+        first = str((row or {}).get("First") or "").strip()
+        last = str((row or {}).get("Last") or "").strip()
+        if not first and not last:
+            continue
+        items.append([
+            first,
+            last,
+            str((row or {}).get("Address") or "").strip(),
+            str((row or {}).get("City") or "").strip(),
+            str((row or {}).get("State") or "").strip(),
+            str((row or {}).get("Zip") or "").strip(),
+            str((row or {}).get("Phone") or "").strip(),
+            str((row or {}).get("Email") or "").strip(),
+        ])
+    return items
+
+
+def _parse_google_sheet_discord_posts(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    items = []
+    for row in reader:
+        title = str((row or {}).get("Title") or "").strip()
+        message = str((row or {}).get("Message") or "")
+        if title:
+            items.append([title, message])
+    return items
+
+
+def _parse_google_sheet_screenshots(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    items = []
+    for row in reader:
+        title = str((row or {}).get("Title") or "").strip()
+        image_path = str((row or {}).get("ImagePath") or "").strip()
+        if title:
+            items.append({"title": title, "image_url": image_path})
+    return items
+
+
+def _parse_google_sheet_coaching(csv_text, include_ids):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    items = []
+    for row in reader:
+        label = str((row or {}).get("Label") or "").strip()
+        if not label:
+            continue
+        item = {"label": label}
+        helper = str((row or {}).get("Helper") or "").strip()
+        children = [
+            child.strip()
+            for child in str((row or {}).get("ChildrenPipeDelimited") or "").split("|")
+            if child.strip()
+        ]
+        if include_ids:
+            item["id"] = str((row or {}).get("ID") or "").strip()
+        if helper:
+            item["helper"] = helper
+        if children:
+            item["children"] = children
+        items.append(item)
+    return items
+
+
+def _parse_google_sheet_approved_headsets(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    grouped = {}
+    order = []
+    ignored_brands = {"source note", "source url", "example"}
+
+    for row in reader:
+        brand = str((row or {}).get("Brand") or "").strip()
+        model = str((row or {}).get("Model") or "").strip()
+        if not brand or brand.lower() in ignored_brands or not model:
+            continue
+        if brand not in grouped:
+            grouped[brand] = []
+            order.append(brand)
+        if model not in grouped[brand]:
+            grouped[brand].append(model)
+
+    return [{"brand": brand, "models": grouped[brand]} for brand in order if grouped[brand]]
+
+
+CONTENT_SHEET_PARSERS = {
+    "call_types": lambda csv_text: _parse_google_sheet_text_list(csv_text),
+    "sup_reasons": lambda csv_text: _parse_google_sheet_text_list(csv_text),
+    "shows": _parse_google_sheet_shows,
+    "donors_new": _parse_google_sheet_callers,
+    "donors_existing": _parse_google_sheet_callers,
+    "donors_increase": _parse_google_sheet_callers,
+    "discord_templates": _parse_google_sheet_discord_posts,
+    "discord_screenshots": _parse_google_sheet_screenshots,
+    "call_coaching": lambda csv_text: _parse_google_sheet_coaching(csv_text, include_ids=True),
+    "call_fails": lambda csv_text: _parse_google_sheet_text_list(csv_text),
+    "sup_coaching": lambda csv_text: _parse_google_sheet_coaching(csv_text, include_ids=False),
+    "sup_fails": lambda csv_text: _parse_google_sheet_text_list(csv_text),
+    "approved_headsets": _parse_google_sheet_approved_headsets,
+}
+
+
+def _load_google_sheet_content(runtime_config):
+    sheet_id = _resolve_content_sheet_id(runtime_config or {})
+    if not sheet_id:
+        return {}
+
+    loaded = {}
+    for content_key, tab_name in CONTENT_SHEET_TAB_MAP.items():
+        try:
+            csv_text = _fetch_google_sheet_tab_csv(sheet_id, tab_name)
+            parsed = CONTENT_SHEET_PARSERS[content_key](csv_text)
+            if parsed:
+                loaded[content_key] = parsed
+            else:
+                logger.warning("[CONTENT] Google Sheet tab '%s' was empty or produced no rows; using local defaults for %s", tab_name, content_key)
+        except Exception as exc:
+            logger.warning("[CONTENT] Failed to load Google Sheet tab '%s'; using local defaults for %s: %s", tab_name, content_key, exc)
+    return loaded
 
 
 @lru_cache(maxsize=1)
@@ -1332,6 +1551,10 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
 
 
 def generate_summaries(session, api_key="", settings=None):
+    auto_fail_summaries = _auto_fail_review_summaries(session)
+    if auto_fail_summaries:
+        return auto_fail_summaries
+
     coaching = build_clean_coaching(session)
     fail = "N/A" if _is_fail_na(session) else build_clean_fail(session)
 
@@ -1402,6 +1625,77 @@ def _map_auto_fail_for_form(auto_fail_reason):
     return "N/A"
 
 
+def _classify_auto_fail_reason(auto_fail_reason):
+    reason = " ".join(str(auto_fail_reason or "").strip().lower().split())
+    if not reason:
+        return ""
+    if "nc/ns" in reason or "nc / ns" in reason:
+        return "ncns"
+    if "stopped responding" in reason:
+        return "stopped"
+    if "unable to turn off vpn" in reason or "vpn" in reason:
+        return "vpn"
+    if "wrong headset" in reason:
+        return "headset"
+    if "not ready" in reason:
+        return "not_ready"
+    return "other"
+
+
+def _auto_fail_completion_flags(session):
+    if not session.get("auto_fail_reason"):
+        return None
+
+    return {
+        "mock_complete": "Yes" if session.get("supervisor_only", False) else "No",
+        "sup_complete": "No",
+        "all_complete": "No",
+    }
+
+
+def _auto_fail_review_summaries(session):
+    auto_fail_reason = session.get("auto_fail_reason")
+    if not auto_fail_reason:
+        return None
+
+    name = (session.get("candidate_name") or session.get("candidate") or "The candidate").strip() or "The candidate"
+    auto_fail_type = _classify_auto_fail_reason(auto_fail_reason)
+    coaching_lines = []
+
+    for i in range(1, 4):
+        line = _build_section_coaching_summary(session.get(f"call_{i}"), f"Call {i}")
+        if line:
+            coaching_lines.append(line)
+    for i in range(1, 3):
+        line = _build_section_coaching_summary(session.get(f"sup_transfer_{i}"), f"Supervisor Transfer {i}")
+        if line:
+            coaching_lines.append(line)
+
+    if auto_fail_type == "ncns":
+        return {"coaching": "N/A", "fail": f"{name} was a NC/NS."}
+    if auto_fail_type == "not_ready":
+        return {"coaching": "N/A", "fail": f"{name} was not ready or prepared for the session."}
+    if auto_fail_type == "headset":
+        return {
+            "coaching": f"{name} was informed that a USB headset with a noise-cancelling microphone is required to contract with ACD.",
+            "fail": f"{name} was not using an approved USB headset with a noise-cancelling microphone.",
+        }
+    if auto_fail_type == "vpn":
+        return {
+            "coaching": f"{name} was informed that the use of a VPN is not acceptable when contracting with ACD.",
+            "fail": f"{name} was using a VPN and was unable to turn it off.",
+        }
+    if auto_fail_type == "stopped":
+        return {
+            "coaching": "\n".join(coaching_lines) if coaching_lines else "N/A",
+            "fail": f"{name} stopped responding.",
+        }
+    return {
+        "coaching": "\n".join(coaching_lines) if coaching_lines else "N/A",
+        "fail": _sentence_case(auto_fail_reason) + ".",
+    }
+
+
 def _map_tech_issue_for_form(session):
     current = session.get("tech_issue")
     logs = [entry.get("issue", "") for entry in session.get("tech_issues_log", []) if isinstance(entry, dict)]
@@ -1447,24 +1741,30 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
     tech_issue = _map_tech_issue_for_form(session)
     summaries = generate_summaries(session)
 
-    mock_complete = "Yes" if sup_only else "No"
-    if not sup_only and (calls_passed >= 2 or calls_failed >= 2):
-        mock_complete = "Yes"
-
-    sup_complete = "No"
-    if not newbie:
-        if sup_only:
-            sup_complete = "Yes" if sups_passed >= 1 else "No"
-        elif sups_passed >= 1 or sups_failed >= 2:
-            sup_complete = "Yes"
-
-    if sup_only:
-        all_complete = "Yes" if not newbie and sups_passed >= 1 else "No"
+    auto_fail_flags = _auto_fail_completion_flags(session)
+    if auto_fail_flags:
+        mock_complete = auto_fail_flags["mock_complete"]
+        sup_complete = auto_fail_flags["sup_complete"]
+        all_complete = auto_fail_flags["all_complete"]
     else:
-        all_complete = "Yes" if not newbie and (session.get("auto_fail_reason") or final_status in {"Pass", "Fail"}) else "No"
+        mock_complete = "Yes" if sup_only else "No"
+        if not sup_only and (calls_passed >= 2 or calls_failed >= 2):
+            mock_complete = "Yes"
+
+        sup_complete = "No"
+        if not newbie:
+            if sup_only:
+                sup_complete = "Yes" if sups_passed >= 1 else "No"
+            elif sups_passed >= 1 or sups_failed >= 2:
+                sup_complete = "Yes"
+
+        if sup_only:
+            all_complete = "Yes" if not newbie and sups_passed >= 1 else "No"
+        else:
+            all_complete = "Yes" if not newbie and final_status in {"Pass", "Fail"} else "No"
 
     fail_reason = "N/A"
-    if _is_form_fail_session(session):
+    if session.get("auto_fail_reason") or _is_form_fail_session(session):
         fail_reason = (fail_summary or "").strip() or summaries["fail"]
 
     return {
@@ -2063,6 +2363,12 @@ async def _fetch_approved_headsets():
     now = time.time()
     if _headset_cache["groups"] and (now - _headset_cache["last_fetch"]) < 300:
         return _headset_cache["groups"], ""
+
+    sheet_groups = EXTERNAL_CONTENT.get("approved_headsets")
+    if isinstance(sheet_groups, list) and sheet_groups:
+        _headset_cache["groups"] = sheet_groups
+        _headset_cache["last_fetch"] = now
+        return sheet_groups, ""
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:

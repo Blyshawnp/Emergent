@@ -224,8 +224,8 @@ export default function CallsPage({ onNavigate }) {
 
   const callTypes = settings.call_types || defaults.call_types || [];
   const shows = settings.shows || defaults.shows || [];
-  const callCoaching = defaults.call_coaching || DEFAULT_CALL_COACHING;
-  const callFails = defaults.call_fails || DEFAULT_CALL_FAILS;
+  const callCoaching = settings.call_coaching || defaults.call_coaching || DEFAULT_CALL_COACHING;
+  const callFails = settings.call_fails || defaults.call_fails || DEFAULT_CALL_FAILS;
   const callers = useMemo(() => getCallersForType(callSetup.type, settings, defaults), [callSetup.type, settings, defaults]);
   useEffect(() => {
     if (!callers.length) return;
