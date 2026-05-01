@@ -1,0 +1,4 @@
+Brand,Model,Note
+SOURCE NOTE,,"Current headset rows are not stored locally in this repo. The live app fetches them from the approved headsets Google Doc export URL defined in backend/server.py and parses them at runtime."
+SOURCE URL,,https://docs.google.com/document/d/1HXdvhOLKjoA5YDznJRtFuEZfKFU2CDNDiEp-Vn4fE2o/export?format=txt
+EXAMPLE,Logitech H390,"Example only from local test data, not a guaranteed full live list."

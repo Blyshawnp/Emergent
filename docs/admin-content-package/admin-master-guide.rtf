@@ -1,0 +1,37 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Arial;}}
+\fs24
+\b Mock Testing Suite Admin Master Guide\par
+\b0\par
+\b Purpose\par
+\b0 This guide explains which content files are used at runtime today, which files are reference-only, and the safest path to make defaults editable without code changes.\par
+\par
+\b Runtime today\par
+\b0 1. Structured defaults come from backend/content/app_content.json.\par
+2. Help and FAQ currently come from frontend/src/pages/HelpPage.jsx.\par
+3. Approved headsets are fetched live from a Google Doc and parsed by backend/server.py.\par
+4. Notification sheet URL is admin-managed in backend/config/runtime_config.json.\par
+\par
+\b Reference-only docs\par
+\b0 The docs/default-content/*.md files are not read by the app at runtime. Editing them does not change the live app.\par
+\par
+\b Safest strategy\par
+\b0 1. Keep structured app defaults in one master spreadsheet source.\par
+2. Keep long-form help and FAQ in Google Docs or local authored docs.\par
+3. Keep approved headsets in a structured sheet instead of a freeform Google Doc once you are ready to migrate it.\par
+\par
+\b Recommended eventual source design\par
+\b0 - Discord Posts -> Google Sheet or local JSON\par
+- Screenshots -> local settings or asset-managed JSON\par
+- Coaching checkboxes -> Google Sheet or local JSON\par
+- Fail reason checkboxes -> Google Sheet or local JSON\par
+- Callers -> Google Sheet\par
+- Call Types -> Google Sheet\par
+- Shows -> Google Sheet\par
+- Help -> Google Doc\par
+- FAQ -> Google Doc\par
+- Approved Headsets -> Google Sheet\par
+\par
+\b Current note about headsets\par
+\b0 The current approved headset list is not stored in the repo. It is loaded from a Google Doc export URL at runtime, so this package includes only a headset worksheet template and source note, not a verified live snapshot.\par
+}

@@ -1,21 +1,23 @@
 """
-Mock Testing Suite v3.0 — FastAPI Backend
-All routes in a single file for simplicity. Uses MongoDB for persistence.
+Mock Testing Suite — FastAPI Backend
+All routes in a single file for simplicity. Uses SQLite for local persistence.
 """
 import os
 import json
 import sys
 import logging
+import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
 from services.form_filler import fill_form as fill_cert_form
 
@@ -28,28 +30,259 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════
 # CONSTANTS / DEFAULTS
 # ══════════════════════════════════════════════════════════════════
-APP_VERSION = "2.5.0"
-DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
-DEFAULT_DB_NAME = "mock_testing_suite"
+DEFAULT_APP_VERSION = "1.0.1"
+DEFAULT_NOTIFICATION_SHEET_URL = "https://docs.google.com/spreadsheets/d/1OkDE9SxnNA0WEHa-TeiZ3b2j5AZ9qiJi1Hv4Lmn8YSE/edit?gid=0#gid=0"
+
+
+def _load_desktop_app_version():
+    env_version = (os.getenv("APP_VERSION") or "").strip()
+    if env_version:
+        return env_version
+
+    package_json = ROOT_DIR.parent / "desktop" / "package.json"
+    try:
+        with package_json.open("r", encoding="utf-8") as f:
+            return (json.load(f).get("version") or "").strip() or DEFAULT_APP_VERSION
+    except Exception as exc:
+        logger.warning("[STARTUP] Failed to read desktop/package.json version: %s", exc)
+        return DEFAULT_APP_VERSION
+
+
+APP_VERSION = _load_desktop_app_version()
+DEFAULT_SQLITE_FILENAME = "mock_testing_suite.sqlite3"
 DEFAULT_CERT_SHEET_URL = "https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg"
 
-mongo_url = (os.getenv("MONGO_URL") or "").strip()
-db_name = (os.getenv("DB_NAME") or "").strip()
 
-if mongo_url:
-    logger.info("[STARTUP] MONGO_URL loaded from environment.")
-else:
-    mongo_url = DEFAULT_MONGO_URL
-    logger.warning("[STARTUP] MONGO_URL was not set. Using fallback %s", DEFAULT_MONGO_URL)
+def _resolve_sqlite_path():
+    configured_path = (os.getenv("SQLITE_DB_PATH") or "").strip()
+    if configured_path:
+        return Path(configured_path).expanduser()
 
-if db_name:
-    logger.info("[STARTUP] DB_NAME loaded from environment.")
-else:
-    db_name = DEFAULT_DB_NAME
-    logger.warning("[STARTUP] DB_NAME was not set. Using fallback %s", DEFAULT_DB_NAME)
+    app_data_dir = (os.getenv("APP_DATA_DIR") or "").strip()
+    if app_data_dir:
+        return Path(app_data_dir).expanduser() / DEFAULT_SQLITE_FILENAME
 
-client = AsyncIOMotorClient(mongo_url)
-db = client[db_name]
+    return ROOT_DIR / "data" / DEFAULT_SQLITE_FILENAME
+
+
+class SQLiteCursor:
+    def __init__(self, collection, docs, projection=None):
+        self.collection = collection
+        self.docs = docs
+        self.projection = projection
+
+    def sort(self, field, direction):
+        reverse = direction < 0
+        self.docs.sort(key=lambda doc: str(doc.get(field, "")), reverse=reverse)
+        return self
+
+    async def to_list(self, length):
+        docs = self.docs if length is None else self.docs[:length]
+        return [self.collection.project(doc, self.projection) for doc in docs]
+
+
+class SQLiteCollection:
+    def __init__(self, store, name):
+        self.store = store
+        self.name = name
+
+    @staticmethod
+    def clone(doc):
+        return json.loads(json.dumps(doc or {}, ensure_ascii=False, default=str))
+
+    @classmethod
+    def project(cls, doc, projection=None):
+        projected = cls.clone(doc)
+        if projection and projection.get("_id") == 0:
+            projected.pop("_id", None)
+        return projected
+
+    def _read_document(self, doc_id):
+        row = self.store.fetchone(
+            "SELECT data FROM kv_documents WHERE collection = ? AND doc_id = ?",
+            (self.name, doc_id),
+        )
+        return json.loads(row["data"]) if row else None
+
+    def _write_document(self, doc):
+        document = self.clone(doc)
+        doc_id = document.get("_id")
+        if not doc_id:
+            raise ValueError(f"{self.name} documents require an _id")
+        self.store.execute(
+            """
+            INSERT INTO kv_documents (collection, doc_id, data, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(collection, doc_id) DO UPDATE SET
+                data = excluded.data,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (self.name, str(doc_id), json.dumps(document, ensure_ascii=False, default=str)),
+        )
+
+    async def find_one(self, query=None, projection=None):
+        query = query or {}
+        if self.name == "history":
+            docs = self._read_history_docs()
+            for doc in docs:
+                if all(doc.get(key) == value for key, value in query.items()):
+                    return self.project(doc, projection)
+            return None
+
+        doc_id = query.get("_id")
+        if not doc_id:
+            return None
+        doc = self._read_document(str(doc_id))
+        return self.project(doc, projection) if doc else None
+
+    async def insert_one(self, doc):
+        document = self.clone(doc)
+        if self.name == "history":
+            document.pop("_id", None)
+            self.store.execute(
+                "INSERT INTO history_documents (data, timestamp, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                (
+                    json.dumps(document, ensure_ascii=False, default=str),
+                    str(document.get("timestamp_iso") or document.get("timestamp") or ""),
+                ),
+            )
+            return
+
+        self._write_document(document)
+
+    async def update_one(self, query, update, upsert=False):
+        query = query or {}
+        existing = await self.find_one(query)
+        if not existing and not upsert:
+            return
+
+        doc_id = query.get("_id") or (existing or {}).get("_id")
+        document = existing or {"_id": doc_id}
+        values = update.get("$set", update)
+        document.update(self.clone(values))
+        self._write_document(document)
+
+    async def replace_one(self, query, replacement, upsert=False):
+        query = query or {}
+        existing = await self.find_one(query)
+        if not existing and not upsert:
+            return
+
+        document = self.clone(replacement)
+        if "_id" not in document and query.get("_id"):
+            document["_id"] = query["_id"]
+        self._write_document(document)
+
+    async def delete_one(self, query):
+        query = query or {}
+        if self.name == "history":
+            return
+
+        doc_id = query.get("_id")
+        if not doc_id:
+            return
+        self.store.execute(
+            "DELETE FROM kv_documents WHERE collection = ? AND doc_id = ?",
+            (self.name, str(doc_id)),
+        )
+
+    async def delete_many(self, query=None):
+        query = query or {}
+        if self.name == "history" and not query:
+            self.store.execute("DELETE FROM history_documents")
+            return
+        if not query:
+            self.store.execute("DELETE FROM kv_documents WHERE collection = ?", (self.name,))
+
+    def _read_history_docs(self):
+        rows = self.store.fetchall(
+            "SELECT data FROM history_documents ORDER BY id ASC",
+            (),
+        )
+        return [json.loads(row["data"]) for row in rows]
+
+    def find(self, query=None, projection=None):
+        query = query or {}
+        if self.name == "history":
+            docs = self._read_history_docs()
+        else:
+            rows = self.store.fetchall(
+                "SELECT data FROM kv_documents WHERE collection = ?",
+                (self.name,),
+            )
+            docs = [json.loads(row["data"]) for row in rows]
+
+        if query:
+            docs = [
+                doc for doc in docs
+                if all(doc.get(key) == value for key, value in query.items())
+            ]
+        return SQLiteCursor(self, docs, projection)
+
+
+class SQLiteDocumentStore:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.RLock()
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self._initialize_schema()
+        self.settings = SQLiteCollection(self, "settings")
+        self.sessions = SQLiteCollection(self, "sessions")
+        self.history = SQLiteCollection(self, "history")
+        logger.info("[STARTUP] SQLite database: %s", self.path)
+
+    def _initialize_schema(self):
+        with self.lock, self.conn:
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS kv_documents (
+                    collection TEXT NOT NULL,
+                    doc_id TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (collection, doc_id)
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS history_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT NOT NULL,
+                    timestamp TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history_documents (timestamp DESC, id DESC)"
+            )
+
+    def execute(self, sql, params=()):
+        with self.lock, self.conn:
+            return self.conn.execute(sql, params)
+
+    def fetchone(self, sql, params=()):
+        with self.lock:
+            return self.conn.execute(sql, params).fetchone()
+
+    def fetchall(self, sql, params=()):
+        with self.lock:
+            return self.conn.execute(sql, params).fetchall()
+
+    async def has_any_data(self):
+        kv_count = self.fetchone("SELECT COUNT(*) AS count FROM kv_documents")["count"]
+        history_count = self.fetchone("SELECT COUNT(*) AS count FROM history_documents")["count"]
+        return kv_count > 0 or history_count > 0
+
+    def close(self):
+        with self.lock:
+            self.conn.close()
+
+
+db = SQLiteDocumentStore(_resolve_sqlite_path())
 
 
 def _content_file_candidates():
@@ -101,6 +334,7 @@ def _load_backend_runtime_config():
             logger.warning("[CONFIG] Failed to load %s: %s", candidate, exc)
     logger.info("[CONFIG] No backend runtime config found")
     return {}
+
 
 CALL_TYPES = [
     "New Donor - One Time Donation",
@@ -189,19 +423,62 @@ AUTO_FAIL_REASONS = [
 ]
 
 TICKER_MESSAGES = [
-    "Welcome to Mock Testing Suite v2.5.0",
+    f"Welcome to Mock Testing Suite v{APP_VERSION}",
     "Tip: Use the Discord Post button to quickly copy common messages",
     "Need help? Check the Help tab for step-by-step setup guides",
 ]
 
 TICKER_DOC_URL = "https://docs.google.com/document/d/1kRJMSd-1qK3qU6jDYr30HeNglrqTiF0tF5fiYEhpP80/export?format=txt"
-UPDATE_DOC_URL = "https://docs.google.com/document/d/1_5L1LS6i5bYWxRYUiBrmaVonbQq9nEhY68XrL5G9c1w/export?format=txt"
+UPDATE_DOC_URL = "https://docs.google.com/document/d/1-eNbA4KriCkE8pKnnpj0FReUhUmMvTVjG8Y7B7ppu_A/export?format=txt"
+APPROVED_HEADSETS_DOC_ID = "1HXdvhOLKjoA5YDznJRtFuEZfKFU2CDNDiEp-Vn4fE2o"
+APPROVED_HEADSETS_DOC_URL = f"https://docs.google.com/document/d/{APPROVED_HEADSETS_DOC_ID}/export?format=txt"
 
 DEFAULT_FORM_URL = "https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl"
 
 DISCORD_SCREENSHOTS = [
     {"title": "Welcome New Agent", "image_url": "/welcome-new-agent.png"},
     {"title": "Welcome to Stars", "image_url": "/welcome-to-stars.png"},
+]
+
+CALL_COACHING = [
+    {"id": "c-show-app", "label": "Show appreciation", "children": ["For Current/Existing Donors", "After donation amount is given"]},
+    {"id": "c-phonetics", "label": "Phonetics table provided to candidate"},
+    {"id": "c-dontask", "label": "Don't Ask, Just Verify Address and Phone Number", "helper": "Existing member already provided address and phone number"},
+    {"id": "c-verify", "label": "Verification", "children": ["Name", "Address", "Phone", "Email", "Card/EFT", "Phonetics for Sound Alike Letters"]},
+    {"id": "c-verbatim", "label": "Read script verbatim", "helper": "No adlibbing or skipping sections"},
+    {"id": "c-nav", "label": "Use effective script navigation", "children": ["Scroll down to avoid missing parts of the script", "Use the Back and Next buttons and not the Icons"]},
+    {"id": "c-other", "label": "Other"},
+]
+
+CALL_FAILS = [
+    "Skipped parts of script",
+    "Volunteered info",
+    "Wrong donation",
+    "Background noise on call",
+    "Paraphrased script",
+    "Wrong thank you gift",
+    "Script navigation issues",
+    "Other",
+]
+
+SUP_COACHING = [
+    {"label": "Minimize dead air", "helper": "Maintain engagement throughout hold and transfer"},
+    {"label": "Queue Not Changed", "helper": "Did not change queue to ACD Direct Supervisor"},
+    {"label": "Caller Placed On Hold"},
+    {"label": "Verification", "children": ["Name", "Address", "Phone", "Email", "Card/EFT", "Phonetics for Sound Alike Letters"]},
+    {"label": "Discord permission", "helper": "Ask explicit permission to transfer via Discord"},
+    {"label": "Did not notify caller of transfer", "helper": "Notify caller before transferring"},
+    {"label": "Screenshots/Discord Chat", "helper": "Coached with standard instructions and screenshots"},
+    {"label": "Other"},
+]
+
+SUP_FAILS = [
+    "Did not ask permission to transfer",
+    "Did not minimize dead air",
+    "Caller Placed On Hold",
+    "Transferred to wrong queue",
+    "Did not inform caller of transfer",
+    "Other",
 ]
 
 HELP_CONTENT = {
@@ -398,11 +675,41 @@ HELP_CONTENT = {
 
 EXTERNAL_CONTENT = _load_external_content()
 
+if isinstance(EXTERNAL_CONTENT.get("call_types"), list) and EXTERNAL_CONTENT["call_types"]:
+    CALL_TYPES = EXTERNAL_CONTENT["call_types"]
+
+if isinstance(EXTERNAL_CONTENT.get("sup_reasons"), list) and EXTERNAL_CONTENT["sup_reasons"]:
+    SUP_REASONS = EXTERNAL_CONTENT["sup_reasons"]
+
+if isinstance(EXTERNAL_CONTENT.get("shows"), list) and EXTERNAL_CONTENT["shows"]:
+    SHOWS = EXTERNAL_CONTENT["shows"]
+
+if isinstance(EXTERNAL_CONTENT.get("donors_new"), list) and EXTERNAL_CONTENT["donors_new"]:
+    NEW_DONORS = EXTERNAL_CONTENT["donors_new"]
+
+if isinstance(EXTERNAL_CONTENT.get("donors_existing"), list) and EXTERNAL_CONTENT["donors_existing"]:
+    EXISTING_MEMBERS = EXTERNAL_CONTENT["donors_existing"]
+
+if isinstance(EXTERNAL_CONTENT.get("donors_increase"), list) and EXTERNAL_CONTENT["donors_increase"]:
+    INCREASE_SUSTAINING = EXTERNAL_CONTENT["donors_increase"]
+
 if isinstance(EXTERNAL_CONTENT.get("discord_templates"), list) and EXTERNAL_CONTENT["discord_templates"]:
     DISCORD_TEMPLATES = EXTERNAL_CONTENT["discord_templates"]
 
 if isinstance(EXTERNAL_CONTENT.get("discord_screenshots"), list) and EXTERNAL_CONTENT["discord_screenshots"]:
     DISCORD_SCREENSHOTS = EXTERNAL_CONTENT["discord_screenshots"]
+
+if isinstance(EXTERNAL_CONTENT.get("call_coaching"), list) and EXTERNAL_CONTENT["call_coaching"]:
+    CALL_COACHING = EXTERNAL_CONTENT["call_coaching"]
+
+if isinstance(EXTERNAL_CONTENT.get("call_fails"), list) and EXTERNAL_CONTENT["call_fails"]:
+    CALL_FAILS = EXTERNAL_CONTENT["call_fails"]
+
+if isinstance(EXTERNAL_CONTENT.get("sup_coaching"), list) and EXTERNAL_CONTENT["sup_coaching"]:
+    SUP_COACHING = EXTERNAL_CONTENT["sup_coaching"]
+
+if isinstance(EXTERNAL_CONTENT.get("sup_fails"), list) and EXTERNAL_CONTENT["sup_fails"]:
+    SUP_FAILS = EXTERNAL_CONTENT["sup_fails"]
 
 if isinstance(EXTERNAL_CONTENT.get("help"), dict) and EXTERNAL_CONTENT["help"]:
     HELP_CONTENT = EXTERNAL_CONTENT["help"]
@@ -415,9 +722,12 @@ DEFAULT_SETTINGS = {
     "form_fill_browser": "auto",
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
+    "notification_sheet_url": DEFAULT_NOTIFICATION_SHEET_URL,
+    "ticker_speed": "normal",
     "enable_sounds": True,
     "theme": "dark",
     "enable_gemini": True,
+    "gemini_key": "",
     "enable_calendar": False,
     "discord_templates": DISCORD_TEMPLATES,
     "discord_screenshots": DISCORD_SCREENSHOTS,
@@ -428,16 +738,20 @@ DEFAULT_SETTINGS = {
     "donors_new": NEW_DONORS,
     "donors_existing": EXISTING_MEMBERS,
     "donors_increase": INCREASE_SUSTAINING,
+    "call_coaching": CALL_COACHING,
+    "call_fails": CALL_FAILS,
+    "sup_coaching": SUP_COACHING,
+    "sup_fails": SUP_FAILS,
 }
 
 SENSITIVE_SETTINGS_KEYS = set()
-
-ALLOWED_SETTINGS_KEYS = set(DEFAULT_SETTINGS.keys())
+ADMIN_ONLY_SETTINGS_KEYS = {"notification_sheet_url"}
+ALLOWED_SETTINGS_KEYS = set(DEFAULT_SETTINGS.keys()) - ADMIN_ONLY_SETTINGS_KEYS
 PRESERVED_SETTINGS_KEYS_ON_RESTORE = {"setup_complete", "tutorial_completed"}
 
 
 def sanitize_settings(doc: Optional[dict]) -> dict:
-    base = dict(DEFAULT_SETTINGS)
+    base = {key: value for key, value in DEFAULT_SETTINGS.items() if key not in ADMIN_ONLY_SETTINGS_KEYS}
     if doc:
         for key, value in doc.items():
             if key in ALLOWED_SETTINGS_KEYS or key in SENSITIVE_SETTINGS_KEYS:
@@ -494,6 +808,10 @@ def empty_session():
         "final_status": None,
         "last_saved": None,
         "tech_issues_log": [],
+        "current_call_num": None,
+        "current_call_draft": None,
+        "current_sup_transfer_num": None,
+        "current_sup_transfer_draft": None,
     }
 
 
@@ -528,6 +846,11 @@ def _get_fail_items(data):
     if notes:
         items.append(notes)
     return items
+
+
+DISCORD_SCREENSHOT_SUMMARY_TEXT = (
+    "Provided coaching using the standard screenshots and instructions in Discord chat."
+)
 
 
 AUTO_FAIL_MESSAGES = {
@@ -596,6 +919,164 @@ def _collect_fail_lines(session):
         reasons_str = ", ".join(reasons) if reasons else "unspecified"
         lines.append(f"Supervisor Transfer {i} failed: {reasons_str}.")
     return lines
+
+
+def _sentence_case(value):
+    text = " ".join(str(value or "").replace("\n", " ").split()).strip(" .")
+    if not text:
+        return ""
+    return text[0].upper() + text[1:]
+
+
+def _looks_like_discord_screenshot_coaching(value):
+    text = " ".join(str(value or "").replace("_", " ").replace("/", " ").split()).strip().lower()
+    if not text:
+        return False
+    has_screenshot = "screenshot" in text
+    has_discord_or_chat = "discord" in text or "chat" in text or "instruction" in text
+    return has_screenshot and has_discord_or_chat
+
+
+def _has_discord_screenshot_coaching(data):
+    if not data:
+        return False
+
+    coaching = data.get("coaching", {})
+    for key, checked in coaching.items():
+        if checked and _looks_like_discord_screenshot_coaching(key):
+            return True
+
+    notes = data.get("coach_notes", "")
+    return _looks_like_discord_screenshot_coaching(notes)
+
+
+def _dedupe_preserve_order(items):
+    seen = set()
+    result = []
+    for item in items:
+        normalized = " ".join(str(item or "").split()).strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(str(item).strip())
+    return result
+
+
+def _format_management_list(items):
+    cleaned = [_sentence_case(item) for item in items if _sentence_case(item)]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} and {cleaned[1]}"
+    return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
+
+
+def _extract_coaching_summary_parts(section):
+    coaching = (section or {}).get("coaching", {}) or {}
+    grouped = {}
+
+    for key, checked in coaching.items():
+        if not checked or not key:
+            continue
+        if "_" in key:
+            parent, child = key.split("_", 1)
+            parent = str(parent or "").strip()
+            child = str(child or "").strip()
+            if not parent or not child:
+                continue
+            grouped.setdefault(parent, [])
+            if child not in grouped[parent]:
+                grouped[parent].append(child)
+            continue
+        parent = str(key or "").strip()
+        if not parent:
+            continue
+        grouped.setdefault(parent, [])
+
+    parts = []
+    for parent, children in grouped.items():
+        parent_text = _sentence_case(parent)
+        child_values = [_sentence_case(child) for child in children if _sentence_case(child)]
+        if child_values:
+            parts.append(f"{parent_text} ({'; '.join(child_values)})")
+        else:
+            parts.append(parent_text)
+    return parts
+
+
+def _extract_fail_summary_parts(section):
+    fails = (section or {}).get("fails", {}) or {}
+    parts = []
+    for key, checked in fails.items():
+        if checked and key:
+            parts.append(str(key).strip())
+    return _dedupe_preserve_order(parts)
+
+
+def _normalize_notes_sentence(value):
+    text = " ".join(str(value or "").replace("\n", " ").split()).strip()
+    return text.rstrip(".")
+
+
+def _collect_all_coaching_items(session):
+    items = []
+    for i in range(1, 4):
+        items.extend(_get_coaching_items(session.get(f"call_{i}") or {}))
+    for i in range(1, 3):
+        items.extend(_get_coaching_items(session.get(f"sup_transfer_{i}") or {}))
+    return _dedupe_preserve_order(items)
+
+
+def _collect_all_fail_items(session):
+    items = []
+    for i in range(1, 4):
+        items.extend(_get_fail_items(session.get(f"call_{i}") or {}))
+    for i in range(1, 3):
+        items.extend(_get_fail_items(session.get(f"sup_transfer_{i}") or {}))
+    return _dedupe_preserve_order(items)
+
+
+def _build_section_coaching_summary(section, label):
+    result = (section or {}).get("result")
+    if result not in {"Pass", "Fail"}:
+        return ""
+
+    coaching_items = _extract_coaching_summary_parts(section)
+    coaching_notes = _normalize_notes_sentence((section or {}).get("coach_notes", ""))
+    has_discord_screenshot = _has_discord_screenshot_coaching(section)
+
+    details = []
+    if coaching_items:
+        details.append("Coaching addressed " + _format_management_list(coaching_items) + ".")
+    if has_discord_screenshot:
+        details.append(DISCORD_SCREENSHOT_SUMMARY_TEXT)
+    if coaching_notes:
+        details.append(f"Coaching notes: {coaching_notes}.")
+    if not details:
+        details.append("No coaching items were selected for this portion of the session.")
+
+    return f"{label} - {result.upper()} - {' '.join(details)}"
+
+
+def _build_section_fail_summary(section, label):
+    if (section or {}).get("result") != "Fail":
+        return ""
+
+    fail_items = _extract_fail_summary_parts(section)
+    fail_notes = _normalize_notes_sentence((section or {}).get("fail_notes", ""))
+    details = []
+
+    if fail_items:
+        details.append("Fail reasons: " + _format_management_list(fail_items) + ".")
+    else:
+        details.append("Fail reasons: N/A.")
+
+    if fail_notes:
+        details.append(f"Fail notes: {fail_notes}.")
+
+    return f"{label} - FAIL - {' '.join(details)}"
 
 
 def _is_fail_na(session):
@@ -695,24 +1176,52 @@ def _normalize_history_timestamp(entry):
 
 
 def build_clean_coaching(session):
-    name = session.get("candidate_name", "Candidate")
     auto_fail = session.get("auto_fail_reason")
-    if auto_fail:
-        return f"{name} — Auto-fail: {auto_fail}."
     lines = []
-    if not session.get("supervisor_only", False):
-        lines.extend(_collect_call_coaching_lines(session))
-    lines.extend(_collect_sup_coaching_lines(session))
-    return "\n".join(lines) if lines else "No coaching data recorded."
+    for i in range(1, 4):
+        line = _build_section_coaching_summary(session.get(f"call_{i}"), f"Call {i}")
+        if line:
+            lines.append(line)
+    for i in range(1, 3):
+        line = _build_section_coaching_summary(
+            session.get(f"sup_transfer_{i}"),
+            f"Supervisor Transfer {i}",
+        )
+        if line:
+            lines.append(line)
+    if lines:
+        return "\n".join(lines)
+    if auto_fail:
+        return (
+            "No coaching summary was generated before the session ended. "
+            f"Session closed under the recorded auto-fail reason: {_sentence_case(auto_fail)}."
+        )
+    return "No coaching summary was generated because no coaching items were selected for this session."
 
 
 def build_clean_fail(session):
-    name = session.get("candidate_name", "Candidate")
     auto_fail = session.get("auto_fail_reason")
     if auto_fail:
-        return _resolve_auto_fail_message(name, auto_fail)
-    fail_lines = _collect_fail_lines(session)
-    return "\n".join(fail_lines) if fail_lines else "N/A"
+        return (
+            "Session Auto-Fail - FAIL - "
+            f"Recorded auto-fail reason: {_sentence_case(auto_fail)}."
+        )
+
+    lines = []
+    for i in range(1, 4):
+        line = _build_section_fail_summary(session.get(f"call_{i}"), f"Call {i}")
+        if line:
+            lines.append(line)
+    for i in range(1, 3):
+        line = _build_section_fail_summary(
+            session.get(f"sup_transfer_{i}"),
+            f"Supervisor Transfer {i}",
+        )
+        if line:
+            lines.append(line)
+    if lines:
+        return "\n".join(lines)
+    return "N/A"
 
 
 DEFAULT_GEMINI_COACHING_PROMPT = (
@@ -720,11 +1229,16 @@ DEFAULT_GEMINI_COACHING_PROMPT = (
     "Based on the coaching checkboxes selected during the mock certification session, "
     "write a clear, concise, management-facing summary of what occurred during the test. "
     "The summary must be objective, professional, and suitable for internal documentation. "
+    "Use the existing session-note line structure when possible, keeping each completed call "
+    "or supervisor transfer management-facing and concise. "
     "Incorporate the selected coaching checklist items directly into the summary instead of "
     "generalizing vaguely. Reference the specific coached items in plain language. Do not "
     "address the candidate. Do not use second-person language such as 'you' or 'your'. Do "
     "not give advice or instructions such as 'should', 'try to', or 'remember to'. Describe "
-    "the observed performance and the coaching provided during the session."
+    "the observed performance and the coaching provided during the session. If the selected "
+    "coaching includes screenshots, Discord chat, or standard instructions, explicitly include "
+    "management-facing wording equivalent to 'Provided coaching using the standard screenshots "
+    "and instructions in Discord chat.' Do not invent any coaching item that was not selected."
 )
 
 DEFAULT_GEMINI_FAIL_PROMPT = (
@@ -762,24 +1276,6 @@ def _extract_gemini_text(response):
                 return candidate_text
 
     return ""
-
-
-@lru_cache(maxsize=1)
-def _get_backend_gemini_api_key() -> str:
-    env_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    if env_key:
-        logger.info("[GEMINI] API key loaded from environment override")
-        return env_key
-
-    config = _load_backend_runtime_config()
-    config_key = (config.get("gemini_api_key") or "").strip()
-    if config_key:
-        logger.info("[GEMINI] API key loaded from backend runtime config")
-        return config_key
-
-    logger.warning("[GEMINI] No backend Gemini API key configured")
-    return ""
-
 
 @lru_cache(maxsize=8)
 def _select_supported_gemini_model(api_key: str) -> str:
@@ -842,25 +1338,25 @@ def generate_summaries(session, api_key="", settings=None):
     use_gemini = bool(settings and settings.get("enable_gemini"))
     if not use_gemini:
         return {"coaching": coaching, "fail": fail}
-
-    coaching_prompt = (
-        (settings or {}).get("gemini_coaching_prompt") or DEFAULT_GEMINI_COACHING_PROMPT
-    )
-    fail_prompt = (
-        (settings or {}).get("gemini_fail_prompt") or DEFAULT_GEMINI_FAIL_PROMPT
-    )
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return {
+            "coaching": coaching,
+            "fail": fail,
+            "error": "Gemini is enabled, but no API key was provided. Using generic summaries instead.",
+        }
 
     try:
         gemini_coaching = _generate_gemini_summary(
             coaching,
-            coaching_prompt,
+            DEFAULT_GEMINI_COACHING_PROMPT,
             api_key,
             "coaching",
         ) if coaching != "No coaching data recorded." else coaching
 
         gemini_fail = _generate_gemini_summary(
             fail,
-            fail_prompt,
+            DEFAULT_GEMINI_FAIL_PROMPT,
             api_key,
             "fail",
         ) if fail != "N/A" else fail
@@ -951,18 +1447,21 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
     tech_issue = _map_tech_issue_for_form(session)
     summaries = generate_summaries(session)
 
-    mock_complete = "No"
+    mock_complete = "Yes" if sup_only else "No"
     if not sup_only and (calls_passed >= 2 or calls_failed >= 2):
         mock_complete = "Yes"
 
     sup_complete = "No"
     if not newbie:
-        if sup_only and sup_attempts >= 1:
-            sup_complete = "Yes"
-        elif not sup_only and (sups_passed >= 1 or sups_failed >= 2):
+        if sup_only:
+            sup_complete = "Yes" if sups_passed >= 1 else "No"
+        elif sups_passed >= 1 or sups_failed >= 2:
             sup_complete = "Yes"
 
-    all_complete = "Yes" if not newbie and (session.get("auto_fail_reason") or final_status in {"Pass", "Fail"}) else "No"
+    if sup_only:
+        all_complete = "Yes" if not newbie and sups_passed >= 1 else "No"
+    else:
+        all_complete = "Yes" if not newbie and (session.get("auto_fail_reason") or final_status in {"Pass", "Fail"}) else "No"
 
     fail_reason = "N/A"
     if _is_form_fail_session(session):
@@ -970,7 +1469,7 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
 
     return {
         "tester_name": (session.get("tester_name") or settings.get("tester_name") or settings.get("display_name") or "").strip(),
-        "candidate_name": (session.get("candidate_name") or "").strip(),
+        "candidate_name": (session.get("candidate_name") or session.get("candidate") or "").strip(),
         "skills": ["Supervisor Transfer"] if sup_only else ["Mock Calls", "Supervisor Transfer"],
         "mock_complete": mock_complete,
         "sup_complete": sup_complete,
@@ -985,11 +1484,52 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
     }
 
 
+async def import_sqlite_seed_if_requested():
+    """Optional one-time JSON import for Mongo exports; skipped once SQLite has data."""
+    import_path = (os.getenv("SQLITE_IMPORT_PATH") or "").strip()
+    if not import_path:
+        return
+
+    seed_path = Path(import_path).expanduser()
+    if not seed_path.is_file():
+        logger.warning("[MIGRATION] SQLITE_IMPORT_PATH does not exist: %s", seed_path)
+        return
+
+    if await db.has_any_data():
+        logger.info("[MIGRATION] SQLite already has data; skipping import from %s", seed_path)
+        return
+
+    with seed_path.open("r", encoding="utf-8") as f:
+        seed = json.load(f)
+
+    settings = seed.get("settings")
+    if isinstance(settings, dict):
+        settings_doc = SQLiteCollection.clone(settings)
+        settings_doc["_id"] = "app_settings"
+        await db.settings.replace_one({"_id": "app_settings"}, settings_doc, upsert=True)
+
+    active_session = seed.get("active_session") or seed.get("session")
+    if isinstance(active_session, dict):
+        session_doc = SQLiteCollection.clone(active_session)
+        session_doc["_id"] = "active_session"
+        await db.sessions.replace_one({"_id": "active_session"}, session_doc, upsert=True)
+
+    history = seed.get("history") or []
+    if isinstance(history, list):
+        for record in history:
+            if isinstance(record, dict):
+                await db.history.insert_one(record)
+
+    logger.info("[MIGRATION] Imported SQLite seed data from %s", seed_path)
+
+
 # ══════════════════════════════════════════════════════════════════
 # APP SETUP
 # ══════════════════════════════════════════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await import_sqlite_seed_if_requested()
+
     # Ensure default settings exist
     existing = await db.settings.find_one({"_id": "app_settings"})
     if not existing:
@@ -1001,6 +1541,8 @@ async def lifespan(app: FastAPI):
         for key, val in DEFAULT_SETTINGS.items():
             if key not in existing:
                 updates[key] = val
+        if not str(existing.get("notification_sheet_url") or "").strip() and DEFAULT_NOTIFICATION_SHEET_URL:
+            updates["notification_sheet_url"] = DEFAULT_NOTIFICATION_SHEET_URL
         # Migrate old 3-template discord to new 15-template list
         if len(existing.get("discord_templates", [])) < 5:
             updates["discord_templates"] = DISCORD_TEMPLATES
@@ -1009,7 +1551,7 @@ async def lifespan(app: FastAPI):
             logger.info(f"[STARTUP] Migrated settings: {list(updates.keys())}")
     logger.info(f"[STARTUP] Mock Testing Suite v{APP_VERSION}")
     yield
-    client.close()
+    db.close()
     logger.info("[SHUTDOWN] Server stopped")
 
 
@@ -1074,6 +1616,11 @@ async def get_defaults():
         "donors_existing": EXISTING_MEMBERS,
         "donors_increase": INCREASE_SUSTAINING,
         "discord_templates": DISCORD_TEMPLATES,
+        "discord_screenshots": DISCORD_SCREENSHOTS,
+        "call_coaching": CALL_COACHING,
+        "call_fails": CALL_FAILS,
+        "sup_coaching": SUP_COACHING,
+        "sup_fails": SUP_FAILS,
         "payment": DEFAULT_PAYMENT,
         "tech_issues": TECH_ISSUES,
         "auto_fail_reasons": AUTO_FAIL_REASONS,
@@ -1131,14 +1678,14 @@ async def update_session(payload: dict):
 @api_router.post("/session/call")
 async def save_call(payload: dict):
     key = f"call_{payload.get('call_num', 1)}"
-    await db.sessions.update_one({"_id": "active_session"}, {"$set": {key: payload}})
+    await db.sessions.update_one({"_id": "active_session"}, {"$set": {key: payload, "current_call_draft": None, "current_call_num": None}})
     return {"ok": True}
 
 
 @api_router.post("/session/sup")
 async def save_sup(payload: dict):
     key = f"sup_transfer_{payload.get('transfer_num', 1)}"
-    await db.sessions.update_one({"_id": "active_session"}, {"$set": {key: payload}})
+    await db.sessions.update_one({"_id": "active_session"}, {"$set": {key: payload, "current_sup_transfer_draft": None, "current_sup_transfer_num": None}})
     return {"ok": True}
 
 
@@ -1202,6 +1749,8 @@ async def clear_history():
     return {"ok": True}
 
 
+import csv
+import io
 import re
 import httpx
 
@@ -1209,6 +1758,15 @@ import httpx
 # TICKER (fetches from Google Doc, falls back to defaults)
 # ══════════════════════════════════════════════════════════════════
 _ticker_cache = {"messages": None, "last_fetch": 0}
+_headset_cache = {"groups": None, "last_fetch": 0}
+_notification_cache = {"groups": None, "last_fetch": 0, "url": ""}
+
+_notification_defaults = {
+    "tickerMessages": [],
+    "banners": [],
+    "popups": [],
+}
+DEFAULT_NOTIFICATION_TIMEZONE = "America/New_York"
 
 async def _fetch_ticker_from_doc():
     """Fetch ticker messages from Google Doc. Each numbered line becomes a message.
@@ -1238,24 +1796,307 @@ async def _fetch_ticker_from_doc():
         logger.warning(f"[TICKER] Failed to fetch Google Doc: {e}")
     return TICKER_MESSAGES
 
+
+def _normalize_notification_bool(value):
+    return str(value or "").strip().lower() in {"true", "1", "yes", "y", "on"}
+
+
+def _normalize_notification_text(value):
+    return str(value or "").strip()
+
+
+def _normalize_notification_date(value, end_of_day=False):
+    text = _normalize_notification_text(value)
+    if not text:
+        return None
+
+    parsed = None
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            parsed = None
+    else:
+        for fmt in ("%m/%d/%Y", "%Y/%m/%d", "%m-%d-%Y"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+
+    if not parsed:
+        return None
+
+    if end_of_day:
+        return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _normalize_notification_time(value):
+    text = _normalize_notification_text(value).upper().replace(".", "").strip()
+    if not text:
+        return None
+
+    for fmt in ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return parsed.hour, parsed.minute, parsed.second
+        except ValueError:
+            continue
+
+    return None
+
+
+def _combine_notification_datetime(date_value, time_value, default_time):
+    parsed_date = _normalize_notification_date(date_value)
+    if not parsed_date:
+        return None
+
+    parsed_time = _normalize_notification_time(time_value) or default_time
+    return datetime(
+        parsed_date.year,
+        parsed_date.month,
+        parsed_date.day,
+        parsed_time[0],
+        parsed_time[1],
+        parsed_time[2],
+        tzinfo=ZoneInfo(DEFAULT_NOTIFICATION_TIMEZONE),
+    )
+
+
+def _resolve_notification_sheet_url(value):
+    raw = _normalize_notification_text(value)
+    if not raw:
+        return ""
+
+    match = re.match(r"^https://docs\.google\.com/spreadsheets/d/([^/]+)/.*?(?:[?#&]gid=(\d+))?", raw)
+    if match:
+        doc_id = match.group(1)
+        gid = match.group(2) or "0"
+        return f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv&gid={gid}"
+
+    return raw
+
+
+def _get_admin_notification_sheet_url(settings_doc):
+    runtime_config = _load_backend_runtime_config()
+    runtime_url = _resolve_notification_sheet_url(runtime_config.get("notification_sheet_url"))
+    if runtime_url:
+        return runtime_url
+    return _resolve_notification_sheet_url((settings_doc or {}).get("notification_sheet_url"))
+
+
+def _notification_is_active(start_date, end_date):
+    current = datetime.now(ZoneInfo(DEFAULT_NOTIFICATION_TIMEZONE))
+    if start_date and current < start_date:
+        return False
+    if end_date and current > end_date:
+        return False
+    return True
+
+
+def _parse_notification_csv(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text or ""))
+    allowed_types = {"ticker", "info", "warning", "urgent"}
+    groups = {"tickerMessages": [], "banners": [], "popups": []}
+
+    for row in reader:
+        if not isinstance(row, dict):
+            continue
+
+        if not _normalize_notification_bool(row.get("Enabled")):
+            continue
+
+        notification_type = _normalize_notification_text(row.get("Type")).lower()
+        if notification_type not in allowed_types:
+            continue
+
+        message = _normalize_notification_text(row.get("Message"))
+        if not message:
+            continue
+
+        start_date = _combine_notification_datetime(
+            row.get("StartDate"),
+            row.get("StartTime"),
+            (0, 0, 0),
+        ) if _normalize_notification_text(row.get("StartDate")) else None
+        end_default_time = (23, 59, 59) if row.get("EndTime") is None else (0, 0, 0)
+        end_date = _combine_notification_datetime(
+            row.get("EndDate"),
+            row.get("EndTime"),
+            end_default_time,
+        ) if _normalize_notification_text(row.get("EndDate")) else None
+
+        if _normalize_notification_text(row.get("StartDate")) and not start_date:
+            start_date = None
+        if _normalize_notification_text(row.get("EndDate")) and not end_date:
+            continue
+        if start_date and end_date and start_date > end_date:
+            continue
+        if not _notification_is_active(start_date, end_date):
+            continue
+
+        notification_id = _normalize_notification_text(row.get("ID")) or f"notification-row-{len(groups['tickerMessages']) + len(groups['banners']) + len(groups['popups']) + 1}"
+        item = {
+            "id": notification_id,
+            "type": notification_type,
+            "title": _normalize_notification_text(row.get("Title")),
+            "message": message,
+            "showPopup": _normalize_notification_bool(row.get("ShowPopup")),
+            "showBanner": _normalize_notification_bool(row.get("ShowBanner")),
+            "persistent": _normalize_notification_bool(row.get("Persistent")),
+            "startTime": _normalize_notification_text(row.get("StartTime")),
+            "endTime": _normalize_notification_text(row.get("EndTime")),
+            "actionText": _normalize_notification_text(row.get("ActionText")) if _normalize_notification_text(row.get("ActionURL")) else "",
+            "actionURL": _normalize_notification_text(row.get("ActionURL")),
+            }
+
+        if item["type"] == "ticker":
+            groups["tickerMessages"].append(item)
+        if item["showBanner"]:
+            groups["banners"].append(item)
+        if item["showPopup"]:
+            groups["popups"].append(item)
+
+    return groups
+
+
+async def _fetch_notifications_from_sheet():
+    import time
+
+    settings_doc = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0}) or {}
+    sheet_url = _get_admin_notification_sheet_url(settings_doc)
+    if not sheet_url:
+        return _notification_defaults
+
+    now = time.time()
+    if (
+        _notification_cache["groups"] is not None
+        and _notification_cache["url"] == sheet_url
+        and (now - _notification_cache["last_fetch"]) < 55
+    ):
+        return _notification_cache["groups"]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(sheet_url, follow_redirects=True)
+            if resp.status_code == 200:
+                groups = _parse_notification_csv(resp.text)
+                _notification_cache["groups"] = groups
+                _notification_cache["last_fetch"] = now
+                _notification_cache["url"] = sheet_url
+                return groups
+    except Exception as exc:
+        logger.warning("[NOTIFICATIONS] Failed to fetch notification sheet: %s", exc)
+
+    return _notification_defaults
+
 @api_router.get("/ticker")
 async def get_ticker():
     messages = await _fetch_ticker_from_doc()
     return {"messages": messages}
 
 
+@api_router.get("/notifications")
+async def get_notifications():
+    groups = await _fetch_notifications_from_sheet()
+    return groups
+
+
+def _parse_approved_headsets_doc(text: str):
+    groups = []
+    current = None
+    pending_brand = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        line = re.sub(r"^[\u2022\u25CF\u25E6]+\s*", "", line)
+        line = re.sub(r"^\d+[\.\)]\s*", "", line)
+
+        brand_match = re.match(r"^Brand:\s*(.+?)\s*$", line, re.IGNORECASE)
+        if brand_match:
+            brand = brand_match.group(1).strip()
+            if brand:
+                current = {"brand": brand, "models": []}
+                groups.append(current)
+                pending_brand = None
+            continue
+
+        model_match = re.match(r"^-\s+(.+?)\s*$", line)
+        if model_match and current is not None:
+            model = model_match.group(1).strip()
+            if model and model not in current["models"]:
+                current["models"].append(model)
+            continue
+
+        if line.endswith(":"):
+            pending_brand = line[:-1].strip()
+            continue
+
+        if pending_brand and not line.startswith("-"):
+            current = {"brand": pending_brand, "models": []}
+            groups.append(current)
+            pending_brand = None
+
+        if current is None and not line.startswith("-") and len(line) < 80 and not re.search(r"\b(usb|noise|microphone|discord|approved)\b", line, re.IGNORECASE):
+            pending_brand = line
+            continue
+
+        model_text = re.sub(r"^-\s*", "", line).strip()
+        if pending_brand and model_text:
+            current = {"brand": pending_brand, "models": []}
+            groups.append(current)
+            pending_brand = None
+
+        if current is not None and model_text and model_text.lower() not in {current["brand"].lower(), "approved models"} and model_text not in current["models"]:
+            current["models"].append(model_text)
+
+    return [group for group in groups if group["models"]]
+
+
+async def _fetch_approved_headsets():
+    import time
+
+    now = time.time()
+    if _headset_cache["groups"] and (now - _headset_cache["last_fetch"]) < 300:
+        return _headset_cache["groups"], ""
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(APPROVED_HEADSETS_DOC_URL, follow_redirects=True)
+            if resp.status_code == 200:
+                groups = _parse_approved_headsets_doc(resp.text.strip())
+                if groups:
+                    _headset_cache["groups"] = groups
+                    _headset_cache["last_fetch"] = now
+                    return groups, ""
+                return _headset_cache["groups"] or [], "The approved headset Google Doc was reached, but its contents could not be parsed."
+    except Exception as exc:
+        logger.warning("[HEADSETS] Failed to fetch approved headset doc: %s", exc)
+        return _headset_cache["groups"] or [], "Unable to reach the approved headset Google Doc right now."
+
+    return _headset_cache["groups"] or [], "Unable to load the approved headset list right now."
+
+
+@api_router.get("/headsets")
+async def get_approved_headsets():
+    groups, error = await _fetch_approved_headsets()
+    return {"groups": groups, "error": error}
+
+
 # ══════════════════════════════════════════════════════════════════
 # GEMINI / SUMMARIES
 # ══════════════════════════════════════════════════════════════════
 @api_router.post("/gemini/summaries")
-async def gen_summaries():
+async def gen_summaries(payload: dict):
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {"coaching": "No active session.", "fail": "No active session."}
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
-    api_key = ""
-    if settings and settings.get("enable_gemini"):
-        api_key = _get_backend_gemini_api_key()
+    api_key = (payload or {}).get("api_key", "")
     result = generate_summaries(doc, api_key, settings)
     return result
 
@@ -1267,9 +2108,7 @@ async def regen_summary(payload: dict):
     if not doc:
         return {"ok": False, "error": "No active session"}
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
-    api_key = ""
-    if settings and settings.get("enable_gemini"):
-        api_key = _get_backend_gemini_api_key()
+    api_key = payload.get("api_key", "")
     result = generate_summaries(doc, api_key, settings)
     if result.get("error"):
         return {"ok": False, "error": result["error"], "text": result.get(summary_type, "")}
@@ -1317,7 +2156,9 @@ async def update_status():
 
 @api_router.post("/form/fill")
 async def fill_form(payload: dict):
-    session = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
+    session = payload.get("session") if isinstance(payload, dict) else None
+    if not session:
+        session = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not session:
         return {"ok": False, "message": "No active session was found to send to the Cert Form."}
 

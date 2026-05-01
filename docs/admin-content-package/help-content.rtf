@@ -1,0 +1,78 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Arial;}}
+\fs24
+\b Mock Testing Suite Help Content\par
+\b0\par
+\b Home Screen\par
+\b0 The Home screen is your dashboard. It shows your stats (Total Sessions, Pass Rate, NC/NS Rate) and recent sessions.\par
+- Start New Session --- Begin a full mock call + supervisor transfer session\par
+- Supervisor Transfer Only --- Used when a candidate previously ran out of time and only needs supervisor transfers\par
+- Session History --- View all past sessions with search and detail views\par
+\par
+\b The Basics Screen\par
+\b0 This is the first step in every session. You'll verify the candidate's setup.\par
+- Tester Name --- Auto-filled from your settings\par
+- Candidate Name --- Type the candidate's full name (required)\par
+- Final Attempt --- Mark whether this is the candidate's last allowed mock session\par
+- Headset --- Must be USB with noise-cancelling microphone. If not, auto-fails\par
+- VPN --- If they have one, they must turn it off. If they can't, auto-fails\par
+- Browser --- Must be default, extensions off, pop-ups allowed\par
+\par
+Footer buttons:\par
+- NC/NS --- No Call / No Show. Instantly fails and goes to Review\par
+- Not Ready --- Candidate wasn't prepared for the session\par
+- Stopped Responding --- Candidate went silent in Discord\par
+- Tech Issue --- Opens the Technical Issues dialog for troubleshooting\par
+\par
+\b Calls Screen (Up to 3)\par
+\b0 You'll grade up to 3 mock calls. The scenario card shows you exactly who to portray.\par
+- Call Setup --- Select Call Type, Show, Caller, and Donation from the dropdowns\par
+- Scenario Card --- Shows the caller's info, gift, and randomized variables (Phone Type, SMS, E-Newsletter, Shipping, CC Fee)\par
+- Regenerate --- Re-rolls the random scenario variables without changing the call data\par
+- Payment Simulation --- Shows the credit card and EFT info for the test call\par
+- Pass/Fail --- Click PASS or FAIL after the call\par
+- Coaching --- Select coaching checkboxes (required --- if none selected, you'll be asked to confirm)\par
+- Fail Reasons --- If FAIL, you must select at least one fail reason\par
+Routing logic: 2 passes (1 New Donor + 1 Existing Member) -> Sup Transfers. 2 fails -> session ends. 1+1 -> Call 3.\par
+\par
+\b Supervisor Transfer Screen (Up to 2)\par
+\b0 Tests the candidate's ability to transfer to a supervisor. Same coaching/fail flow as calls.\par
+- Post "WXYZ Supervisor Test Call Being Queued" in Discord Stars channel\par
+- Call the WXYZ number: 1-828-630-7006\par
+- Pass Transfer 1 -> done (go to Review). Fail both -> Newbie Shift.\par
+\par
+\b Smart Resume for Supervisor Transfer Only\par
+\b0 The Smart Resume flow helps you continue a candidate into Supervisor Transfer when the mock calls were already completed in an earlier session.\par
+- When it appears --- Click Supervisor Transfer Only from Home, then answer Yes when asked if you previously conducted the mock session for that candidate.\par
+- How it finds sessions --- The app looks through saved history for prior mock-call sessions tied to the current tester name in Settings. It only shows sessions that already have mock call results and have not already completed supervisor transfers.\par
+- What you'll see --- If matching sessions exist, a resume picker opens so you can choose the right candidate. If none exist, the app tells you there are no resumable sessions for that tester.\par
+- How to continue --- Select the candidate, confirm the prompt, and the app restores the earlier Basics and mock-call data, then opens directly on Supervisor Transfer #1.\par
+\par
+\b Newbie Shift Screen\par
+\b0 Only appears when the candidate needs a follow-up session. Pick a date, time, and timezone.\par
+- Enter the date using the date picker or type in MM/DD/YYYY format\par
+- Enter time as H:MM (e.g. 10:30)\par
+- Add to Google Calendar --- Creates an event titled "Supervisor Test Call - [Candidate Name]"\par
+\par
+\b Review Screen\par
+\b0 Final review of the session. The Pass/Fail/Incomplete banner is calculated automatically.\par
+- Coaching Summary --- Generated from your coaching checkboxes, with Gemini used only if enabled and configured\par
+- Fail Summary --- Generated from fail reasons (N/A for passing sessions)\par
+- Copy --- Copies the summary text to your clipboard\par
+- Regenerate --- Rebuilds the summary from checkbox data\par
+- Fill Form --- Opens the Cert Form and maps session data to form fields\par
+- Save & Finish --- Saves to history and clears the session\par
+\par
+\b Discord Post Panel\par
+\b0 Click "Discord Post" in the sidebar to open the panel with two tabs:\par
+- Templates --- Pre-written messages for Pass, Fail, Sup Intro, etc. Click Copy to copy to clipboard\par
+- Screenshots --- Welcome images that can be copied to clipboard for Discord. Click Copy Image to copy\par
+- Both tabs are searchable\par
+\par
+\b Tech Issue Button\par
+\b0 Available on every session screen. Opens a troubleshooting wizard:\par
+- Internet Speed --- Asks for speed test results. Below 25 Mbps down / 10 Mbps up = fail\par
+- Calls Won't Route --- Checks DTE status, then browser troubleshooting\par
+- No Script Pop --- Browser troubleshooting steps\par
+- Discord/Other --- Manual notes with resolution tracking\par
+}

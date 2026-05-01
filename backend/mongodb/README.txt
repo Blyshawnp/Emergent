@@ -1,7 +1,4 @@
-Place the portable MongoDB server bundle here for production desktop builds.
+MongoDB is no longer used by the app at runtime.
 
-Expected executable:
-- mongodb\bin\mongod.exe
-
-Electron packaging copies this directory into:
-resources/mongodb/
+Persistence now uses a local SQLite database file. This directory is retained only
+as a historical placeholder and is not copied into production desktop builds.

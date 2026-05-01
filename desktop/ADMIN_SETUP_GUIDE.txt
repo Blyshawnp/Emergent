@@ -1,5 +1,5 @@
 ===============================================================================
- MOCK TESTING SUITE v2.5.0 — ADMIN SETUP GUIDE
+ MOCK TESTING SUITE v1.0.1 — ADMIN SETUP GUIDE
  For the Developer / Administrator Only
 ===============================================================================
 
@@ -36,16 +36,16 @@ The ticker bar at the top of the app fetches messages from a Google Doc.
 
 The app checks for updates on startup by reading a Google Doc.
 
-  DOC URL: https://docs.google.com/document/d/1_5L1LS6i5bYWxRYUiBrmaVonbQq9nEhY68XrL5G9c1w
+  DOC URL: https://docs.google.com/document/d/1-eNbA4KriCkE8pKnnpj0FReUhUmMvTVjG8Y7B7ppu_A
 
   FORMAT (put these lines in the doc):
-  VERSION=2.6.0
-  URL=https://your-hosting.com/MockTestingSuite-Setup-2.6.0.exe
+  VERSION=1.0.1
+  URL=https://your-hosting.com/MockTestingSuite-Setup-1.0.1.exe
   NOTES=Bug fixes, new features, improved scenario generation.
 
   HOW IT WORKS:
   - On startup, the Electron app fetches this doc.
-  - If VERSION is higher than the current (2.5.0), a dialog appears.
+  - If VERSION is higher than the current app version, a dialog appears.
   - If URL is provided, clicking "Download Update" opens the browser.
   - The tester is NOT shown this doc URL anywhere in the app.
 
@@ -58,31 +58,94 @@ The app checks for updates on startup by reading a Google Doc.
   CODE LOCATION: /app/desktop/src/main.js → UPDATE_DOC_URL, checkForUpdates()
 
 ===============================================================================
- 3. DEFAULT CALLERS, SHOWS, DISCORD POSTS
+ 3. ADMIN-EDITABLE DEFAULT CONTENT
 ===============================================================================
 
-All default data is defined in /app/backend/server.py.
+The app now supports one shared admin-editable content file:
 
-  CALLERS:
-  - NEW_DONORS — shown when "New Donor" call type is selected
-  - EXISTING_MEMBERS — shown for "Existing Member" types
-  - INCREASE_SUSTAINING — shown for "Increase" types
-  - Format: ["First", "Last", "Address", "City", "State", "Zip", "Phone", "Email"]
+  FILE:
+  /app/backend/content/app_content.json
 
-  SHOWS:
-  - SHOWS — format: ["Show Name", "One-Time $", "Monthly $", "Gift Description"]
+This file is loaded by the backend at startup. If a section is missing or the
+file is unavailable, the app safely falls back to the built-in defaults in
+server.py.
 
-  DISCORD TEMPLATES:
-  - DISCORD_TEMPLATES — format: ["Trigger Name", "Message Text"]
+SECTIONS IN app_content.json:
 
-  DISCORD SCREENSHOTS:
-  - DISCORD_SCREENSHOTS — format: {"title": "...", "image_url": "/filename.png"}
-  - Image files go in /frontend/public/
+  DISCORD TEMPLATES
+  - Key: "discord_templates"
+  - Format: ["Trigger Name", "Message Text"]
 
-  TO UPDATE DEFAULTS:
-  1. Edit the arrays in server.py.
-  2. Delete the "app_settings" document from MongoDB to force re-creation.
-     OR: The startup migration will add new fields automatically.
+  DISCORD SCREENSHOTS
+  - Key: "discord_screenshots"
+  - Format: {"title": "...", "image_url": "/filename.png"}
+  - Built-in image paths should point to files in /frontend/public/
+  - Saved user-upload screenshots may appear as data URLs. Do not remove the
+    quotes or alter the data URL structure.
+
+  CALL TYPES
+  - Key: "call_types"
+  - Format: ["Call Type Name", ...]
+
+  CALLERS
+  - Keys:
+      "donors_new"
+      "donors_existing"
+      "donors_increase"
+  - Format for each row:
+      ["First", "Last", "Address", "City", "State", "Zip", "Phone", "Email"]
+  - These are split by call type:
+      donors_new = New Donor calls
+      donors_existing = Existing Member calls
+      donors_increase = Increase Sustaining calls
+
+  SHOWS / GIFTS / DONATION AMOUNTS
+  - Key: "shows"
+  - Format:
+      ["Show Name", "One-Time $", "Monthly $", "Gift Description"]
+  - This is where one-time and monthly sustaining donation defaults are stored.
+
+  COACHING REASONS
+  - Keys:
+      "call_coaching"
+      "sup_coaching"
+  - Format:
+      {
+        "label": "Parent Checkbox Label",
+        "helper": "Optional helper text",
+        "children": ["Optional sub-checkbox 1", "Optional sub-checkbox 2"]
+      }
+
+  FAIL REASONS
+  - Keys:
+      "call_fails"
+      "sup_fails"
+  - Format:
+      ["Fail reason 1", "Fail reason 2", ...]
+
+  SUPERVISOR TRANSFER REASONS
+  - Key: "sup_reasons"
+  - Format: ["Reason 1", "Reason 2", ...]
+
+  TO UPDATE DEFAULTS SAFELY:
+  1. Make a backup copy of app_content.json before editing.
+  2. Keep the file as valid JSON:
+     - Use double quotes around all keys and string values.
+     - Keep commas between items.
+     - Do not add comments.
+  3. Preserve the existing array/object structure for each section.
+  4. Restart the backend or relaunch the desktop app after changes.
+  5. Existing saved Settings values are not overwritten automatically.
+     - New installs pick up these defaults automatically.
+     - Existing installs should use Settings → Restore Defaults to pull in the edited defaults.
+     - For full reseeding in development, delete the local SQLite database or use Settings -> Restore Defaults.
+
+  CHECKBOX / SUB-CHECK FORMATTING RULES:
+  - Parent coaching items must keep "label" exactly as the visible checkbox text.
+  - Sub-check items must stay inside the parent item's "children" array.
+  - If you remove "children", that item becomes a single checkbox only.
+  - "helper" is optional plain text shown under the parent checkbox.
+  - Fail reasons are plain string lists only; do not convert them to objects.
 
 ===============================================================================
  4. CERT FORM & SHEET URLS
@@ -130,7 +193,6 @@ All default data is defined in /app/backend/server.py.
   PREREQUISITES:
   - Node.js 18+ (for Electron)
   - Python 3.10+ (for the backend)
-  - MongoDB (local or Atlas connection string)
   - Windows 10/11 (for building the installer)
 
   BUILD STEPS:
@@ -141,7 +203,7 @@ All default data is defined in /app/backend/server.py.
      (Builds the production React frontend first, then builds the Windows NSIS installer)
 
   3. The installer will be in /app/desktop/dist/
-     File: Mock Testing Suite Setup 2.5.0.exe
+     File: Mock Testing Suite Setup 1.0.1.exe
 
   NOTES:
   - The installer bundles the React frontend build + Python backend files.
@@ -151,7 +213,7 @@ All default data is defined in /app/backend/server.py.
       /resources/backend/server.py
   - In development, Electron loads the backend from:
       /app/backend/server.py
-  - The backend requires Python and MongoDB to be installed on the target machine.
+  - The backend uses a local SQLite database file and does not require MongoDB.
   - On Windows, the app looks for the Python launcher in this order:
       1. py -3
       2. python
@@ -161,20 +223,18 @@ All default data is defined in /app/backend/server.py.
     Then modify main.js to run the .exe instead of "python -m uvicorn".
 
 ===============================================================================
- 8. MONGODB
+ 8. SQLITE
 ===============================================================================
 
-  COLLECTIONS:
-  - settings  — app configuration (single document, _id: "app_settings")
-  - sessions  — active session (single document, _id: "active_session")
-  - history   — completed sessions (one document per session)
+  DATA GROUPS:
+  - settings  - app configuration (single document, _id: "app_settings")
+  - sessions  - active session (single document, _id: "active_session")
+  - history   - completed sessions (one row per session)
 
-  DEFAULT DB NAME: mock_testing_suite
-  DEFAULT MONGO URL: mongodb://localhost:27017
+  DEFAULT DATABASE FILE: mock_testing_suite.sqlite3
 
-  For MongoDB Atlas:
-  - Set MONGO_URL in /app/backend/.env to your Atlas connection string.
-  - Make sure the DB user has readWrite access.
+  Production builds store the database under the Electron userData directory.
+  Development can override the path with SQLITE_DB_PATH.
 
 ===============================================================================
  9. GOOGLE SHEETS INTEGRATION

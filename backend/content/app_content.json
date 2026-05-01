@@ -1,0 +1,329 @@
+{
+  "call_types": [
+    "New Donor - One Time Donation",
+    "New Donor - New Sustaining Donation",
+    "Existing Member - One Time Donation",
+    "Existing Member - New Monthly Sustaining Donation",
+    "Existing Member - Increase Current Sustaining Amount"
+  ],
+  "sup_reasons": [
+    "Hung up on",
+    "Charged for a cancelled sustaining",
+    "Double Charged",
+    "Damaged Gift",
+    "Didn't Receive Gift",
+    "Cancel Sustaining",
+    "Use Own/Other"
+  ],
+  "shows": [
+    [
+      "New Divas - Live in Vienna",
+      "$216",
+      "$18",
+      "The New Divas - Best of Live in Vienna (CD) + Wine Glasses + PBS Retro Speaker"
+    ],
+    [
+      "Alan Jackson's Precious Memories",
+      "$120",
+      "$10",
+      "2-CD Set"
+    ],
+    [
+      "Doo Wop Project",
+      "$192",
+      "$16",
+      "Combo-DVD & 3 CDs"
+    ],
+    [
+      "Aging Backwards 3",
+      "$240",
+      "$20",
+      "Aging Backwards 3: (DVD) + 4-DVD Workouts Set + Calendar + TV Subscription + HBK"
+    ],
+    [
+      "Great American Recipes",
+      "$360",
+      "$30",
+      "Great American Recipes cookbook and Finding Your Roots companion book (HBK)"
+    ],
+    [
+      "Easy Yoga",
+      "$144",
+      "$12",
+      "Easy Yoga for Everything 10 DVD combo"
+    ]
+  ],
+  "donors_new": [
+    [
+      "Sam",
+      "Smith",
+      "400 N Broad St",
+      "Philadelphia",
+      "PA",
+      "19103",
+      "215-515-1212",
+      "ssmith@test.com"
+    ],
+    [
+      "Harold",
+      "Smith",
+      "3686 Village Dr Apt. D",
+      "Franklin",
+      "OH",
+      "45005",
+      "858-555-1212",
+      "sally@test.com"
+    ],
+    [
+      "Harry",
+      "Smith",
+      "P.O. Box 6",
+      "Atlasburg",
+      "PA",
+      "15004",
+      "602-515-1212",
+      "testentry@test.com"
+    ],
+    [
+      "Mark",
+      "Jackson",
+      "1020 Holland Ave",
+      "Port Huron",
+      "MI",
+      "48060",
+      "310-515-1212",
+      "mjtest@test.com"
+    ]
+  ],
+  "donors_existing": [
+    [
+      "Ron",
+      "Jones",
+      "3345 W. Auburn Rd, Apt 207",
+      "Rochester Hills",
+      "MI",
+      "48309",
+      "858-555-1212",
+      "michele@test.com"
+    ],
+    [
+      "Diane/James",
+      "Williams",
+      "8150 Priestley Dr",
+      "Reynoldsburg",
+      "OH",
+      "43068",
+      "619-555-1212",
+      "DandJ@test.com"
+    ],
+    [
+      "Harry",
+      "Jones",
+      "876 McDonald Ave",
+      "Brooklyn",
+      "NY",
+      "11218",
+      "619-555-1212",
+      "test@test.com"
+    ]
+  ],
+  "donors_increase": [
+    [
+      "Alison",
+      "DeRudder",
+      "2200 N Hillman Rd",
+      "Stanton",
+      "MI",
+      "48888",
+      "801-555-1212",
+      "TESTENTRY@TEST.COM"
+    ],
+    [
+      "Sherri",
+      "Testing",
+      "104 Newport Dr",
+      "Boardman",
+      "OH",
+      "44512",
+      "(801) 555-1217",
+      "TESTENTRY@TEST.COM"
+    ]
+  ],
+  "discord_templates": [
+    [
+      "Pass",
+      "**:tada: Congratulations! You passed your test calls! :tada:**\n- 24-48hrs to go live. Watch your inbox.\n- Log out of Call Corp and Simple Script.\n- Complete TLMS courses.\n- Remove extra mock shifts from Gateway.\n**Welcome to ACDD!**"
+    ],
+    [
+      "Fail",
+      "Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours."
+    ],
+    [
+      "Fail Final",
+      "Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck."
+    ],
+    [
+      "Incomplete",
+      "Our time is up. We'll schedule another session for Supervisor Transfers.\nPlease give me a moment."
+    ],
+    [
+      "Ncns",
+      "Candidate was a No Call / No Show for mock testing."
+    ],
+    [
+      "Sup Intro",
+      "I'll help you complete the Supervisor Transfer test call. I'll provide instructions step by step. OK?"
+    ],
+    [
+      "Sup Instructions",
+      "When you need to transfer:\n1) Ask in chat first\n2) Give CCM time to check\n3) When CCM says ok - let caller know you are transferring"
+    ],
+    [
+      "Sup Transfer",
+      "1. Click Transfer in CC\n2. Select Queue > ACD Direct Supervisor\n3. Tell caller to hold, click Blind Transfer"
+    ],
+    [
+      "Sup Dte",
+      "Change DTE to Ready (green)."
+    ],
+    [
+      "Sup Status",
+      "I show Ready. Calling now."
+    ],
+    [
+      "Sup Transfer Now",
+      "You may transfer the call now."
+    ],
+    [
+      "Sup Stars",
+      "WXYZ Supervisor Test Call Being Queued"
+    ],
+    [
+      "Sup Disposition",
+      "Click cancel (red phone), disposition as Test/Training.\nThen disposition in Call Corp."
+    ],
+    [
+      "Sup Retry",
+      "Transfer was not successful. Review steps and let me know when ready."
+    ],
+    [
+      "Ran Out Of Time",
+      "We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion."
+    ]
+  ],
+  "discord_screenshots": [
+    {
+      "title": "Welcome New Agent",
+      "image_url": "/welcome-new-agent.png"
+    },
+    {
+      "title": "Welcome to Stars",
+      "image_url": "/welcome-to-stars.png"
+    }
+  ],
+  "call_coaching": [
+    {
+      "id": "c-show-app",
+      "label": "Show appreciation",
+      "children": [
+        "For Current/Existing Donors",
+        "After donation amount is given"
+      ]
+    },
+    {
+      "id": "c-phonetics",
+      "label": "Phonetics table provided to candidate"
+    },
+    {
+      "id": "c-dontask",
+      "label": "Don't Ask, Just Verify Address and Phone Number",
+      "helper": "Existing member already provided address and phone number"
+    },
+    {
+      "id": "c-verify",
+      "label": "Verification",
+      "children": [
+        "Name",
+        "Address",
+        "Phone",
+        "Email",
+        "Card/EFT",
+        "Phonetics for Sound Alike Letters"
+      ]
+    },
+    {
+      "id": "c-verbatim",
+      "label": "Read script verbatim",
+      "helper": "No adlibbing or skipping sections"
+    },
+    {
+      "id": "c-nav",
+      "label": "Use effective script navigation",
+      "children": [
+        "Scroll down to avoid missing parts of the script",
+        "Use the Back and Next buttons and not the Icons"
+      ]
+    },
+    {
+      "id": "c-other",
+      "label": "Other"
+    }
+  ],
+  "call_fails": [
+    "Skipped parts of script",
+    "Volunteered info",
+    "Wrong donation",
+    "Background noise on call",
+    "Paraphrased script",
+    "Wrong thank you gift",
+    "Script navigation issues",
+    "Other"
+  ],
+  "sup_coaching": [
+    {
+      "label": "Minimize dead air",
+      "helper": "Maintain engagement throughout hold and transfer"
+    },
+    {
+      "label": "Queue Not Changed",
+      "helper": "Did not change queue to ACD Direct Supervisor"
+    },
+    {
+      "label": "Caller Placed On Hold"
+    },
+    {
+      "label": "Verification",
+      "children": [
+        "Name",
+        "Address",
+        "Phone",
+        "Email",
+        "Card/EFT",
+        "Phonetics for Sound Alike Letters"
+      ]
+    },
+    {
+      "label": "Discord permission",
+      "helper": "Ask explicit permission to transfer via Discord"
+    },
+    {
+      "label": "Did not notify caller of transfer",
+      "helper": "Notify caller before transferring"
+    },
+    {
+      "label": "Screenshots/Discord Chat",
+      "helper": "Coached with standard instructions and screenshots"
+    },
+    {
+      "label": "Other"
+    }
+  ],
+  "sup_fails": [
+    "Did not ask permission to transfer",
+    "Did not minimize dead air",
+    "Caller Placed On Hold",
+    "Transferred to wrong queue",
+    "Did not inform caller of transfer",
+    "Other"
+  ]
+}

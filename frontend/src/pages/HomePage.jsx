@@ -3,7 +3,6 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
 
-const LOGO_SRC = 'logo.png';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 
 function normalizeName(value) {
@@ -161,13 +160,10 @@ export default function HomePage({ onNavigate }) {
 
   return (
     <div data-testid="home-page" style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
-      <div className="home-header" style={{ marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <img src={LOGO_SRC} alt="ACD" style={{ width: 64, height: 64, borderRadius: 8, objectFit: 'contain' }} />
-          <div>
-            <h1 style={{ marginBottom: 0 }}>Welcome, {name}!</h1>
-            <p className="text-muted" style={{ margin: 0 }}>Mock Testing Suite — Certification</p>
-          </div>
+      <div className="home-header" style={{ marginBottom: 12 }} data-tour="home-header">
+        <div>
+          <h1 style={{ marginBottom: 0 }}>Welcome, {name}!</h1>
+          <p className="text-muted" style={{ margin: 0 }}>Mock Testing Suite — Certification</p>
         </div>
       </div>
       <div className="stats-row" style={{ marginBottom: 16 }}>
@@ -192,7 +188,21 @@ export default function HomePage({ onNavigate }) {
           {recent.length === 0 ? (
             <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No sessions yet. Start testing to see history here.</div>
           ) : recent.map((s, i) => (
-            <div key={i} className="recent-row">
+            <div
+              key={i}
+              className="recent-row"
+              onClick={() => onNavigate('history', { selectedHistoryRecord: s })}
+              style={{ cursor: 'pointer' }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onNavigate('history', { selectedHistoryRecord: s });
+                }
+              }}
+              title="Open this history record"
+            >
               <span className="recent-date">{s.timestamp || 'Unknown'}</span>
               <span style={{ margin: '0 8px', color: 'var(--text-tertiary)' }}>&bull;</span>
               <span className="recent-name">{s.candidate || 'Unknown'}</span>

@@ -2,14 +2,17 @@ import React, { useState, useEffect } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
+import mtsLogo from '../assets/images/MTSLogonew.png';
 
-export default function SetupPage({ onNavigate }) {
+const TUTORIAL_AFTER_SETUP_KEY = 'mts-start-tutorial-after-setup';
+
+export default function SetupPage({ onNavigate, onSetupCompleted }) {
   const modal = useModal();
   const [step, setStep] = useState(0);
   const [first, setFirst] = useState('');
   const [last, setLast] = useState('');
   const [display, setDisplay] = useState('');
-  const [formUrl, setFormUrl] = useState('https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturlask');
+  const [formUrl, setFormUrl] = useState('https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl');
   const [certSheetUrl, setCertSheetUrl] = useState('https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg');
 
   useEffect(() => {
@@ -21,11 +24,12 @@ export default function SetupPage({ onNavigate }) {
     () => (
       <div className="setup-step">
         <div className="setup-center">
+          <img src={mtsLogo} alt="Mock Testing Suite" className="setup-logo" />
           <h1 className="setup-heading">Welcome to Mock Testing Suite</h1>
           <p className="setup-sub">Let's get your profile set up.</p>
           <div className="card setup-card">
-            <div className="form-row"><label>First Name</label><input type="text" value={first} onChange={e => setFirst(e.target.value)} placeholder="e.g. Shawn" data-testid="setup-first" /></div>
-            <div className="form-row"><label>Last Name</label><input type="text" value={last} onChange={e => setLast(e.target.value)} placeholder="e.g. Bly" data-testid="setup-last" /></div>
+            <div className="form-row"><label>First Name</label><input type="text" value={first} onChange={e => setFirst(e.target.value)} placeholder="e.g. Jordan" data-testid="setup-first" /></div>
+            <div className="form-row"><label>Last Name</label><input type="text" value={last} onChange={e => setLast(e.target.value)} placeholder="e.g. Taylor" data-testid="setup-last" /></div>
             <div className="form-row"><label>Display Name</label><input type="text" value={display} onChange={e => setDisplay(e.target.value)} placeholder="Optional nickname" data-testid="setup-display" /></div>
           </div>
         </div>
@@ -35,6 +39,7 @@ export default function SetupPage({ onNavigate }) {
     () => (
       <div className="setup-step">
         <div className="setup-center">
+          <img src={mtsLogo} alt="Mock Testing Suite" className="setup-logo" />
           <h1 className="setup-heading">System Links</h1>
           <p className="setup-sub">Pre-filled for you. Change only if needed.</p>
           <div className="card setup-card">
@@ -48,6 +53,7 @@ export default function SetupPage({ onNavigate }) {
     () => (
       <div className="setup-step">
         <div className="setup-center">
+          <img src={mtsLogo} alt="Mock Testing Suite" className="setup-logo" />
           <h1 className="setup-heading">Unlock App Power-Ups</h1>
           <p className="setup-sub">Enable these anytime in the Settings tab.</p>
           <div className="card setup-card" style={{ textAlign: 'left', lineHeight: 1.8 }}>
@@ -77,8 +83,12 @@ export default function SetupPage({ onNavigate }) {
           form_url: formUrl.trim(),
           cert_sheet_url: certSheetUrl.trim(),
         });
-        onNavigate('home');
-        window.location.reload();
+        if (onSetupCompleted) {
+          await onSetupCompleted();
+        } else {
+          localStorage.setItem(TUTORIAL_AFTER_SETUP_KEY, '1');
+          onNavigate('home');
+        }
       } catch (e) {
         await modal.error('Error', e.message);
       }

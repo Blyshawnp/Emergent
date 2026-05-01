@@ -1,6 +1,9 @@
 @echo off
+for /f %%v in ('powershell -NoProfile -Command "(Get-Content '%~dp0package.json' -Raw | ConvertFrom-Json).version"') do set APP_VERSION=%%v
+if "%APP_VERSION%"=="" set APP_VERSION=0.0.0
+
 echo ================================================
-echo  Mock Testing Suite v2.5.0 — Windows Build
+echo  Mock Testing Suite v%APP_VERSION% — Windows Build
 echo ================================================
 echo.
 
@@ -35,6 +38,6 @@ if %ERRORLEVEL% neq 0 (
 echo.
 echo ================================================
 echo  BUILD COMPLETE!
-echo  Installer: dist\Mock Testing Suite Setup 2.5.0.exe
+echo  Installer: dist\Mock Testing Suite Setup %APP_VERSION%.exe
 echo ================================================
 pause

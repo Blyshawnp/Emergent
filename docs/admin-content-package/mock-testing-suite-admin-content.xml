@@ -1,0 +1,233 @@
+<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+  <Styles>
+    <Style ss:ID="Header">
+      <Font ss:Bold="1"/>
+      <Interior ss:Color="#D9EAF7" ss:Pattern="Solid"/>
+    </Style>
+    <Style ss:ID="Wrap">
+      <Alignment ss:Vertical="Top" ss:WrapText="1"/>
+    </Style>
+  </Styles>
+  <Worksheet ss:Name="Discord Posts">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Title</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Message</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">Pass</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">**:tada: Congratulations! You passed your test calls! :tada:**
+- 24-48hrs to go live. Watch your inbox.
+- Log out of Call Corp and Simple Script.
+- Complete TLMS courses.
+- Remove extra mock shifts from Gateway.
+**Welcome to ACDD!**</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Fail</Data></Cell><Cell><Data ss:Type="String">Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Fail Final</Data></Cell><Cell><Data ss:Type="String">Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Incomplete</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Our time is up. We'll schedule another session for Supervisor Transfers.
+Please give me a moment.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Ncns</Data></Cell><Cell><Data ss:Type="String">Candidate was a No Call / No Show for mock testing.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Intro</Data></Cell><Cell><Data ss:Type="String">I'll help you complete the Supervisor Transfer test call. I'll provide instructions step by step. OK?</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Instructions</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">When you need to transfer:
+1) Ask in chat first
+2) Give CCM time to check
+3) When CCM says ok - let caller know you are transferring</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Transfer</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">1. Click Transfer in CC
+2. Select Queue &gt; ACD Direct Supervisor
+3. Tell caller to hold, click Blind Transfer</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Dte</Data></Cell><Cell><Data ss:Type="String">Change DTE to Ready (green).</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Status</Data></Cell><Cell><Data ss:Type="String">I show Ready. Calling now.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Transfer Now</Data></Cell><Cell><Data ss:Type="String">You may transfer the call now.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Stars</Data></Cell><Cell><Data ss:Type="String">WXYZ Supervisor Test Call Being Queued</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Disposition</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Click cancel (red phone), disposition as Test/Training.
+Then disposition in Call Corp.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Retry</Data></Cell><Cell><Data ss:Type="String">Transfer was not successful. Review steps and let me know when ready.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Ran Out Of Time</Data></Cell><Cell><Data ss:Type="String">We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion.</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Screenshots">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Title</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">ImagePath</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">Welcome New Agent</Data></Cell><Cell><Data ss:Type="String">/welcome-new-agent.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Welcome to Stars</Data></Cell><Cell><Data ss:Type="String">/welcome-to-stars.png</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Call Coaching">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">ID</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Label</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Helper</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">ChildrenPipeDelimited</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">c-show-app</Data></Cell><Cell><Data ss:Type="String">Show appreciation</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">For Current/Existing Donors|After donation amount is given</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-phonetics</Data></Cell><Cell><Data ss:Type="String">Phonetics table provided to candidate</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-dontask</Data></Cell><Cell><Data ss:Type="String">Don't Ask, Just Verify Address and Phone Number</Data></Cell><Cell><Data ss:Type="String">Existing member already provided address and phone number</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-verify</Data></Cell><Cell><Data ss:Type="String">Verification</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Name|Address|Phone|Email|Card/EFT|Phonetics for Sound Alike Letters</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-verbatim</Data></Cell><Cell><Data ss:Type="String">Read script verbatim</Data></Cell><Cell><Data ss:Type="String">No adlibbing or skipping sections</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-nav</Data></Cell><Cell><Data ss:Type="String">Use effective script navigation</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Scroll down to avoid missing parts of the script|Use the Back and Next buttons and not the Icons</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-other</Data></Cell><Cell><Data ss:Type="String">Other</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Call Fails">
+    <Table>
+      <Row><Cell ss:StyleID="Header"><Data ss:Type="String">FailReason</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Skipped parts of script</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Volunteered info</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Wrong donation</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Background noise on call</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Paraphrased script</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Wrong thank you gift</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Script navigation issues</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Other</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Callers New">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">First</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Last</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Address</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">City</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">State</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Zip</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Phone</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Email</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">Sam</Data></Cell><Cell><Data ss:Type="String">Smith</Data></Cell><Cell><Data ss:Type="String">400 N Broad St</Data></Cell><Cell><Data ss:Type="String">Philadelphia</Data></Cell><Cell><Data ss:Type="String">PA</Data></Cell><Cell><Data ss:Type="String">19103</Data></Cell><Cell><Data ss:Type="String">215-515-1212</Data></Cell><Cell><Data ss:Type="String">ssmith@test.com</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Harold</Data></Cell><Cell><Data ss:Type="String">Smith</Data></Cell><Cell><Data ss:Type="String">3686 Village Dr Apt. D</Data></Cell><Cell><Data ss:Type="String">Franklin</Data></Cell><Cell><Data ss:Type="String">OH</Data></Cell><Cell><Data ss:Type="String">45005</Data></Cell><Cell><Data ss:Type="String">858-555-1212</Data></Cell><Cell><Data ss:Type="String">sally@test.com</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Harry</Data></Cell><Cell><Data ss:Type="String">Smith</Data></Cell><Cell><Data ss:Type="String">P.O. Box 6</Data></Cell><Cell><Data ss:Type="String">Atlasburg</Data></Cell><Cell><Data ss:Type="String">PA</Data></Cell><Cell><Data ss:Type="String">15004</Data></Cell><Cell><Data ss:Type="String">602-515-1212</Data></Cell><Cell><Data ss:Type="String">testentry@test.com</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Mark</Data></Cell><Cell><Data ss:Type="String">Jackson</Data></Cell><Cell><Data ss:Type="String">1020 Holland Ave</Data></Cell><Cell><Data ss:Type="String">Port Huron</Data></Cell><Cell><Data ss:Type="String">MI</Data></Cell><Cell><Data ss:Type="String">48060</Data></Cell><Cell><Data ss:Type="String">310-515-1212</Data></Cell><Cell><Data ss:Type="String">mjtest@test.com</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Callers Existing">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">First</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Last</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Address</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">City</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">State</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Zip</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Phone</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Email</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">Ron</Data></Cell><Cell><Data ss:Type="String">Jones</Data></Cell><Cell><Data ss:Type="String">3345 W. Auburn Rd, Apt 207</Data></Cell><Cell><Data ss:Type="String">Rochester Hills</Data></Cell><Cell><Data ss:Type="String">MI</Data></Cell><Cell><Data ss:Type="String">48309</Data></Cell><Cell><Data ss:Type="String">858-555-1212</Data></Cell><Cell><Data ss:Type="String">michele@test.com</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Diane/James</Data></Cell><Cell><Data ss:Type="String">Williams</Data></Cell><Cell><Data ss:Type="String">8150 Priestley Dr</Data></Cell><Cell><Data ss:Type="String">Reynoldsburg</Data></Cell><Cell><Data ss:Type="String">OH</Data></Cell><Cell><Data ss:Type="String">43068</Data></Cell><Cell><Data ss:Type="String">619-555-1212</Data></Cell><Cell><Data ss:Type="String">DandJ@test.com</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Harry</Data></Cell><Cell><Data ss:Type="String">Jones</Data></Cell><Cell><Data ss:Type="String">876 McDonald Ave</Data></Cell><Cell><Data ss:Type="String">Brooklyn</Data></Cell><Cell><Data ss:Type="String">NY</Data></Cell><Cell><Data ss:Type="String">11218</Data></Cell><Cell><Data ss:Type="String">619-555-1212</Data></Cell><Cell><Data ss:Type="String">test@test.com</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Callers Increase">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">First</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Last</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Address</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">City</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">State</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Zip</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Phone</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Email</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">Alison</Data></Cell><Cell><Data ss:Type="String">DeRudder</Data></Cell><Cell><Data ss:Type="String">2200 N Hillman Rd</Data></Cell><Cell><Data ss:Type="String">Stanton</Data></Cell><Cell><Data ss:Type="String">MI</Data></Cell><Cell><Data ss:Type="String">48888</Data></Cell><Cell><Data ss:Type="String">801-555-1212</Data></Cell><Cell><Data ss:Type="String">TESTENTRY@TEST.COM</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sherri</Data></Cell><Cell><Data ss:Type="String">Testing</Data></Cell><Cell><Data ss:Type="String">104 Newport Dr</Data></Cell><Cell><Data ss:Type="String">Boardman</Data></Cell><Cell><Data ss:Type="String">OH</Data></Cell><Cell><Data ss:Type="String">44512</Data></Cell><Cell><Data ss:Type="String">(801) 555-1217</Data></Cell><Cell><Data ss:Type="String">TESTENTRY@TEST.COM</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Call Types">
+    <Table>
+      <Row><Cell ss:StyleID="Header"><Data ss:Type="String">CallType</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">New Donor - One Time Donation</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">New Donor - New Sustaining Donation</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Existing Member - One Time Donation</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Existing Member - New Monthly Sustaining Donation</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Existing Member - Increase Current Sustaining Amount</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Shows">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">ShowName</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">OneTimeAmount</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">MonthlyAmount</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Gift</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">New Divas - Live in Vienna</Data></Cell><Cell><Data ss:Type="String">$216</Data></Cell><Cell><Data ss:Type="String">$18</Data></Cell><Cell><Data ss:Type="String">The New Divas - Best of Live in Vienna (CD) + Wine Glasses + PBS Retro Speaker</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Alan Jackson's Precious Memories</Data></Cell><Cell><Data ss:Type="String">$120</Data></Cell><Cell><Data ss:Type="String">$10</Data></Cell><Cell><Data ss:Type="String">2-CD Set</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Doo Wop Project</Data></Cell><Cell><Data ss:Type="String">$192</Data></Cell><Cell><Data ss:Type="String">$16</Data></Cell><Cell><Data ss:Type="String">Combo-DVD &amp; 3 CDs</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Aging Backwards 3</Data></Cell><Cell><Data ss:Type="String">$240</Data></Cell><Cell><Data ss:Type="String">$20</Data></Cell><Cell><Data ss:Type="String">Aging Backwards 3: (DVD) + 4-DVD Workouts Set + Calendar + TV Subscription + HBK</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Great American Recipes</Data></Cell><Cell><Data ss:Type="String">$360</Data></Cell><Cell><Data ss:Type="String">$30</Data></Cell><Cell><Data ss:Type="String">Great American Recipes cookbook and Finding Your Roots companion book (HBK)</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Easy Yoga</Data></Cell><Cell><Data ss:Type="String">$144</Data></Cell><Cell><Data ss:Type="String">$12</Data></Cell><Cell><Data ss:Type="String">Easy Yoga for Everything 10 DVD combo</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Sup Reasons">
+    <Table>
+      <Row><Cell ss:StyleID="Header"><Data ss:Type="String">SupervisorReason</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Hung up on</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Charged for a cancelled sustaining</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Double Charged</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Damaged Gift</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Didn't Receive Gift</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Cancel Sustaining</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Use Own/Other</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Sup Coaching">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Label</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Helper</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">ChildrenPipeDelimited</Data></Cell>
+      </Row>
+      <Row><Cell><Data ss:Type="String">Minimize dead air</Data></Cell><Cell><Data ss:Type="String">Maintain engagement throughout hold and transfer</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Queue Not Changed</Data></Cell><Cell><Data ss:Type="String">Did not change queue to ACD Direct Supervisor</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Caller Placed On Hold</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Verification</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Name|Address|Phone|Email|Card/EFT|Phonetics for Sound Alike Letters</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Discord permission</Data></Cell><Cell><Data ss:Type="String">Ask explicit permission to transfer via Discord</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Did not notify caller of transfer</Data></Cell><Cell><Data ss:Type="String">Notify caller before transferring</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Screenshots/Discord Chat</Data></Cell><Cell><Data ss:Type="String">Coached with standard instructions and screenshots</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Other</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Sup Fails">
+    <Table>
+      <Row><Cell ss:StyleID="Header"><Data ss:Type="String">FailReason</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Did not ask permission to transfer</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Did not minimize dead air</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Caller Placed On Hold</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Transferred to wrong queue</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Did not inform caller of transfer</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Other</Data></Cell></Row>
+    </Table>
+  </Worksheet>
+  <Worksheet ss:Name="Approved Headsets">
+    <Table>
+      <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Brand</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Model</Data></Cell>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Note</Data></Cell>
+      </Row>
+      <Row>
+        <Cell><Data ss:Type="String">SOURCE NOTE</Data></Cell>
+        <Cell><Data ss:Type="String"></Data></Cell>
+        <Cell ss:StyleID="Wrap"><Data ss:Type="String">Current headset rows are not stored locally in this repo. The live app fetches them from the approved headsets Google Doc export URL defined in backend/server.py and parses them at runtime.</Data></Cell>
+      </Row>
+      <Row>
+        <Cell><Data ss:Type="String">SOURCE URL</Data></Cell>
+        <Cell><Data ss:Type="String"></Data></Cell>
+        <Cell><Data ss:Type="String">https://docs.google.com/document/d/1HXdvhOLKjoA5YDznJRtFuEZfKFU2CDNDiEp-Vn4fE2o/export?format=txt</Data></Cell>
+      </Row>
+      <Row>
+        <Cell><Data ss:Type="String">EXAMPLE</Data></Cell>
+        <Cell><Data ss:Type="String">Logitech H390</Data></Cell>
+        <Cell><Data ss:Type="String">Example only from local test data, not a guaranteed full live list.</Data></Cell>
+      </Row>
+    </Table>
+  </Worksheet>
+</Workbook>

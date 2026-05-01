@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
+import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 
 export default function NewbieShiftPage({ onNavigate }) {
   const modal = useModal();
@@ -89,15 +90,16 @@ export default function NewbieShiftPage({ onNavigate }) {
 
   return (
     <div data-testid="newbieshift-page">
+      <WorkflowProgress {...getWorkflowProgress({ page: 'newbieshift' })} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
         <h1 style={{ marginBottom: 0 }}>Schedule Newbie Shift</h1>
         {candidateName && (
-          <div className="text-sm text-muted" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-            <b>Candidate:</b> {candidateName}
+          <div className="candidate-header">
+            <span className="candidate-header-label">Candidate:</span> {candidateName}
           </div>
         )}
       </div>
-      <div className="card" style={{ padding: 48 }}>
+      <div className="card" style={{ padding: 48 }} data-tour="newbie-form">
         <div style={{ display: 'flex', gap: 32, justifyContent: 'center', flexWrap: 'wrap' }}>
           <div>
             <label className="text-sm font-bold text-muted" style={{ display: 'block', marginBottom: 6 }}>DATE</label>

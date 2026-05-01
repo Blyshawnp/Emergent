@@ -1,0 +1,6 @@
+Enabled,ID,Type,Title,Message,ShowPopup,ShowBanner,Persistent,StartDate,StartTime,EndDate,EndTime,ActionText,ActionURL,CreatedAt,UpdatedAt
+TRUE,ticker-home-1,ticker,,System maintenance window opens at 9:00 PM Eastern.,FALSE,FALSE,FALSE,2026-04-28,08:00 AM,2026-04-30,11:59 PM,,,2026-04-28T08:00:00Z,2026-04-28T08:00:00Z
+TRUE,popup-release-1,info,New release available,Version 1.0.2 includes workflow polish and notification support.,TRUE,FALSE,FALSE,2026-04-28,08:05 AM,2026-05-10,12:00 AM,Open release notes,https://example.com/releases/1-0-2,2026-04-28T08:05:00Z,2026-04-28T08:05:00Z
+TRUE,banner-outage-1,warning,Calendar Delay,Google Calendar links may open slowly during peak hours.,FALSE,TRUE,TRUE,2026-04-28,08:10 AM,2026-05-03,12:00 AM,,,2026-04-28T08:10:00Z,2026-04-28T08:10:00Z
+TRUE,expired-example,urgent,Old notice,This row should be hidden because the expiration datetime has passed.,TRUE,TRUE,TRUE,2026-04-01,09:00 AM,2026-04-10,12:00 AM,,,2026-04-01T00:00:00Z,2026-04-01T00:00:00Z
+TRUE,bad-row-example,not-a-real-type,Bad row,This row should be ignored because the type is invalid.,TRUE,TRUE,FALSE,2026-04-28,08:15 AM,2026-05-01,12:00 AM,,,2026-04-28T08:15:00Z,2026-04-28T08:15:00Z

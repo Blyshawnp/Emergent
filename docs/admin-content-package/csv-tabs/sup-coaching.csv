@@ -1,0 +1,9 @@
+Label,Helper,ChildrenPipeDelimited
+Minimize dead air,Maintain engagement throughout hold and transfer,
+Queue Not Changed,Did not change queue to ACD Direct Supervisor,
+Caller Placed On Hold,,
+Verification,,Name|Address|Phone|Email|Card/EFT|Phonetics for Sound Alike Letters
+Discord permission,Ask explicit permission to transfer via Discord,
+Did not notify caller of transfer,Notify caller before transferring,
+Screenshots/Discord Chat,Coached with standard instructions and screenshots,
+Other,,

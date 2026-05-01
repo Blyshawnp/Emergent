@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
-const SUP_COACHING = [
+import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+const DEFAULT_SUP_COACHING = [
   { label: 'Minimize dead air', helper: 'Maintain engagement throughout hold and transfer' },
   { label: 'Queue Not Changed', helper: 'Did not change queue to ACD Direct Supervisor' },
   { label: 'Caller Placed On Hold' },
@@ -13,12 +14,12 @@ const SUP_COACHING = [
   { label: 'Other' },
 ];
 
-const SUP_FAILS = [
+const DEFAULT_SUP_FAILS = [
   'Did not ask permission to transfer', 'Did not minimize dead air', 'Caller Placed On Hold',
   'Transferred to wrong queue', 'Did not inform caller of transfer', 'Other',
 ];
 
-const SUP_REASONS = [
+const DEFAULT_SUP_REASONS = [
   'Hung up on', 'Charged for a cancelled sustaining', 'Double Charged',
   'Damaged Gift', "Didn't Receive Gift", 'Cancel Sustaining', 'Use Own/Other',
 ];
@@ -30,7 +31,7 @@ export default function SupTransferPage({ onNavigate }) {
   const [defaults, setDefaults] = useState({});
   const [settings, setSettings] = useState({});
   const [techOpen, setTechOpen] = useState(false);
-  const [setup, setSetup] = useState({ caller: '', show: '', reason: SUP_REASONS[0] });
+  const [setup, setSetup] = useState({ caller: '', show: '', reason: '' });
   const [coaching, setCoaching] = useState({});
   const [coachNotes, setCoachNotes] = useState('');
   const [fails, setFails] = useState({});
@@ -39,23 +40,43 @@ export default function SupTransferPage({ onNavigate }) {
   const [isSupervisorOnly, setIsSupervisorOnly] = useState(false);
   const [copied, setCopied] = useState(false);
   const [candidateName, setCandidateName] = useState('');
+  const hydratedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [d, s] = await Promise.all([api.getDefaults(), api.getSettings()]);
+        const [{ session }, d, s] = await Promise.all([api.getCurrentSession(), api.getDefaults(), api.getSettings()]);
         if (cancelled) return;
         setDefaults(d); setSettings(s);
-        const { session } = await api.getCurrentSession();
+        const initialSupReasons = s.sup_reasons || d.sup_reasons || DEFAULT_SUP_REASONS;
+        const savedDraft = session?.current_sup_transfer_draft || null;
+        setSetup({
+          caller: savedDraft?.caller || '',
+          show: savedDraft?.show || '',
+          reason: savedDraft?.reason || initialSupReasons[0] || '',
+        });
         if (!cancelled && session) {
           setIsFinal(session.final_attempt || false);
           setIsSupervisorOnly(session.supervisor_only || false);
           setCandidateName(session.candidate_name || '');
+          setTransferNum(savedDraft?.transfer_num || (session.sup_transfer_1?.result ? 2 : 1));
+          setResult(savedDraft?.result || null);
+          setCoaching(savedDraft?.coaching || {});
+          setCoachNotes(savedDraft?.coach_notes || '');
+          setFails(savedDraft?.fails || {});
+          setFailNotes(savedDraft?.fail_notes || '');
+          setSupRandFlags(savedDraft?.rand_flags || {
+            phone: ['Mobile', 'Landline'][Math.floor(Math.random() * 2)],
+            sms: ['Yes', 'No'][Math.floor(Math.random() * 2)],
+            enews: ['Yes', 'No'][Math.floor(Math.random() * 2)],
+            ship: ['Yes', 'No'][Math.floor(Math.random() * 2)],
+          });
         }
       } catch (err) {
         // Failed to load transfer setup data — page renders with empty dropdowns
       }
+      if (!cancelled) hydratedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, []);
@@ -68,7 +89,10 @@ export default function SupTransferPage({ onNavigate }) {
     window.scrollTo(0, 0);
   }, [transferNum]);
 
-  const shows = settings.shows || defaults.shows || [];
+  const shows = useMemo(() => settings.shows || defaults.shows || [], [settings.shows, defaults.shows]);
+  const supCoaching = defaults.sup_coaching || DEFAULT_SUP_COACHING;
+  const supFails = defaults.sup_fails || DEFAULT_SUP_FAILS;
+  const supReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;
   const callers = useMemo(() => {
     const allCallers = [
       ...(settings.donors_new || defaults.donors_new || []),
@@ -77,7 +101,7 @@ export default function SupTransferPage({ onNavigate }) {
     ];
     const seen = new Set();
     return allCallers.filter((caller) => {
-      const key = `${caller[0] || ''}|${caller[1] || ''}|${caller[7] || ''}|${caller[8] || ''}`.toLowerCase();
+      const key = `${caller[0] || ''}|${caller[1] || ''}|${caller[6] || ''}|${caller[7] || ''}`.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -90,6 +114,14 @@ export default function SupTransferPage({ onNavigate }) {
     settings.donors_increase,
     defaults.donors_increase,
   ]);
+  useEffect(() => {
+    if (!callers.length) return;
+    const currentName = setup.caller;
+    const isValidCaller = callers.some((caller) => `${caller[0]} ${caller[1]}` === currentName);
+    if (!isValidCaller) {
+      setSetup((prev) => ({ ...prev, caller: `${callers[0][0]} ${callers[0][1]}` }));
+    }
+  }, [callers, setup.caller]);
   const callerIdx = Math.max(0, callers.findIndex(c => `${c[0]} ${c[1]}` === setup.caller));
   const currentCaller = useMemo(() => callers[callerIdx] || callers[0] || [], [callers, callerIdx]);
 
@@ -118,6 +150,32 @@ export default function SupTransferPage({ onNavigate }) {
     return reason || '';
   }, []);
 
+  useEffect(() => {
+    if (!hydratedRef.current || !candidateName) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      api.updateSession({
+        current_sup_transfer_num: transferNum,
+        current_sup_transfer_draft: {
+          transfer_num: transferNum,
+          result,
+          caller: setup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
+          show: setup.show || (shows[0]?.[0] || ''),
+          reason: setup.reason,
+          coaching,
+          coach_notes: coachNotes,
+          fails,
+          fail_notes: failNotes,
+          rand_flags: supRandFlags,
+        },
+      }).catch(() => {});
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [transferNum, result, setup, currentCaller, shows, coaching, coachNotes, fails, failNotes, supRandFlags, candidateName]);
+
   const resetTransfer = () => {
     setResult(null);
     setCoaching({});
@@ -131,7 +189,16 @@ export default function SupTransferPage({ onNavigate }) {
     if (result === 'Fail' && !Object.values(fails).some(v => v)) { await modal.warning('Notice', 'Select at least one Fail Reason.'); return; }
     const hasCoaching = Object.values(coaching).some(v => v);
     if (!hasCoaching) {
-      const cont = await modal.confirm('No Coaching', 'You did not select any coaching for this transfer. Continue anyway?');
+      const cont = await modal.showModal({
+        type: 'confirm',
+        title: 'No Coaching',
+        body: 'You did not select any coaching for this transfer. Continue anyway?',
+        graphic: 'question',
+        buttons: [
+          { label: 'Yes', cls: 'btn-primary', value: true },
+          { label: 'No', cls: 'btn-muted', value: false },
+        ],
+      });
       if (!cont) return;
     }
 
@@ -142,6 +209,7 @@ export default function SupTransferPage({ onNavigate }) {
       coaching, coach_notes: coachNotes, fails, fail_notes: failNotes,
     };
     await api.saveSupTransfer(data);
+    await api.updateSession({ current_sup_transfer_draft: null, current_sup_transfer_num: null });
 
     if (transferNum === 1) {
       if (result === 'Pass') { onNavigate('review'); }
@@ -171,19 +239,33 @@ export default function SupTransferPage({ onNavigate }) {
     onNavigate('review');
   }, [candidateName, modal, onNavigate]);
 
+  const handleDiscardSession = useCallback(async () => {
+    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress?');
+    if (!confirmed) return;
+    await api.discardSession();
+    onNavigate('home');
+  }, [modal, onNavigate]);
+
   const toggle = (key, setter) => setter(prev => ({ ...prev, [key]: !prev[key] }));
 
   return (
     <div data-testid="suptransfer-page">
+      <WorkflowProgress
+        {...getWorkflowProgress({
+          page: 'suptransfer',
+          supervisorOnly: isSupervisorOnly,
+          transferNum,
+        })}
+      />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 8 }}>
         <h1 style={{ marginBottom: 0 }}>Supervisor Transfer #{transferNum}</h1>
         {candidateName && (
-          <div className="text-sm text-muted" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-            <b>Candidate:</b> {candidateName}
+          <div className="candidate-header">
+            <span className="candidate-header-label">Candidate:</span> {candidateName}
           </div>
         )}
       </div>
-      <div className="card" style={{ textAlign: 'center', marginBottom: 16, padding: 16, background: 'var(--color-primary)', border: 'none' }}>
+      <div className="card" style={{ textAlign: 'center', marginBottom: 16, padding: 16, background: 'var(--color-primary)', border: 'none' }} data-tour="sup-discord-banner">
         <div style={{ color: 'white', fontWeight: 700, fontSize: '1.125rem' }}>Call Corp WXYZ Test Transfer #: 1-828-630-7006</div>
       </div>
       <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px' }}>
@@ -195,7 +277,7 @@ export default function SupTransferPage({ onNavigate }) {
       </div>
 
       <div className="split-layout">
-        <div className="card setup-card">
+        <div className="card setup-card" data-tour="sup-setup">
           <h3 style={{ marginBottom: 16 }}>Call Setup</h3>
           <div className="form-row"><label>Caller</label>
             <select value={setup.caller} onChange={e => setSetup(p => ({ ...p, caller: e.target.value }))} data-testid="sup-caller">
@@ -209,7 +291,7 @@ export default function SupTransferPage({ onNavigate }) {
           </div>
           <div className="form-row"><label>Reason</label>
             <select value={setup.reason} onChange={e => setSetup(p => ({ ...p, reason: e.target.value }))} data-testid="sup-reason">
-              {SUP_REASONS.map(r => <option key={r}>{r}</option>)}
+              {supReasons.map(r => <option key={r}>{r}</option>)}
             </select>
           </div>
         </div>
@@ -239,8 +321,8 @@ export default function SupTransferPage({ onNavigate }) {
           <h3 style={{ marginBottom: 8 }}>Caller Demographics</h3>
           <div style={{ textAlign: 'center' }}>
             <b>{currentCaller[0]} {currentCaller[1]}</b><br />
-            {currentCaller[2]}{currentCaller[3] ? `, ${currentCaller[3]}` : ''}, {currentCaller[4]}, {currentCaller[5]} {currentCaller[6]}<br />
-            Phone: {currentCaller[7]} | Email: {currentCaller[8]}
+            {currentCaller[2]}{currentCaller[3] ? `, ${currentCaller[3]}` : ''}, {currentCaller[4]} {currentCaller[5]}<br />
+            Phone: {currentCaller[6]} | Email: {currentCaller[7]}
           </div>
         </div>
       )}
@@ -257,8 +339,8 @@ export default function SupTransferPage({ onNavigate }) {
         <h3>Coaching Given</h3>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <div className="coaching-grid">
-          <div>{SUP_COACHING.slice(0, 4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
-          <div>{SUP_COACHING.slice(4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
+          <div>{supCoaching.slice(0, 4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
+          <div>{supCoaching.slice(4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
         </div>
         <div style={{ marginTop: 16 }}><label className="text-sm font-bold">Other Notes</label><textarea rows={2} value={coachNotes} onChange={e => setCoachNotes(e.target.value)} disabled={!coaching['Other']} style={{ marginTop: 4 }} /></div>
       </div>
@@ -267,10 +349,10 @@ export default function SupTransferPage({ onNavigate }) {
         <div className="card card-fail" style={{ marginBottom: 16 }}>
           <h3 style={{ color: 'var(--color-danger)' }}>Fail Reasons</h3>
           <div className="coaching-grid">
-            <div>{SUP_FAILS.slice(0, 3).map(item => (
+            <div>{supFails.slice(0, 3).map(item => (
               <label key={item} className="checkbox-label"><input type="checkbox" checked={!!fails[item]} onChange={() => toggle(item, setFails)} /><span>{item}</span></label>
             ))}</div>
-            <div>{SUP_FAILS.slice(3).map(item => (
+            <div>{supFails.slice(3).map(item => (
               <label key={item} className="checkbox-label"><input type="checkbox" checked={!!fails[item]} onChange={() => toggle(item, setFails)} /><span>{item}</span></label>
             ))}</div>
           </div>
@@ -281,6 +363,7 @@ export default function SupTransferPage({ onNavigate }) {
       <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
 
       <div className="footer-bar" data-testid="sup-footer">
+        <button className="btn btn-muted btn-sm" onClick={handleDiscardSession} data-testid="sup-discard">Discard Session</button>
         <button className="btn btn-muted btn-sm" onClick={() => { if (transferNum > 1) { setTransferNum(1); resetTransfer(); } else onNavigate(isSupervisorOnly ? 'basics' : 'calls'); }} data-testid="sup-back">Back</button>
         <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="sup-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="sup-tech" title="Log a technical issue">Tech Issue</button>

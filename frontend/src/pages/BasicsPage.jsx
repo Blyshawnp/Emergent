@@ -1,29 +1,136 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
+import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
+const HEADSET_HELPER_TEXT = '*If the brand/model is not listed, confirm it is USB and has a noise-cancelling microphone. Unsure? Post in Discord Tester Room.';
+
+function hasBasicsDraft(form) {
+  return Boolean(
+    String(form.candidate_name || '').trim() ||
+    form.final_attempt ||
+    form.headset_usb !== null ||
+    form.noise_cancel !== null ||
+    String(form.headset_brand || '').trim() ||
+    form.vpn_on !== null ||
+    form.vpn_off !== null ||
+    form.chrome_default !== null ||
+    form.extensions_disabled !== null ||
+    form.popups_allowed !== null
+  );
+}
 
 export default function BasicsPage({ onNavigate }) {
   const modal = useModal();
   const [settings, setSettings] = useState({});
   const [techOpen, setTechOpen] = useState(false);
   const [supervisorOnlyMode, setSupervisorOnlyMode] = useState(false);
+  const [headsetLookupOpen, setHeadsetLookupOpen] = useState(false);
+  const [headsetQuery, setHeadsetQuery] = useState('');
+  const [approvedHeadsets, setApprovedHeadsets] = useState([]);
+  const [headsetLookupError, setHeadsetLookupError] = useState('');
+  const [headsetLookupLoading, setHeadsetLookupLoading] = useState(true);
   const [form, setForm] = useState({
     candidate_name: '', tester_name: '', final_attempt: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
     vpn_on: null, vpn_off: null, chrome_default: null, extensions_disabled: null, popups_allowed: null,
   });
+  const hydratedRef = useRef(false);
 
   useEffect(() => {
-    setSupervisorOnlyMode(window.sessionStorage.getItem(SUP_ONLY_MODE_KEY) === '1');
-    api.getSettings().then(s => {
-      setSettings(s);
-      setForm(f => ({ ...f, tester_name: s.tester_name || '' }));
-    }).catch(() => {});
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const [currentSettings, sessionResponse, headsetResponse] = await Promise.all([
+          api.getSettings(),
+          api.getCurrentSession(),
+          api.getApprovedHeadsets().catch((error) => ({ groups: [], error: error.message || 'Unable to load the approved headset list right now.' })),
+        ]);
+        if (cancelled) return;
+
+        const session = sessionResponse?.session || null;
+        const storedSupervisorOnly = Boolean(session?.supervisor_only) || window.sessionStorage.getItem(SUP_ONLY_MODE_KEY) === '1';
+        setSupervisorOnlyMode(storedSupervisorOnly);
+        setSettings(currentSettings);
+        setForm((prev) => ({
+          ...prev,
+          tester_name: currentSettings.tester_name || '',
+          ...(session ? {
+            candidate_name: session.candidate_name || '',
+            tester_name: session.tester_name || currentSettings.tester_name || '',
+            final_attempt: !!session.final_attempt,
+            headset_usb: session.headset_usb ?? null,
+            noise_cancel: session.noise_cancel ?? null,
+            headset_brand: session.headset_brand || '',
+            vpn_on: session.vpn_on ?? null,
+            vpn_off: session.vpn_off ?? null,
+            chrome_default: session.chrome_default ?? null,
+            extensions_disabled: session.extensions_disabled ?? null,
+            popups_allowed: session.popups_allowed ?? null,
+          } : {}),
+        }));
+
+        setApprovedHeadsets(headsetResponse.groups || []);
+        setHeadsetLookupError(headsetResponse.error || '');
+      } catch (_error) {
+        if (cancelled) return;
+        setHeadsetLookupError('Unable to load the approved headset list right now. You can still type the headset manually.');
+      } finally {
+        if (!cancelled) {
+          setHeadsetLookupLoading(false);
+          hydratedRef.current = true;
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
+  useEffect(() => {
+    if (!hydratedRef.current || !hasBasicsDraft(form)) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      api.updateSession({
+        ...form,
+        supervisor_only: supervisorOnlyMode,
+        status: 'In Progress',
+      }).catch(() => {});
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [form, supervisorOnlyMode]);
+
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const filteredHeadsets = useMemo(() => {
+    const query = headsetQuery.trim().toLowerCase();
+    if (!query) return approvedHeadsets;
+
+    return approvedHeadsets
+      .map((group) => {
+        const brandMatches = group.brand.toLowerCase().includes(query);
+        const models = brandMatches
+          ? group.models
+          : group.models.filter((model) => model.toLowerCase().includes(query));
+
+        return { ...group, models };
+      })
+      .filter((group) => group.models.length > 0);
+  }, [approvedHeadsets, headsetQuery]);
+
+  const handleDiscardSession = async () => {
+    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress?');
+    if (!confirmed) return;
+    await api.discardSession();
+    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+    onNavigate('home');
+  };
 
   const autoFail = async (reason) => {
     if (!form.candidate_name.trim()) { await modal.warning('Missing Info', 'Enter the Candidate Name first.'); return; }
@@ -55,7 +162,16 @@ export default function BasicsPage({ onNavigate }) {
       const reasons = [];
       if (!d.headset_usb) reasons.push('Wrong headset (not USB)');
       if (!d.noise_cancel) reasons.push('Wrong headset (not noise cancelling)');
-      const yes = await modal.confirm('Headset Issue', `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`);
+      const yes = await modal.showModal({
+        type: 'confirm',
+        title: 'Headset Issue',
+        body: `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`,
+        graphic: 'warning',
+        buttons: [
+          { label: 'Yes', cls: 'btn-primary', value: true },
+          { label: 'No', cls: 'btn-muted', value: false },
+        ],
+      });
       if (yes) {
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
         await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' });
@@ -113,6 +229,7 @@ export default function BasicsPage({ onNavigate }) {
 
   return (
     <div data-testid="basics-page">
+      <WorkflowProgress {...getWorkflowProgress({ page: 'basics', supervisorOnly: supervisorOnlyMode })} />
       <h1 style={{ marginBottom: 16 }}>The Basics</h1>
       <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }}>
         <h3 style={{ marginBottom: 8 }}>Session Information</h3>
@@ -121,7 +238,7 @@ export default function BasicsPage({ onNavigate }) {
             <label className="text-sm font-bold" style={{ minWidth: 130 }}>Candidate Name</label>
             <input type="text" value={form.candidate_name} onChange={e => set('candidate_name', e.target.value)} placeholder="Required" style={{ flex: 1 }} data-testid="basics-candidate" />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} data-tour="basics-final-attempt">
             <label className="text-sm font-bold" style={{ minWidth: 130, color: 'var(--color-danger)', fontWeight: 800 }}>Final Attempt</label>
             <div>
               <RadioGroup name="b-final-attempt" value={form.final_attempt} onChange={v => set('final_attempt', v)} />
@@ -130,7 +247,7 @@ export default function BasicsPage({ onNavigate }) {
           </div>
         </div>
       </div>
-      <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }}>
+      <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }} data-tour="basics-headset-section">
         <h3 style={{ marginBottom: 12 }}>Headset Requirements</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -145,10 +262,25 @@ export default function BasicsPage({ onNavigate }) {
             <label className="text-sm font-bold" style={{ minWidth: 160 }}>Brand / Model</label>
             <input type="text" value={form.headset_brand} onChange={e => set('headset_brand', e.target.value)} placeholder="e.g. Logitech H390" style={{ maxWidth: 280 }} data-testid="basics-brand" />
           </div>
+          <div style={{ marginTop: 4 }}>
+            <div className="basics-headset-actions">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm basics-headset-lookup-btn"
+                onClick={() => setHeadsetLookupOpen(true)}
+                data-testid="basics-headset-lookup"
+              >
+                {'\uD83D\uDD0D'} Lookup Approved Headsets
+              </button>
+            </div>
+            <div className="text-xs text-muted basics-headset-note">
+              {HEADSET_HELPER_TEXT}
+            </div>
+          </div>
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        <div className="card" style={{ padding: '16px 24px' }}>
+        <div className="card" style={{ padding: '16px 24px' }} data-tour="basics-vpn-section">
           <h3 style={{ marginBottom: 8 }}>VPN</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -161,7 +293,7 @@ export default function BasicsPage({ onNavigate }) {
             </div>
           </div>
         </div>
-        <div className="card" style={{ padding: '16px 24px' }}>
+        <div className="card" style={{ padding: '16px 24px' }} data-tour="basics-browser-section">
           <h3 style={{ marginBottom: 8 }}>Browser</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -182,7 +314,94 @@ export default function BasicsPage({ onNavigate }) {
 
       <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={form.final_attempt} onNavigate={onNavigate} />
 
+      {headsetLookupOpen && (
+        <div
+          className="modal-overlay open"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setHeadsetLookupOpen(false);
+            }
+          }}
+        >
+          <div className="modal" style={{ width: 640, maxWidth: '92vw' }}>
+            <div className="modal-header">
+              <h2>Approved Headset Lookup</h2>
+              <button className="modal-close" onClick={() => setHeadsetLookupOpen(false)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <div className="headset-lookup-subtitle">Search by brand or model</div>
+              <div className="text-xs text-muted headset-lookup-note">
+                {HEADSET_HELPER_TEXT}
+              </div>
+              <input
+                type="text"
+                value={headsetQuery}
+                onChange={(event) => setHeadsetQuery(event.target.value)}
+                placeholder="Search brand or model..."
+                data-testid="headset-lookup-search"
+                style={{ marginBottom: 16 }}
+              />
+              <div className="headset-lookup-results-scroll">
+                {headsetLookupError && approvedHeadsets.length === 0 ? (
+                  <div className="headset-lookup-empty">
+                    <div className="text-muted">{headsetLookupError}</div>
+                    <div className="text-xs text-muted headset-lookup-empty-note">
+                      You can still type the headset brand/model manually and confirm it is USB with a noise-cancelling microphone.
+                    </div>
+                  </div>
+                ) : headsetLookupLoading ? (
+                  <div className="headset-lookup-empty">
+                    <div className="text-muted">Loading approved headset list...</div>
+                  </div>
+                ) : filteredHeadsets.length === 0 ? (
+                  <div className="headset-lookup-empty">
+                    <div className="text-muted">No matching headset found.</div>
+                    <div className="text-xs text-muted headset-lookup-empty-note">
+                      {HEADSET_HELPER_TEXT}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="headset-lookup-results">
+                  {filteredHeadsets.map((group) => (
+                    <div key={group.brand} className="headset-lookup-group">
+                      <div className="headset-lookup-brand">{group.brand}</div>
+                      <ul className="headset-lookup-models">
+                        {group.models.map((model) => (
+                          <li key={`${group.brand}-${model}`}>
+                            <button
+                              type="button"
+                              className="headset-lookup-model-btn"
+                              onClick={() => {
+                                set('headset_brand', `${group.brand} ${model}`);
+                                setHeadsetLookupOpen(false);
+                              }}
+                            >
+                              {model}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                  </div>
+                )}
+              </div>
+              <div className="headset-lookup-footer">
+                <button
+                  type="button"
+                  className="btn btn-muted btn-sm"
+                  onClick={() => setHeadsetLookupOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="footer-bar" data-testid="basics-footer">
+        <button className="btn btn-muted btn-sm" onClick={handleDiscardSession} data-testid="basics-discard">Discard Session</button>
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('NC/NS')} data-testid="basics-ncns" title="No Call / No Show — candidate did not join the session">NC / NS</button>
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('Not Ready for Session')} data-testid="basics-notready" title="Candidate was not prepared for the session (wrong setup, etc.)">Not Ready</button>
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('Stopped Responding in Chat')} data-testid="basics-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>

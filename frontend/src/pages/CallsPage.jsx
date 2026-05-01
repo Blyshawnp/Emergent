@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
-const CALL_COACHING = [
+import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
   { id: 'c-phonetics', label: 'Phonetics table provided to candidate' },
   { id: 'c-dontask', label: "Don't Ask, Just Verify Address and Phone Number", helper: 'Existing member already provided address and phone number' },
@@ -12,7 +13,7 @@ const CALL_COACHING = [
   { id: 'c-other', label: 'Other' },
 ];
 
-const CALL_FAILS = [
+const DEFAULT_CALL_FAILS = [
   'Skipped parts of script', 'Volunteered info', 'Wrong donation', 'Background noise on call',
   'Paraphrased script', 'Wrong thank you gift', 'Script navigation issues', 'Other',
 ];
@@ -33,10 +34,24 @@ function generateRandomFlags() {
   };
 }
 
+function classifyCallType(callType = '') {
+  const normalized = String(callType || '').trim().toLowerCase();
+  if (normalized.startsWith('existing member')) {
+    return normalized.includes('increase') ? 'increase' : 'existing';
+  }
+  if (normalized.startsWith('new donor')) {
+    return 'new';
+  }
+  if (normalized.includes('increase')) return 'increase';
+  if (normalized.includes('existing')) return 'existing';
+  if (normalized.includes('new donor')) return 'new';
+  return 'existing';
+}
+
 function getCallersForType(callType, settings, defaults) {
-  const ct = callType.toLowerCase();
-  if (ct.includes('increase')) return settings.donors_increase || defaults.donors_increase || [];
-  if (ct.includes('new')) return settings.donors_new || defaults.donors_new || [];
+  const callCategory = classifyCallType(callType);
+  if (callCategory === 'increase') return settings.donors_increase || defaults.donors_increase || [];
+  if (callCategory === 'new') return settings.donors_new || defaults.donors_new || [];
   return settings.donors_existing || defaults.donors_existing || [];
 }
 
@@ -57,7 +72,8 @@ function ScenarioCard({ currentCaller, callSetup, randFlags, donations, onRegene
   const fname = currentCaller[0];
   const fullName = `${currentCaller[0]} ${currentCaller[1]}`;
   const ct = callSetup.type.toLowerCase();
-  const donorType = ct.includes('new') ? 'a new donor' : 'an existing member';
+  const callCategory = classifyCallType(callSetup.type);
+  const donorType = callCategory === 'new' ? 'a new donor' : 'an existing member';
   const isOneTime = isOneTimeDonation(callSetup.type);
   let action = 'make a one-time donation of';
   if (ct.includes('increase')) action = 'increase their sustaining donation to';
@@ -96,11 +112,17 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
   }
 
   if (passes.length === 2) {
-    const hasNew = passes.some(t => t.toLowerCase().includes('new'));
-    const hasExt = passes.some(t => t.toLowerCase().includes('existing'));
+    const hasNew = passes.some((type) => classifyCallType(type) === 'new');
+    const hasExt = passes.some((type) => classifyCallType(type) === 'existing' || classifyCallType(type) === 'increase');
     if (!hasNew || !hasExt) {
       const missing = hasNew ? 'Existing Member' : 'New Donor';
-      await modal.warning('Call Type Error', `You must pass one New Donor and one Existing Member call.<br><br>Change this call's type to a "${missing}" scenario.`);
+      await modal.showModal({
+        type: 'warning',
+        title: 'Call Type Error',
+        body: `You must pass one New Donor and one Existing Member call.<br><br>Change this call's type to a "${missing}" scenario.`,
+        graphic: 'calltype',
+        buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
+      });
       return 'stay';
     }
   }
@@ -113,7 +135,16 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
   }
 
   if (passes.length >= 2) {
-    const hasTime = await modal.confirm('Confirm', 'Is there enough time for Supervisor Transfers?');
+    const hasTime = await modal.showModal({
+      type: 'confirm',
+      title: 'Supervisor Transfer Time Check',
+      body: 'Is there enough time for Supervisor Transfers?',
+      graphic: 'time',
+      buttons: [
+        { label: 'Yes', cls: 'btn-primary', value: true },
+        { label: 'No', cls: 'btn-muted', value: false },
+      ],
+    });
     if (hasTime) {
       await apiRef.updateSession({ time_for_sup: true });
       onNavigate('suptransfer');
@@ -143,6 +174,7 @@ export default function CallsPage({ onNavigate }) {
   const [randFlags, setRandFlags] = useState({});
   const [isFinal, setIsFinal] = useState(false);
   const [candidateName, setCandidateName] = useState('');
+  const hydratedRef = useRef(false);
 
   const rollRandom = useCallback(() => {
     setRandFlags(generateRandomFlags());
@@ -152,34 +184,88 @@ export default function CallsPage({ onNavigate }) {
     let cancelled = false;
     (async () => {
       try {
-        const [d, s] = await Promise.all([api.getDefaults(), api.getSettings()]);
+        const [{ session }, d, s] = await Promise.all([api.getCurrentSession(), api.getDefaults(), api.getSettings()]);
         if (cancelled) return;
         setDefaults(d);
         setSettings(s);
         const types = s.call_types || d.call_types || [];
         const shows = s.shows || d.shows || [];
-        if (types.length) setCallSetup(prev => ({ ...prev, type: types[0] }));
-        if (shows.length) setCallSetup(prev => ({ ...prev, show: shows[0][0] }));
-        const { session } = await api.getCurrentSession();
+        const savedDraft = session?.current_call_draft || null;
+        const resolvedCallNum = savedDraft?.call_num || [session?.call_1, session?.call_2, session?.call_3].findIndex((call) => !call?.result) + 1 || 1;
+        setCallNum(Math.max(1, Math.min(3, resolvedCallNum || 1)));
+
         if (!cancelled && session) {
           setIsFinal(session.final_attempt || false);
           setCandidateName(session.candidate_name || '');
+          setCallSetup({
+            type: savedDraft?.type || types[0] || '',
+            show: savedDraft?.show || shows[0]?.[0] || '',
+            caller: savedDraft?.caller || '',
+            donation: savedDraft?.donation || '',
+          });
+          setResult(savedDraft?.result || null);
+          setCoaching(savedDraft?.coaching || {});
+          setCoachNotes(savedDraft?.coach_notes || '');
+          setFails(savedDraft?.fails || {});
+          setFailNotes(savedDraft?.fail_notes || '');
+          setRandFlags(savedDraft?.rand_flags || generateRandomFlags());
+        } else {
+          if (types.length) setCallSetup(prev => ({ ...prev, type: types[0] }));
+          if (shows.length) setCallSetup(prev => ({ ...prev, show: shows[0][0] }));
+          rollRandom();
         }
       } catch (err) {
         // Failed to load defaults/settings — page will render with empty dropdowns
       }
-      if (!cancelled) rollRandom();
+      if (!cancelled) hydratedRef.current = true;
     })();
     return () => { cancelled = true; };
   }, [rollRandom]);
 
   const callTypes = settings.call_types || defaults.call_types || [];
   const shows = settings.shows || defaults.shows || [];
+  const callCoaching = defaults.call_coaching || DEFAULT_CALL_COACHING;
+  const callFails = defaults.call_fails || DEFAULT_CALL_FAILS;
   const callers = useMemo(() => getCallersForType(callSetup.type, settings, defaults), [callSetup.type, settings, defaults]);
+  useEffect(() => {
+    if (!callers.length) return;
+    const currentName = callSetup.caller;
+    const isValidCaller = callers.some((caller) => `${caller[0]} ${caller[1]}` === currentName);
+    if (!isValidCaller) {
+      setCallSetup((prev) => ({ ...prev, caller: `${callers[0][0]} ${callers[0][1]}` }));
+    }
+  }, [callers, callSetup.caller]);
   const callerIdx = Math.max(0, callers.findIndex(c => `${c[0]} ${c[1]}` === callSetup.caller));
   const currentCaller = useMemo(() => callers[callerIdx] || callers[0] || [], [callers, callerIdx]);
   const showData = shows.find(s => s[0] === callSetup.show);
   const donations = useMemo(() => getDonationsForShow(showData, callSetup.type), [showData, callSetup.type]);
+
+  useEffect(() => {
+    if (!hydratedRef.current || !candidateName) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      api.updateSession({
+        current_call_num: callNum,
+        current_call_draft: {
+          call_num: callNum,
+          result,
+          type: callSetup.type,
+          show: callSetup.show,
+          caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
+          donation: callSetup.donation || donations[0] || '',
+          coaching,
+          coach_notes: coachNotes,
+          fails,
+          fail_notes: failNotes,
+          rand_flags: randFlags,
+        },
+      }).catch(() => {});
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [callNum, result, callSetup, currentCaller, donations, coaching, coachNotes, fails, failNotes, randFlags, candidateName]);
 
   const resetCall = useCallback(() => {
     setResult(null);
@@ -200,7 +286,16 @@ export default function CallsPage({ onNavigate }) {
     // Coaching validation - warn if no coaching selected
     const hasCoaching = Object.values(coaching).some(v => v);
     if (!hasCoaching) {
-      const cont = await modal.confirm('No Coaching', 'You did not select any coaching for this call. Continue anyway?');
+      const cont = await modal.showModal({
+        type: 'confirm',
+        title: 'No Coaching',
+        body: 'You did not select any coaching for this call. Continue anyway?',
+        graphic: 'question',
+        buttons: [
+          { label: 'Yes', cls: 'btn-primary', value: true },
+          { label: 'No', cls: 'btn-muted', value: false },
+        ],
+      });
       if (!cont) return;
     }
 
@@ -211,6 +306,7 @@ export default function CallsPage({ onNavigate }) {
       coaching, coach_notes: coachNotes, fails, fail_notes: failNotes,
     };
     await api.saveCall(callData);
+    await api.updateSession({ current_call_draft: null, current_call_num: null });
 
     const { session } = await api.getCurrentSession();
     const routeResult = await evaluateCallRouting(session, modal, onNavigate, api);
@@ -222,6 +318,13 @@ export default function CallsPage({ onNavigate }) {
       if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [result, fails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, modal, onNavigate, resetCall]);
+
+  const handleDiscardSession = useCallback(async () => {
+    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress?');
+    if (!confirmed) return;
+    await api.discardSession();
+    onNavigate('home');
+  }, [modal, onNavigate]);
 
   const handleStoppedResponding = useCallback(async () => {
     const confirmed = await modal.confirm(
@@ -237,16 +340,17 @@ export default function CallsPage({ onNavigate }) {
 
   return (
     <div data-testid="calls-page">
+      <WorkflowProgress {...getWorkflowProgress({ page: 'calls', callNum })} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
         <h1 style={{ marginBottom: 0 }}>Call #{callNum}</h1>
         {candidateName && (
-          <div className="text-sm text-muted" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-            <b>Candidate:</b> {candidateName}
+          <div className="candidate-header">
+            <span className="candidate-header-label">Candidate:</span> {candidateName}
           </div>
         )}
       </div>
       <div className="split-layout">
-        <div className="card setup-card">
+        <div className="card setup-card" data-tour="calls-setup">
           <h3 style={{ marginBottom: 16 }}>Call Setup</h3>
           <div className="form-row"><label>Call Type</label>
             <select value={callSetup.type} onChange={e => { setCallSetup(p => ({ ...p, type: e.target.value })); rollRandom(); }} data-testid="call-type">
@@ -276,7 +380,7 @@ export default function CallsPage({ onNavigate }) {
 
       {currentCaller.length > 0 && <CallerDemographics caller={currentCaller} />}
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" style={{ marginBottom: 16 }} data-tour="calls-coaching">
         <h3 style={{ marginBottom: 8 }}>Call Result</h3>
         <div className="result-btns">
           <button className={`result-btn ${result === 'Pass' ? 'selected-pass' : ''}`} onClick={() => setResult('Pass')} data-testid="call-pass">PASS</button>
@@ -287,7 +391,7 @@ export default function CallsPage({ onNavigate }) {
       <div className="card" style={{ marginBottom: 16 }}>
         <h3>Coaching Given</h3>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
-        <CoachingGrid items={CALL_COACHING} checked={coaching} onChange={setCoaching} />
+        <CoachingGrid items={callCoaching} checked={coaching} onChange={setCoaching} />
         <div style={{ marginTop: 16 }}>
           <label className="text-sm font-bold">Other Coaching Notes</label>
           <textarea rows={2} value={coachNotes} onChange={e => setCoachNotes(e.target.value)} disabled={!coaching['Other']} style={{ marginTop: 4 }} data-testid="call-coach-notes" />
@@ -295,10 +399,10 @@ export default function CallsPage({ onNavigate }) {
       </div>
 
       {result === 'Fail' && (
-        <div className="card card-fail" style={{ marginBottom: 16 }}>
+        <div className="card card-fail" style={{ marginBottom: 16 }} data-tour="calls-fail-reasons">
           <h3 style={{ color: 'var(--color-danger)' }}>Fail Reasons</h3>
           <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
-          <FailGrid items={CALL_FAILS} checked={fails} onChange={setFails} />
+          <FailGrid items={callFails} checked={fails} onChange={setFails} />
           <div style={{ marginTop: 16 }}>
             <label className="text-sm font-bold">Other Fail Notes</label>
             <textarea rows={2} value={failNotes} onChange={e => setFailNotes(e.target.value)} disabled={!fails['Other']} style={{ marginTop: 4 }} data-testid="call-fail-notes" />
@@ -309,6 +413,7 @@ export default function CallsPage({ onNavigate }) {
       <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
 
       <div className="footer-bar" data-testid="calls-footer">
+        <button className="btn btn-muted btn-sm" onClick={handleDiscardSession} data-testid="calls-discard">Discard Session</button>
         <button className="btn btn-muted btn-sm" onClick={() => { if (callNum > 1) { setCallNum(n => n - 1); resetCall(); } else onNavigate('basics'); }} data-testid="calls-back">Back</button>
         <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="calls-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="calls-tech" title="Log a technical issue">Tech Issue</button>
@@ -322,7 +427,7 @@ export default function CallsPage({ onNavigate }) {
 // --- Extracted sub-components to reduce main component size ---
 function PaymentSimulation() {
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
+    <div className="card" style={{ marginBottom: 16 }} data-tour="calls-payment">
       <h3 style={{ marginBottom: 8 }}>Payment Simulation</h3>
       <div className="payment-grid">
         <div className="payment-card payment-card-cc">
@@ -346,8 +451,8 @@ function CallerDemographics({ caller }) {
       <h3 style={{ marginBottom: 8 }}>Caller Demographics</h3>
       <div style={{ textAlign: 'center' }}>
         <b>{caller[0]} {caller[1]}</b><br />
-        {caller[2]}{caller[3] ? `, ${caller[3]}` : ''}, {caller[4]}, {caller[5]} {caller[6]}<br />
-        Phone: {caller[7]} | Email: {caller[8]}
+        {caller[2]}{caller[3] ? `, ${caller[3]}` : ''}, {caller[4]} {caller[5]}<br />
+        Phone: {caller[6]} | Email: {caller[7]}
       </div>
     </div>
   );

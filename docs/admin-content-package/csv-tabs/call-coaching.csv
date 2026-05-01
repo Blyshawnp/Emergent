@@ -1,0 +1,8 @@
+ID,Label,Helper,ChildrenPipeDelimited
+c-show-app,Show appreciation,,For Current/Existing Donors|After donation amount is given
+c-phonetics,Phonetics table provided to candidate,,
+c-dontask,"Don't Ask, Just Verify Address and Phone Number",Existing member already provided address and phone number,
+c-verify,Verification,,Name|Address|Phone|Email|Card/EFT|Phonetics for Sound Alike Letters
+c-verbatim,Read script verbatim,No adlibbing or skipping sections,
+c-nav,Use effective script navigation,,Scroll down to avoid missing parts of the script|Use the Back and Next buttons and not the Icons
+c-other,Other,,

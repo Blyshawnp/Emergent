@@ -1,0 +1,28 @@
+Title,Message
+Pass,"**:tada: Congratulations! You passed your test calls! :tada:**
+- 24-48hrs to go live. Watch your inbox.
+- Log out of Call Corp and Simple Script.
+- Complete TLMS courses.
+- Remove extra mock shifts from Gateway.
+**Welcome to ACDD!**"
+Fail,"Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours."
+Fail Final,"Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck."
+Incomplete,"Our time is up. We'll schedule another session for Supervisor Transfers.
+Please give me a moment."
+Ncns,"Candidate was a No Call / No Show for mock testing."
+Sup Intro,"I'll help you complete the Supervisor Transfer test call. I'll provide instructions step by step. OK?"
+Sup Instructions,"When you need to transfer:
+1) Ask in chat first
+2) Give CCM time to check
+3) When CCM says ok - let caller know you are transferring"
+Sup Transfer,"1. Click Transfer in CC
+2. Select Queue > ACD Direct Supervisor
+3. Tell caller to hold, click Blind Transfer"
+Sup Dte,"Change DTE to Ready (green)."
+Sup Status,"I show Ready. Calling now."
+Sup Transfer Now,"You may transfer the call now."
+Sup Stars,"WXYZ Supervisor Test Call Being Queued"
+Sup Disposition,"Click cancel (red phone), disposition as Test/Training.
+Then disposition in Call Corp."
+Sup Retry,"Transfer was not successful. Review steps and let me know when ready."
+Ran Out Of Time,"We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion."

@@ -5,8 +5,6 @@ from PyInstaller.utils.hooks import collect_submodules
 
 hiddenimports = []
 hiddenimports += collect_submodules("uvicorn")
-hiddenimports += collect_submodules("motor")
-hiddenimports += collect_submodules("pymongo")
 hiddenimports += collect_submodules("selenium")
 
 
