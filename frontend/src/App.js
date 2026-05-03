@@ -172,7 +172,7 @@ function App() {
             <div className="sidebar-brand">
               <img src={LOGO_SRC} alt="ACD" className="sidebar-logo-img" />
               <div className="sidebar-title">Mock Testing<br />Suite</div>
-              <div className="sidebar-version">v2.5.0</div>
+              <div className="sidebar-version">v3.0.0</div>
             </div>
             <nav className="sidebar-nav">
               {NAV_ITEMS.map(item => (
@@ -203,7 +203,7 @@ function App() {
             <div className="status-bar">
               <span id="status-text"></span>
               <span className="status-spacer" />
-              <span>Mock Testing Suite v2.5.0 — By Shawn P. Bly</span>
+              <span>Mock Testing Suite v3.0.0 — By Shawn P. Bly</span>
             </div>
           </main>
         </div>

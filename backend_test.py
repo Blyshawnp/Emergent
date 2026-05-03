@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 class MockTestingSuiteAPITester:
-    def __init__(self, base_url="https://app-screen-fixes.preview.emergentagent.com/api"):
+    def __init__(self, base_url="http://localhost:8001/api"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
@@ -47,11 +47,11 @@ class MockTestingSuiteAPITester:
                         if check_response(response_data):
                             print(f"   ✅ Response validation passed")
                         else:
-                            print(f"   ⚠️  Response validation failed")
+                            print(f"   ⚠️ Response validation failed")
                             success = False
                             self.tests_passed -= 1
                     except Exception as e:
-                        print(f"   ⚠️  Response validation error: {e}")
+                        print(f"   ⚠️ Response validation error: {e}")
                 
                 return success, response.json() if response.content else {}
             else:
@@ -255,7 +255,7 @@ def main():
         print("🎉 All backend API tests passed!")
         return 0
     else:
-        print("⚠️  Some backend API tests failed!")
+        print("⚠️ Some backend API tests failed!")
         return 1
 
 if __name__ == "__main__":

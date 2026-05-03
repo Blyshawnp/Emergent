@@ -2,7 +2,7 @@ import html
 import logging
 import os
 import sys
-from typing import Iterable
+fram typing import Iterable
 
 
 QUESTION_IDS = {
@@ -95,7 +95,7 @@ def _create_driver(preferred_browser: str = "auto"):
     drivers = {
         "chrome": {
             "display": "Chrome",
-            "filename": "chromedriver.exe",
+            "filename": "chromedriver",
             "factory": lambda driver_path: webdriver.Chrome(
                 service=ChromeService(executable_path=driver_path),
                 options=_build_chromium_options(webdriver.ChromeOptions()),
@@ -103,7 +103,7 @@ def _create_driver(preferred_browser: str = "auto"):
         },
         "edge": {
             "display": "Edge",
-            "filename": "msedgedriver.exe",
+            "filename": "msedgedriver",
             "factory": lambda driver_path: webdriver.Edge(
                 service=EdgeService(executable_path=driver_path),
                 options=_build_chromium_options(webdriver.EdgeOptions()),

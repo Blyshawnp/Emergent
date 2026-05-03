@@ -25,10 +25,10 @@ load_dotenv(ROOT_DIR / '.env')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # CONSTANTS / DEFAULTS
-# ══════════════════════════════════════════════════════════════════
-APP_VERSION = "2.5.0"
+# ════════════════════════════════════
+APP_VERSION = "3.0.0"
 DEFAULT_MONGO_URL = "mongodb://127.0.0.1:27017"
 DEFAULT_DB_NAME = "mock_testing_suite"
 DEFAULT_CERT_SHEET_URL = "https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg"
@@ -497,9 +497,9 @@ def empty_session():
     }
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # GEMINI SERVICE (summary generation)
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 def _get_coaching_items(data):
     if not data:
         return []
@@ -740,8 +740,8 @@ DEFAULT_GEMINI_FAIL_PROMPT = (
 )
 
 PREFERRED_GEMINI_TEXT_MODELS = (
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
 )
@@ -985,9 +985,9 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
     }
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # APP SETUP
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Ensure default settings exist
@@ -1025,9 +1025,9 @@ app.add_middleware(
 )
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # SETTINGS ROUTES
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 @api_router.get("/settings")
 async def get_settings():
     doc = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
@@ -1100,9 +1100,9 @@ async def complete_setup(payload: dict):
     return {"ok": True}
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # SESSION ROUTES
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 @api_router.get("/session/current")
 async def get_current_session():
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
@@ -1168,9 +1168,9 @@ async def discard_session():
     return {"ok": True}
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # HISTORY ROUTES
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 @api_router.get("/history")
 async def get_history():
     docs = await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500)
@@ -1205,9 +1205,9 @@ async def clear_history():
 import re
 import httpx
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # TICKER (fetches from Google Doc, falls back to defaults)
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 _ticker_cache = {"messages": None, "last_fetch": 0}
 
 async def _fetch_ticker_from_doc():
@@ -1244,9 +1244,9 @@ async def get_ticker():
     return {"messages": messages}
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # GEMINI / SUMMARIES
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 @api_router.post("/gemini/summaries")
 async def gen_summaries():
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
@@ -1276,9 +1276,9 @@ async def regen_summary(payload: dict):
     return {"ok": True, "text": result.get(summary_type, "")}
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # FINISH SESSION (orchestrator)
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 @api_router.post("/finish-session")
 async def finish_all(payload: dict):
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
@@ -1302,9 +1302,9 @@ async def finish_all(payload: dict):
     return {"ok": True, "message": "Session saved successfully!"}
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # UPDATE / FORM (stubs)
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════
 @api_router.get("/update")
 async def check_update():
     return {"update_available": False, "current_version": APP_VERSION}
