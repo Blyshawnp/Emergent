@@ -15,6 +15,7 @@ import geminiGraphic from '../assets/images/Gemini2.png';
 import mtsLogo from '../assets/images/MTSLogonew.png';
 
 const ModalContext = createContext(null);
+const notificationGraphic = `${process.env.PUBLIC_URL || ''}/notification-popup.png`;
 
 export function useModal() {
   return useContext(ModalContext);
@@ -33,6 +34,7 @@ function getModalGraphic(modal) {
   if (modal.graphic === 'gemini') return geminiGraphic;
   if (modal.graphic === 'warning') return warningTriangle;
   if (modal.graphic === 'logo') return mtsLogo;
+  if (modal.graphic === 'notification') return notificationGraphic;
   if (modal.title === 'Form Filled') return formFilled;
   if (/gemini is enabled, but no api key/i.test(`${modal.title || ''} ${modal.body || ''}`)) return geminiGraphic;
   if (/restore defaults/i.test(modal.title || '')) return warningTriangle;
@@ -126,7 +128,16 @@ export function ModalProvider({ children }) {
         <div className="cmodal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) closeModal(false); }}>
           <div className="cmodal">
             {modalGraphic ? (
-              <img className={`cmodal-graphic ${modal.graphic === 'logo' ? 'cmodal-graphic-logo' : ''}`} src={modalGraphic} alt="" />
+              <img
+                className={`cmodal-graphic ${modal.graphic === 'logo' ? 'cmodal-graphic-logo' : ''}`}
+                src={modalGraphic}
+                alt=""
+                onError={(event) => {
+                  if (event.currentTarget.src !== mtsLogo) {
+                    event.currentTarget.src = mtsLogo;
+                  }
+                }}
+              />
             ) : (
               <div className="cmodal-icon">
                 <i data-lucide={modal.icon}></i>

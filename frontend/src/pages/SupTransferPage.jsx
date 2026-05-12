@@ -41,6 +41,7 @@ export default function SupTransferPage({ onNavigate }) {
   const [copied, setCopied] = useState(false);
   const [candidateName, setCandidateName] = useState('');
   const hydratedRef = useRef(false);
+  const latestDraftPayloadRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,26 +156,43 @@ export default function SupTransferPage({ onNavigate }) {
       return undefined;
     }
 
+    const payload = {
+      current_sup_transfer_num: transferNum,
+      current_sup_transfer_draft: {
+        transfer_num: transferNum,
+        result,
+        caller: setup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
+        show: setup.show || (shows[0]?.[0] || ''),
+        reason: setup.reason,
+        coaching,
+        coach_notes: coachNotes,
+        fails,
+        fail_notes: failNotes,
+        rand_flags: supRandFlags,
+      },
+    };
+    latestDraftPayloadRef.current = payload;
+
     const timer = window.setTimeout(() => {
-      api.updateSession({
-        current_sup_transfer_num: transferNum,
-        current_sup_transfer_draft: {
-          transfer_num: transferNum,
-          result,
-          caller: setup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
-          show: setup.show || (shows[0]?.[0] || ''),
-          reason: setup.reason,
-          coaching,
-          coach_notes: coachNotes,
-          fails,
-          fail_notes: failNotes,
-          rand_flags: supRandFlags,
-        },
-      }).catch(() => {});
+      api.updateSession(payload).catch(() => {});
     }, 250);
 
     return () => window.clearTimeout(timer);
   }, [transferNum, result, setup, currentCaller, shows, coaching, coachNotes, fails, failNotes, supRandFlags, candidateName]);
+
+  useEffect(() => {
+    return () => {
+      if (latestDraftPayloadRef.current) {
+        api.updateSession(latestDraftPayloadRef.current).catch(() => {});
+      }
+    };
+  }, []);
+
+  const saveTransferDraftNow = useCallback(async () => {
+    if (latestDraftPayloadRef.current) {
+      await api.updateSession(latestDraftPayloadRef.current);
+    }
+  }, []);
 
   const resetTransfer = () => {
     setResult(null);
@@ -208,6 +226,7 @@ export default function SupTransferPage({ onNavigate }) {
       show: setup.show || (shows.length ? shows[0][0] : ''), reason: setup.reason,
       coaching, coach_notes: coachNotes, fails, fail_notes: failNotes,
     };
+    latestDraftPayloadRef.current = null;
     await api.saveSupTransfer(data);
     await api.updateSession({ current_sup_transfer_draft: null, current_sup_transfer_num: null });
 
@@ -235,6 +254,7 @@ export default function SupTransferPage({ onNavigate }) {
       'warning'
     );
     if (!confirmed) return;
+    latestDraftPayloadRef.current = null;
     await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' });
     onNavigate('review');
   }, [candidateName, modal, onNavigate]);
@@ -255,6 +275,7 @@ export default function SupTransferPage({ onNavigate }) {
     const confirmed = await modal.confirm('Confirm Auto-Fail', body, 'alert-triangle', 'warning');
     if (!confirmed) return;
 
+    latestDraftPayloadRef.current = null;
     await api.updateSession({
       auto_fail_reason: reason,
       final_status: 'Fail',
@@ -265,16 +286,22 @@ export default function SupTransferPage({ onNavigate }) {
   }, [candidateName, modal, onNavigate]);
 
   const handleDiscardSession = useCallback(async () => {
-    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress?');
+    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');
     if (!confirmed) return;
+    latestDraftPayloadRef.current = null;
     await api.discardSession();
     onNavigate('home');
   }, [modal, onNavigate]);
 
+  const handleBack = useCallback(async () => {
+    await saveTransferDraftNow();
+    onNavigate(isSupervisorOnly ? 'basics' : 'calls');
+  }, [saveTransferDraftNow, isSupervisorOnly, onNavigate]);
+
   const toggle = (key, setter) => setter(prev => ({ ...prev, [key]: !prev[key] }));
 
   return (
-    <div data-testid="suptransfer-page">
+    <div className="page-with-sticky-actions" data-testid="suptransfer-page">
       <WorkflowProgress
         {...getWorkflowProgress({
           page: 'suptransfer',
@@ -352,7 +379,7 @@ export default function SupTransferPage({ onNavigate }) {
         </div>
       )}
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" style={{ marginBottom: 16 }} data-tour="sup-result">
         <h3>Transfer Result</h3>
         <div className="result-btns">
           <button className={`result-btn ${result === 'Pass' ? 'selected-pass' : ''}`} onClick={() => setResult('Pass')} data-testid="sup-pass">PASS</button>
@@ -360,14 +387,25 @@ export default function SupTransferPage({ onNavigate }) {
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" style={{ marginBottom: 16 }} data-tour="sup-coaching">
         <h3>Coaching Given</h3>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <div className="coaching-grid">
           <div>{supCoaching.slice(0, 4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
           <div>{supCoaching.slice(4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
         </div>
-        <div style={{ marginTop: 16 }}><label className="text-sm font-bold">Other Notes</label><textarea rows={2} value={coachNotes} onChange={e => setCoachNotes(e.target.value)} disabled={!coaching['Other']} style={{ marginTop: 4 }} /></div>
+        <div style={{ marginTop: 16 }}>
+          <label className="text-sm font-bold">Other Coaching Notes</label>
+          <textarea
+            rows={2}
+            value={coachNotes}
+            onChange={e => setCoachNotes(e.target.value)}
+            disabled={!coaching['Other']}
+            placeholder="Select Other above to enter custom coaching notes."
+            style={{ marginTop: 4 }}
+            data-testid="sup-coach-notes"
+          />
+        </div>
       </div>
 
       {result === 'Fail' && (
@@ -381,15 +419,29 @@ export default function SupTransferPage({ onNavigate }) {
               <label key={item} className="checkbox-label"><input type="checkbox" checked={!!fails[item]} onChange={() => toggle(item, setFails)} /><span>{item}</span></label>
             ))}</div>
           </div>
-          <div style={{ marginTop: 16 }}><label className="text-sm font-bold">Other Fail Notes</label><textarea rows={2} value={failNotes} onChange={e => setFailNotes(e.target.value)} disabled={!fails['Other']} style={{ marginTop: 4 }} /></div>
+          <div style={{ marginTop: 16 }}>
+            <label className="text-sm font-bold">Other Fail Notes</label>
+            <textarea
+              rows={2}
+              value={failNotes}
+              onChange={e => setFailNotes(e.target.value)}
+              disabled={!fails['Other']}
+              placeholder="Select Other above to enter custom fail notes."
+              style={{ marginTop: 4 }}
+              data-testid="sup-fail-notes"
+            />
+          </div>
         </div>
       )}
 
-      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
+      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} context="suptransfer" />
 
-      <div className="footer-bar" data-testid="sup-footer">
-        <button className="btn btn-muted btn-sm" onClick={handleDiscardSession} data-testid="sup-discard">Discard Session</button>
-        <button className="btn btn-muted btn-sm" onClick={() => { if (transferNum > 1) { setTransferNum(1); resetTransfer(); } else onNavigate(isSupervisorOnly ? 'basics' : 'calls'); }} data-testid="sup-back">Back</button>
+      <div className="footer-bar sticky-action-footer" data-testid="sup-footer">
+        <div className="action-safety-group">
+          <button className="btn btn-muted btn-sm" onClick={handleBack} data-testid="sup-back">Back</button>
+          <button className="btn btn-danger-outline btn-sm" onClick={handleDiscardSession} data-testid="sup-discard" title="Discard the current session draft and lose all progress">Discard Session</button>
+        </div>
+        <span className="action-divider" aria-hidden="true" />
         {isSupervisorOnly && transferNum === 1 && (
           <button className="btn btn-danger btn-sm" onClick={() => handleSupervisorOnlyAutoFail('NC/NS')} data-testid="sup-ncns" title="No Call / No Show — candidate did not join the supervisor transfer session">NC / NS</button>
         )}

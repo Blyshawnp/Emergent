@@ -1,0 +1,84 @@
+{
+  "appId": "com.acddirect.mocktestingsuite.notificationmanager",
+  "productName": "MTS Notification Manager",
+  "copyright": "Copyright © 2026 ACD Direct / Shawn P. Bly",
+  "directories": {
+    "output": "dist-notification-manager"
+  },
+  "extraMetadata": {
+    "name": "mock-testing-suite-notification-manager",
+    "description": "Mock Testing Suite Notification Manager",
+    "main": "src/notification-main.js"
+  },
+  "files": [
+    "src/**/*",
+    "assets/**/*",
+    "node_modules/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "../frontend/build",
+      "to": "frontend",
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": "../backend/dist/backend.exe",
+      "to": "backend/backend.exe"
+    },
+    {
+      "from": "../backend/config",
+      "to": "backend/config",
+      "filter": [
+        "runtime_config.json",
+        "google-service-account.json",
+        "service-account.json"
+      ]
+    },
+    {
+      "from": "../backend/defaults",
+      "to": "backend/defaults",
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": "../backend/drivers",
+      "to": "backend/drivers",
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": "assets",
+      "to": "assets",
+      "filter": [
+        "**/*"
+      ]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "icon": "assets/notification-micro.ico",
+    "publisherName": "ACD Direct"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": true,
+    "allowToChangeInstallationDirectory": false,
+    "installerIcon": "assets/notification-micro.ico",
+    "uninstallerIcon": "assets/notification-micro.ico",
+    "installerHeaderIcon": "assets/notification-micro.ico",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "MTS Notification Manager"
+  }
+}

@@ -1,6 +1,6 @@
 export const NOTIFICATION_MANAGER_STORAGE_KEY = 'mts-notification-manager-draft';
 
-export const NOTIFICATION_TYPES = ['ticker', 'info', 'warning', 'urgent'];
+export const NOTIFICATION_TYPES = ['info', 'warning', 'urgent'];
 
 export const NOTIFICATION_CSV_COLUMNS = [
   'Enabled',
@@ -8,6 +8,7 @@ export const NOTIFICATION_CSV_COLUMNS = [
   'Type',
   'Title',
   'Message',
+  'ShowTicker',
   'ShowPopup',
   'ShowBanner',
   'Persistent',
@@ -188,6 +189,38 @@ function buildEasternDateTime(dateValue, timeValue, defaultToMidnight = false) {
   return new Date(utcGuess.getTime() - offset * 60000);
 }
 
+export function getNotificationExpiryDate(item) {
+  const normalized = normalizeManagerNotification(item);
+  if (!normalized.EndDate) return null;
+  return buildEasternDateTime(normalized.EndDate, normalized.EndTime, true);
+}
+
+export function isExpiredNotification(item, now = new Date()) {
+  const expiresAt = getNotificationExpiryDate(item);
+  if (!expiresAt) return false;
+  return expiresAt <= now;
+}
+
+export function sortManagerItems(items) {
+  return [...(items || [])].sort((left, right) => {
+    const leftExpired = isExpiredNotification(left);
+    const rightExpired = isExpiredNotification(right);
+    if (leftExpired !== rightExpired) {
+      return leftExpired ? 1 : -1;
+    }
+
+    const leftEnabled = normalizeManagerNotification(left).Enabled;
+    const rightEnabled = normalizeManagerNotification(right).Enabled;
+    if (leftEnabled !== rightEnabled) {
+      return leftEnabled ? -1 : 1;
+    }
+
+    const leftUpdated = new Date(normalizeManagerNotification(left).UpdatedAt || 0).getTime();
+    const rightUpdated = new Date(normalizeManagerNotification(right).UpdatedAt || 0).getTime();
+    return rightUpdated - leftUpdated;
+  });
+}
+
 export function createEmptyNotification() {
   const defaults = getEasternNowDefaults();
   return {
@@ -197,6 +230,7 @@ export function createEmptyNotification() {
     Title: '',
     Message: '',
     ShowPopup: false,
+    ShowTicker: true,
     ShowBanner: true,
     Persistent: false,
     StartDate: defaults.startDate,
@@ -212,11 +246,16 @@ export function createEmptyNotification() {
 
 export function normalizeManagerNotification(item = {}) {
   const base = createEmptyNotification();
+  const normalizedType = String(item.Type || base.Type || 'info').toLowerCase() === 'ticker'
+    ? 'info'
+    : String(item.Type || base.Type || 'info').toLowerCase();
   return {
     ...base,
     ...item,
+    Type: normalizedType,
     Enabled: item.Enabled !== false && String(item.Enabled).toLowerCase() !== 'false',
     ShowPopup: item.ShowPopup === true || String(item.ShowPopup).toLowerCase() === 'true',
+    ShowTicker: item.ShowTicker !== false && String(item.ShowTicker).toLowerCase() !== 'false',
     ShowBanner: item.ShowBanner === true || String(item.ShowBanner).toLowerCase() === 'true',
     Persistent: item.Persistent === true || String(item.Persistent).toLowerCase() === 'true',
     StartDate: item.StartDate || base.StartDate,
@@ -245,7 +284,7 @@ export function validateNotification(item, existingItems = []) {
   const nextId = ensureNotificationId(normalized);
 
   if (!NOTIFICATION_TYPES.includes(normalized.Type)) {
-    errors.push('Type must be ticker, info, warning, or urgent.');
+    errors.push('Type must be info, warning, or urgent.');
   }
 
   if (!String(normalized.Message || '').trim()) {
@@ -305,7 +344,7 @@ export function serializeNotificationsToCsv(items) {
           return encodeCsvCell('12:00 AM');
         }
         const value = item[column];
-        if (column === 'Enabled' || column === 'ShowPopup' || column === 'ShowBanner' || column === 'Persistent') {
+        if (column === 'Enabled' || column === 'ShowPopup' || column === 'ShowTicker' || column === 'ShowBanner' || column === 'Persistent') {
           return encodeCsvCell(value ? 'TRUE' : 'FALSE');
         }
         return encodeCsvCell(value ?? '');
@@ -337,6 +376,7 @@ export function parseManagerCsv(csvText) {
     Title: record.Title || '',
     Message: record.Message || '',
     ShowPopup: String(record.ShowPopup || '').trim().toUpperCase() === 'TRUE',
+    ShowTicker: String(record.ShowTicker || '').trim().toUpperCase() !== 'FALSE',
     ShowBanner: String(record.ShowBanner || '').trim().toUpperCase() === 'TRUE',
     Persistent: String(record.Persistent || '').trim().toUpperCase() === 'TRUE',
     StartDate: record.StartDate || '',

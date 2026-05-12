@@ -4,7 +4,7 @@ const TYPE_LABELS = {
   info: 'Info',
   warning: 'Warning',
   urgent: 'Urgent',
-  ticker: 'Ticker',
+  ticker: '',
 };
 
 export default function NotificationBanner({
@@ -16,7 +16,7 @@ export default function NotificationBanner({
     return null;
   }
 
-  const typeLabel = TYPE_LABELS[notification.type] || 'Notice';
+  const typeLabel = TYPE_LABELS[notification.type] ?? 'Notice';
 
   return (
     <div
@@ -26,8 +26,7 @@ export default function NotificationBanner({
       aria-live={notification.type === 'urgent' ? 'assertive' : 'polite'}
     >
       <div className="notification-banner-copy">
-        <div className="notification-banner-meta">{typeLabel}</div>
-        {notification.title ? <div className="notification-banner-title">{notification.title}</div> : null}
+        {typeLabel ? <div className="notification-banner-meta">{typeLabel}</div> : null}
         <div className="notification-banner-message">{notification.message}</div>
       </div>
 
@@ -42,7 +41,7 @@ export default function NotificationBanner({
             className="notification-banner-dismiss"
             type="button"
             onClick={() => onDismiss?.(notification.id)}
-            aria-label={`Dismiss ${notification.title || typeLabel} notification`}
+            aria-label={`Dismiss ${typeLabel || 'notification'}`}
           >
             Dismiss
           </button>

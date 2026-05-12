@@ -1,0 +1,846 @@
+diff --git a/frontend/src/tutorial/TutorialPreviewOverlay.jsx b/frontend/src/tutorial/TutorialPreviewOverlay.jsx
+index 9a652ad..8a0e286 100644
+--- a/frontend/src/tutorial/TutorialPreviewOverlay.jsx
++++ b/frontend/src/tutorial/TutorialPreviewOverlay.jsx
+@@ -1,10 +1,16 @@
+-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+-import { Joyride, ACTIONS, EVENTS, STATUS } from 'react-joyride';
++import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ 
+ const TARGET_WAIT_TIMEOUT_MS = 5000;
++const STEP_TARGET_TIMEOUT_MS = 1800;
++const PREPARE_SELECTOR_TIMEOUT_MS = 1500;
++const SCROLL_SETTLE_MS = 180;
+ 
+-function resolveTarget(step) {
+-  return step.fallbackTarget || step.target;
++function isTargetVisible(selector) {
++  if (!selector) return false;
++  const element = document.querySelector(selector);
++  if (!element) return false;
++  const rect = element.getBoundingClientRect();
++  return rect.width > 0 && rect.height > 0;
+ }
+ 
+ function waitForTarget(selector, timeoutMs = TARGET_WAIT_TIMEOUT_MS) {
+@@ -17,7 +23,7 @@ function waitForTarget(selector, timeoutMs = TARGET_WAIT_TIMEOUT_MS) {
+     const startedAt = Date.now();
+ 
+     const check = () => {
+-      if (document.querySelector(selector)) {
++      if (isTargetVisible(selector)) {
+         resolve(true);
+         return;
+       }
+@@ -34,6 +40,38 @@ function waitForTarget(selector, timeoutMs = TARGET_WAIT_TIMEOUT_MS) {
+   });
+ }
+ 
++function delay(ms) {
++  return new Promise((resolve) => {
++    window.setTimeout(resolve, ms);
++  });
++}
++
++function getResolvedTarget(step) {
++  if (!step) return null;
++  if (isTargetVisible(step.target)) return step.target;
++  if (isTargetVisible(step.fallbackTarget)) return step.fallbackTarget;
++  return null;
++}
++
++function clamp(value, min, max) {
++  return Math.min(Math.max(value, min), max);
++}
++
++function getTargetRect(selector) {
++  const element = selector ? document.querySelector(selector) : null;
++  if (!element) return null;
++  const rect = element.getBoundingClientRect();
++  if (rect.width <= 0 || rect.height <= 0) return null;
++  return {
++    top: rect.top,
++    left: rect.left,
++    width: rect.width,
++    height: rect.height,
++    right: rect.right,
++    bottom: rect.bottom,
++  };
++}
++
+ export default function TutorialPreviewOverlay({
+   run,
+   stepIndex,
+@@ -45,16 +83,25 @@ export default function TutorialPreviewOverlay({
+ }) {
+   const transitionRef = useRef(false);
+   const mountedRef = useRef(true);
++  const preparedStepRef = useRef('');
++  const cleanupTimerRef = useRef(null);
++  const [targetOverrides, setTargetOverrides] = useState({});
++  const [readyStepId, setReadyStepId] = useState('');
++  const [targetRect, setTargetRect] = useState(null);
+ 
+   useEffect(() => () => {
+     mountedRef.current = false;
++    if (cleanupTimerRef.current) {
++      window.clearTimeout(cleanupTimerRef.current);
++    }
+   }, []);
+ 
+-  const steps = useMemo(() => ([
++  const baseSteps = useMemo(() => ([
+     {
+       id: 'welcome',
+       page: 'home',
+-      target: 'body',
++      target: '[data-tour="home-header"]',
++      fallbackTarget: '[data-testid="home-page"]',
+       content: (
+         <div>
+           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10, color: '#ffffff' }}>
+@@ -66,470 +113,382 @@ export default function TutorialPreviewOverlay({
+           </div>
+         </div>
+       ),
+-      placement: 'center',
+-    },
+-    {
+-      id: 'home-header',
+-      page: 'home',
+-      target: '[data-tour="home-header"]',
+-      fallbackTarget: '[data-testid="home-page"]',
+-      content: 'Home is the main dashboard for starting sessions and checking recent activity.',
+       placement: 'bottom',
+     },
+     {
+-      id: 'home-start',
++      id: 'home-workflows',
+       page: 'home',
+       target: '[data-testid="home-start-btn"]',
+-      content: 'Start New Session begins the standard flow: Basics, Calls, Supervisor Transfer, then Review.',
+-      placement: 'bottom',
+-    },
+-    {
+-      id: 'home-sup-only',
+-      page: 'home',
+-      target: '[data-testid="home-sup-only-btn"]',
+-      content: 'Supervisor Transfer Only is for candidates who already completed mock calls and only need the transfer portion.',
+-      placement: 'bottom',
+-    },
+-    {
+-      id: 'home-history',
+-      page: 'home',
+-      target: '[data-testid="home-history-btn"]',
+-      content: 'Session History lets you review saved sessions and reopen historical summaries without changing active work.',
++      fallbackTarget: '[data-testid="home-page"]',
++      content: 'Home is where sessions begin. Start New Session runs the full workflow, Supervisor Transfer Only starts directly at transfer scoring, Smart Resume can continue eligible saved work, and History opens completed sessions.',
+       placement: 'bottom',
+     },
+     {
+-      id: 'sidebar',
++      id: 'home-tools',
+       page: 'home',
+       target: '[data-testid="sidebar"]',
+-      content: 'The sidebar keeps the main tools reachable at all times: workflow pages, settings, help, Discord tools, and Exit App.',
+-      placement: 'right',
+-    },
+-    {
+-      id: 'sidebar-discord',
+-      page: 'home',
+-      target: '[data-tour="sidebar-discord"]',
+-      content: 'Discord Post opens saved templates and screenshots used during live tester communication.',
++      fallbackTarget: '[data-testid="home-page"]',
++      content: 'The sidebar keeps workflow pages, Discord posts and screenshots, Settings, Help, and Exit App available without changing the current session.',
+       placement: 'right',
+     },
+     {
+-      id: 'basics-candidate',
++      id: 'basics-overview',
+       page: 'basics',
+       target: '[data-testid="basics-candidate"]',
+-      content: 'The Basics page collects candidate and session setup information before any scoring begins.',
+-      placement: 'bottom',
+-    },
+-    {
+-      id: 'basics-final-attempt',
+-      page: 'basics',
+-      target: '[data-tour="basics-final-attempt"]',
+-      content: 'Final Attempt should only be marked Yes when this is the candidate’s last allowed mock session.',
++      fallbackTarget: '[data-testid="basics-page"]',
++      content: 'Basics collects candidate details and required pre-checks before scoring starts. Use this page to confirm final attempt status, VPN/browser readiness, and the required setup items.',
+       placement: 'bottom',
+     },
+     {
+       id: 'basics-headset',
+       page: 'basics',
+-      target: '[data-tour="basics-headset-section"]',
+-      content: 'Headset rules are strict: the candidate must use a USB headset with a noise-cancelling microphone.',
++      target: '[data-testid="basics-headset-lookup"]',
++      fallbackTarget: '[data-testid="basics-page"]',
++      content: 'The headset section is where you record the candidate headset and use Lookup Approved Headsets to confirm the model. Headset failures route through the app’s fail handling.',
+       placement: 'right',
+     },
+     {
+-      id: 'basics-vpn',
++      id: 'basics-auto-fails',
+       page: 'basics',
+-      target: '[data-tour="basics-vpn-section"]',
+-      content: 'VPN use must be checked here. If the candidate has a VPN and cannot turn it off, the session fails.',
+-      placement: 'left',
+-    },
+-    {
+-      id: 'basics-browser',
+-      page: 'basics',
+-      target: '[data-tour="basics-browser-section"]',
+-      content: 'Browser requirements are verified here: Chrome or the required browser must be default, extensions off, and pop-ups allowed.',
+-      placement: 'left',
+-    },
+-    {
+-      id: 'basics-danger',
+-      page: 'basics',
+-      target: '[data-testid="basics-ncns"]',
+-      content: 'The red footer actions are immediate session outcomes. NC/NS, Not Ready, and Stopped Responding are danger-path buttons. Tech Issue opens troubleshooting instead of ending the session immediately.',
++      target: '[data-testid="basics-footer"]',
++      fallbackTarget: '[data-testid="basics-footer"]',
++      content: 'The red action buttons are grouped auto-fail or exception paths. Use NC/NS, Not Ready, Tech Issue, and related danger actions only when that outcome applies; the app records the reason and routes the session forward.',
+       placement: 'top',
+     },
+-    {
+-      id: 'basics-continue',
+-      page: 'basics',
+-      target: '[data-testid="basics-continue"]',
+-      content: 'Continue validates the Basics requirements, applies any automatic fail rules, and then routes into Calls or Supervisor Transfer Only.',
+-      placement: 'left',
+-    },
+     {
+       id: 'calls-setup',
+       page: 'calls',
+       target: '[data-tour="calls-setup"]',
+       fallbackTarget: '[data-testid="calls-page"]',
+-      content: 'Calls is where the tester configures the scenario and scores the candidate’s mock call performance.',
++      content: 'Calls is where you set up the scenario. Choose the call type, show, caller, and donation details, then use the scenario and payment simulation to run the mock call.',
+       placement: 'right',
+     },
+     {
+-      id: 'calls-scenario',
+-      page: 'calls',
+-      target: '[data-testid="scenario-card"]',
+-      fallbackTarget: '[data-testid="calls-page"]',
+-      content: 'The scenario card tells you who to portray and what variables apply to the call.',
+-      placement: 'left',
+-    },
+-    {
+-      id: 'calls-payment',
++      id: 'calls-scoring',
+       page: 'calls',
+-      target: '[data-tour="calls-payment"]',
++      target: '[data-tour="calls-result"]',
+       fallbackTarget: '[data-testid="calls-page"]',
+-      content: 'Payment Simulation provides the card and EFT details used during mock call testing.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'calls-result',
+-      page: 'calls',
+-      target: '[data-testid="call-pass"]',
+-      fallbackTarget: '[data-testid="calls-page"]',
+-      content: 'Each mock call is marked Pass or Fail. A candidate needs 2 passed calls, and those passes must include 1 New Member pass and 1 Existing Member pass.',
++      content: 'Call scoring is grouped here. Mark each call Pass or Fail, record coaching checkboxes, select fail reasons when needed, and use Stopped Responding only for the chat auto-fail path.',
+       placement: 'bottom',
+     },
+     {
+-      id: 'calls-coaching',
+-      page: 'calls',
+-      target: '[data-tour="calls-coaching"]',
+-      fallbackTarget: '[data-testid="calls-page"]',
+-      content: 'Record coaching given during the call here. These selections feed the final review summary later.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'calls-fails',
+-      page: 'calls',
+-      target: '[data-tour="calls-fail-reasons"]',
+-      fallbackTarget: '[data-testid="calls-page"]',
+-      content: 'If a call fails, select the specific fail reasons so Review can document the result accurately.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'calls-continue',
+-      page: 'calls',
+-      target: '[data-testid="calls-continue"]',
+-      fallbackTarget: '[data-testid="calls-page"]',
+-      content: 'Continue saves the current call and applies the routing rules for the next call, Supervisor Transfer, or Review.',
+-      placement: 'left',
+-    },
+-    {
+-      id: 'sup-banner',
++      id: 'supervisor-transfer',
+       page: 'suptransfer',
+       target: '[data-tour="sup-discord-banner"]',
+       fallbackTarget: '[data-testid="suptransfer-page"]',
+-      content: 'Supervisor Transfer uses the transfer number and the required Discord message to set up the live transfer test.',
+-      placement: 'bottom',
+-    },
+-    {
+-      id: 'sup-copy',
+-      page: 'suptransfer',
+-      target: '[data-testid="sup-copy-discord"]',
+-      fallbackTarget: '[data-testid="suptransfer-page"]',
+-      content: 'Use Copy to place the transfer message on the clipboard before posting it in Discord.',
+-      placement: 'left',
+-    },
+-    {
+-      id: 'sup-setup',
+-      page: 'suptransfer',
+-      target: '[data-tour="sup-setup"]',
+-      fallbackTarget: '[data-testid="suptransfer-page"]',
+-      content: 'Choose the caller, show, and supervisor reason here before scoring the transfer.',
+-      placement: 'right',
+-    },
+-    {
+-      id: 'sup-result',
+-      page: 'suptransfer',
+-      target: '[data-testid="sup-pass"]',
+-      fallbackTarget: '[data-testid="suptransfer-page"]',
+-      content: 'At least 1 passing supervisor transfer is required to complete the session successfully.',
+-      placement: 'bottom',
+-    },
+-    {
+-      id: 'newbie-form',
+-      page: 'newbieshift',
+-      target: '[data-tour="newbie-form"]',
+-      fallbackTarget: '[data-testid="newbieshift-page"]',
+-      content: 'Newbie Shift is used when the candidate needs a scheduled follow-up instead of a final pass outcome.',
+-      placement: 'bottom',
+-    },
+-    {
+-      id: 'newbie-date',
+-      page: 'newbieshift',
+-      target: '[data-testid="newbie-date"]',
+-      fallbackTarget: '[data-testid="newbieshift-page"]',
+-      content: 'Set the follow-up date, time, and timezone here for the next session.',
++      content: 'Supervisor Transfer covers the live transfer portion. Copy the Discord message, choose the transfer setup details, watch the time check, and score whether the transfer passes.',
+       placement: 'bottom',
+     },
+     {
+-      id: 'newbie-gcal',
+-      page: 'newbieshift',
+-      target: '[data-testid="newbie-gcal"]',
+-      fallbackTarget: '[data-testid="newbieshift-page"]',
+-      content: 'Add to Google Calendar opens a prefilled calendar link so the follow-up can be scheduled quickly.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'review-banner',
++      id: 'review-fill',
+       page: 'review',
++      pageState: {
++        historyRecord: {
++          candidate_name: 'Example Candidate',
++          tester_name: 'Example Tester',
++          final_status: 'Pass',
++          call_1: { result: 'Pass' },
++          call_2: { result: 'Pass' },
++          call_3: { result: '' },
++          sup_transfer_1: { result: 'Pass' },
++          sup_transfer_2: { result: '' },
++          coaching_summary: 'Example coaching summary: confirmed required process steps, documented coaching, and reviewed the session outcome.',
++          fail_summary: 'N/A',
++          supervisor_only: false,
++        },
++      },
+       target: '[data-testid="review-banner"]',
+       fallbackTarget: '[data-testid="review-page"]',
+-      content: 'Review is the final checkpoint for the session outcome before anything is saved or sent onward.',
++      content: 'Review is the final checkpoint. Confirm the pass/fail result, review coaching and fail summaries, use Fill Form to populate the certification form, then Save & Finish when the session is complete.',
+       placement: 'bottom',
+     },
+     {
+-      id: 'review-coaching',
+-      page: 'review',
+-      target: '[data-testid="review-coaching"]',
+-      fallbackTarget: '[data-testid="review-page"]',
+-      content: 'Check the coaching summary carefully. If Gemini is enabled, review the generated wording before using it.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'review-fail',
+-      page: 'review',
+-      target: '[data-testid="review-fail"]',
+-      fallbackTarget: '[data-testid="review-page"]',
+-      content: 'Review the fail summary as well so the documented reasons match the actual session result.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'review-fill',
+-      page: 'review',
+-      target: '[data-testid="review-fill-form"]',
+-      fallbackTarget: '[data-testid="review-page"]',
+-      content: 'Fill Form opens the Microsoft certification form with your data mapped in. It helps prefill fields, but it does not auto-submit the form for you.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'review-finish',
+-      page: 'review',
+-      target: '[data-testid="review-finish"]',
+-      fallbackTarget: '[data-testid="review-page"]',
+-      content: 'Save & Finish Session writes the session to history and clears the active draft.',
+-      placement: 'top',
++      id: 'history-page',
++      page: 'history',
++      target: '[data-testid="history-page"]',
++      content: 'History stores completed sessions for later lookup. From a saved record, you can review the summaries again or run historical Fill Form without changing the active session.',
++      placement: 'center',
+     },
+     {
+-      id: 'settings-tabs',
++      id: 'settings-page',
+       page: 'settings',
+       target: '[data-tour="settings-tabs"]',
+       fallbackTarget: '[data-testid="settings-page"]',
+-      content: 'Settings is where you manage application behavior, reference data, and integrations.',
++      content: 'Settings manages app behavior and integrations: tester identity, form links, sounds, theme, Gemini summaries, Discord posts and screenshots, updates, and ticker speed.',
+       placement: 'bottom',
+     },
+     {
+-      id: 'settings-general',
+-      page: 'settings',
+-      target: '[data-testid="settings-general"]',
+-      fallbackTarget: '[data-testid="settings-page"]',
+-      content: 'General settings include tester identity, form links, sounds, and theme options.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'settings-gemini',
+-      page: 'settings',
+-      target: '[data-testid="settings-gemini"]',
+-      fallbackTarget: '[data-testid="settings-page"]',
+-      prepareSelector: '[data-testid="settings-tab-gemini"]',
+-      content: 'Gemini settings control AI-generated coaching and fail summaries. These summaries should always be reviewed before use.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'settings-discord',
+-      page: 'settings',
+-      target: '[data-testid="settings-discord"]',
+-      fallbackTarget: '[data-testid="settings-page"]',
+-      prepareSelector: '[data-testid="settings-tab-discord"]',
+-      content: 'Discord settings let you manage templates and screenshots used from the sidebar Discord Post panel.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'settings-updates',
+-      page: 'settings',
+-      target: '[data-testid="settings-update-panel"]',
+-      fallbackTarget: '[data-testid="settings-page"]',
+-      content: 'The update panel is where desktop update checks and deferred installs are managed.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'settings-save',
+-      page: 'settings',
+-      target: '[data-testid="settings-save"]',
+-      fallbackTarget: '[data-testid="settings-page"]',
+-      content: 'Save Settings commits your configuration changes. Use this after updating sounds, Gemini, Discord, or other settings.',
+-      placement: 'top',
+-    },
+-    {
+-      id: 'help-header',
++      id: 'help-page',
+       page: 'help',
+       target: '[data-tour="help-header"]',
+       fallbackTarget: '[data-testid="help-page"]',
+-      content: 'Help collects workflow guidance, setup references, FAQs, and support details.',
++      content: 'Help is the reference center for workflow guidance, troubleshooting, FAQ content, setup notes, update/about details, and replaying this tutorial later.',
+       placement: 'bottom',
+     },
+-    {
+-      id: 'help-replay',
+-      page: 'help',
+-      target: '[data-testid="help-tutorial"]',
+-      fallbackTarget: '[data-testid="help-page"]',
+-      content: 'Replay App Tutorial lets you run this walkthrough again any time.',
+-      placement: 'left',
+-    },
+-    {
+-      id: 'sidebar-exit',
+-      page: 'help',
+-      target: '[data-tour="sidebar-exit"]',
+-      content: 'Exit App is always available from the sidebar when you are done.',
+-      placement: 'top',
+-    },
+   ].map((step) => ({
+     disableBeacon: true,
+     ...step,
+   }))), []);
+ 
+-  const prepareStep = useCallback(async (step) => {
+-    if (!step || transitionRef.current) return;
++  const steps = useMemo(() => baseSteps.map((step) => ({
++    ...step,
++    target: targetOverrides[step.id] || step.target,
++  })), [baseSteps, targetOverrides]);
+ 
+-    transitionRef.current = true;
++  const refreshTargetRect = useCallback((selector) => {
++    const rect = getTargetRect(selector);
++    setTargetRect(rect);
++    return rect;
++  }, []);
++
++  const forceCleanup = useCallback(() => {
++    transitionRef.current = false;
++    preparedStepRef.current = '';
++    setReadyStepId('');
++    setTargetRect(null);
++    setTargetOverrides({});
+     setRun(false);
++  }, [setRun]);
++
++  const scheduleTransitionFailsafe = useCallback(() => {
++    if (cleanupTimerRef.current) {
++      window.clearTimeout(cleanupTimerRef.current);
++    }
++    cleanupTimerRef.current = window.setTimeout(() => {
++      if (!mountedRef.current || !transitionRef.current) return;
++      forceCleanup();
++      onStop?.('failed');
++    }, TARGET_WAIT_TIMEOUT_MS);
++  }, [forceCleanup, onStop]);
++
++  const clearTransitionFailsafe = useCallback(() => {
++    if (cleanupTimerRef.current) {
++      window.clearTimeout(cleanupTimerRef.current);
++      cleanupTimerRef.current = null;
++    }
++  }, []);
++
++  const prepareStep = useCallback(async (step, index = stepIndex) => {
++    if (!step || transitionRef.current) return false;
++
++    transitionRef.current = true;
++    scheduleTransitionFailsafe();
++    setReadyStepId('');
+ 
+     if (step.page !== currentPage) {
+-      navigate(step.page, null);
++      navigate(step.page, step.pageState || null);
++    } else if (step.pageState) {
++      navigate(step.page, step.pageState);
+     }
+ 
+     if (step.prepareSelector) {
+-      await waitForTarget(step.prepareSelector, 1500);
++      await waitForTarget(step.prepareSelector, PREPARE_SELECTOR_TIMEOUT_MS);
+       document.querySelector(step.prepareSelector)?.click();
+     }
+ 
+-    await waitForTarget(resolveTarget(step));
++    const hasPrimaryTarget = await waitForTarget(step.target, STEP_TARGET_TIMEOUT_MS);
++    if (!hasPrimaryTarget && step.fallbackTarget) {
++      await waitForTarget(step.fallbackTarget, STEP_TARGET_TIMEOUT_MS);
++    }
++
++    if (!mountedRef.current) return false;
+ 
+-    if (!mountedRef.current) return;
++    const resolvedTarget = getResolvedTarget(step);
++    if (!resolvedTarget) {
++      transitionRef.current = false;
++      clearTransitionFailsafe();
++      preparedStepRef.current = '';
+ 
++      const nextIndex = index + 1;
++      if (nextIndex >= baseSteps.length) {
++        forceCleanup();
++        onStop?.('failed');
++        return false;
++      }
++
++      setStepIndex(nextIndex);
++      window.setTimeout(() => {
++        prepareStep(baseSteps[nextIndex], nextIndex);
++      }, 0);
++      return false;
++    }
++
++    setTargetOverrides((current) => (
++      current[step.id] === resolvedTarget ? current : { ...current, [step.id]: resolvedTarget }
++    ));
++    document.querySelector(resolvedTarget)?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
++    await delay(SCROLL_SETTLE_MS);
++    if (!mountedRef.current) return false;
++    refreshTargetRect(resolvedTarget);
++    preparedStepRef.current = step.id;
++    setReadyStepId(step.id);
+     transitionRef.current = false;
++    clearTransitionFailsafe();
+     setRun(true);
+-  }, [currentPage, navigate, setRun]);
++    return true;
++  }, [baseSteps, clearTransitionFailsafe, currentPage, forceCleanup, navigate, onStop, refreshTargetRect, scheduleTransitionFailsafe, setRun, setStepIndex, stepIndex]);
+ 
+   useEffect(() => {
+     if (!run || transitionRef.current) return;
+-
+-    const step = steps[stepIndex];
++    const step = baseSteps[stepIndex];
+     if (!step) return;
++    if (preparedStepRef.current === step.id) return;
++    prepareStep(step, stepIndex);
++  }, [baseSteps, prepareStep, run, stepIndex]);
+ 
+-    if (!document.querySelector(resolveTarget(step))) {
+-      prepareStep(step);
+-    }
+-  }, [currentPage, prepareStep, run, stepIndex, steps]);
++  const goToStep = useCallback((nextIndex) => {
++    preparedStepRef.current = '';
++    setReadyStepId('');
++    setTargetRect(null);
+ 
+-  const handleJoyrideCallback = useCallback((data) => {
+-    const { action, index, status, type } = data;
++    if (nextIndex < 0) {
++      nextIndex = 0;
++    }
+ 
+-    if (status === STATUS.FINISHED) {
++    if (nextIndex >= baseSteps.length) {
++      forceCleanup();
+       onStop?.('completed');
+       return;
+     }
+ 
+-    if (status === STATUS.SKIPPED) {
+-      onStop?.('dismissed');
+-      return;
+-    }
++    const nextStep = baseSteps[nextIndex];
++    setStepIndex(nextIndex);
++    prepareStep(nextStep, nextIndex);
++  }, [baseSteps, forceCleanup, onStop, prepareStep, setStepIndex]);
+ 
+-    if (type === EVENTS.TARGET_NOT_FOUND) {
+-      const currentStep = steps[index];
+-      const fallbackTarget = currentStep?.fallbackTarget;
+-      if (fallbackTarget && document.querySelector(fallbackTarget)) {
+-        return;
+-      }
+-    }
++  const handleBack = useCallback(() => {
++    goToStep(stepIndex - 1);
++  }, [goToStep, stepIndex]);
+ 
+-    if (type === EVENTS.STEP_AFTER) {
+-      const delta = action === ACTIONS.PREV ? -1 : 1;
+-      const nextIndex = index + delta;
++  const handleNext = useCallback(() => {
++    goToStep(stepIndex + 1);
++  }, [goToStep, stepIndex]);
+ 
+-      if (nextIndex < 0) {
+-        setStepIndex(0);
+-        return;
+-      }
++  const handleSkip = useCallback(() => {
++    forceCleanup();
++    onStop?.('skipped');
++  }, [forceCleanup, onStop]);
+ 
+-      if (nextIndex >= steps.length) {
+-        onStop?.('completed');
+-        return;
++  useEffect(() => {
++    const currentStep = baseSteps[stepIndex];
++    if (!run || !currentStep || readyStepId !== currentStep.id) return undefined;
++
++    const selector = targetOverrides[currentStep.id] || currentStep.target;
++    const updateRect = () => {
++      const rect = refreshTargetRect(selector);
++      if (!rect) {
++        goToStep(stepIndex + 1);
+       }
++    };
+ 
+-      setStepIndex(nextIndex);
+-    }
+-  }, [onStop, setStepIndex, steps]);
++    updateRect();
++    window.addEventListener('resize', updateRect);
++    window.addEventListener('scroll', updateRect, true);
++
++    return () => {
++      window.removeEventListener('resize', updateRect);
++      window.removeEventListener('scroll', updateRect, true);
++    };
++  }, [baseSteps, goToStep, readyStepId, refreshTargetRect, run, stepIndex, targetOverrides]);
++
++  const currentStep = baseSteps[stepIndex];
++  const renderedStep = steps[stepIndex];
++  if (!run || !currentStep || readyStepId !== currentStep.id || !targetRect) {
++    return null;
++  }
++
++  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
++  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
++  const tooltipWidth = Math.min(380, Math.max(300, viewportWidth - 32));
++  const tooltipHeightEstimate = 260;
++  const tooltipGap = 14;
++  const placement = renderedStep.placement || 'bottom';
++  const targetCenterX = targetRect.left + (targetRect.width / 2);
++  const targetCenterY = targetRect.top + (targetRect.height / 2);
++  const preferredTopByPlacement = {
++    top: targetRect.top - tooltipGap - tooltipHeightEstimate,
++    bottom: targetRect.bottom + tooltipGap,
++    left: targetCenterY - (tooltipHeightEstimate / 2),
++    right: targetCenterY - (tooltipHeightEstimate / 2),
++    center: (viewportHeight - tooltipHeightEstimate) / 2,
++  };
++  const preferredLeftByPlacement = {
++    top: targetCenterX - (tooltipWidth / 2),
++    bottom: targetCenterX - (tooltipWidth / 2),
++    left: targetRect.left - tooltipGap - tooltipWidth,
++    right: targetRect.right + tooltipGap,
++    center: (viewportWidth - tooltipWidth) / 2,
++  };
++  const tooltipTop = clamp(preferredTopByPlacement[placement] ?? preferredTopByPlacement.bottom, 16, Math.max(16, viewportHeight - tooltipHeightEstimate - 16));
++  const tooltipLeft = clamp(preferredLeftByPlacement[placement] ?? preferredLeftByPlacement.bottom, 16, Math.max(16, viewportWidth - tooltipWidth - 16));
++  const isLastStep = stepIndex >= baseSteps.length - 1;
+ 
+   return (
+-    <Joyride
+-      steps={steps}
+-      run={run}
+-      stepIndex={stepIndex}
+-      callback={handleJoyrideCallback}
+-      disableBeacon
+-      continuous
+-      showProgress
+-      showSkipButton
+-      scrollToFirstStep
+-      disableOverlayClose
+-      spotlightPadding={8}
+-      locale={{
+-        back: 'Back',
+-        close: 'Close',
+-        last: 'Finish',
+-        next: 'Next',
+-        skip: 'Skip',
+-      }}
+-      styles={{
+-        options: {
+-          zIndex: 10000,
+-          primaryColor: '#38bdf8',
+-          textColor: '#f8fafc',
+-          backgroundColor: '#0b1220',
+-          arrowColor: '#0b1220',
+-          overlayColor: 'rgba(0, 0, 0, 0.45)',
+-        },
+-        tooltip: {
+-          borderRadius: 18,
+-          padding: 20,
+-          border: '1px solid rgba(56, 189, 248, 0.28)',
+-          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(56, 189, 248, 0.25)',
+-        },
+-        tooltipContainer: {
+-          padding: 4,
+-        },
+-        tooltipContent: {
+-          color: '#e2e8f0',
+-          fontSize: 14,
+-          lineHeight: 1.6,
+-        },
+-        buttonNext: {
+-          borderRadius: 10,
+-          padding: '10px 16px',
+-          fontWeight: 700,
+-          backgroundColor: '#38bdf8',
+-          color: '#08111f',
+-          border: '1px solid rgba(125, 211, 252, 0.8)',
+-          boxShadow: '0 10px 24px rgba(56, 189, 248, 0.24)',
+-        },
+-        buttonBack: {
+-          color: '#cbd5e1',
+-          marginRight: 8,
+-        },
+-        buttonSkip: {
+-          color: '#94a3b8',
+-        },
+-        buttonClose: {
+-          color: '#94a3b8',
+-        },
+-        spotlight: {
++    <div className="tutorial-overlay-root" data-testid="tutorial-overlay">
++      <div
++        aria-hidden="true"
++        style={{
++          position: 'fixed',
++          inset: 0,
++          zIndex: 9998,
++          background: 'rgba(0, 0, 0, 0.48)',
++          pointerEvents: 'none',
++        }}
++      />
++      <div
++        aria-hidden="true"
++        style={{
++          position: 'fixed',
++          zIndex: 9999,
++          top: Math.max(8, targetRect.top - 8),
++          left: Math.max(8, targetRect.left - 8),
++          width: targetRect.width + 16,
++          height: targetRect.height + 16,
+           borderRadius: 12,
+-          boxShadow: '0 0 0 3px rgba(56, 189, 248, 0.35), 0 0 24px rgba(56, 189, 248, 0.35)',
+-        },
+-      }}
+-    />
++          border: '2px solid rgba(56, 189, 248, 0.9)',
++          boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.28), 0 0 24px rgba(56, 189, 248, 0.5)',
++          pointerEvents: 'none',
++        }}
++      />
++      <section
++        role="dialog"
++        aria-modal="false"
++        aria-label="App tutorial"
++        style={{
++          position: 'fixed',
++          zIndex: 10000,
++          top: tooltipTop,
++          left: tooltipLeft,
++          width: tooltipWidth,
++          maxWidth: 'calc(100vw - 32px)',
++          color: '#f8fafc',
++          background: '#0b1220',
++          border: '1px solid rgba(56, 189, 248, 0.35)',
++          borderRadius: 16,
++          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(56, 189, 248, 0.18)',
++          padding: 18,
++        }}
++      >
++        <div style={{ fontSize: 12, fontWeight: 800, color: '#7dd3fc', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0 }}>
++          Tutorial {stepIndex + 1} of {baseSteps.length}
++        </div>
++        <div style={{ color: '#e2e8f0', fontSize: 14, lineHeight: 1.6 }}>
++          {renderedStep.content}
++        </div>
++        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 18 }}>
++          <button type="button" onClick={handleSkip} className="btn btn-muted btn-sm">
++            Skip
++          </button>
++          <div style={{ display: 'flex', gap: 8 }}>
++            <button type="button" onClick={handleBack} className="btn btn-muted btn-sm" disabled={stepIndex === 0}>
++              Back
++            </button>
++            <button type="button" onClick={handleNext} className="btn btn-primary btn-sm">
++              {isLastStep ? 'Finish' : 'Next'}
++            </button>
++          </div>
++        </div>
++      </section>
++    </div>
+   );
+ }

@@ -10,6 +10,8 @@
     "build:react": "cd ../frontend && yarn build",
     "build:backend": "powershell -ExecutionPolicy Bypass -File ../backend/build-backend.ps1",
     "build:win": "npm run build:react && npm run build:backend && electron-builder --win --x64",
+    "build:notification-manager": "npm run build:react && npm run build:backend && electron-builder --win --x64 --config notification-manager-builder.json",
+    "package:notification-manager": "electron-builder --win --x64 --config notification-manager-builder.json",
     "build": "npm run build:win",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -24,7 +26,7 @@
   "build": {
     "appId": "com.acddirect.mocktestingsuite",
     "productName": "Mock Testing Suite",
-    "copyright": "Copyright © 2026 ACD Direct / Shawn P. Bly",
+    "copyright": "Copyright © 2026 Shawn P. Bly",
     "directories": {
       "output": "dist"
     },
@@ -48,6 +50,15 @@
       {
         "from": "../backend/config",
         "to": "backend/config",
+        "filter": [
+          "runtime_config.json",
+          "google-service-account.json",
+          "service-account.json"
+        ]
+      },
+      {
+        "from": "../backend/defaults",
+        "to": "backend/defaults",
         "filter": [
           "**/*"
         ]
@@ -76,16 +87,16 @@
           ]
         }
       ],
-      "icon": "assets/newMTS.ico",
-      "publisherName": "ACD Direct"
+      "icon": "assets/app-full.ico",
+      "publisherName": "Shawn P. Bly"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": true,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "assets/newMTS.ico",
-      "uninstallerIcon": "assets/newMTS.ico",
-      "installerHeaderIcon": "assets/newMTS.ico",
+      "allowToChangeInstallationDirectory": false,
+      "installerIcon": "assets/app-full.ico",
+      "uninstallerIcon": "assets/app-full.ico",
+      "installerHeaderIcon": "assets/app-full.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Mock Testing Suite"

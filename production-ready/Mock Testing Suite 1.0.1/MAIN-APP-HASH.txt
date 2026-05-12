@@ -1,0 +1,5 @@
+
+Algorithm : SHA256
+Hash      : 9DDA9146EF0AD91B3D689E6336A00FA04AAEFEA30CF9C96DCD1152B0E22DE8CE
+Path      : C:\Emergent-Mock-BU\APP-main\production-ready\Mock Testing Suite 1.0.1\Mock Testing Suite Setup 1.0.1.exe
+

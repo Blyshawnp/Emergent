@@ -5,13 +5,43 @@ import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
-  { id: 'c-phonetics', label: 'Phonetics table provided to candidate' },
   { id: 'c-dontask', label: "Don't Ask, Just Verify Address and Phone Number", helper: 'Existing member already provided address and phone number' },
-  { id: 'c-verify', label: 'Verification', children: ['Name', 'Address', 'Phone', 'Email', 'Card/EFT', 'Phonetics for Sound Alike Letters'] },
+  {
+    id: 'c-verify',
+    label: 'Verification',
+    children: ['Name', 'Address', 'Phone', 'Email', 'Card/EFT', 'Phonetics for Sound Alike Letters'],
+  },
+  { id: 'c-phonetics', label: 'Phonetics table provided to candidate' },
   { id: 'c-verbatim', label: 'Read script verbatim', helper: 'No adlibbing or skipping sections' },
   { id: 'c-nav', label: 'Use effective script navigation', children: ['Scroll down to avoid missing parts of the script', 'Use the Back and Next buttons and not the Icons'] },
   { id: 'c-other', label: 'Other' },
 ];
+
+const PHONETICS_LABEL_RE = /phonetics/i;
+
+function getCallCoachingForDisplay(items = []) {
+  const source = Array.isArray(items) && items.length ? items : DEFAULT_CALL_COACHING;
+  let phoneticsItem = null;
+  const normalized = [];
+
+  source.forEach((item) => {
+    if (!item || !item.label) return;
+    const label = String(item.label || '');
+    if (PHONETICS_LABEL_RE.test(label) && !/verification/i.test(label)) {
+      phoneticsItem = phoneticsItem || { ...item, children: undefined };
+      return;
+    }
+    normalized.push({ ...item });
+  });
+
+  const topLevelPhonetics = phoneticsItem || { id: 'c-phonetics', label: 'Phonetics table provided to candidate' };
+  const verifyIndex = normalized.findIndex(item => /verification/i.test(String(item.label || '')));
+  if (verifyIndex >= 0) {
+    normalized.splice(verifyIndex + 1, 0, topLevelPhonetics);
+    return normalized;
+  }
+  return [topLevelPhonetics, ...normalized];
+}
 
 const DEFAULT_CALL_FAILS = [
   'Skipped parts of script', 'Volunteered info', 'Wrong donation', 'Background noise on call',
@@ -175,6 +205,7 @@ export default function CallsPage({ onNavigate }) {
   const [isFinal, setIsFinal] = useState(false);
   const [candidateName, setCandidateName] = useState('');
   const hydratedRef = useRef(false);
+  const latestDraftPayloadRef = useRef(null);
 
   const rollRandom = useCallback(() => {
     setRandFlags(generateRandomFlags());
@@ -191,7 +222,8 @@ export default function CallsPage({ onNavigate }) {
         const types = s.call_types || d.call_types || [];
         const shows = s.shows || d.shows || [];
         const savedDraft = session?.current_call_draft || null;
-        const resolvedCallNum = savedDraft?.call_num || [session?.call_1, session?.call_2, session?.call_3].findIndex((call) => !call?.result) + 1 || 1;
+        const nextOpenCallIndex = [session?.call_1, session?.call_2, session?.call_3].findIndex((call) => !call?.result);
+        const resolvedCallNum = savedDraft?.call_num || (nextOpenCallIndex >= 0 ? nextOpenCallIndex + 1 : 3);
         setCallNum(Math.max(1, Math.min(3, resolvedCallNum || 1)));
 
         if (!cancelled && session) {
@@ -224,7 +256,7 @@ export default function CallsPage({ onNavigate }) {
 
   const callTypes = settings.call_types || defaults.call_types || [];
   const shows = settings.shows || defaults.shows || [];
-  const callCoaching = settings.call_coaching || defaults.call_coaching || DEFAULT_CALL_COACHING;
+  const callCoaching = getCallCoachingForDisplay(settings.call_coaching || defaults.call_coaching || DEFAULT_CALL_COACHING);
   const callFails = settings.call_fails || defaults.call_fails || DEFAULT_CALL_FAILS;
   const callers = useMemo(() => getCallersForType(callSetup.type, settings, defaults), [callSetup.type, settings, defaults]);
   useEffect(() => {
@@ -245,27 +277,44 @@ export default function CallsPage({ onNavigate }) {
       return undefined;
     }
 
+    const payload = {
+      current_call_num: callNum,
+      current_call_draft: {
+        call_num: callNum,
+        result,
+        type: callSetup.type,
+        show: callSetup.show,
+        caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
+        donation: callSetup.donation || donations[0] || '',
+        coaching,
+        coach_notes: coachNotes,
+        fails,
+        fail_notes: failNotes,
+        rand_flags: randFlags,
+      },
+    };
+    latestDraftPayloadRef.current = payload;
+
     const timer = window.setTimeout(() => {
-      api.updateSession({
-        current_call_num: callNum,
-        current_call_draft: {
-          call_num: callNum,
-          result,
-          type: callSetup.type,
-          show: callSetup.show,
-          caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
-          donation: callSetup.donation || donations[0] || '',
-          coaching,
-          coach_notes: coachNotes,
-          fails,
-          fail_notes: failNotes,
-          rand_flags: randFlags,
-        },
-      }).catch(() => {});
+      api.updateSession(payload).catch(() => {});
     }, 250);
 
     return () => window.clearTimeout(timer);
   }, [callNum, result, callSetup, currentCaller, donations, coaching, coachNotes, fails, failNotes, randFlags, candidateName]);
+
+  useEffect(() => {
+    return () => {
+      if (latestDraftPayloadRef.current) {
+        api.updateSession(latestDraftPayloadRef.current).catch(() => {});
+      }
+    };
+  }, []);
+
+  const saveCallDraftNow = useCallback(async () => {
+    if (latestDraftPayloadRef.current) {
+      await api.updateSession(latestDraftPayloadRef.current);
+    }
+  }, []);
 
   const resetCall = useCallback(() => {
     setResult(null);
@@ -303,8 +352,9 @@ export default function CallsPage({ onNavigate }) {
       call_num: callNum, result, type: callSetup.type, show: callSetup.show,
       caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
       donation: callSetup.donation || donations[0],
-      coaching, coach_notes: coachNotes, fails, fail_notes: failNotes,
+      coaching, coach_notes: coachNotes, fails, fail_notes: failNotes, rand_flags: randFlags,
     };
+    latestDraftPayloadRef.current = null;
     await api.saveCall(callData);
     await api.updateSession({ current_call_draft: null, current_call_num: null });
 
@@ -317,14 +367,20 @@ export default function CallsPage({ onNavigate }) {
       const el = document.querySelector('[data-testid="page-content"]');
       if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [result, fails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, modal, onNavigate, resetCall]);
+  }, [result, fails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, randFlags, modal, onNavigate, resetCall]);
 
   const handleDiscardSession = useCallback(async () => {
-    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress?');
+    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');
     if (!confirmed) return;
+    latestDraftPayloadRef.current = null;
     await api.discardSession();
     onNavigate('home');
   }, [modal, onNavigate]);
+
+  const handleBack = useCallback(async () => {
+    await saveCallDraftNow();
+    onNavigate('basics');
+  }, [saveCallDraftNow, onNavigate]);
 
   const handleStoppedResponding = useCallback(async () => {
     const confirmed = await modal.confirm(
@@ -334,12 +390,13 @@ export default function CallsPage({ onNavigate }) {
       'warning'
     );
     if (!confirmed) return;
+    latestDraftPayloadRef.current = null;
     await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' });
     onNavigate('review');
   }, [candidateName, modal, onNavigate]);
 
   return (
-    <div data-testid="calls-page">
+    <div className="page-with-sticky-actions" data-testid="calls-page">
       <WorkflowProgress {...getWorkflowProgress({ page: 'calls', callNum })} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
         <h1 style={{ marginBottom: 0 }}>Call #{callNum}</h1>
@@ -380,7 +437,7 @@ export default function CallsPage({ onNavigate }) {
 
       {currentCaller.length > 0 && <CallerDemographics caller={currentCaller} />}
 
-      <div className="card" style={{ marginBottom: 16 }} data-tour="calls-coaching">
+      <div className="card" style={{ marginBottom: 16 }} data-tour="calls-result">
         <h3 style={{ marginBottom: 8 }}>Call Result</h3>
         <div className="result-btns">
           <button className={`result-btn ${result === 'Pass' ? 'selected-pass' : ''}`} onClick={() => setResult('Pass')} data-testid="call-pass">PASS</button>
@@ -388,13 +445,21 @@ export default function CallsPage({ onNavigate }) {
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" style={{ marginBottom: 16 }} data-tour="calls-coaching">
         <h3>Coaching Given</h3>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <CoachingGrid items={callCoaching} checked={coaching} onChange={setCoaching} />
         <div style={{ marginTop: 16 }}>
           <label className="text-sm font-bold">Other Coaching Notes</label>
-          <textarea rows={2} value={coachNotes} onChange={e => setCoachNotes(e.target.value)} disabled={!coaching['Other']} style={{ marginTop: 4 }} data-testid="call-coach-notes" />
+          <textarea
+            rows={2}
+            value={coachNotes}
+            onChange={e => setCoachNotes(e.target.value)}
+            disabled={!coaching['Other']}
+            placeholder="Select Other above to enter custom coaching notes."
+            style={{ marginTop: 4 }}
+            data-testid="call-coach-notes"
+          />
         </div>
       </div>
 
@@ -405,16 +470,27 @@ export default function CallsPage({ onNavigate }) {
           <FailGrid items={callFails} checked={fails} onChange={setFails} />
           <div style={{ marginTop: 16 }}>
             <label className="text-sm font-bold">Other Fail Notes</label>
-            <textarea rows={2} value={failNotes} onChange={e => setFailNotes(e.target.value)} disabled={!fails['Other']} style={{ marginTop: 4 }} data-testid="call-fail-notes" />
+            <textarea
+              rows={2}
+              value={failNotes}
+              onChange={e => setFailNotes(e.target.value)}
+              disabled={!fails['Other']}
+              placeholder="Select Other above to enter custom fail notes."
+              style={{ marginTop: 4 }}
+              data-testid="call-fail-notes"
+            />
           </div>
         </div>
       )}
 
       <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
 
-      <div className="footer-bar" data-testid="calls-footer">
-        <button className="btn btn-muted btn-sm" onClick={handleDiscardSession} data-testid="calls-discard">Discard Session</button>
-        <button className="btn btn-muted btn-sm" onClick={() => { if (callNum > 1) { setCallNum(n => n - 1); resetCall(); } else onNavigate('basics'); }} data-testid="calls-back">Back</button>
+      <div className="footer-bar sticky-action-footer" data-testid="calls-footer">
+        <div className="action-safety-group">
+          <button className="btn btn-muted btn-sm" onClick={handleBack} data-testid="calls-back">Back</button>
+          <button className="btn btn-danger-outline btn-sm" onClick={handleDiscardSession} data-testid="calls-discard" title="Discard the current session draft and lose all progress">Discard Session</button>
+        </div>
+        <span className="action-divider" aria-hidden="true" />
         <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="calls-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="calls-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />
@@ -460,11 +536,19 @@ function CallerDemographics({ caller }) {
 
 function CoachingGrid({ items, checked, onChange }) {
   const toggle = (key) => onChange(prev => ({ ...prev, [key]: !prev[key] }));
-  const half = Math.ceil(items.length / 2);
+  const showAppreciation = items.find(item => /show appreciation/i.test(String(item?.label || '')));
+  const orderedItems = showAppreciation
+    ? items.filter(item => item !== showAppreciation)
+    : items;
+  const half = Math.ceil(orderedItems.length / 2);
+  const leftItems = orderedItems.slice(0, half);
+  const rightItems = showAppreciation
+    ? [showAppreciation, ...orderedItems.slice(half)]
+    : orderedItems.slice(half);
   return (
     <div className="coaching-grid">
-      <div>{items.slice(0, half).map(item => <CoachingItem key={item.id} item={item} checked={checked} onToggle={toggle} />)}</div>
-      <div>{items.slice(half).map(item => <CoachingItem key={item.id} item={item} checked={checked} onToggle={toggle} />)}</div>
+      <div>{leftItems.map(item => <CoachingItem key={item.id || item.label} item={item} checked={checked} onToggle={toggle} />)}</div>
+      <div>{rightItems.map(item => <CoachingItem key={item.id || item.label} item={item} checked={checked} onToggle={toggle} />)}</div>
     </div>
   );
 }

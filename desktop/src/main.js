@@ -5,6 +5,7 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn, spawnSync, execFileSync } = require('child_process');
 const http = require('http');
 const Store = require('electron-store');
@@ -18,9 +19,13 @@ try {
 
 const store = new Store();
 const APP_ID = 'com.acddirect.mocktestingsuite';
+const NOTIFICATION_MANAGER_APP_ID = 'com.acddirect.mocktestingsuite.notificationmanager';
 const BACKEND_PORT = 8600;
 const isDev = !app.isPackaged;
+const isNotificationManagerMode = process.env.MTS_NOTIFICATION_MANAGER === '1';
 const DEFAULT_APP_VERSION = '1.0.1';
+const APP_DISPLAY_NAME = isNotificationManagerMode ? 'MTS Notification Manager' : 'Mock Testing Suite';
+const APP_RUNTIME_ID = isNotificationManagerMode ? NOTIFICATION_MANAGER_APP_ID : APP_ID;
 const BACKEND_STARTUP_RETRY_DELAY_MS = 500;
 const BACKEND_STARTUP_RETRIES = isDev ? 40 : 120;
 const BACKEND_READY_REQUEST_TIMEOUT_MS = 1500;
@@ -31,15 +36,19 @@ let backendProcess = null;
 let backendLaunchError = null;
 let backendLogTail = [];
 let backendCommandLabel = '';
+let usingExternalBackend = false;
 let isHandlingCloseConfirmation = false;
 let allowWindowClose = false;
 let hasUnsavedChanges = false;
 let hasRegisteredProcessCleanupHandlers = false;
 let quitConfirmationResolver = null;
+let sharedAdminToken = '';
+let heartbeatTimer = null;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
 const STORE_LAST_ACKNOWLEDGED_VERSION_KEY = 'updater.lastAcknowledgedInstalledVersion';
+const HEARTBEAT_STALE_MS = 8000;
 
 function isVersionString(value) {
   return /^\d+(?:\.\d+)*$/.test(String(value || '').trim());
@@ -82,6 +91,121 @@ function getSqliteDbPath() {
   return path.join(app.getPath('userData'), 'mock_testing_suite.sqlite3');
 }
 
+function getSharedAppDataPath(subpath = '') {
+  return path.join(app.getPath('appData'), 'Mock Testing Suite', subpath);
+}
+
+function getSharedAdminToken() {
+  if (sharedAdminToken) {
+    return sharedAdminToken;
+  }
+
+  const tokenPath = getSharedAppDataPath('admin-token');
+  try {
+    fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+    if (fs.existsSync(tokenPath)) {
+      sharedAdminToken = fs.readFileSync(tokenPath, 'utf8').trim();
+    }
+    if (!sharedAdminToken) {
+      sharedAdminToken = crypto.randomBytes(32).toString('hex');
+      fs.writeFileSync(tokenPath, sharedAdminToken, { encoding: 'utf8', flag: 'w' });
+    }
+  } catch (err) {
+    console.warn('[APP] Failed to read/write shared admin token; using session token only:', err.message);
+    sharedAdminToken = crypto.randomBytes(32).toString('hex');
+  }
+  return sharedAdminToken;
+}
+
+function getAppModeName() {
+  return isNotificationManagerMode ? 'notification-manager' : 'main';
+}
+
+function getHeartbeatPath(mode = getAppModeName()) {
+  return getSharedAppDataPath(`${mode}.heartbeat.json`);
+}
+
+function getBackendOwnerPath() {
+  return getSharedAppDataPath('backend-owner.json');
+}
+
+function writeJsonFile(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data), { encoding: 'utf8', flag: 'w' });
+}
+
+function readJsonFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (_err) {
+    return null;
+  }
+}
+
+function writeHeartbeat() {
+  try {
+    writeJsonFile(getHeartbeatPath(), {
+      pid: process.pid,
+      mode: getAppModeName(),
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    console.warn('[APP] Failed to write app heartbeat:', err.message);
+  }
+}
+
+function startHeartbeat() {
+  writeHeartbeat();
+  heartbeatTimer = setInterval(writeHeartbeat, 2000);
+  heartbeatTimer.unref?.();
+}
+
+function clearHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  try {
+    fs.rmSync(getHeartbeatPath(), { force: true });
+  } catch (_err) {}
+}
+
+function isOtherAppActive() {
+  const otherMode = isNotificationManagerMode ? 'main' : 'notification-manager';
+  const heartbeat = readJsonFile(getHeartbeatPath(otherMode));
+  return Boolean(
+    heartbeat
+    && heartbeat.pid
+    && heartbeat.pid !== process.pid
+    && Number.isFinite(Number(heartbeat.updatedAt))
+    && (Date.now() - Number(heartbeat.updatedAt)) < HEARTBEAT_STALE_MS
+  );
+}
+
+function writeBackendOwner(pid) {
+  try {
+    writeJsonFile(getBackendOwnerPath(), {
+      pid,
+      ownerPid: process.pid,
+      ownerMode: getAppModeName(),
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    console.warn('[BACKEND] Failed to write backend owner file:', err.message);
+  }
+}
+
+function clearBackendOwnerForPid(pid) {
+  const owner = readJsonFile(getBackendOwnerPath());
+  if (!owner || String(owner.pid) !== String(pid)) {
+    return;
+  }
+  try {
+    fs.rmSync(getBackendOwnerPath(), { force: true });
+  } catch (_err) {}
+}
+
 function getFrontendPath(subpath = '') {
   if (isDev) {
     return path.join(path.resolve(__dirname, '..', '..', 'frontend', 'build'), subpath);
@@ -94,14 +218,11 @@ function getAssetPath(filename) {
 }
 
 function getAppIconPath() {
-  if (process.platform === 'win32') {
-    return getAssetPath('newMTS.ico');
-  }
-  return getAssetPath('newMTS.ico');
+  return getAssetPath(isNotificationManagerMode ? 'notification-micro.ico' : 'mts-micro.ico');
 }
 
 function getTrayIconPath() {
-  return getAssetPath('systray-32.png');
+  return getAssetPath(isNotificationManagerMode ? 'notification-tray.ico' : 'mts-tray.ico');
 }
 
 function isSafeExternalUrl(value, allowedProtocols = ['http:', 'https:', 'mailto:']) {
@@ -246,6 +367,7 @@ function registerProcessCleanupHandlers() {
 
   const cleanup = () => {
     app.isQuitting = true;
+    clearHeartbeat();
     stopBackend();
   };
 
@@ -270,8 +392,14 @@ function startBackend() {
     const backendPath = path.join(process.resourcesPath, 'backend', 'backend.exe');
     const backendCwd = path.dirname(backendPath);
     const driverDir = path.join(process.resourcesPath, 'backend', 'drivers');
+    const backendConfigDir = path.join(process.resourcesPath, 'backend', 'config');
+    const backendRuntimeConfigPath = path.join(backendConfigDir, 'runtime_config.json');
+    const backendDefaultsDir = path.join(process.resourcesPath, 'backend', 'defaults');
+    const googleServiceAccountPath = path.join(backendConfigDir, 'google-service-account.json');
     requireRuntimePath(backendPath, 'Bundled backend executable');
     requireRuntimePath(driverDir, 'Bundled browser drivers directory');
+    requireRuntimePath(backendRuntimeConfigPath, 'Bundled backend runtime config');
+    requireRuntimePath(backendDefaultsDir, 'Bundled backend defaults directory');
 
     backendLaunchError = null;
     backendLogTail = [];
@@ -280,6 +408,9 @@ function startBackend() {
     console.log('[BACKEND] Launching packaged backend');
     console.log(`[BACKEND] backendPath: ${backendPath}`);
     console.log(`[BACKEND] cwd: ${backendCwd}`);
+    console.log(`[BACKEND] runtimeConfig: ${backendRuntimeConfigPath}`);
+    console.log(`[BACKEND] defaultsDir: ${backendDefaultsDir}`);
+    console.log(`[BACKEND] googleServiceAccount: ${fs.existsSync(googleServiceAccountPath) ? googleServiceAccountPath : 'not bundled'}`);
 
     try {
       backendProcess = spawn(backendPath, [], {
@@ -291,6 +422,8 @@ function startBackend() {
           BROWSER_DRIVER_DIR: driverDir,
           APP_VERSION,
           APP_RESOURCES_PATH: process.resourcesPath,
+          GOOGLE_SERVICE_ACCOUNT_FILE: googleServiceAccountPath,
+          MTS_ADMIN_TOKEN: getSharedAdminToken(),
         },
         windowsHide: true,
         shell: false,
@@ -310,6 +443,7 @@ function startBackend() {
     }
 
     console.log(`[BACKEND] Spawned backend.exe with pid ${backendProcess.pid}`);
+    writeBackendOwner(backendProcess.pid);
 
     backendProcess.stdout.on('data', (data) => appendBackendLog(data.toString().trim()));
     backendProcess.stderr.on('data', (data) => appendBackendLog(data.toString().trim()));
@@ -358,6 +492,7 @@ function startBackend() {
       ...process.env,
       SQLITE_DB_PATH: getSqliteDbPath(),
       APP_VERSION,
+      MTS_ADMIN_TOKEN: getSharedAdminToken(),
       PYTHONUNBUFFERED: '1'
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -403,9 +538,46 @@ function startBackend() {
 
 function stopBackend() {
   if (backendProcess) {
+    if (isOtherAppActive()) {
+      console.log('[BACKEND] Leaving backend running because the companion app is active.');
+      backendProcess = null;
+      return;
+    }
+    const pid = backendProcess.pid;
     killChildProcessTree(backendProcess, 'backend process');
+    clearBackendOwnerForPid(pid);
     backendProcess = null;
+    return;
   }
+
+  if (usingExternalBackend && !isOtherAppActive()) {
+    const owner = readJsonFile(getBackendOwnerPath());
+    const pid = Number(owner?.pid || 0);
+    if (pid > 0) {
+      killChildProcessTree({ pid }, 'shared backend process');
+      clearBackendOwnerForPid(pid);
+    }
+  }
+}
+
+function probeBackend() {
+  return new Promise((resolve) => {
+    const req = http.get({
+      hostname: '127.0.0.1',
+      port: BACKEND_PORT,
+      path: '/api/runtime/verify-token',
+      headers: { 'X-MTS-Admin-Token': getSharedAdminToken() },
+    }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.setTimeout(BACKEND_READY_REQUEST_TIMEOUT_MS, () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
 }
 
 function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
@@ -415,11 +587,11 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
         return reject(new Error(getBackendFailureMessage(backendLaunchError.message)));
       }
 
-      if (!backendProcess) {
+      if (!backendProcess && !usingExternalBackend) {
         return reject(new Error(getBackendFailureMessage('Backend process was not created.')));
       }
 
-      if (backendProcess.exitCode !== null) {
+      if (backendProcess && backendProcess.exitCode !== null) {
         return reject(new Error(getBackendFailureMessage(`Backend exited with code ${backendProcess.exitCode}.`)));
       }
 
@@ -428,7 +600,12 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
         return reject(new Error(getBackendFailureMessage(`Backend did not respond within ${timeoutSeconds} seconds.`)));
       }
 
-      const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/api/`, (res) => {
+      const req = http.get({
+        hostname: '127.0.0.1',
+        port: BACKEND_PORT,
+        path: '/api/runtime/verify-token',
+        headers: { 'X-MTS-Admin-Token': getSharedAdminToken() },
+      }, (res) => {
         if (res.statusCode === 200) resolve();
         else setTimeout(() => attempt(remaining - 1), BACKEND_STARTUP_RETRY_DELAY_MS);
       });
@@ -450,12 +627,12 @@ function createMainWindow() {
   const appIcon = nativeImage.createFromPath(iconPath);
 
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 1024,
-    minHeight: 700,
+    width: isNotificationManagerMode ? 1180 : 1280,
+    height: isNotificationManagerMode ? 760 : 800,
+    minWidth: isNotificationManagerMode ? 960 : 1024,
+    minHeight: isNotificationManagerMode ? 640 : 700,
     icon: appIcon.isEmpty() ? iconPath : appIcon,
-    title: `Mock Testing Suite v${APP_VERSION}`,
+    title: `${APP_DISPLAY_NAME} v${APP_VERSION}`,
     show: false,
     backgroundColor: '#0f1117',
     webPreferences: {
@@ -467,11 +644,18 @@ function createMainWindow() {
 
   // Load the frontend
   if (isDev) {
-    mainWindow.loadURL('http://localhost:3000');
+    const devUrl = isNotificationManagerMode
+      ? 'http://localhost:3000/#/notification-manager'
+      : 'http://localhost:3000';
+    mainWindow.loadURL(devUrl);
   } else {
     const frontendPath = getFrontendPath('index.html');
     requireRuntimePath(frontendPath, 'Packaged frontend index');
-    mainWindow.loadFile(frontendPath);
+    if (isNotificationManagerMode) {
+      mainWindow.loadFile(frontendPath, { hash: '/notification-manager' });
+    } else {
+      mainWindow.loadFile(frontendPath);
+    }
   }
 
   mainWindow.once('ready-to-show', () => {
@@ -556,6 +740,29 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
   isHandlingCloseConfirmation = true;
 
   try {
+    if (isNotificationManagerMode) {
+      const { response } = await dialog.showMessageBox(parentWindow || null, {
+        type: 'question',
+        buttons: ['Exit App', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'Exit Notification Manager',
+        message: 'Are you sure you want to exit the Notification Manager?',
+      });
+
+      if (response !== 0) {
+        return false;
+      }
+
+      tray = null;
+      app.isQuitting = true;
+      allowWindowClose = true;
+      clearHeartbeat();
+      stopBackend();
+      app.quit();
+      return true;
+    }
+
     let confirmed = false;
 
     if (parentWindow && !parentWindow.isDestroyed()) {
@@ -617,6 +824,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
     tray = null;
     app.isQuitting = true;
     allowWindowClose = true;
+    clearHeartbeat();
     stopBackend();
     app.quit();
     return true;
@@ -630,23 +838,51 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
 // ═══════════════════════════════════════════════════════════════
 function createTray() {
   const iconPath = getTrayIconPath();
-  const trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
-  tray = new Tray(trayIcon);
+  const trayIcon = nativeImage.createFromPath(iconPath);
+  tray = new Tray(trayIcon.isEmpty() ? iconPath : trayIcon);
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: `Mock Testing Suite v${APP_VERSION}`, enabled: false },
+    { label: `${APP_DISPLAY_NAME} v${APP_VERSION}`, enabled: false },
     { type: 'separator' },
     { label: 'Show App', click: () => { if (mainWindow) mainWindow.show(); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { promptForQuitConfirmation(); }}
   ]);
 
-  tray.setToolTip(`Mock Testing Suite v${APP_VERSION}`);
+  tray.setToolTip(`${APP_DISPLAY_NAME} v${APP_VERSION}`);
   tray.setContextMenu(contextMenu);
   tray.on('double-click', () => { if (mainWindow) mainWindow.show(); });
 }
 
 function createAppMenu() {
+  if (isNotificationManagerMode) {
+    const template = [
+      {
+        label: 'File',
+        submenu: [
+          {
+            label: 'Exit',
+            click: () => {
+              promptForQuitConfirmation();
+            },
+          },
+        ],
+      },
+      {
+        label: 'Help',
+        submenu: [
+          {
+            label: 'About',
+            click: () => sendAppEvent('menu:about', getAboutDetails()),
+          },
+        ],
+      },
+    ];
+
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+    return;
+  }
+
   const template = [
     {
       label: 'File',
@@ -703,6 +939,14 @@ ipcMain.handle('app:quit', () => {
 
 ipcMain.on('app:getVersion', (event) => {
   event.returnValue = APP_VERSION;
+});
+
+ipcMain.on('app:isNotificationManager', (event) => {
+  event.returnValue = isNotificationManagerMode;
+});
+
+ipcMain.on('app:getAdminToken', (event) => {
+  event.returnValue = getSharedAdminToken();
 });
 
 ipcMain.handle('app:quit-response', (_event, confirmed) => {
@@ -996,18 +1240,25 @@ process.on('unhandledRejection', (reason) => {
 });
 
 app.whenReady().then(async () => {
-  console.log(`[APP] Mock Testing Suite v${APP_VERSION} starting...`);
+  console.log(`[APP] ${APP_DISPLAY_NAME} v${APP_VERSION} starting...`);
   if (process.platform === 'win32') {
-    app.setAppUserModelId(APP_ID);
+    app.setAppUserModelId(APP_RUNTIME_ID);
   }
   reconcileStoredUpdateState();
   registerProcessCleanupHandlers();
+  startHeartbeat();
   createMainWindow();
   createTray();
   createAppMenu();
 
   try {
-    startBackend();
+    if (await probeBackend()) {
+      usingExternalBackend = true;
+      console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
+    } else {
+      usingExternalBackend = false;
+      startBackend();
+    }
     await waitForBackend();
     console.log('[APP] Backend is ready');
   } catch (err) {
@@ -1017,15 +1268,18 @@ app.whenReady().then(async () => {
     return;
   }
 
-  sendAppEvent('update:state-changed', getUpdateState());
-  // Check for updates after a short delay
-  setTimeout(() => {
-    checkForUpdates({ promptUser: true });
-  }, 5000);
+  if (!isNotificationManagerMode) {
+    sendAppEvent('update:state-changed', getUpdateState());
+    // Check for updates after a short delay
+    setTimeout(() => {
+      checkForUpdates({ promptUser: true });
+    }, 5000);
+  }
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    clearHeartbeat();
     stopBackend();
     app.quit();
   }
@@ -1039,5 +1293,6 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   app.isQuitting = true;
   tray = null;
+  clearHeartbeat();
   stopBackend();
 });

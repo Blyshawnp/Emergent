@@ -14,6 +14,8 @@ This folder is a starter admin-content package for moving editable defaults out 
   - Word-compatible rich text document with the current Help content
 - `faq-content.rtf`
   - Word-compatible rich text document with the current FAQ content
+- `google-doc-templates.md`
+  - Google Doc formatting examples for Help, FAQ, and editable Gemini prompt instructions
 - `admin-master-guide.rtf`
   - Word-compatible guide describing what is runtime today and how to manage it safely
 
@@ -35,6 +37,10 @@ Current runtime sources are:
     - Supervisor reasons
     - Supervisor coaching
     - Supervisor fail reasons
+- `backend/defaults/gemini-coaching-prompt.md`
+  - Local editable Gemini coaching prompt fallback
+- `backend/defaults/gemini-fail-prompt.md`
+  - Local editable Gemini fail prompt fallback
 - `frontend/src/pages/HelpPage.jsx`
   - Current Help screen content
   - Current FAQ content
@@ -82,6 +88,8 @@ That means the worksheet/tab names must be:
 - `sup-coaching`
 - `sup-fails`
 - `approved-headsets`
+- `gemini-coaching-prompt`
+- `gemini-fail-prompt`
 
 Do not replace these with display labels like `Discord Posts` or `Sup Reasons` unless the actual worksheet name matches exactly.
 
@@ -98,8 +106,9 @@ Because of that, the `Approved Headsets` worksheet in the workbook is a structur
 3. If you want a simpler import path, use the files in `csv-tabs/` instead of the XML workbook.
 4. In Google Sheets, create one tab per CSV and import each file into its matching tab name exactly.
 5. Use `help-content.rtf` and `faq-content.rtf` as the starting point for Google Docs versions of Help and FAQ.
-6. Use `admin-master-guide.rtf` as the starting point for the admin-only Google Doc.
-7. Keep `backend/content/app_content.json` as the safest current runtime-editable master until a Google-backed import path is implemented.
+6. Use `google-doc-templates.md` as the starting point for Gemini coaching/fail prompt Google Docs.
+7. Use `admin-master-guide.rtf` as the starting point for the admin-only Google Doc.
+8. Keep `backend/content/app_content.json` as the safest current runtime-editable master until a Google-backed import path is implemented.
 
 ## Google Sheets import notes
 
@@ -129,15 +138,21 @@ Each tab is fetched using the exact tab name with:
 
 If a tab is missing or empty, the backend logs a warning and falls back to the local content defaults for that section.
 
+Gemini prompt tabs are optional. Google Docs or local markdown files are recommended for Gemini prompt instructions because prompts are prose-heavy. If you use Sheet tabs instead, create tabs named `gemini-coaching-prompt` and `gemini-fail-prompt` with a `Prompt` column. The backend joins the prompt rows together and uses them instead of the local markdown prompt files.
+
 ## Google Docs notes
 
 1. Upload `help-content.rtf` into Google Docs for the Help source.
 2. Upload `faq-content.rtf` into Google Docs for the FAQ source.
 3. Upload `admin-master-guide.rtf` into Google Docs for the admin guide source.
-4. After you create the Google Docs and Google Sheet, send me:
+4. Optional and recommended for remote prompt editing: create Google Docs for the Gemini coaching and fail prompts.
+5. Add these optional URL keys to `backend/config/runtime_config.json` when using Gemini prompt docs:
+   - `admin_gemini_coaching_prompt_doc_url`
+   - `admin_gemini_fail_prompt_doc_url`
+6. After you create the Google Docs and Google Sheet, send me:
    - the Google Sheet URL
    - each worksheet/tab name
-   - the Google Doc URLs for Help, FAQ, and Admin Guide
+   - the Google Doc URLs for Help, FAQ, Admin Guide, and any Gemini prompt docs
 
 ## Files inspected during audit
 

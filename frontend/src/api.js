@@ -12,6 +12,14 @@ function getBackendUrl() {
 const BACKEND_URL = getBackendUrl();
 const BASE = `${BACKEND_URL}/api`;
 
+function getAdminToken() {
+  try {
+    return window.electronAPI?.getAdminToken?.() || '';
+  } catch (_error) {
+    return '';
+  }
+}
+
 function setUnsavedChanges(value) {
   if (window.electronAPI?.setUnsavedChanges) {
     window.electronAPI.setUnsavedChanges(value).catch(() => {});
@@ -25,6 +33,10 @@ async function request(method, path, body = null, timeout = 15000) {
     headers: { 'Content-Type': 'application/json' },
     timeout,
   };
+  const adminToken = getAdminToken();
+  if (adminToken) {
+    opts.headers['X-MTS-Admin-Token'] = adminToken;
+  }
   if (body !== null) opts.data = body;
   const res = await axios(opts);
   return res.data;
@@ -41,6 +53,7 @@ const api = {
   saveSettings: (data) => savedRequest('PUT', '/settings', data),
   getDefaults: () => request('GET', '/settings/defaults'),
   restoreSettingsDefaults: () => savedRequest('POST', '/settings/restore-defaults'),
+  resetSettingsSection: (section) => savedRequest('POST', '/settings/reset-section', { section }),
   completeSetup: (data) => savedRequest('POST', '/settings/complete-setup', data),
   getCurrentSession: () => request('GET', '/session/current'),
   startSession: (data) => savedRequest('POST', '/session/start', data),
@@ -54,7 +67,11 @@ const api = {
   clearHistory: () => request('DELETE', '/history'),
   getTicker: () => request('GET', '/ticker'),
   getNotifications: () => request('GET', '/notifications'),
+  getConfigStatus: () => request('GET', '/config-status'),
+  getManagedNotifications: () => request('GET', '/notifications/manage'),
+  saveManagedNotification: (item) => request('POST', '/notifications/manage', { item }),
   getApprovedHeadsets: () => request('GET', '/headsets'),
+  getHelpContent: () => request('GET', '/help/content'),
   generateSummaries: (apiKey = '') => request('POST', '/gemini/summaries', { api_key: apiKey }),
   regenerateSummary: (type, apiKey = '') => request('POST', '/gemini/regenerate', { type, api_key: apiKey }),
   fillForm: (coaching, fail, session = null) => request('POST', '/form/fill', { coaching, fail_reason: fail, session }, 120000),

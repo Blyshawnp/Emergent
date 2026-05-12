@@ -1,0 +1,172 @@
+Mock Testing Suite - Packaging and Distribution Instructions
+===========================================================
+
+What This Folder Is
+-------------------
+This folder is the regular agent-facing production package:
+
+  production-ready\Mock Testing Suite 1.0.1
+
+Give this folder to regular agents.
+
+Do not put the Notification Manager installer in this folder.
+
+
+Important Folders
+-----------------
+Main app package:
+
+  C:\Emergent-Mock-BU\APP-main\production-ready\Mock Testing Suite 1.0.1
+
+Admin-only Notification Manager package:
+
+  C:\Emergent-Mock-BU\APP-main\production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1
+
+Project source folder:
+
+  C:\Emergent-Mock-BU\APP-main
+
+
+What To Rebuild
+---------------
+If backend Python files changed, rebuild in this order:
+
+1. Run REBUILD-BACKEND.bat
+2. Run BUILD-MAIN-APP-PACKAGE.bat
+3. Run the admin folder's BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE.bat if the admin app also needs a fresh package
+
+If only frontend files changed, rebuild in this order:
+
+1. Run BUILD-MAIN-APP-PACKAGE.bat
+2. Run the admin folder's BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE.bat if the admin app also needs the same frontend bundle
+
+If only documentation changed inside this production-ready folder, you usually do not need to rebuild installers.
+
+
+BAT Files In This Folder
+------------------------
+CLEAN-REBUILD-MAIN-APP.bat
+
+  Removes old build output, rebuilds backend.exe, rebuilds the frontend,
+  rebuilds the main Windows installer, refreshes this production-ready folder,
+  and writes MAIN-APP-HASH.txt.
+
+REBUILD-BACKEND.bat
+
+  Rebuilds:
+
+    C:\Emergent-Mock-BU\APP-main\backend\dist\backend.exe
+
+  Use this after changing backend\server.py or files under backend\services.
+
+BUILD-MAIN-APP-PACKAGE.bat
+
+  Rebuilds:
+
+    C:\Emergent-Mock-BU\APP-main\desktop\dist\Mock Testing Suite Setup 1.0.1.exe
+
+  Then refreshes this folder with:
+
+    Mock Testing Suite Setup 1.0.1.exe
+    Mock Testing Suite Setup 1.0.1.exe.blockmap
+    win-unpacked
+
+Dev-tools script:
+
+  C:\Emergent-Mock-BU\APP-main\dev-tools\CLEAN-REBUILD-MAIN-APP-NO-PRODUCTION-TOUCH.bat
+
+  Use this if you want a clean main app rebuild that does not delete, copy, or
+  change anything inside production-ready.
+
+
+Step By Step: Full Main App Release
+-----------------------------------
+1. Open this folder:
+
+     C:\Emergent-Mock-BU\APP-main\production-ready\Mock Testing Suite 1.0.1
+
+2. For the cleanest full release build, double-click:
+
+     CLEAN-REBUILD-MAIN-APP.bat
+
+3. Wait until it says:
+
+     Clean main app rebuild complete.
+
+4. If you do not need a full clean rebuild, you can use the smaller scripts instead.
+
+5. If backend code changed, double-click:
+
+     REBUILD-BACKEND.bat
+
+6. Wait until it says:
+
+     Backend rebuild complete.
+
+7. Double-click:
+
+     BUILD-MAIN-APP-PACKAGE.bat
+
+8. Wait until it says:
+
+     Main app package is ready.
+
+9. Check that this file exists:
+
+     Mock Testing Suite Setup 1.0.1.exe
+
+10. Check that this file exists:
+
+     MAIN-APP-HASH.txt
+
+11. Send this whole folder to regular agents:
+
+     production-ready\Mock Testing Suite 1.0.1
+
+
+Update Installer Behavior
+-------------------------
+The main app installer is configured to upgrade the existing Mock Testing Suite
+install instead of creating a second side-by-side app.
+
+To keep that working:
+
+1. Do not change the installer appId:
+
+     com.acddirect.mocktestingsuite
+
+2. Do not change the product name unless you intentionally want a separate app:
+
+     Mock Testing Suite
+
+3. Do not enable install-folder changes in the installer config.
+
+4. In the Google update document, make the URL point to the normal newest setup
+   EXE, for example:
+
+     Mock Testing Suite Setup 1.0.2.exe
+
+When an agent clicks Install Update, the app opens that setup EXE link. The setup
+EXE handles the actual upgrade.
+
+
+Do Not Send Agents
+------------------
+Do not send regular agents this folder:
+
+  production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1
+
+That folder is only for admins.
+
+
+What Is A Hash
+--------------
+A hash is a fingerprint for a file.
+
+If the installer changes, the hash changes.
+
+After BUILD-MAIN-APP-PACKAGE.bat finishes, the newest main app hash is written here:
+
+  MAIN-APP-HASH.txt
+
+Use that hash in your release notes so you can confirm which installer was sent out.

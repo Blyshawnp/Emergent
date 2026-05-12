@@ -1,6 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
 from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.building.datastruct import Tree
 
 
 hiddenimports = []
@@ -8,11 +11,18 @@ hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("selenium")
 
 
+tree_data = Tree("defaults", prefix="defaults")
+optional_config_files = [
+    ("config/runtime_config.json", "config"),
+]
+datas = [(src, dest) for src, dest in optional_config_files if os.path.exists(src)]
+datas += [(src, dest) for dest, src, _ in tree_data]
+
 a = Analysis(
     ["packaged_backend.py"],
     pathex=["."],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=hiddenimports + [
         "dotenv",
         "services.form_filler",

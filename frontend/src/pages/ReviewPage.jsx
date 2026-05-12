@@ -82,6 +82,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
   const [loading, setLoading] = useState(true);
   const [finishing, setFinishing] = useState(false);
   const [filling, setFilling] = useState(false);
+  const [regenerating, setRegenerating] = useState('');
   const [hasFilledForm, setHasFilledForm] = useState(false);
   const historyRecord = navigationState?.historyRecord || null;
   const isHistoricalReview = Boolean(historyRecord);
@@ -120,9 +121,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
         }
 
         // Generate summaries
-        const summaries = await api.generateSummaries(
-          currentSettings?.enable_gemini ? (currentSettings?.gemini_key || '') : ''
-        );
+        const summaries = await api.generateSummaries();
         if (!cancelled) {
           setCoaching(summaries.coaching || '');
           setFail(summaries.fail || '');
@@ -140,7 +139,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     return () => { cancelled = true; };
   }, [historyRecord]);
 
-  if (loading) return <div className="page-loading" data-testid="review-page">Loading review...</div>;
+  if (loading) return <div className="page-loading" data-testid="review-page">{historyRecord ? 'Loading review...' : 'Generating review summaries...'}</div>;
   if (!session) return <div className="stub-page" data-testid="review-page"><h1>No Active Session</h1><p>Start a session from the Home screen.</p></div>;
 
   const s = session;
@@ -173,11 +172,10 @@ export default function ReviewPage({ onNavigate, navigationState }) {
 
   const handleRegen = async (type) => {
     if (isHistoricalReview) return;
+    if (regenerating) return;
+    setRegenerating(type);
     try {
-      const r = await api.regenerateSummary(
-        type,
-        settings?.enable_gemini ? (settings?.gemini_key || '') : ''
-      );
+      const r = await api.regenerateSummary(type);
       if (r.ok) {
         if (type === 'coaching') setCoaching(r.text);
         else setFail(r.text);
@@ -189,6 +187,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
         await modal.error('Regeneration Failed', r.error || 'Unknown error');
       }
     } catch (e) { await modal.error('Error', e.message); }
+    finally { setRegenerating(''); }
   };
 
   const runFillForm = async ({ showSuccess = true } = {}) => {
@@ -274,10 +273,25 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     onNavigate(getReviewBackTarget(session, isHistoricalReview));
   };
 
-  const geminiActive = Boolean(settings?.enable_gemini && String(settings?.gemini_key || '').trim());
+  const handleDiscardSession = async () => {
+    const confirmed = await modal.confirmDanger(
+      'Discard Session',
+      'Discard the current session draft and lose all progress? This cannot be undone.'
+    );
+    if (!confirmed) return;
+    try {
+      await api.discardSession();
+    } catch (e) {
+      // Surface the error but still navigate home so the user is not stuck.
+      await modal.error('Discard Failed', e.message || 'Unknown error');
+    }
+    onNavigate('home');
+  };
+
+  const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
 
   return (
-    <div data-testid="review-page">
+    <div className="page-with-sticky-actions" data-testid="review-page">
       {!isHistoricalReview && (
         <WorkflowProgress
           {...getWorkflowProgress({
@@ -332,7 +346,16 @@ export default function ReviewPage({ onNavigate, navigationState }) {
         <textarea className="review-textarea" rows={6} value={coaching} onChange={e => setCoaching(e.target.value)} data-testid="review-coaching" readOnly={isHistoricalReview} />
         <div className="review-btn-row" data-tour="review-coaching-actions">
           <button className="btn btn-primary btn-sm" id="btn-copy-coaching" onClick={() => copyText(coaching, 'btn-copy-coaching')} data-testid="review-copy-coaching">Copy</button>
-          {!isHistoricalReview && <button className="btn btn-ghost btn-sm" onClick={() => handleRegen('coaching')} data-testid="review-regen-coaching">Regenerate</button>}
+          {!isHistoricalReview && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => handleRegen('coaching')}
+              disabled={Boolean(regenerating)}
+              data-testid="review-regen-coaching"
+            >
+              {regenerating === 'coaching' ? 'Regenerating...' : 'Regenerate'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -349,14 +372,29 @@ export default function ReviewPage({ onNavigate, navigationState }) {
         <textarea className="review-textarea" rows={6} value={fail} onChange={e => setFail(e.target.value)} data-testid="review-fail" readOnly={isHistoricalReview} />
         <div className="review-btn-row" data-tour="review-fail-actions">
           <button className="btn btn-primary btn-sm" id="btn-copy-fail" onClick={() => copyText(fail, 'btn-copy-fail')} data-testid="review-copy-fail">Copy</button>
-          {!isHistoricalReview && <button className="btn btn-ghost btn-sm" onClick={() => handleRegen('fail')} data-testid="review-regen-fail">Regenerate</button>}
+          {!isHistoricalReview && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => handleRegen('fail')}
+              disabled={Boolean(regenerating)}
+              data-testid="review-regen-fail"
+            >
+              {regenerating === 'fail' ? 'Regenerating...' : 'Regenerate'}
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="footer-bar" data-testid="review-footer">
+      <div className="footer-bar sticky-action-footer" data-testid="review-footer">
         <button className="btn btn-muted btn-lg" onClick={handleBack} data-testid="review-back">
           {isHistoricalReview ? 'Back to History' : 'Back'}
         </button>
+        {!isHistoricalReview && (
+          <>
+            <button className="btn btn-danger-outline btn-sm" onClick={handleDiscardSession} data-testid="review-discard" title="Discard the current session draft and lose all progress">Discard Session</button>
+            <span className="action-divider" aria-hidden="true" />
+          </>
+        )}
         <span className="spacer" />
         {isHistoricalReview ? (
           <>

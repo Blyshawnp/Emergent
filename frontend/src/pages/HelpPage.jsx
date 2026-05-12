@@ -1,163 +1,640 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
+import api from '../api';
 
 const APP_VERSION_FALLBACK = '1.0.1';
 
-const HELP_SECTIONS = [
+const HELP_TOPICS = [
   {
     id: 'getting-started',
-    eyebrow: 'Start Here',
-    title: 'Getting Started',
-    body: 'Use Home as the control center for new sessions, supervisor-only continuation, history, and daily stats. Replay the tutorial any time from this page or Help after setup is complete.',
+    title: '1. Getting Started',
+    summary: 'Mock Testing Suite is the control center for certification mock sessions, supervisor transfers, and follow-up scheduling.',
     bullets: [
-      'Start New Session launches the standard mock-call flow.',
-      'Supervisor Transfer Only is for candidates whose mock calls were already completed.',
-      'Session History opens saved sessions, search, and detail review.',
+      'Open the app from the desktop shortcut or Start menu.',
+      'The first launch runs the Setup Wizard, then the Tutorial.',
+      'Everything begins from the Home screen: new sessions, supervisor-only work, and history.',
+      'Active session drafts are saved automatically while you work, so moving between screens never wipes progress.',
     ],
   },
   {
     id: 'setup-wizard',
-    eyebrow: 'First Launch',
-    title: 'Setup Wizard',
-    body: 'The Setup Wizard handles the initial tester profile and required baseline settings. On first launch, the in-app tutorial should begin immediately after setup is completed.',
+    title: '2. Setup Wizard',
+    summary: 'The first-run wizard captures your tester identity and the form/spreadsheet links the app needs to fill.',
     bullets: [
-      'Enter tester-facing profile information before running sessions.',
-      'Save setup changes before beginning certification work.',
-      'Tutorial completion is only recorded after Finish or Skip.',
+      'Enter your first name, last name, and (optional) display name.',
+      'Confirm the certification form URL and the certification spreadsheet URL.',
+      'When you finish the wizard, the Tutorial starts automatically if it has not been completed yet.',
+      'You can revisit any of these values later from Settings.',
     ],
-    adminNote: 'Admin-only notification sheet configuration is not exposed here. Normal users only manage user-facing settings.',
+  },
+  {
+    id: 'tutorial',
+    title: '3. Tutorial and Replay Tutorial',
+    summary: 'The guided tutorial walks through the main app workflow without changing any session data.',
+    bullets: [
+      'The tutorial runs once on first launch.',
+      'You can replay it any time from this Help screen using the Replay Tutorial button.',
+      'Use Next, Back, Skip, and Finish inside the tutorial to control it.',
+      'Tutorial completion is only marked after Skip or Finish.',
+    ],
+  },
+  {
+    id: 'home-screen',
+    title: '4. Home Screen',
+    summary: 'Home is the launcher for every session type and the entry point to history.',
+    bullets: [
+      'Start New Session begins the full Basics → Calls → Supervisor Transfer → Review flow.',
+      'Supervisor Transfer Only is used when mock calls were already completed earlier.',
+      'Session History opens the archive of saved sessions.',
+      'Recent stats and any active session prompt also appear on Home.',
+    ],
+  },
+  {
+    id: 'smart-resume',
+    title: '5. Smart Resume',
+    summary: 'Smart Resume restores work in progress so you do not lose data from a paused or interrupted session.',
+    bullets: [
+      'If you reopen the app while a session is in progress, Home offers to resume it.',
+      'For Supervisor Transfer Only, Smart Resume can continue from a saved record when prior mock calls were already completed.',
+      'Choosing not to resume starts a brand-new session and keeps the previous work in History.',
+    ],
   },
   {
     id: 'basics',
-    eyebrow: 'Session Flow',
-    title: 'Basics',
-    body: 'The Basics screen verifies whether the candidate is ready to proceed before any call scoring begins.',
+    title: '6. Basics Screen',
+    summary: 'Basics verifies candidate readiness before any scoring begins.',
     bullets: [
       'Candidate Name is required.',
-      'Headset, VPN, browser readiness, and final-attempt status are documented here.',
-      'NC/NS, Not Ready, and Stopped Responding route directly to Review as immediate outcomes.',
+      'Final Attempt marks this as the candidate’s last allowed mock attempt and affects routing later.',
+      'Headset must be USB with a noise-cancelling microphone.',
+      'VPN must be off, and required browser checks must pass before you can continue.',
+      'Continue validates readiness and routes into Calls (or Supervisor Transfer Only when applicable).',
+    ],
+  },
+  {
+    id: 'headset-lookup',
+    title: '7. Headset Lookup',
+    summary: 'Use the approved headset lookup to confirm a candidate is using an allowed USB noise-cancelling model.',
+    bullets: [
+      'Click Lookup Approved Headsets next to the Brand / Model field.',
+      'Search by brand or model, then select a listed model to auto-fill the field.',
+      'If the model is not listed, double-check that the headset is USB and has a noise-cancelling microphone before continuing.',
+    ],
+  },
+  {
+    id: 'autofails-ncns-notready',
+    title: '8. NC/NS and Not Ready Auto-Fails',
+    summary: 'These red buttons end the session immediately. Use them only when the candidate cannot start testing.',
+    bullets: [
+      'NC/NS = the candidate did not join the session at all.',
+      'Not Ready = the candidate is present but cannot start (no headset, VPN on, wrong browser, etc.).',
+      'Both buttons end the session and route directly to Review with the auto-fail reason recorded.',
+    ],
+  },
+  {
+    id: 'tech-issue',
+    title: '9. Tech Issue Flow',
+    summary: 'Use Tech Issue when a real technical problem is interrupting the session, before deciding to end it.',
+    bullets: [
+      'Open Tech Issue from Basics or any session screen where it is available.',
+      'Choose the issue type: internet, DTE, browser, routing, or Other.',
+      'Follow the prompts to continue the session, route to Review, or schedule a Newbie Shift if the candidate cannot finish today.',
+      'A Tech Issue does not automatically fail the candidate; it just guides the next step.',
     ],
   },
   {
     id: 'calls',
-    eyebrow: 'Session Flow',
-    title: 'Calls',
-    body: 'Mock calls are scored one section at a time with scenario data, coaching, and fail reasons captured for review and documentation.',
+    title: '10. Calls Screen',
+    summary: 'The Calls screen scores up to three mock calls.',
     bullets: [
-      'Call setup uses Call Type, Show, Caller, and donation scenario defaults.',
-      'Coaching selections should match what was actually coached during the call.',
-      'Fail reasons are required when a call is marked FAIL.',
-      'Routing remains based on pass/fail outcomes, not summary text generation.',
+      'For each call pick Call Type, Show, Caller, and Donation amount.',
+      'Mark the call Pass or Fail before moving on.',
+      'Two passed calls (with the required mix of New Donor and Existing Member work) route to Supervisor Transfer.',
+      'Two failed calls route directly to Review.',
+    ],
+  },
+  {
+    id: 'coaching-checkboxes',
+    title: '11. Coaching Checkboxes',
+    summary: 'Coaching checkboxes record what coaching was actually given on each call.',
+    bullets: [
+      'Check only the items you actually coached during the call.',
+      'Coaching selections feed the Coaching Summary on the Review screen.',
+      'Use Other notes only when no existing checkbox describes the coaching clearly.',
+    ],
+  },
+  {
+    id: 'fail-reasons',
+    title: '12. Fail Reason Checkboxes',
+    summary: 'Fail reasons explain why a call did not pass.',
+    bullets: [
+      'When a call is marked FAIL, select at least one fail reason.',
+      'Pick every reason that applies; the Review summary lists all of them.',
+      'Use Other notes only when the existing list does not describe the issue.',
+    ],
+  },
+  {
+    id: 'autofail-stopped-responding',
+    title: '13. Stopped Responding Auto-Fail',
+    summary: 'Stopped Responding ends the session as a fail when the candidate goes silent and will not respond.',
+    bullets: [
+      'Use the red Stopped Responding button only after a real attempt to re-engage the candidate.',
+      'It immediately ends the session and routes to Review with Stopped Responding recorded.',
+      'This is different from Tech Issue: pick Stopped Responding only when the candidate, not technology, is the problem.',
     ],
   },
   {
     id: 'supervisor-transfer',
-    eyebrow: 'Session Flow',
-    title: 'Supervisor Transfer',
-    body: 'Supervisor transfers document whether the candidate successfully handled the transfer portion after mock-call requirements were met.',
+    title: '14. Supervisor Transfer',
+    summary: 'Supervisor Transfer verifies the candidate can complete the transfer process correctly.',
     bullets: [
-      'Supervisor Transfer Only can resume prior mock-call work for the same tester when eligible history exists.',
-      'Transfer sections use the same coaching and fail-reason capture model as calls.',
-      'If both supervisor transfers fail, the session can route to Newbie Shift as incomplete follow-up work.',
+      'Post the Discord queue message and use the WXYZ supervisor test number.',
+      'Choose caller, show, and supervisor reason before scoring the transfer.',
+      'Pass Transfer 1 to complete the transfer requirement.',
+      'If both transfers fail, the session routes to Newbie Shift follow-up.',
     ],
   },
   {
-    id: 'review-fill-form',
-    eyebrow: 'Documentation',
-    title: 'Review and Fill Form',
-    body: 'Review is the documentation checkpoint. It generates the management-facing coaching and fail summaries and prepares the Microsoft certification form fill.',
+    id: 'supervisor-only',
+    title: '15. Supervisor Transfer Only',
+    summary: 'Use this when mock calls were already completed earlier and only the transfer portion remains.',
     bullets: [
-      'Coaching Summary and Fail Summary are built from selected checkboxes and notes.',
-      'Gemini only rewrites summary text when enabled; it does not affect scoring or routing.',
-      'Fill Form opens the certification form and maps session data into the form fields.',
-      'Save & Finish stores the session in history and clears the working session.',
+      'Choose Supervisor Transfer Only from Home.',
+      'Smart Resume can continue from a saved record if prior mock calls match the candidate.',
+      'Fresh supervisor-only sessions still run through Basics first.',
     ],
   },
   {
-    id: 'history',
-    eyebrow: 'Records',
-    title: 'History',
-    body: 'History keeps the local record of completed and incomplete sessions for search, review, and continuation scenarios.',
+    id: 'newbie-shift',
+    title: '16. Newbie Shift',
+    summary: 'Newbie Shift schedules follow-up work when a candidate cannot complete the flow today.',
     bullets: [
-      'Use History to review saved outcomes and session details.',
-      'Supervisor-only smart resume depends on eligible saved history tied to the current tester.',
-      'If prior data is missing from History, the app cannot resume that session.',
+      'Enter the follow-up date, start time, AM/PM, and timezone.',
+      'Use Add to Google Calendar to open a prefilled calendar event.',
+      'Continue to Review to save the Newbie Shift details on the session.',
+    ],
+  },
+  {
+    id: 'review',
+    title: '17. Review Screen',
+    summary: 'Review is the final checkpoint before filling forms or saving the session.',
+    bullets: [
+      'Confirm the final status, call results, transfer results, and any auto-fail reason.',
+      'Read the Coaching Summary and Fail Summary before using them anywhere else.',
+      'Use Fill Form to push session data into the certification form.',
+      'Save and Finish stores the session in History and clears the active draft.',
+    ],
+  },
+  {
+    id: 'generic-summaries',
+    title: '18. Generic Summaries',
+    summary: 'Generic summaries are built from your coaching and fail-reason selections without using AI.',
+    bullets: [
+      'No setup is required. Generic summaries always work.',
+      'They list the selected coaching items and fail reasons in plain text.',
+      'Use them as-is, or turn on Gemini for cleaner wording (see next topic).',
+    ],
+  },
+  {
+    id: 'gemini-summaries',
+    title: '19. Gemini Summaries',
+    summary: 'Gemini summaries rewrite the generic summary into more polished management-facing wording.',
+    bullets: [
+      'Gemini is optional. The app still creates generic summaries without it.',
+      'Gemini only rewrites the wording; it does not change pass/fail status or routing.',
+      'Turn Gemini on in Settings → Gemini AI after adding an API key (next topic).',
+      'Typical usage in this app is light, often fewer than 5 AI calls per day.',
+    ],
+  },
+  {
+    id: 'gemini-setup',
+    title: '20. How to get and add a free Gemini API key',
+    summary: 'A short, beginner-friendly walkthrough for adding Gemini to Mock Testing Suite.',
+    bullets: [
+      'Gemini is optional. The app can still create generic summaries without it.',
+      'Gemini just makes the coaching and fail summaries sound more polished.',
+      'Do not share your API key publicly. Treat it like a password.',
+    ],
+    steps: [
+      'Open Google AI Studio in your browser: https://aistudio.google.com',
+      'Sign in with your Google account.',
+      'Create or get a Gemini API key from Google AI Studio.',
+      'Copy the API key to your clipboard.',
+      'In Mock Testing Suite, open Settings.',
+      'Go to the Gemini AI tab.',
+      'Turn on Enable Gemini AI Summaries.',
+      'Paste your API key into the Gemini API Key box.',
+      'Click Save Settings.',
+      'Open a session and check Review — Gemini will now polish the coaching and fail summaries.',
+    ],
+  },
+  {
+    id: 'fill-form',
+    title: '21. Fill Form',
+    summary: 'Fill Form pushes session data into the configured Microsoft certification form using a browser.',
+    bullets: [
+      'Use Fill Form from Review before closing the active session.',
+      'The app maps known session data into the form, but you should still confirm everything before submitting.',
+      'If Fill Form fails, check the form URL and browser setting in Settings.',
+    ],
+  },
+  {
+    id: 'history-fill-form',
+    title: '22. History and Historical Fill Form',
+    summary: 'History stores saved sessions. You can reopen a session in read-only Review or fill the form from it again.',
+    bullets: [
+      'Open History from Home to see all saved sessions.',
+      'Click a session to view summary details, or open it in Historical Review (read-only).',
+      'Historical Fill Form re-runs Fill Form from a saved record without changing the active session.',
     ],
   },
   {
     id: 'settings',
-    eyebrow: 'Configuration',
-    title: 'Settings',
-    body: 'Settings control user-editable app behavior such as profile, Gemini, Discord defaults, calendar support, and editable scenario content.',
+    title: '23. Settings',
+    summary: 'Settings controls your profile, integrations, and app preferences.',
     bullets: [
-      'Ticker Speed is the only notification ticker option shown to normal users.',
-      'Gemini API keys are entered only by the current app user in Settings.',
-      'Call Types, Shows, Callers, coaching items, and fail reasons remain editable through their existing tabs.',
+      'General: tester identity, form/spreadsheet links, browser behavior, sounds, theme, and ticker speed.',
+      'Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.',
+      'Help content is not editable from normal Settings.',
+      'The notification ticker sheet URL is managed by the admin and is not exposed to normal users.',
     ],
-    adminNote: 'Notification sheet URLs and other admin-only notification sources should be managed outside the normal user Settings UI.',
-  },
-  {
-    id: 'gemini-ai',
-    eyebrow: 'Integration',
-    title: 'Gemini AI',
-    body: 'Gemini is optional. When enabled with a user-provided API key, it produces concise management-facing coaching and fail summaries from the selected review data.',
-    bullets: [
-      'No shared Gemini API key is bundled with the app.',
-      'If Gemini is disabled or unavailable, the app falls back to the built-in summary generator.',
-      'Summaries should remain factual, documentation-style, and suitable for management review.',
-    ],
-    media: 'gemini',
   },
   {
     id: 'discord',
-    eyebrow: 'Integration',
-    title: 'Discord Posts and Screenshots',
-    body: 'Discord support is split between reusable post templates and screenshot assets used during tester communication and coaching.',
+    title: '24. Discord Posts and Screenshots',
+    summary: 'The Discord panel keeps reusable Discord messages and screenshot images close at hand during a session.',
     bullets: [
-      'Discord Post opens the existing template-and-screenshot panel from the sidebar.',
-      'Settings → Discord keeps templates and screenshots editable.',
-      'Screenshots/Discord coaching language belongs in generated summaries when those coaching items are selected.',
+      'Open Discord Post from the sidebar.',
+      'Search templates and copy message text with one click.',
+      'Switch to Screenshots to preview and copy any configured screenshot image.',
+      'Templates and screenshots are managed in Settings.',
     ],
-    note: 'Copying text and an image together as one cross-app Discord payload is not reliably supported through the browser clipboard stack. Text copy and image copy are safer as separate actions.',
   },
   {
     id: 'notifications',
-    eyebrow: 'Integration',
-    title: 'Notifications and Ticker',
-    body: 'The app can display ticker messages, banners, and popups from the admin-managed notification source while keeping the user-facing ticker speed local.',
+    title: '25. Ticker and Notifications',
+    summary: 'The ticker and notification system surfaces operational messages without blocking normal work.',
     bullets: [
-      'If no active notification ticker exists, the app falls back to its existing ticker behavior.',
-      'Ticker Speed in Settings controls the animation speed for the current user.',
-      'Normal users do not manage the notification sheet URL in Settings.',
+      'Ticker messages scroll across the top of the app.',
+      'Ticker content comes from the admin-configured Google ticker sheet, with a built-in fallback when the sheet is unavailable.',
+      'Banner and popup notifications can also appear from the same source.',
+      'Ticker Speed is controlled in Settings; the ticker URL is admin-only.',
     ],
   },
   {
     id: 'updates-about',
-    eyebrow: 'Application',
-    title: 'Updates and About',
-    body: 'Versioning and installer updates remain available through the desktop app shell and the Settings update panel.',
+    title: '26. Updates and About',
+    summary: 'Update checks and app version info live in the app menu and Settings.',
     bullets: [
-      `Current app version: v${APP_VERSION_FALLBACK}.`,
-      'Use Settings to check for published updates when available.',
-      'About information is also available from the desktop app menu.',
+      'Use the app menu or Settings update panel to check for updates.',
+      'Deferred updates can be installed later from Settings when available.',
+      'About shows the app version and support identity details (also shown on this Help screen).',
     ],
   },
   {
     id: 'troubleshooting',
-    eyebrow: 'Support',
-    title: 'Troubleshooting',
-    body: 'Use the built-in technical issue flow for live call troubleshooting and use support channels when the issue is app-side rather than candidate-side.',
+    title: '27. Troubleshooting',
+    summary: 'Use the built-in troubleshooting paths before ending a session for technical reasons.',
     bullets: [
-      'Tech Issue handles internet speed, routing, browser, and manual issue notes.',
-      'If a screen behaves unexpectedly, note the page, the action taken, and any visible error.',
-      'Include the app version when reporting persistent issues.',
+      'Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.',
+      'Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.',
+      'If the app itself is misbehaving, restart it. Active session drafts are saved automatically.',
+      'When reporting an app issue, include the screen name, the action you took, and any visible error text.',
+    ],
+  },
+  {
+    id: 'faq',
+    title: '28. FAQ',
+    summary: 'The FAQ panel lists short answers to common questions.',
+    bullets: [
+      'See the Common Questions panel on this page (right side on wide screens, below the topics on narrow screens).',
+      'FAQ content is loaded from the admin-configured FAQ source, with a built-in fallback if loading fails.',
+      'If the FAQ shows the fallback notice, the app could not reach the configured FAQ source. Try Help again later.',
     ],
   },
 ];
 
+const FAQ_FALLBACK = [
+  {
+    question: 'What if FAQ content does not load?',
+    blocks: [{ type: 'paragraph', text: 'The app could not load the configured FAQ source. Use this packaged fallback and try Help again later.' }],
+  },
+  {
+    question: 'What if the candidate stops responding?',
+    blocks: [{ type: 'paragraph', text: 'Use the red Stopped Responding button on the current workflow screen.' }],
+  },
+  {
+    question: 'Where is session data stored?',
+    blocks: [{ type: 'paragraph', text: 'Settings and session records are stored in the local app database.' }],
+  },
+];
+
+function stripFaqMarkers(text) {
+  return String(text || '')
+    .replace(/^\*+|\*+$/g, '')
+    .trim();
+}
+
+function slugify(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'section';
+}
+
+function parseMarkdownBlocks(markdown) {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push({ type: 'paragraph', text: paragraph.join(' ').trim() });
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!list || !list.items.length) return;
+    blocks.push(list);
+    list = null;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      blocks.push({ type: 'heading', level: headingMatch[1].length, text: headingMatch[2].trim() });
+      continue;
+    }
+
+    const unorderedMatch = line.match(/^[-*]\s+(.+)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      if (!list || list.type !== 'ul') {
+        flushList();
+        list = { type: 'ul', items: [] };
+      }
+      list.items.push(unorderedMatch[1].trim());
+      continue;
+    }
+
+    const orderedMatch = line.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (!list || list.type !== 'ol') {
+        flushList();
+        list = { type: 'ol', items: [] };
+      }
+      list.items.push(orderedMatch[1].trim());
+      continue;
+    }
+
+    if (/^\**\s*[QA]\s*[:.\-]/i.test(line)) {
+      flushParagraph();
+      flushList();
+      blocks.push({ type: 'paragraph', text: line });
+      continue;
+    }
+
+    if (list) {
+      list.items[list.items.length - 1] = `${list.items[list.items.length - 1]} ${line}`.trim();
+    } else {
+      paragraph.push(line);
+    }
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks;
+}
+
+function renderInline(text) {
+  const parts = String(text || '').split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g).filter(Boolean);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={`strong-${index}`}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={`code-${index}`}>{part.slice(1, -1)}</code>;
+    }
+    const linkMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (linkMatch) {
+      return (
+        <a key={`link-${index}`} href={linkMatch[2]} target="_blank" rel="noopener noreferrer">
+          {linkMatch[1]}
+        </a>
+      );
+    }
+    return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
+  });
+}
+
+function matchFaqQuestion(text) {
+  const cleaned = stripFaqMarkers(text);
+  const match = cleaned.match(/^Q\s*[:.\-]\s*(.+)$/i);
+  if (!match) return '';
+  return stripFaqMarkers(match[1]);
+}
+
+function matchFaqAnswer(text) {
+  const cleaned = stripFaqMarkers(text);
+  const match = cleaned.match(/^A\s*[:.\-]\s*(.*)$/i);
+  if (!match) return null;
+  return stripFaqMarkers(match[1]);
+}
+
+function buildFaqEntries(markdown) {
+  const blocks = parseMarkdownBlocks(markdown);
+  const entries = [];
+  let current = null;
+
+  for (const block of blocks) {
+    if (block.type === 'heading' && block.level <= 2) {
+      const headingText = stripFaqMarkers(block.text);
+      if (/^(mock testing suite )?faq( content)?$/i.test(headingText)) {
+        continue;
+      }
+      if (current) entries.push(current);
+      current = { question: headingText, blocks: [] };
+      continue;
+    }
+
+    if (block.type === 'paragraph') {
+      const question = matchFaqQuestion(block.text);
+      if (question) {
+        if (current) entries.push(current);
+        current = { question, blocks: [] };
+        continue;
+      }
+      if (current) {
+        const answer = matchFaqAnswer(block.text);
+        if (answer !== null) {
+          if (answer) {
+            current.blocks.push({ type: 'paragraph', text: answer });
+          }
+          continue;
+        }
+      }
+    }
+
+    if (!current) continue;
+    current.blocks.push(block);
+  }
+
+  if (current) entries.push(current);
+  return entries.filter((entry) => entry.question && entry.blocks.length > 0);
+}
+
+function MarkdownBlock({ block }) {
+  if (block.type === 'heading') {
+    if (block.level === 3) {
+      return <h3 className="help-doc-subheading">{renderInline(block.text)}</h3>;
+    }
+    return null;
+  }
+
+  if (block.type === 'ul') {
+    return (
+      <ul className="help-list">
+        {block.items.map((item, index) => (
+          <li key={`${item}-${index}`}>{renderInline(item)}</li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (block.type === 'ol') {
+    return (
+      <ol className="help-list help-list-numbered">
+        {block.items.map((item, index) => (
+          <li key={`${item}-${index}`}>{renderInline(item)}</li>
+        ))}
+      </ol>
+    );
+  }
+
+  return <p className="help-card-body">{renderInline(block.text)}</p>;
+}
+
+function topicMatches(topic, query) {
+  if (!query) return true;
+  const haystack = [topic.title, topic.summary, ...(topic.bullets || []), ...(topic.steps || [])].join(' ').toLowerCase();
+  return haystack.includes(query);
+}
+
+function blockText(block) {
+  if (!block) return '';
+  if (block.type === 'paragraph' || block.type === 'heading') return block.text || '';
+  if (block.type === 'ul' || block.type === 'ol') return (block.items || []).join(' ');
+  return '';
+}
+
+function buildHelpSectionsFromMarkdown(markdown) {
+  if (!markdown) return [];
+  const blocks = parseMarkdownBlocks(markdown);
+  const sections = [];
+  let current = null;
+
+  const flush = () => {
+    if (current && current.blocks.length) sections.push(current);
+    current = null;
+  };
+
+  for (const block of blocks) {
+    if (block.type === 'heading' && block.level <= 2) {
+      const heading = String(block.text || '').trim();
+      if (/^mock testing suite help/i.test(heading)) continue;
+      if (/^support$/i.test(heading)) {
+        flush();
+        continue; // Support is rendered by the side panel
+      }
+      flush();
+      current = { id: slugify(heading), title: heading, blocks: [] };
+      continue;
+    }
+    if (!current) continue;
+    current.blocks.push(block);
+  }
+  flush();
+  return sections;
+}
+
+function helpSectionMatches(section, query) {
+  if (!query) return true;
+  const text = section.blocks.map(blockText).join(' ');
+  return `${section.title} ${text}`.toLowerCase().includes(query);
+}
+
+function normalizeHelpTitle(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^\d+\.\s*/, '')
+    .toLowerCase();
+}
+
+function mergeHelpTopics(liveSections) {
+  if (!liveSections.length) return HELP_TOPICS;
+
+  const liveTitles = new Set(liveSections.map((section) => normalizeHelpTitle(section.title)));
+  const fallbackTopics = HELP_TOPICS.filter((topic) => !liveTitles.has(normalizeHelpTitle(topic.title)));
+  return [...liveSections, ...fallbackTopics];
+}
+
 export default function HelpPage({ appVersion, onNavigate, settings, onReplayTutorial }) {
   const version = appVersion || APP_VERSION_FALLBACK;
-  const geminiActive = Boolean(settings?.enable_gemini && String(settings?.gemini_key || '').trim());
+  const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
+  const [helpContent, setHelpContent] = useState(null);
+  const [helpLoadError, setHelpLoadError] = useState('');
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getHelpContent()
+      .then((payload) => {
+        if (cancelled) return;
+        setHelpContent(payload || {});
+        setHelpLoadError('');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHelpContent({});
+        setHelpLoadError('Unable to refresh the configured Help or FAQ source right now. Showing built-in guidance.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const faqEntries = useMemo(() => {
+    if (helpContent === null) return [];
+    const entries = buildFaqEntries(helpContent?.faq_markdown || '');
+    return entries.length ? entries : FAQ_FALLBACK;
+  }, [helpContent]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const liveSections = useMemo(
+    () => buildHelpSectionsFromMarkdown(helpContent?.help_markdown || ''),
+    [helpContent],
+  );
+  const helpTopics = useMemo(() => mergeHelpTopics(liveSections), [liveSections]);
+  const visibleTopics = useMemo(() => {
+    return helpTopics.filter((topic) => (
+      topic.blocks
+        ? helpSectionMatches(topic, normalizedQuery)
+        : topicMatches(topic, normalizedQuery)
+    ));
+  }, [helpTopics, normalizedQuery]);
+  const support = helpContent?.support || {};
 
   return (
     <div data-testid="help-page" className="help-center-page">
@@ -179,22 +656,30 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
 
       <section className="help-hero">
         <div className="help-hero-copy">
-          <div className="help-hero-kicker">Production Help Center</div>
           <h1>Mock Testing Suite Help Center</h1>
           <p>
-            Reference the full session workflow, settings, integrations, review steps, notification behavior,
-            and support guidance from one place. This page is read-only and is intended for in-app operational help.
+            Current guidance for running mock sessions, handling auto-fails, filling certification forms,
+            managing Discord assets, and using app settings.
           </p>
           <div className="help-hero-pills">
             <span className="help-pill">Version v{version}</span>
-            <span className="help-pill">{geminiActive ? 'Gemini Configured' : 'Gemini Optional'}</span>
-            <span className="help-pill">Tutorial Replay Available</span>
+            <span className="help-pill">{geminiActive ? 'Gemini summaries enabled' : 'Generic summaries available'}</span>
           </div>
+          <div className="help-common-tasks" aria-label="Common help tasks">
+            <a href="#tutorial" className="help-common-task">Replay Tutorial</a>
+            <a href="#basics" className="help-common-task">Basics Setup</a>
+            <a href="#fill-form" className="help-common-task">Fill Form</a>
+            <a href="#troubleshooting" className="help-common-task">Troubleshooting</a>
+          </div>
+          {helpLoadError ? <div className="help-note">{helpLoadError}</div> : null}
         </div>
         <div className="help-hero-panel">
-          <h2>Quick Actions</h2>
+          <div>
+            <div className="help-card-eyebrow">Need Help Fast?</div>
+            <h2>Quick Actions</h2>
+          </div>
           <div className="help-hero-action-list">
-            <button className="btn btn-primary" onClick={() => onReplayTutorial?.()}>
+            <button className="btn btn-primary" onClick={() => onReplayTutorial?.()} data-testid="help-quick-replay">
               Replay Tutorial
             </button>
             <button className="btn btn-ghost" onClick={() => onNavigate?.('settings', null)}>
@@ -204,123 +689,167 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
               Open History
             </button>
           </div>
-          <p className="text-muted text-sm">
-            Replay Tutorial reopens the onboarding flow without changing saved data until the tutorial is skipped or finished.
-          </p>
+          <div className="help-status-grid">
+            <div className="help-status-card">
+              <span>Tutorial</span>
+              <strong>Replay anytime</strong>
+            </div>
+            <div className="help-status-card">
+              <span>Settings</span>
+              <strong>Tester setup</strong>
+            </div>
+            <div className="help-status-card">
+              <span>Fill Form</span>
+              <strong>Review first</strong>
+            </div>
+            <div className="help-status-card">
+              <span>Gemini</span>
+              <strong>{geminiActive ? 'Enabled' : 'Optional'}</strong>
+            </div>
+          </div>
+          {geminiActive ? (
+            <div className="help-gemini-brand">
+              <img src={geminiActiveGraphic} alt="Gemini enabled" />
+              <span>Gemini is configured for cleaner coaching and fail summary wording.</span>
+            </div>
+          ) : (
+            <p className="text-muted text-sm">
+              Gemini is optional. The app still creates generic summaries from selected coaching and fail reasons.
+            </p>
+          )}
         </div>
+      </section>
+
+      <section className="help-search-card card">
+        <div>
+          <h2>Find Help</h2>
+          <p className="text-muted text-sm">Search current workflow topics or jump directly to a section.</p>
+        </div>
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search Basics, Gemini, Fill Form, Discord..."
+          data-testid="help-search"
+        />
       </section>
 
       <section className="help-anchor-nav card">
         <div className="help-anchor-title">
           <h2>Browse Topics</h2>
-          <p className="text-muted text-sm">Jump directly to the section you need.</p>
+          <p className="text-muted text-sm">{visibleTopics.length} topic{visibleTopics.length === 1 ? '' : 's'} shown</p>
         </div>
         <div className="help-anchor-grid">
-          {HELP_SECTIONS.map((section) => (
-            <a key={section.id} href={`#${section.id}`} className="help-anchor-link">
-              {section.title}
+          {visibleTopics.map((topic) => (
+            <a key={topic.id} href={`#${topic.id}`} className="help-anchor-link">
+              {topic.title}
             </a>
           ))}
         </div>
       </section>
 
-      <section className="help-card-grid">
-        {HELP_SECTIONS.map((section) => (
-          <article key={section.id} id={section.id} className="card help-card">
-            <div className="help-card-header">
-              <div>
-                <div className="help-card-eyebrow">{section.eyebrow}</div>
-                <h2>{section.title}</h2>
+      <section className="help-doc-grid">
+        <div className="help-doc-column">
+          {visibleTopics.length ? visibleTopics.map((topic) => (
+            <article key={topic.id} id={topic.id} className="card help-card help-doc-card">
+              <div className="help-card-header">
+                <div>
+                  <div className="help-card-eyebrow">Help Topic</div>
+                  <h2>{topic.title}</h2>
+                </div>
               </div>
-              {section.media === 'gemini' && geminiActive && (
-                <div className="help-gemini-brand">
-                  <img src={geminiActiveGraphic} alt="Gemini enabled" />
-                  <span>Gemini summaries are enabled.</span>
+              {topic.blocks && topic.blocks.length ? (
+                topic.blocks.map((block, index) => (
+                  <MarkdownBlock key={`${topic.id}-${block.type}-${index}`} block={block} />
+                ))
+              ) : (
+                <>
+                  {topic.summary ? <p className="help-card-body">{topic.summary}</p> : null}
+                  {topic.bullets && topic.bullets.length ? (
+                    <ul className="help-list">
+                      {topic.bullets.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {topic.steps && topic.steps.length ? (
+                    <ol className="help-list help-list-numbered">
+                      {topic.steps.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ol>
+                  ) : null}
+                </>
+              )}
+            </article>
+          )) : (
+            <div className="card help-empty-state">
+              <h2>No topics match that search.</h2>
+              <p className="help-card-body">Try a shorter term such as Settings, Review, Discord, or Form.</p>
+            </div>
+          )}
+        </div>
+
+        <aside className="help-support-column">
+          <div className="card help-support-card" id="faq">
+            <div className="help-card-eyebrow">FAQ</div>
+            <h2>Common Questions</h2>
+            <div className="help-faq-list" data-testid="help-faq-list">
+              {faqEntries.length ? faqEntries.map((entry) => (
+                <div key={entry.question} className="help-faq-item">
+                  <p><strong>Q:</strong> {entry.question}</p>
+                  <div className="help-faq-answer">
+                    {entry.blocks.map((block, index) => (
+                      <MarkdownBlock key={`${entry.question}-${block.type}-${index}`} block={block} />
+                    ))}
+                  </div>
+                </div>
+              )) : (
+                <div className="help-faq-item">
+                  <p><strong>FAQ is loading.</strong></p>
+                  <div className="help-faq-answer">
+                    <p className="help-card-body">Configured FAQ content will appear here shortly.</p>
+                  </div>
                 </div>
               )}
             </div>
-            <p className="help-card-body">{section.body}</p>
-            <ul className="help-list">
-              {section.bullets.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-            {section.note && <div className="help-note">{section.note}</div>}
-            {section.adminNote && (
-              <div className="help-admin-note">
-                <strong>Admin note:</strong> {section.adminNote}
-              </div>
-            )}
-          </article>
-        ))}
+          </div>
+
+          <div className="card help-support-card">
+            <div className="help-card-eyebrow">Support</div>
+            <h2>Support and About</h2>
+            <p className="help-card-body">
+              {support.intro || `Mock Testing Suite version ${version}. Include the screen, action, and visible error details when reporting issues.`}
+            </p>
+            <div className="help-support-actions">
+              <a
+                href={`mailto:${support.email || 'blyshawnp@gmail.com'}?subject=Mock%20Testing%20Suite%20Support`}
+                className="btn btn-primary"
+                style={{ textDecoration: 'none' }}
+                data-testid="support-email"
+              >
+                Send Email
+              </a>
+              <a
+                href={support.discord_url || 'https://discord.com/users/shawnbly'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn"
+                style={{ textDecoration: 'none', background: '#5865F2', color: 'white' }}
+                data-testid="support-discord"
+              >
+                Message on Discord
+              </a>
+            </div>
+            <div className="help-about-block">
+              <p><strong>Version:</strong> {version}</p>
+              <p><strong>Email:</strong> {support.email || 'blyshawnp@gmail.com'}</p>
+              <p><strong>Discord:</strong> {support.discord_name || 'shawnbly'}</p>
+              <p><strong>Support note:</strong> {support.footer || 'Include the page name, action taken, and any visible error details.'}</p>
+            </div>
+          </div>
+        </aside>
       </section>
-
-      <section className="help-support-grid">
-        <div className="card help-support-card">
-          <div className="help-card-eyebrow">FAQ</div>
-          <h2>Common Questions</h2>
-          <div className="help-faq-list">
-            <FAQ
-              q="What if the candidate stops responding?"
-              a='Use the red "Stopped Responding" action. The session is documented immediately and routed to Review.'
-            />
-            <FAQ
-              q="What if coaching is not selected?"
-              a="The app prompts for confirmation, but coaching selections should match what was actually covered during the call or transfer."
-            />
-            <FAQ
-              q="How does Supervisor Transfer Only resume work?"
-              a="It searches saved local history for eligible prior mock-call sessions tied to the current tester and resumes the candidate into transfer steps when possible."
-            />
-            <FAQ
-              q="Where do Discord defaults and screenshots get edited?"
-              a="Settings → Discord. Posts and screenshots remain editable there, while the Help page is read-only."
-            />
-          </div>
-        </div>
-
-        <div className="card help-support-card">
-          <div className="help-card-eyebrow">Support</div>
-          <h2>Support and About</h2>
-          <p className="help-card-body">
-            Mock Testing Suite version {version}. Include the page name, actions taken, and any visible error details when reporting issues.
-          </p>
-          <div className="help-support-actions">
-            <a
-              href="mailto:blyshawnp@gmail.com?subject=Mock%20Testing%20Suite%20Support"
-              className="btn btn-primary"
-              style={{ textDecoration: 'none' }}
-              data-testid="support-email"
-            >
-              Send Email
-            </a>
-            <a
-              href="https://discord.com/users/shawnbly"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn"
-              style={{ textDecoration: 'none', background: '#5865F2', color: 'white' }}
-              data-testid="support-discord"
-            >
-              Message on Discord
-            </a>
-          </div>
-          <div className="help-about-block">
-            <p><strong>Creator:</strong> Shawn Bly</p>
-            <p><strong>Email:</strong> blyshawnp@gmail.com</p>
-            <p><strong>About:</strong> Use the desktop app menu About item for the current version and published creator metadata.</p>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function FAQ({ q, a }) {
-  return (
-    <div className="help-faq-item">
-      <p><strong>Q:</strong> {q}</p>
-      <p><strong>A:</strong> {a}</p>
     </div>
   );
 }

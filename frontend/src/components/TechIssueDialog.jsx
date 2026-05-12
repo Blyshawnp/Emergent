@@ -17,12 +17,12 @@ const TECH_ISSUES = [
 ];
 
 // --- Shared helper ---
-async function logIssue(issue, resolved) {
+async function logIssue(issue, resolved, extraSessionFields = {}) {
   try {
     const { session } = await api.getCurrentSession();
     const log = session?.tech_issues_log || [];
     log.push({ issue, resolved, timestamp: new Date().toISOString() });
-    await api.updateSession({ tech_issues_log: log, tech_issue: issue });
+    await api.updateSession({ tech_issues_log: log, tech_issue: issue, ...extraSessionFields });
   } catch (_err) {
     // Tech issue logging is best-effort; session continues regardless
   }
@@ -113,11 +113,15 @@ function SpeedFailStep({ speedDown, speedUp, isFinalAttempt, onGoToReview }) {
   );
 }
 
-function DteAskStep({ onNo, onYes }) {
+function DteAskStep({ onNo, onYes, isSupervisorTransfer = false }) {
   return (
     <div>
       <h3 className="ti-title">Calls Would Not Route</h3>
-      <p className="ti-body">Is the candidate's DTE status set to <strong>"Ready"</strong> in the Call Corp Dashboard?</p>
+      <p className="ti-body">
+        {isSupervisorTransfer
+          ? <>Does the candidate&apos;s status show as <strong>&quot;Ready&quot;</strong> in the Call Corp Dashboard or Ready on their DTE?</>
+          : <>Is the candidate&apos;s DTE status set to <strong>&quot;Ready&quot;</strong> in the Call Corp Dashboard?</>}
+      </p>
       <div className="ti-actions">
         <button className="btn btn-danger" onClick={onNo} data-testid="dte-no">No</button>
         <button className="btn btn-primary" onClick={onYes} data-testid="dte-yes">Yes</button>
@@ -130,7 +134,7 @@ function DteFixStep({ onNo, onResolved }) {
   return (
     <div>
       <h3 className="ti-title">Fix DTE Status</h3>
-      <p className="ti-body">Have them change their DTE status to <strong>"Ready"</strong> in the Call Corp Dashboard.</p>
+      <p className="ti-body">Ask the candidate to change their DTE status to <strong>&quot;Ready&quot;</strong>.</p>
       <p className="ti-subtitle" style={{ marginTop: 12 }}>Did that resolve the issue?</p>
       <div className="ti-actions">
         <button className="btn btn-danger" onClick={onNo} data-testid="dte-fix-no">No</button>
@@ -140,10 +144,28 @@ function DteFixStep({ onNo, onResolved }) {
   );
 }
 
-function BrowserAskStep({ onShowSteps, onAlreadyTried }) {
+function DteStuckStep({ onNo, onYes }) {
   return (
     <div>
-      <h3 className="ti-title">Browser Troubleshooting</h3>
+      <h3 className="ti-title">DTE Status Check</h3>
+      <p className="ti-body">
+        Is their DTE status stuck in{' '}
+        <strong style={{ color: '#facc15' }}>Full Capacity</strong>
+        {' '}or{' '}
+        <strong style={{ color: '#ef4444' }}>Ready for Got Calls</strong>?
+      </p>
+      <div className="ti-actions">
+        <button className="btn btn-muted" onClick={onNo} data-testid="dte-stuck-no">No</button>
+        <button className="btn btn-primary" onClick={onYes} data-testid="dte-stuck-yes">Yes</button>
+      </div>
+    </div>
+  );
+}
+
+function BrowserAskStep({ onShowSteps, onAlreadyTried, title = 'Browser Troubleshooting' }) {
+  return (
+    <div>
+      <h3 className="ti-title">{title}</h3>
       <p className="ti-body">Have you tried having the candidate do the following?</p>
       <ol className="ti-steps">
         <li>Log out of all systems</li>
@@ -249,13 +271,15 @@ function CompleteAskStep({ onEndSession, onContinue }) {
 }
 
 // --- Main Controller ---
-export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavigate }) {
+export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavigate, context = '' }) {
   const [step, setStep] = useState('select');
   const [selected, setSelected] = useState({});
   const [otherNotes, setOtherNotes] = useState('');
   const [speedDown, setSpeedDown] = useState('');
   const [speedUp, setSpeedUp] = useState('');
   const [currentIssue, setCurrentIssue] = useState(null);
+  const isSupervisorTransfer = context === 'suptransfer';
+  const isSupervisorRoutingIssue = isSupervisorTransfer && currentIssue === 'calls';
 
   const reset = useCallback(() => {
     setStep('select');
@@ -330,11 +354,19 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
           goToReview();
         }} />;
       case 'dte-ask':
-        return <DteAskStep onNo={() => setStep('dte-fix')} onYes={() => setStep('browser-ask')} />;
+        return <DteAskStep isSupervisorTransfer={isSupervisorTransfer} onNo={() => setStep('dte-fix')} onYes={() => setStep('browser-ask')} />;
       case 'dte-fix':
-        return <DteFixStep onNo={() => setStep('browser-ask')} onResolved={() => { logIssue('Calls would not route - fixed DTE status', true); continueToNextIssue(); }} />;
+        return <DteFixStep onNo={() => setStep(isSupervisorRoutingIssue ? 'dte-stuck' : 'browser-ask')} onResolved={() => { logIssue('Calls would not route - fixed DTE status', true); continueToNextIssue(); }} />;
+      case 'dte-stuck':
+        return <DteStuckStep
+          onNo={() => setStep('browser-ask')}
+          onYes={async () => {
+            await logIssue('Calls would not route - DTE stuck on Full Capacity / Ready for Got Calls', false, { sup_dte_stuck: true });
+            setStep('browser-ask');
+          }}
+        />;
       case 'browser-ask':
-        return <BrowserAskStep onShowSteps={() => setStep('browser-steps')} onAlreadyTried={() => setStep('browser-result')} />;
+        return <BrowserAskStep title={isSupervisorRoutingIssue ? 'DTE Troubleshooting' : 'Browser Troubleshooting'} onShowSteps={() => setStep('browser-steps')} onAlreadyTried={() => setStep('browser-result')} />;
       case 'browser-steps':
         return <BrowserStepsStep onDone={() => setStep('browser-result')} />;
       case 'browser-result':

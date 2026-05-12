@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"format=txt: %{http_code} bytes=%{size_download}\\\\n\" \"https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ7NtN7gYdLXGTyNuOs6Siu8/export?format=txt\" --max-time 10)",
+      "Bash(curl -s -o /dev/null -w \"format=md:  %{http_code} bytes=%{size_download}\\\\n\" \"https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ7NtN7gYdLXGTyNuOs6Siu8/export?format=md\" --max-time 10)",
+      "Bash(curl -sL -o /tmp/faq-txt.txt -w \"format=txt: %{http_code} bytes=%{size_download}\\\\n\" \"https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ7NtN7gYdLXGTyNuOs6Siu8/export?format=txt\" --max-time 15)",
+      "Bash(curl -sL -o /tmp/faq-md.txt -w \"format=md:  %{http_code} bytes=%{size_download}\\\\n\" \"https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ7NtN7gYdLXGTyNuOs6Siu8/export?format=md\" --max-time 15)",
+      "Bash(curl -sL \"https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ7NtN7gYdLXGTyNuOs6Siu8/export?format=txt\" --max-time 15 -o \"C:/Users/shawn/AppData/Local/Temp/faq-txt.txt\")",
+      "Bash(curl -sL \"https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ7NtN7gYdLXGTyNuOs6Siu8/export?format=md\" --max-time 15 -o \"C:/Users/shawn/AppData/Local/Temp/faq-md.txt\")",
+      "Bash(python -c \"import ast,sys; ast.parse\\(open\\('server.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK: parses'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests/ backend_test.py)",
+      "Bash(python -m unittest discover -s tests -p \"test_*.py\" -v)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend_test.py',encoding='utf-8'\\).read\\(\\)\\); print\\('backend_test.py parses'\\)\")",
+      "Bash(git -c safe.directory=C:/Emergent-Mock-BU/APP-main diff --stat)",
+      "Bash(git -c safe.directory=C:/Emergent-Mock-BU/APP-main status -s)",
+      "Bash(git -c safe.directory=* diff --stat -- backend/server.py frontend/src/pages/HelpPage.jsx frontend/src/pages/HelpPage.test.jsx docs/admin-content-package/google-doc-templates.md)",
+      "Bash(curl -sL \"https://docs.google.com/spreadsheets/d/1R5ccO5BvKWj4lY5OHUX6K03bVzFF0wdjuUCki3Og6VA/gviz/tq?tqx=out:csv&sheet=callers\" --max-time 15)",
+      "Bash(curl -sL \"https://docs.google.com/spreadsheets/d/1R5ccO5BvKWj4lY5OHUX6K03bVzFF0wdjuUCki3Og6VA/gviz/tq?tqx=out:csv&sheet=call-fail-reasons\" --max-time 15)",
+      "Bash(curl -sL \"https://docs.google.com/spreadsheets/d/1R5ccO5BvKWj4lY5OHUX6K03bVzFF0wdjuUCki3Og6VA/gviz/tq?tqx=out:csv&sheet=sup-fail-reasons\" --max-time 15)",
+      "Bash(git *)"
+    ]
+  }
+}

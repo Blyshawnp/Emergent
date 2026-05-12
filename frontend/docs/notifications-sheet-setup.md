@@ -32,16 +32,12 @@ Enabled,ID,Type,Title,Message,ShowPopup,ShowBanner,Persistent,StartDate,StartTim
 - If `EndDate` is chosen and `EndTime` is left blank, default `EndTime` to `12:00 AM`.
 - Validate that `Expires At` is after `Starts At` when both are present.
 
-## Google Sheets publish flow
+## Google Sheets read flow
 
 1. Create a Google Sheet with the required header row.
 2. Add notification rows using the sample CSV in [notifications-sheet-sample.csv](./notifications-sheet-sample.csv).
-3. In Google Sheets, open `File` -> `Share` -> `Publish to web`.
-4. Publish the sheet as `CSV`.
-5. Copy the published CSV URL, or use the normal Google Sheets link. The app can normalize a standard `.../edit?gid=0#gid=0` sheet URL into a CSV export automatically.
-6. In Mock Testing Suite, open `Settings` -> `General`.
-7. Paste the URL into `Notification Sheet CSV URL`.
-8. Save settings.
+3. In `backend/config/runtime_config.json`, set `notification_sheet_url` to the normal Google Sheets URL for the target tab.
+4. The backend converts that URL to a CSV export URL for reads.
 
 ## Behavior notes
 
@@ -52,3 +48,18 @@ Enabled,ID,Type,Title,Message,ShowPopup,ShowBanner,Persistent,StartDate,StartTim
 - Non-persistent banners can be dismissed locally by `ID`.
 - Rows with invalid `Type`, missing `Message`, invalid date/time values, or reversed date windows are ignored safely.
 - Older sheets that only include `StartDate` and `EndDate` still work. Missing start values are treated as active immediately.
+
+## Google Sheets write flow
+
+The notification mini app can now write directly to the configured sheet through the backend.
+
+Required:
+
+1. Google Sheets API enabled in the Google Cloud project
+2. Service account JSON key available through:
+   - `GOOGLE_SERVICE_ACCOUNT_FILE`, or
+   - `GOOGLE_APPLICATION_CREDENTIALS`, or
+   - `backend/config/google-service-account.json`
+3. The sheet shared with the service account `client_email`
+
+When the service account or sharing is missing, the backend returns a configuration error instead of pretending the write succeeded.

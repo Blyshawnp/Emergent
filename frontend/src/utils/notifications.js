@@ -1,4 +1,4 @@
-const NOTIFICATION_TYPES = new Set(['ticker', 'info', 'warning', 'urgent']);
+const NOTIFICATION_TYPES = new Set(['info', 'warning', 'urgent']);
 
 export const DEFAULT_NOTIFICATION_GROUPS = {
   tickerMessages: [],
@@ -18,6 +18,7 @@ const CSV_COLUMNS = [
   'Type',
   'Title',
   'Message',
+  'ShowTicker',
   'ShowPopup',
   'ShowBanner',
   'Persistent',
@@ -227,7 +228,9 @@ function normalizeRow(record, index) {
   const enabled = normalizeBoolean(record.Enabled);
   if (!enabled) return null;
 
-  const type = normalizeText(record.Type).toLowerCase();
+  const rawType = normalizeText(record.Type).toLowerCase();
+  const legacyTickerType = rawType === 'ticker';
+  const type = legacyTickerType ? 'info' : rawType;
   if (!NOTIFICATION_TYPES.has(type)) return null;
 
   const message = normalizeText(record.Message);
@@ -261,10 +264,12 @@ function normalizeRow(record, index) {
   const actionURL = normalizeText(record.ActionURL);
   const actionText = actionURL ? (normalizeText(record.ActionText) || 'Open') : '';
   const showPopup = normalizeBoolean(record.ShowPopup);
+  const showTicker = record.ShowTicker === null
+    ? legacyTickerType
+    : normalizeBoolean(record.ShowTicker);
   const showBanner = normalizeBoolean(record.ShowBanner);
-  const isTicker = type === 'ticker';
 
-  if (!showPopup && !showBanner && !isTicker) {
+  if (!showPopup && !showBanner && !showTicker) {
     return null;
   }
 
@@ -273,6 +278,7 @@ function normalizeRow(record, index) {
     type,
     title: normalizeText(record.Title),
     message,
+    showTicker,
     showPopup,
     showBanner,
     persistent: normalizeBoolean(record.Persistent),
@@ -312,7 +318,7 @@ export function parseNotificationsCsv(csvText) {
 
 export function groupNotifications(items) {
   return items.reduce((groups, item) => {
-    if (item.type === 'ticker') {
+    if (item.showTicker) {
       groups.tickerMessages.push(item);
     }
 

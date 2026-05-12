@@ -290,6 +290,7 @@ def fill_form(form_url: str, data: dict, preferred_browser: str = "auto") -> dic
 
     driver = None
     browser_name = None
+    completed = False
 
     try:
         logger.info("Starting Microsoft Forms automation")
@@ -312,6 +313,7 @@ def fill_form(form_url: str, data: dict, preferred_browser: str = "auto") -> dic
         _set_textarea(driver, QUESTION_IDS["fail_reason"], data.get("fail_reason", "N/A"), wait)
 
         logger.info("Microsoft Forms automation completed successfully")
+        completed = True
 
         return {
             "ok": True,
@@ -323,3 +325,9 @@ def fill_form(form_url: str, data: dict, preferred_browser: str = "auto") -> dic
     except Exception as exc:
         logger.exception("Microsoft Forms automation failed")
         return {"ok": False, "message": str(exc)}
+    finally:
+        if driver is not None and not completed:
+            try:
+                driver.quit()
+            except Exception:
+                logger.debug("Failed to close browser after form automation error", exc_info=True)

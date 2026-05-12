@@ -18,6 +18,22 @@ import {
   DEFAULT_NOTIFICATION_GROUPS,
   resolveTickerDurationSeconds,
 } from './utils/notifications';
+import {
+  BookOpenCheck,
+  ClipboardList,
+  CircleHelp,
+  FileCheck2,
+  History,
+  Home,
+  MessageSquareText,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PhoneCall,
+  Power,
+  RefreshCw,
+  Settings,
+  Table2,
+} from 'lucide-react';
 import mtsLogo from './assets/images/MTSLogonew.png';
 import TutorialPreviewOverlay from "./tutorial/TutorialPreviewOverlay";
 
@@ -30,16 +46,17 @@ const TUTORIAL_STATUS_KEY = 'mts-tutorial-status';
 const TUTORIAL_AFTER_SETUP_KEY = 'mts-start-tutorial-after-setup';
 const DISMISSED_NOTIFICATION_POPUPS_KEY = 'mts-dismissed-notification-popups';
 const DISMISSED_NOTIFICATION_BANNERS_KEY = 'mts-dismissed-notification-banners';
+const TICKER_REFRESH_INTERVAL_MS = 30000;
 
 const NAV_ITEMS = [
-  { key: 'home', label: 'Home', emoji: '\uD83C\uDFE0' },
-  { key: 'basics', label: 'The Basics', emoji: '\uD83D\uDCCB' },
-  { key: 'calls', label: 'Calls', emoji: '\u260F' },
-  { key: 'suptransfer', label: 'Sup Transfer', emoji: '\uD83D\uDD04' },
-  { key: 'review', label: 'Review', emoji: '\uD83D\uDCC4' },
-  { key: 'history', label: 'History', emoji: '\uD83D\uDCCA' },
-  { key: 'settings', label: 'Settings', emoji: '\u2699\uFE0F' },
-  { key: 'help', label: 'Help', emoji: '\u2139' },
+  { key: 'home', label: 'Home', icon: Home },
+  { key: 'basics', label: 'The Basics', icon: BookOpenCheck },
+  { key: 'calls', label: 'Calls', icon: PhoneCall },
+  { key: 'suptransfer', label: 'Sup Transfer', icon: RefreshCw },
+  { key: 'review', label: 'Review', icon: FileCheck2 },
+  { key: 'history', label: 'History', icon: History },
+  { key: 'settings', label: 'Settings', icon: Settings },
+  { key: 'help', label: 'Help', icon: CircleHelp },
 ];
 
 const UNSAVED_TRACKED_PAGES = new Set(['setup', 'basics', 'calls', 'suptransfer', 'newbieshift', 'review']);
@@ -77,14 +94,30 @@ function openNotificationUrl(url) {
 }
 
 function formatNotificationModalBody(notification) {
-  const title = notification.title
-    ? `<div style="font-weight:700; margin-bottom:8px;">${notification.title}</div>`
-    : '';
   const action = notification.actionURL
     ? `<div style="margin-top:14px;">Action available: <strong>${notification.actionText || 'Open'}</strong></div>`
     : '';
 
-  return `${title}<div>${notification.message}</div>${action}`;
+  return `<div>${notification.message}</div>${action}`;
+}
+
+function getNotificationModalTitle(notification) {
+  if (notification?.type === 'urgent') return 'Urgent';
+  if (notification?.type === 'warning') return 'Warning';
+  return 'Notification';
+}
+
+function getTickerMessage(notification) {
+  if (!notification?.message) return '';
+  if (notification.type === 'warning') return `WARNING: ${notification.message}`;
+  if (notification.type === 'urgent') return `URGENT: ${notification.message}`;
+  return notification.message;
+}
+
+function getTickerItemClass(notification) {
+  if (notification?.type === 'urgent') return 'ticker-item ticker-item-urgent';
+  if (notification?.type === 'warning') return 'ticker-item ticker-item-warning';
+  return 'ticker-item ticker-item-info';
 }
 
 function resolveScreenshotUrl(imageUrl) {
@@ -285,6 +318,7 @@ function AppShell() {
   const installedUpdateNoticeRef = useRef(null);
   const popupSessionIdsRef = useRef(new Set());
   const popupFlowActiveRef = useRef(false);
+  const tutorialAutoStartRef = useRef(false);
   const modal = useModal();
 
   useEffect(() => {
@@ -431,13 +465,13 @@ function AppShell() {
     const fetchTicker = async () => {
       try {
         const data = await api.getTicker();
-        if (data.messages?.length > 0) setTickerMessages(data.messages);
+        setTickerMessages(Array.isArray(data.messages) ? data.messages : []);
       } catch (_err) {
         // Non-critical
       }
     };
     fetchTicker();
-    const interval = setInterval(fetchTicker, 60000);
+    const interval = setInterval(fetchTicker, TICKER_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [loading]);
 
@@ -463,7 +497,7 @@ function AppShell() {
     };
 
     refreshNotifications();
-    const interval = window.setInterval(refreshNotifications, 60000);
+    const interval = window.setInterval(refreshNotifications, TICKER_REFRESH_INTERVAL_MS);
 
     return () => {
       cancelled = true;
@@ -510,9 +544,9 @@ function AppShell() {
 
         const result = await modal.showModal({
           type: notification.type === 'urgent' ? 'warning' : 'alert',
-          title: notification.title || 'Notification',
+          title: getNotificationModalTitle(notification),
           body: formatNotificationModalBody(notification),
-          graphic: notification.type === 'warning' || notification.type === 'urgent' ? 'warning' : 'update',
+          graphic: notification.type === 'warning' || notification.type === 'urgent' ? 'warning' : 'notification',
           buttons: notification.actionURL
             ? [
                 { label: notification.actionText || 'Open', cls: 'btn-primary', value: 'open' },
@@ -598,12 +632,20 @@ function AppShell() {
     navigate('home', null);
   }, [navigate]);
 
-  const stopTutorial = useCallback(async (status = 'dismissed') => {
+  const stopTutorial = useCallback(async (status = 'skipped') => {
     setTutorialRun(false);
     setTutorialStepIndex(0);
     localStorage.setItem(TUTORIAL_STATUS_KEY, status);
 
-    if (status === 'completed' || status === 'dismissed') {
+    if (status === 'failed') {
+      await modal.warning(
+        'Tutorial Could Not Start',
+        'The tutorial could not find the next screen element. The walkthrough was closed so you can keep using the app.'
+      );
+      return;
+    }
+
+    if (status === 'completed' || status === 'skipped') {
       try {
         await api.saveSettings({ tutorial_completed: true });
         setSettings((current) => current ? { ...current, tutorial_completed: true } : current);
@@ -611,13 +653,15 @@ function AppShell() {
         // Ignore tutorial completion persistence errors; the walkthrough still closes.
       }
     }
-  }, []);
+  }, [modal]);
 
   const startFullTutorial = useCallback(() => {
     setSidebarCollapsed(false);
     setTutorialStepIndex(0);
-    setTutorialRun(true);
     navigate('home', null);
+    window.setTimeout(() => {
+      setTutorialRun(true);
+    }, 0);
   }, [navigate]);
 
   useEffect(() => {
@@ -638,6 +682,25 @@ function AppShell() {
     localStorage.removeItem(TUTORIAL_STATUS_KEY);
     startFullTutorial();
   }, [loading, navigate, page, startFullTutorial, tutorialRun]);
+
+  useEffect(() => {
+    if (loading || tutorialRun || tutorialAutoStartRef.current) {
+      return;
+    }
+
+    if (!settings?.setup_complete || settings?.tutorial_completed === true) {
+      return;
+    }
+
+    if (page !== 'home') {
+      navigate('home', null);
+      return;
+    }
+
+    tutorialAutoStartRef.current = true;
+    localStorage.removeItem(TUTORIAL_STATUS_KEY);
+    startFullTutorial();
+  }, [loading, navigate, page, settings, startFullTutorial, tutorialRun]);
 
   const handleExit = useCallback(async () => {
     if (window.electronAPI?.quitApp) {
@@ -664,16 +727,20 @@ function AppShell() {
   }, [modal]);
 
   const notificationTickerMessages = notificationGroups.tickerMessages
-    .map((notification) => (
-      notification.title
-        ? `${notification.title}: ${notification.message}`
-        : notification.message
-    ))
-    .filter(Boolean);
+    .map((notification) => ({
+      id: notification.id,
+      className: getTickerItemClass(notification),
+      text: getTickerMessage(notification),
+    }))
+    .filter((notification) => notification.text);
 
   const fallbackTickerMessages = tickerMessages
-    .map(message => String(message || '').replace(/^\d+[\.\)]\s+/, '').trim())
-    .filter(Boolean);
+    .map((message, index) => ({
+      id: `fallback-${index}`,
+      className: 'ticker-item ticker-item-info',
+      text: String(message || '').replace(/^\d+[\.\)]\s+/, '').trim(),
+    }))
+    .filter((message) => message.text);
 
   const displayTickerMessages = notificationTickerMessages.length > 0
     ? notificationTickerMessages
@@ -688,8 +755,8 @@ function AppShell() {
   ));
 
   const tickerContent = displayTickerMessages.length > 0
-    ? displayTickerMessages.join('  \u25C6  ')
-    : `Welcome to Mock Testing Suite v${appVersion}`;
+    ? displayTickerMessages
+    : [{ id: 'default-welcome', className: 'ticker-item ticker-item-info', text: `Welcome to Mock Testing Suite v${appVersion}` }];
 
   return (
     <>
@@ -706,8 +773,14 @@ function AppShell() {
       <div className="app-root" data-testid="app-root">
         <div className="ticker-bar" style={{ '--ticker-duration': `${tickerDurationSeconds}s` }}>
           <div className="ticker-track">
-            <span className="ticker-content">{tickerContent}</span>
-            <span className="ticker-content" aria-hidden="true">{tickerContent}</span>
+            <span className="ticker-content">
+              {tickerContent.map((item, index) => (
+                <React.Fragment key={item.id || `ticker-${index}`}>
+                  {index > 0 ? <span className="ticker-separator" aria-hidden="true">{' \u25C6 '}</span> : null}
+                  <span className={item.className}>{item.text}</span>
+                </React.Fragment>
+              ))}
+            </span>
           </div>
         </div>
         <div className="app-shell">
@@ -722,13 +795,15 @@ function AppShell() {
                 title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                 data-testid="sidebar-toggle"
               >
-                {sidebarCollapsed ? '\u25B6' : '\u25C0'}
+                {sidebarCollapsed ? <PanelLeftOpen size={17} strokeWidth={2.25} /> : <PanelLeftClose size={17} strokeWidth={2.25} />}
               </button>
               <img src={LOGO_SRC} alt="Mock Testing Suite" className="sidebar-logo-img" />
               <div className="sidebar-version">{`v${appVersion}`}</div>
             </div>
             <nav className="sidebar-nav">
-              {NAV_ITEMS.map(item => (
+              {NAV_ITEMS.map(item => {
+                const Icon = item.icon || ClipboardList;
+                return (
                 <button
                   key={item.key}
                   className={`nav-btn ${page === item.key ? 'active' : ''}`}
@@ -736,23 +811,24 @@ function AppShell() {
                   data-testid={`nav-${item.key}`}
                   title={sidebarCollapsed ? item.label : `Open ${item.label}`}
                 >
-                  <span className="nav-emoji">{item.emoji}</span>
+                  <span className="nav-icon"><Icon size={18} strokeWidth={2.15} /></span>
                   <span className="nav-label">{item.label}</span>
                 </button>
-              ))}
+                );
+              })}
             </nav>
             <div className="sidebar-divider" />
             <div className="sidebar-actions">
               <button className="action-btn action-discord" onClick={() => setDiscordOpen(true)} data-testid="link-discord" data-tour="sidebar-discord" title={sidebarCollapsed ? 'Discord Post' : 'Open Discord message templates'}>
-                <span className="action-emoji">{'\uD83D\uDCAC'}</span><span className="action-label">Discord Post</span>
+                <span className="action-icon"><MessageSquareText size={17} strokeWidth={2.2} /></span><span className="action-label">Discord Post</span>
               </button>
               <button className="action-btn action-cert" onClick={() => { if (settings?.cert_sheet_url) window.open(settings.cert_sheet_url, '_blank'); }} data-testid="link-cert" data-tour="sidebar-cert-sheet" title={sidebarCollapsed ? 'Cert Spreadsheet' : 'Open Cert Spreadsheet'}>
-                <span className="action-emoji">{'\uD83D\uDCCA'}</span><span className="action-label">Cert Spreadsheet</span>
+                <span className="action-icon"><Table2 size={17} strokeWidth={2.2} /></span><span className="action-label">Cert Spreadsheet</span>
               </button>
             </div>
             <div className="sidebar-footer">
               <button className="exit-btn" onClick={handleExit} data-testid="exit-btn" data-tour="sidebar-exit" title={sidebarCollapsed ? 'Exit App' : 'Close the desktop app'}>
-                <span className="exit-btn-icon">{'\u23FB'}</span>
+                <span className="exit-btn-icon"><Power size={17} strokeWidth={2.3} /></span>
                 <span className="exit-btn-label">Exit App</span>
               </button>
             </div>
@@ -882,7 +958,9 @@ function DiscordScreenshotRow({ title, imageUrl }) {
     if (!resolvedImageUrl) return;
     try {
       const resp = await fetch(resolvedImageUrl);
+      if (!resp.ok) throw new Error(`Image request failed with status ${resp.status}`);
       const blob = await resp.blob();
+      if (!blob.type.startsWith('image/')) throw new Error('Referenced file is not an image.');
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -893,7 +971,7 @@ function DiscordScreenshotRow({ title, imageUrl }) {
   };
   return (
     <div className="discord-row" style={{ flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="discord-screenshot-header">
         <div className="discord-title">{title}</div>
         <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={handleCopy} disabled={!resolvedImageUrl || previewError}>{copied ? 'Copied!' : 'Copy Image'}</button>
       </div>
@@ -906,7 +984,7 @@ function DiscordScreenshotRow({ title, imageUrl }) {
         />
       ) : (
         <div className="text-muted" style={{ border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: 16 }}>
-          No image preview is available for this screenshot.
+          Screenshot image not found or unavailable: {imageUrl || 'No image path configured'}
         </div>
       )}
     </div>

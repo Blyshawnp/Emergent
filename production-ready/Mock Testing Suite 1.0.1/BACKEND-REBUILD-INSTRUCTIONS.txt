@@ -1,0 +1,336 @@
+Mock Testing Suite - Backend Rebuild Instructions
+=================================================
+
+Purpose
+-------
+The backend is the Python part of the app. It gets turned into this file:
+
+  backend\dist\backend.exe
+
+The Electron installer then packages that backend.exe into the desktop app.
+
+Think of it like baking:
+
+  backend\server.py and backend\services\form_filler.py = the recipe
+  backend.exe = the baked cake
+  installer.exe = the cake packed into a box
+
+If backend source files change, you must bake a new backend.exe before building the installer.
+
+
+What You Need Installed
+-----------------------
+Install these first:
+
+1. Python 3.11 or Python 3.12 for Windows
+
+   Download from:
+   https://www.python.org/downloads/windows/
+
+   During install, check this box:
+
+     Add python.exe to PATH
+
+   Recommended:
+
+     Python 3.11.x 64-bit
+
+2. Node.js LTS
+
+   The app already builds Electron with Node/npm. If npm already works, you have this.
+
+3. Internet access for package installs
+
+   You need this the first time you install Python packages and Electron build tools.
+
+4. Windows build tools already present on the machine
+
+   You usually do not need to install extra compiler tools for this app if the Python wheels
+   are available. If pip starts trying to build Rust or C packages from source, stop and
+   install a normal CPython from python.org instead of using a special Python runtime.
+
+
+Step 1 - Open PowerShell
+------------------------
+Open PowerShell.
+
+You can use Windows Terminal, PowerShell 7, or normal Windows PowerShell.
+
+
+Step 2 - Go To The App Folder
+-----------------------------
+Run this command:
+
+  cd C:\Emergent-Mock-BU\APP-main
+
+This puts PowerShell inside the project folder.
+
+
+Step 3 - Check Python
+---------------------
+Run:
+
+  py -3.11 --version
+
+If that works, you should see something like:
+
+  Python 3.11.9
+
+If that does not work, try:
+
+  python --version
+
+If neither command works, Python is not installed correctly or was not added to PATH.
+
+
+Step 4 - Create A Clean Build Environment
+-----------------------------------------
+Run:
+
+  py -3.11 -m venv .venv-backend-build
+
+This creates a small private Python toolbox inside:
+
+  .venv-backend-build
+
+If your Python command is just "python", use this instead:
+
+  python -m venv .venv-backend-build
+
+If the `py` command is missing, open the Windows Python installer again and make sure
+Python was added to PATH.
+
+
+Step 5 - Turn On The Build Environment
+--------------------------------------
+Run:
+
+  .\.venv-backend-build\Scripts\Activate.ps1
+
+After this, your PowerShell prompt should start with:
+
+  (.venv-backend-build)
+
+That means the private Python toolbox is turned on.
+
+If PowerShell blocks the script, run this once:
+
+  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+Then run the activate command again:
+
+  .\.venv-backend-build\Scripts\Activate.ps1
+
+
+Step 6 - Upgrade pip
+--------------------
+Run:
+
+  python -m pip install --upgrade pip setuptools wheel
+
+pip is Python's package installer.
+
+If this step fails, fix Python first. Do not continue until `python --version`
+and `python -m pip --version` both work.
+
+
+Step 7 - Install Backend Build Packages
+---------------------------------------
+Run:
+
+  python -m pip install -r backend\requirements.txt pyinstaller
+
+This installs everything needed to build backend.exe.
+
+If this step fails, stop and read the error. The most common causes are:
+
+- Python is too new. Use Python 3.11 or 3.12, not 3.14.
+- Python is not the normal Windows version from python.org.
+- Internet is blocked.
+- You are not in the virtual environment.
+
+If the install is successful, you should now be able to run:
+
+  python -m PyInstaller --version
+
+
+Step 8 - Build backend.exe
+--------------------------
+Run:
+
+  cd backend
+
+Then run:
+
+  python -m PyInstaller --noconfirm backend.spec
+
+Wait until it finishes.
+
+When it works, you should have:
+
+  C:\Emergent-Mock-BU\APP-main\backend\dist\backend.exe
+
+If you want to start over before rebuilding, you can remove the old build
+folders first:
+
+  Remove-Item -Recurse -Force build, dist
+
+Do this only from inside the `backend` folder.
+
+
+Step 9 - Confirm backend.exe Is Fresh
+-------------------------------------
+Run:
+
+  Get-Item dist\backend.exe
+
+Look at LastWriteTime.
+
+It should show today's date and time.
+
+Then go back to the desktop folder:
+
+  cd ..\desktop
+
+
+Step 10 - Rebuild The Main App Installer
+----------------------------------------
+The main app installer packages:
+
+- the React frontend build
+- the Electron desktop app
+- the backend.exe file you just rebuilt
+
+Run:
+
+  npm run build:react
+
+Then run:
+
+  npx electron-builder --win --x64
+
+When it finishes, the main installer will be here:
+
+  C:\Emergent-Mock-BU\APP-main\desktop\dist\Mock Testing Suite Setup 1.0.1.exe
+
+
+Step 11 - Rebuild The Admin Notification Manager Installer
+----------------------------------------------------------
+The admin-only installer packages the same backend.exe plus the Notification
+Manager desktop entry point and the admin-only packaging config.
+
+Still inside the desktop folder, run:
+
+  npx electron-builder --win --x64 --config notification-manager-builder.json
+
+When it finishes, the admin-only installer will be here:
+
+  C:\Emergent-Mock-BU\APP-main\desktop\dist-notification-manager\MTS Notification Manager Setup 1.0.1.exe
+
+
+Step 12 - Refresh The Production Folders
+----------------------------------------
+After both installers are rebuilt, copy these files:
+
+Main app installer:
+
+  From:
+    C:\Emergent-Mock-BU\APP-main\desktop\dist\Mock Testing Suite Setup 1.0.1.exe
+
+  To:
+    C:\Emergent-Mock-BU\APP-main\production-ready\Mock Testing Suite 1.0.1
+
+Admin-only Notification Manager installer:
+
+  From:
+    C:\Emergent-Mock-BU\APP-main\desktop\dist-notification-manager\MTS Notification Manager Setup 1.0.1.exe
+
+  To:
+    C:\Emergent-Mock-BU\APP-main\production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1
+
+Important:
+
+Do not give the ADMIN ONLY folder to regular agents.
+
+If you want the folders to be fully fresh, replace the whole production-ready
+folder contents with the newest installer outputs instead of mixing old and new
+files.
+
+
+Step 13 - Make New Hashes
+-------------------------
+Hashes are explained at the bottom of this file.
+
+Run these commands from:
+
+  C:\Emergent-Mock-BU\APP-main
+
+Main app hash:
+
+  Get-FileHash "production-ready\Mock Testing Suite 1.0.1\Mock Testing Suite Setup 1.0.1.exe" -Algorithm SHA256
+
+Admin installer hash:
+
+  Get-FileHash "production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1\MTS Notification Manager Setup 1.0.1.exe" -Algorithm SHA256
+
+Save the new hash values somewhere with your release notes.
+
+
+Simple Full Command List
+------------------------
+Use this only after reading the steps above.
+
+  cd C:\Emergent-Mock-BU\APP-main
+  py -3.11 -m venv .venv-backend-build
+  .\.venv-backend-build\Scripts\Activate.ps1
+  python -m pip install --upgrade pip setuptools wheel
+  python -m pip install -r backend\requirements.txt pyinstaller
+  cd backend
+  python -m PyInstaller --noconfirm backend.spec
+  Get-Item dist\backend.exe
+  cd ..\desktop
+  npm run build:react
+  npx electron-builder --win --x64
+  npx electron-builder --win --x64 --config notification-manager-builder.json
+
+
+What Are Hashes?
+----------------
+A hash is a fingerprint for a file.
+
+For example, the installer has a SHA256 hash. If the installer changes even a tiny bit, the hash changes.
+
+Hashes are useful because they help prove:
+
+- This is the exact installer you built.
+- The file did not get changed after you built it.
+- You and another person are looking at the same file.
+
+Think of it like a file's serial number.
+
+Current hashes from the last package build:
+
+Main app installer:
+
+  C81F715864BB762F588C1333E810A9574EB012C21541C43B41BD74D522F73333
+
+Admin Notification Manager installer:
+
+  6C5855BCA1B172683EECF968443FA0BB8884DFE1E5B6C77CA8AEA37D773454E3
+
+If you rebuild the backend and rebuild the installers, these hashes will change.
+
+
+Most Important Reminder
+-----------------------
+If backend source changes, rebuild in this order:
+
+1. backend.exe
+2. main app installer
+3. admin Notification Manager installer
+4. production-ready folders
+5. new hashes
+
+If you only changed frontend files, rebuild the installers after the React build.
+If you only changed the backend files, rebuild backend.exe first and then both
+installers.

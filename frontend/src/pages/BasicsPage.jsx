@@ -125,7 +125,7 @@ export default function BasicsPage({ onNavigate }) {
   }, [approvedHeadsets, headsetQuery]);
 
   const handleDiscardSession = async () => {
-    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress?');
+    const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');
     if (!confirmed) return;
     await api.discardSession();
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -228,7 +228,7 @@ export default function BasicsPage({ onNavigate }) {
   );
 
   return (
-    <div data-testid="basics-page">
+    <div className="page-with-sticky-actions" data-testid="basics-page">
       <WorkflowProgress {...getWorkflowProgress({ page: 'basics', supervisorOnly: supervisorOnlyMode })} />
       <h1 style={{ marginBottom: 16 }}>The Basics</h1>
       <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }}>
@@ -400,8 +400,12 @@ export default function BasicsPage({ onNavigate }) {
         </div>
       )}
 
-      <div className="footer-bar" data-testid="basics-footer">
-        <button className="btn btn-muted btn-sm" onClick={handleDiscardSession} data-testid="basics-discard">Discard Session</button>
+      <div className="footer-bar sticky-action-footer" data-testid="basics-footer">
+        <div className="action-safety-group">
+          <button className="btn btn-muted btn-sm" onClick={() => onNavigate('home')} data-testid="basics-back">Back</button>
+          <button className="btn btn-danger-outline btn-sm" onClick={handleDiscardSession} data-testid="basics-discard" title="Discard the current session draft and lose all progress">Discard Session</button>
+        </div>
+        <span className="action-divider" aria-hidden="true" />
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('NC/NS')} data-testid="basics-ncns" title="No Call / No Show — candidate did not join the session">NC / NS</button>
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('Not Ready for Session')} data-testid="basics-notready" title="Candidate was not prepared for the session (wrong setup, etc.)">Not Ready</button>
         <button className="btn btn-danger btn-sm" onClick={() => autoFail('Stopped Responding in Chat')} data-testid="basics-stopped" title="Candidate went silent in Discord during the session">Stopped Responding</button>

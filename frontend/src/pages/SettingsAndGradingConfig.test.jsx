@@ -21,9 +21,10 @@ jest.mock('../api', () => ({
     getDefaults: jest.fn(),
     saveSettings: jest.fn(),
     restoreSettingsDefaults: jest.fn(),
+    resetSettingsSection: jest.fn(),
     getCurrentSession: jest.fn(),
     getApprovedHeadsets: jest.fn(),
-    updateSession: jest.fn(),
+    updateSession: jest.fn(() => Promise.resolve({})),
     saveCall: jest.fn(),
     saveSupTransfer: jest.fn(),
     discardSession: jest.fn(),
@@ -87,6 +88,7 @@ beforeEach(() => {
   mockModal.confirmDanger.mockResolvedValue(false);
   mockModal.warning.mockResolvedValue(true);
   mockModal.error.mockResolvedValue(true);
+  api.updateSession.mockResolvedValue({});
   window.electronAPI = {
     setUnsavedChanges: jest.fn().mockResolvedValue(undefined),
   };
@@ -128,6 +130,7 @@ test('settings shows immediate feedback for Discord list changes and clear save 
   });
 
   expect(view.container.textContent).toContain('Apply to List');
+  expect(view.container.textContent).toContain('Reset Posts to Defaults');
   expect(view.container.textContent).toContain('Added. Click Save Settings to keep changes.');
   expect(view.container.querySelector('[data-testid="settings-unsaved-banner"]')).not.toBeNull();
 

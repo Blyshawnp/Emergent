@@ -1,6 +1,7 @@
 # Node / Electron
 node_modules/
 dist/
+desktop/dist-notification-manager/
 build/
 out/
 release/
@@ -10,6 +11,8 @@ release/
 
 # Env files
 .env
+backend/config/google-service-account.json
+backend/config/service-account.json
 
 # Python
 __pycache__/

@@ -14,6 +14,8 @@ const DEFAULT_APP_VERSION = '1.0.1';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getVersion: () => ipcRenderer.sendSync('app:getVersion') || desktopPackage.version || DEFAULT_APP_VERSION,
+  isNotificationManager: () => Boolean(ipcRenderer.sendSync('app:isNotificationManager')),
+  getAdminToken: () => ipcRenderer.sendSync('app:getAdminToken') || '',
   isElectron: true,
   platform: process.platform,
   quitApp: () => ipcRenderer.invoke('app:quit'),

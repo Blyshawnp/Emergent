@@ -1,0 +1,113 @@
+MTS Notification Manager - Admin-Only Packaging Instructions
+===========================================================
+
+What This Folder Is
+-------------------
+This folder is the admin-only production package:
+
+  production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1
+
+Give this folder only to admins who are allowed to manage notifications.
+
+Do not give this folder to regular agents.
+
+
+What To Rebuild
+---------------
+If backend Python files changed, rebuild in this order:
+
+1. Run REBUILD-BACKEND.bat
+2. Run BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE.bat
+3. Also rebuild the regular main app package if agents need the same backend changes
+
+If only frontend files changed, run:
+
+  BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE.bat
+
+
+BAT Files In This Folder
+------------------------
+REBUILD-BACKEND.bat
+
+  Calls the shared backend rebuild script from the main production folder.
+
+BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE.bat
+
+  Rebuilds:
+
+    C:\Emergent-Mock-BU\APP-main\desktop\dist-notification-manager\MTS Notification Manager Setup 1.0.1.exe
+
+  Then refreshes this folder with:
+
+    MTS Notification Manager Setup 1.0.1.exe
+    MTS Notification Manager Setup 1.0.1.exe.blockmap
+    notification-manager-win-unpacked
+
+
+Step By Step: Admin Package Release
+-----------------------------------
+1. Open this folder:
+
+     C:\Emergent-Mock-BU\APP-main\production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1
+
+2. If backend code changed, double-click:
+
+     REBUILD-BACKEND.bat
+
+3. Wait until it says:
+
+     Backend rebuild complete.
+
+4. Double-click:
+
+     BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE.bat
+
+5. Wait until it says:
+
+     Admin-only Notification Manager package is ready.
+
+6. Check that this file exists:
+
+     MTS Notification Manager Setup 1.0.1.exe
+
+7. Check that this file exists:
+
+     NOTIFICATION-MANAGER-HASH.txt
+
+8. Send this folder only to admins:
+
+     production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1
+
+
+Access Warning
+--------------
+Anyone who receives the Notification Manager installer can install it.
+
+Admin-only protection depends on distribution. Keep this folder in an admin-only location.
+
+
+Update Installer Behavior
+-------------------------
+The Notification Manager installer is configured to upgrade the existing admin
+Notification Manager install instead of creating a second side-by-side app.
+
+To keep that working:
+
+1. Do not change the installer appId:
+
+     com.acddirect.mocktestingsuite.notificationmanager
+
+2. Do not change the product name unless you intentionally want a separate app:
+
+     MTS Notification Manager
+
+3. Do not enable install-folder changes in the installer config.
+
+
+What Is A Hash
+--------------
+A hash is a fingerprint for a file.
+
+After BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE.bat finishes, the newest admin installer hash is written here:
+
+  NOTIFICATION-MANAGER-HASH.txt

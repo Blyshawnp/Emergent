@@ -47,7 +47,7 @@ function ScreenshotPreview({ title, imageUrl }) {
   if (!resolved || failed) {
     return (
       <div style={{ width: 96, height: 72, borderRadius: 4, border: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-xs)', textAlign: 'center', padding: 8 }}>
-        No preview
+        Image not found
       </div>
     );
   }
@@ -176,6 +176,31 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
     }
   }, [modal]);
 
+  const handleResetSection = useCallback(async (section, label) => {
+    const confirmed = await modal.showModal({
+      type: 'confirm',
+      title: `Reset ${label}`,
+      body: `Replace your saved ${label.toLowerCase()} with the current app defaults?`,
+      graphic: 'warning',
+      buttons: [
+        { label: 'Reset', cls: 'btn-primary', value: true },
+        { label: 'Cancel', cls: 'btn-muted', value: false },
+      ],
+    });
+    if (!confirmed) return;
+
+    try {
+      const result = await api.resetSettingsSection(section);
+      const nextSettings = result.settings || {};
+      setS(nextSettings);
+      savedSnapshotRef.current = JSON.stringify(nextSettings);
+      setHasUnsavedChanges(false);
+      markSectionFeedback('discord', `${label} reset to current defaults.`);
+    } catch (e) {
+      await modal.error('Reset Failed', e.message);
+    }
+  }, [markSectionFeedback, modal]);
+
   const pendingUpdate = updateState?.pendingUpdate || null;
 
   const handleCheckForUpdates = useCallback(async () => {
@@ -255,7 +280,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
       {tab === 'supreasons' && <SupReasonsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.sup_reasons} onFeedback={markSectionFeedback} />}
       {tab === 'coaching' && <CoachingTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.coaching} onFeedback={markSectionFeedback} />}
       {tab === 'failreasons' && <FailReasonsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.failreasons} onFeedback={markSectionFeedback} />}
-      {tab === 'discord' && <DiscordTab s={s} set={set} feedback={sectionFeedback.discord} onFeedback={markSectionFeedback} />}
+      {tab === 'discord' && <DiscordTab s={s} set={set} feedback={sectionFeedback.discord} onFeedback={markSectionFeedback} onResetSection={handleResetSection} />}
       {tab === 'payment' && <PaymentTab s={s} set={set} />}
       {tab === 'gemini' && <GeminiTab s={s} set={set} />}
       {tab === 'calendar' && <CalendarTab s={s} set={set} />}
@@ -859,7 +884,7 @@ function FailReasonsTab({ s, set, defaults, feedback, onFeedback }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* DISCORD TAB                                                     */
 /* ═══════════════════════════════════════════════════════════════ */
-function DiscordTab({ s, set, feedback, onFeedback }) {
+function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
   const modal = useModal();
   const [section, setSection] = useState('posts');
   const discord = s.discord_templates || [];
@@ -941,6 +966,7 @@ function DiscordTab({ s, set, feedback, onFeedback }) {
           ))}
           <div className="settings-admin-detail-actions">
             <button className="btn btn-ghost btn-sm" onClick={applyPosts}>Apply to List</button>
+            <button className="btn btn-muted btn-sm" onClick={() => onResetSection?.('discord_templates', 'Discord Posts')}>Reset Posts to Defaults</button>
           </div>
           <PendingListFeedback message={feedback} />
           <button className="btn btn-primary btn-sm" onClick={add} style={{ marginTop: 16 }} data-testid="settings-discord-add">+ Add Template</button>
@@ -977,6 +1003,7 @@ function DiscordTab({ s, set, feedback, onFeedback }) {
           ))}
           <div className="settings-admin-detail-actions">
             <button className="btn btn-ghost btn-sm" onClick={applyScreenshots}>Apply to List</button>
+            <button className="btn btn-muted btn-sm" onClick={() => onResetSection?.('discord_screenshots', 'Discord Screenshots')}>Reset Screenshots to Defaults</button>
           </div>
           <PendingListFeedback message={feedback} />
           <button className="btn btn-primary btn-sm" onClick={addSS} style={{ marginTop: 8 }} data-testid="settings-discord-ss-add">+ Add Screenshot</button>
@@ -1021,9 +1048,9 @@ function GeminiTab({ s, set }) {
           <SettingsRow label="Gemini API Key">
             <input
               type="password"
-              value={s.gemini_key || ''}
-              onChange={e => set('gemini_key', e.target.value)}
-              placeholder="Paste your Gemini API key"
+              value={s.gemini_api_key || ''}
+              onChange={e => set('gemini_api_key', e.target.value)}
+              placeholder={s.gemini_api_key_configured ? 'Gemini API key saved. Enter a new key to replace it.' : 'Paste your Gemini API key'}
               autoComplete="off"
               style={{ maxWidth: 420 }}
               data-testid="settings-gemini-key"
@@ -1035,7 +1062,7 @@ function GeminiTab({ s, set }) {
       <p className="text-muted text-sm" style={{ marginTop: 8, lineHeight: 1.7 }}>
         Gemini is optional. When enabled and a valid API key is saved, the app uses Gemini to generate management-facing coaching and fail summaries from the selected checkboxes.
       </p>
-      {s.enable_gemini && !String(s.gemini_key || '').trim() && (
+      {s.enable_gemini && !s.gemini_api_key_configured && !String(s.gemini_api_key || '').trim() && (
         <p className="text-sm" style={{ marginTop: 12, color: 'var(--color-warning)' }}>
           Gemini is enabled, but no API key is saved. The app will fall back to generic summaries until a valid key is entered.
         </p>

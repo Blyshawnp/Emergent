@@ -1,0 +1,5 @@
+
+Algorithm : SHA256
+Hash      : 4E16E9BEC7D1CDD489F71DC77434D064ADD5841220CAA8297A2B3B5D3A7AD288
+Path      : C:\Emergent-Mock-BU\APP-main\production-ready\ADMIN ONLY - MTS Notification Manager 1.0.1\MTS Notification Manager Setup 1.0.1.exe
+
