@@ -3288,11 +3288,15 @@ def _lookup_shared_candidate_sessions(candidate_name):
     query = " ".join(str(candidate_name or "").lower().split())
     if len(query) < 2:
         return {"ok": True, "matches": [], "finalAttempt": False, "withdrawn": False, "extraAttemptGranted": False}
-    context = _shared_sheet_context()
-    if not context.get("ok"):
-        return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
-    sheets_api = context["service"].spreadsheets()
-    rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+    try:
+        context = _shared_sheet_context()
+        if not context.get("ok"):
+            return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
+        sheets_api = context["service"].spreadsheets()
+        rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+    except Exception as exc:
+        logger.warning("[SHARED] Candidate lookup unavailable; continuing local workflow: %s", exc)
+        return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
     matches = []
     for row in rows:
         candidate = " ".join(str(row.get("candidate_name") or "").lower().split())
@@ -3317,11 +3321,15 @@ def _lookup_shared_candidate_sessions(candidate_name):
 
 
 def _get_shared_pending_sup_transfers():
-    context = _shared_sheet_context()
-    if not context.get("ok"):
-        return {"ok": False, "items": [], "error": context.get("error"), "setup": context.get("setup")}
-    sheets_api = context["service"].spreadsheets()
-    rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
+    try:
+        context = _shared_sheet_context()
+        if not context.get("ok"):
+            return {"ok": False, "items": [], "error": context.get("error"), "setup": context.get("setup")}
+        sheets_api = context["service"].spreadsheets()
+        rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
+    except Exception as exc:
+        logger.warning("[SHARED] Pending supervisor transfer lookup unavailable; continuing local workflow: %s", exc)
+        return {"ok": False, "items": [], "error": f"Shared pending supervisor transfers unavailable: {exc}", "setup": _shared_tracking_required_setup()}
     items = [
         _normalize_shared_row(row)
         for row in rows

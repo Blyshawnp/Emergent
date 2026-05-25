@@ -894,13 +894,15 @@ function scheduleNotificationBackendRetry(detail = '') {
   backendRetryTimer.unref?.();
 }
 
-async function retryNotificationBackendStartup() {
+async function retryNotificationBackendStartup(options = {}) {
   if (!isNotificationManagerMode) {
     return { ok: false, error: 'Manual backend retry is only available in SAM.' };
   }
 
   clearNotificationBackendRetryTimer();
-  backendRetryAttemptCount = 0;
+  if (options?.resetAttempts !== false) {
+    backendRetryAttemptCount = 0;
+  }
 
   try {
     await ensureBackendAvailable();
@@ -1200,8 +1202,8 @@ ipcMain.handle('backend:getState', () => {
   return getBackendState();
 });
 
-ipcMain.handle('backend:retryStartup', async () => {
-  return retryNotificationBackendStartup();
+ipcMain.handle('backend:retryStartup', async (_event, options = {}) => {
+  return retryNotificationBackendStartup(options || {});
 });
 
 ipcMain.handle('assets:getUrl', (_event, filename) => {

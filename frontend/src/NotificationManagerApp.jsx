@@ -769,7 +769,7 @@ export default function NotificationManagerApp() {
 
     backendStartupRetryRef.current.timer = window.setTimeout(() => {
       backendStartupRetryRef.current.timer = null;
-      void (retryBackendStartupRef.current ? retryBackendStartupRef.current(false) : window.electronAPI?.retryBackendStartup?.());
+      void (retryBackendStartupRef.current ? retryBackendStartupRef.current(false) : window.electronAPI?.retryBackendStartup?.({ resetAttempts: false }));
     }, delay);
     return true;
   }, [clearBackendStartupRetryTimer]);
@@ -842,13 +842,21 @@ export default function NotificationManagerApp() {
   }, []);
 
   const runCandidateAction = useCallback(async (payload) => {
-    const result = await api.updateSharedAdminCandidate(payload);
-    if (!result?.ok) {
-      setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: result?.error || 'Candidate tracking update failed.' }));
-      return;
+    try {
+      const result = await api.updateSharedAdminCandidate(payload);
+      if (!result?.ok) {
+        setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: result?.error || 'Candidate tracking update failed.' }));
+        return;
+      }
+      setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: 'Candidate tracking updated in the shared Google Sheet.' }));
+      await loadCandidateTracking({ silent: true });
+    } catch (error) {
+      setSheetState((current) => ({
+        ...current,
+        statusKind: 'error',
+        statusMessage: error instanceof Error ? error.message : 'Candidate tracking update failed.',
+      }));
     }
-    setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: 'Candidate tracking updated in the shared Google Sheet.' }));
-    await loadCandidateTracking({ silent: true });
   }, [loadCandidateTracking]);
 
   useEffect(() => {
@@ -1082,7 +1090,7 @@ export default function NotificationManagerApp() {
     }));
 
     try {
-      const result = await window.electronAPI?.retryBackendStartup?.();
+      const result = await window.electronAPI?.retryBackendStartup?.({ resetAttempts: resetAttempt });
       if (!result?.ok) {
         const message = result?.error || 'Unable to start SAM backend right now.';
         scheduleBackendStartupRetry(message);

@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   acknowledgeInstalledUpdate: () => ipcRenderer.invoke('updates:ackInstalled'),
   getAboutInfo: () => ipcRenderer.invoke('app:getAboutInfo'),
   getBackendState: () => ipcRenderer.invoke('backend:getState'),
-  retryBackendStartup: () => ipcRenderer.invoke('backend:retryStartup'),
+  retryBackendStartup: (options = {}) => ipcRenderer.invoke('backend:retryStartup', options || {}),
   getAssetUrl: (filename) => ipcRenderer.invoke('assets:getUrl', filename),
   onAppEvent: (callback) => {
     if (typeof callback !== 'function') {

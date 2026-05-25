@@ -30,6 +30,9 @@ const APP_STORAGE_DIR_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing S
 const BACKEND_STARTUP_RETRY_DELAY_MS = 500;
 const BACKEND_STARTUP_RETRIES = isDev ? 40 : 120;
 const BACKEND_READY_REQUEST_TIMEOUT_MS = 1500;
+const SAM_NOTIFICATION_BACKEND_RETRY_LIMIT = 6;
+const SAM_NOTIFICATION_BACKEND_RETRY_BASE_DELAY_MS = 2000;
+const SAM_NOTIFICATION_BACKEND_RETRY_MAX_DELAY_MS = 12000;
 const ADMIN_TOKEN_HEADER = 'X-MTS-Admin-Token';
 
 app.setName(APP_DISPLAY_NAME);
@@ -58,6 +61,7 @@ let backendConnectionStatus = 'initializing';
 let backendReadyRetryCount = 0;
 let backendLastError = '';
 let backendRetryTimer = null;
+let backendRetryAttemptCount = 0;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
@@ -837,6 +841,7 @@ async function ensureBackendAvailable() {
     usingExternalBackend = true;
     backendStartedByThisApp = false;
     backendReadyRetryCount = 0;
+    backendRetryAttemptCount = 0;
     setBackendConnectionStatus('connected');
     console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
     return;
@@ -845,24 +850,72 @@ async function ensureBackendAvailable() {
   usingExternalBackend = false;
   startBackend();
   await waitForBackend();
+  backendRetryAttemptCount = 0;
   console.log('[APP] Backend is ready');
 }
 
-function scheduleNotificationBackendRetry() {
+function clearNotificationBackendRetryTimer() {
+  if (backendRetryTimer) {
+    clearTimeout(backendRetryTimer);
+    backendRetryTimer = null;
+  }
+}
+
+function scheduleNotificationBackendRetry(detail = '') {
   if (!isNotificationManagerMode || app.isQuitting || backendRetryTimer) {
     return;
   }
+
+  if (backendRetryAttemptCount >= SAM_NOTIFICATION_BACKEND_RETRY_LIMIT) {
+    setBackendConnectionStatus('error', detail || 'SAM backend startup retries reached the limit.');
+    return;
+  }
+
+  backendRetryAttemptCount += 1;
+  const delay = Math.min(
+    SAM_NOTIFICATION_BACKEND_RETRY_MAX_DELAY_MS,
+    SAM_NOTIFICATION_BACKEND_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, backendRetryAttemptCount - 1)),
+  );
+  setBackendConnectionStatus(
+    'retrying',
+    detail
+      ? `${detail} Retrying in ${Math.round(delay / 1000)} seconds.`
+      : `SAM backend startup retry ${backendRetryAttemptCount}/${SAM_NOTIFICATION_BACKEND_RETRY_LIMIT}. Retrying in ${Math.round(delay / 1000)} seconds.`,
+  );
 
   backendRetryTimer = setTimeout(async () => {
     backendRetryTimer = null;
     try {
       await ensureBackendAvailable();
+      backendRetryAttemptCount = 0;
     } catch (err) {
-      console.warn('[BACKEND] Sam backend retry failed:', err.message);
-      scheduleNotificationBackendRetry();
+      const message = err?.message || 'SAM backend startup failed.';
+      console.warn('[BACKEND] Sam backend retry failed:', message);
+      scheduleNotificationBackendRetry(message);
     }
-  }, 3000);
+  }, delay);
   backendRetryTimer.unref?.();
+}
+
+async function retryNotificationBackendStartup(options = {}) {
+  if (!isNotificationManagerMode) {
+    return { ok: false, error: 'Manual backend retry is only available in SAM.' };
+  }
+
+  clearNotificationBackendRetryTimer();
+  if (options?.resetAttempts !== false) {
+    backendRetryAttemptCount = 0;
+  }
+
+  try {
+    await ensureBackendAvailable();
+    backendRetryAttemptCount = 0;
+    return { ok: true };
+  } catch (err) {
+    const message = err?.message || 'Unable to start the SAM backend.';
+    scheduleNotificationBackendRetry(message);
+    return { ok: false, error: message };
+  }
 }
 
 async function promptForQuitConfirmation(parentWindow = mainWindow) {
@@ -1150,6 +1203,10 @@ ipcMain.handle('app:getAboutInfo', () => {
 
 ipcMain.handle('backend:getState', () => {
   return getBackendState();
+});
+
+ipcMain.handle('backend:retryStartup', async (_event, options = {}) => {
+  return retryNotificationBackendStartup(options || {});
 });
 
 ipcMain.handle('assets:getUrl', (_event, filename) => {
