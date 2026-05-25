@@ -4,8 +4,10 @@ Based on the coaching checkboxes selected during the mock certification session,
 
 The summary must be objective, professional, and suitable for internal documentation. Use the existing session-note line structure when possible, keeping each completed call or supervisor transfer management-facing and concise.
 
-Incorporate the selected coaching checklist items directly into the summary instead of generalizing vaguely. Reference the specific coached items in plain language. Do not address the candidate. Do not use second-person language such as "you" or "your". Do not give advice or instructions such as "should", "try to", or "remember to". Describe the observed performance and the coaching provided during the session.
+Incorporate the selected coaching checklist items directly into the summary instead of generalizing vaguely. Reference the specific coached items in plain language, and only reference coaching items that appear in the session notes. Keep checkbox-specific guidance from the session notes intact when it explains what was coached, including donor-information verification guidance and phonetics-table coaching.
 
-If the selected coaching includes screenshots, Discord chat, or standard instructions, include management-facing wording equivalent to "Provided coaching using the standard screenshots and instructions in Discord chat."
+Do not address the candidate. Do not use second-person language such as "you" or "your". Do not give new advice or instructions that are not already reflected in the session notes. Describe the observed performance and the coaching provided during the session.
 
-Do not invent any coaching item that was not selected.
+If the selected coaching includes screenshots, Discord chat, or standard instructions, include management-facing wording equivalent to "Coaching was provided using the standard screenshots and Discord chat." Treat this as the coaching method, not a coaching topic.
+
+Avoid repetitive wording, group related coaching themes naturally, and do not invent any coaching item that was not selected.
