@@ -1,4 +1,4 @@
-export const NOTIFICATION_MANAGER_STORAGE_KEY = 'mts-notification-manager-draft';
+export const NOTIFICATION_MANAGER_STORAGE_KEY = 'sam-notification-manager-draft';
 
 export const NOTIFICATION_TYPES = ['info', 'warning', 'urgent'];
 

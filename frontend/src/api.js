@@ -1,6 +1,17 @@
 import axios from 'axios';
 
 function getBackendUrl() {
+  const electronUrl = (() => {
+    try {
+      return (window.electronAPI?.getBackendUrl?.() || '').trim();
+    } catch (_error) {
+      return '';
+    }
+  })();
+  if (electronUrl) {
+    return electronUrl.replace(/\/+$/, '');
+  }
+
   const configuredUrl = (process.env.REACT_APP_BACKEND_URL || '').trim();
   if (configuredUrl) {
     return configuredUrl.replace(/\/+$/, '');
@@ -65,18 +76,26 @@ const api = {
   getHistory: () => request('GET', '/history'),
   getHistoryStats: () => request('GET', '/history/stats'),
   clearHistory: () => request('DELETE', '/history'),
+  deleteHistorySession: (historyId) => request('DELETE', `/history/session/${encodeURIComponent(historyId)}`),
+  lookupSharedCandidate: (name) => request('GET', `/shared/candidates/lookup?name=${encodeURIComponent(name || '')}`),
+  getSharedPendingSupTransfers: () => request('GET', '/shared/pending-sup-transfers'),
+  getSharedAdminCandidates: () => request('GET', '/shared/admin/candidates'),
+  updateSharedAdminCandidate: (payload) => request('POST', '/shared/admin/candidates/action', payload),
   getTicker: () => request('GET', '/ticker'),
+  getRuntimeStatus: () => request('GET', '/runtime/verify-token', null, 3000),
   getNotifications: () => request('GET', '/notifications'),
   getConfigStatus: () => request('GET', '/config-status'),
   getManagedNotifications: () => request('GET', '/notifications/manage'),
   saveManagedNotification: (item) => request('POST', '/notifications/manage', { item }),
+  deleteManagedNotification: (id) => request('DELETE', `/notifications/manage/${encodeURIComponent(id)}`),
   getApprovedHeadsets: () => request('GET', '/headsets'),
   getHelpContent: () => request('GET', '/help/content'),
-  generateSummaries: (apiKey = '') => request('POST', '/gemini/summaries', { api_key: apiKey }),
-  regenerateSummary: (type, apiKey = '') => request('POST', '/gemini/regenerate', { type, api_key: apiKey }),
+  generateSummaries: () => request('POST', '/gemini/summaries', {}),
+  regenerateSummary: (type) => request('POST', '/gemini/regenerate', { type }),
+  testGeminiConnection: () => request('POST', '/test-gemini', {}, 15000),
   fillForm: (coaching, fail, session = null) => request('POST', '/form/fill', { coaching, fail_reason: fail, session }, 120000),
   finishSession: (coaching, fail) => savedRequest('POST', '/finish-session', { coaching_summary: coaching, fail_summary: fail }),
-  checkForUpdate: () => request('GET', '/update'),
+  checkForUpdate: (app = 'mts') => request('GET', `/update?app=${encodeURIComponent(app)}`),
 };
 
 export default api;

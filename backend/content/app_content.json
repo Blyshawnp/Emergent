@@ -55,7 +55,7 @@
   ],
   "donors_new": [
     [
-      "Sam",
+      "Sam or Sally",
       "Smith",
       "400 N Broad St",
       "Philadelphia",
@@ -65,7 +65,7 @@
       "ssmith@test.com"
     ],
     [
-      "Harold",
+      "Harold or Helen",
       "Smith",
       "3686 Village Dr Apt. D",
       "Franklin",
@@ -75,7 +75,7 @@
       "sally@test.com"
     ],
     [
-      "Harry",
+      "Harry or Harriet J.",
       "Smith",
       "P.O. Box 6",
       "Atlasburg",
@@ -85,7 +85,7 @@
       "testentry@test.com"
     ],
     [
-      "Mark",
+      "Mark or Mary",
       "Jackson",
       "1020 Holland Ave",
       "Port Huron",
@@ -97,7 +97,7 @@
   ],
   "donors_existing": [
     [
-      "Ron",
+      "Ron or Samantha",
       "Jones",
       "3345 W. Auburn Rd, Apt 207",
       "Rochester Hills",
@@ -107,7 +107,7 @@
       "michele@test.com"
     ],
     [
-      "Diane/James",
+      "Diane or James",
       "Williams",
       "8150 Priestley Dr",
       "Reynoldsburg",
@@ -117,7 +117,7 @@
       "DandJ@test.com"
     ],
     [
-      "Harry",
+      "Harry or Harriette",
       "Jones",
       "876 McDonald Ave",
       "Brooklyn",

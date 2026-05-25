@@ -13,7 +13,10 @@ import csv
 import io
 import re
 import hmac
-from datetime import datetime, timezone
+import time
+import uuid
+from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -365,6 +368,8 @@ DEFAULT_FAQ_DOC_URL = "https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ
 
 DEFAULTS_FILE_MAP = {
     "callers": "callers.csv",
+    "new_callers": "new_callers.csv",
+    "existing_callers": "existing_callers.csv",
     "shows": "shows.csv",
     "call_types": "call-types.csv",
     "sup_reasons": "sup-reasons.csv",
@@ -396,6 +401,11 @@ CONTENT_SHEET_TAB_MAP = {
     "approved_headsets": "headsets",
     "gemini_coaching_prompt": "gemini-coaching-prompt",
     "gemini_fail_prompt": "gemini-fail-prompt",
+}
+
+CONTENT_SHEET_TAB_ALIASES = {
+    "callers": ("Callers",),
+    "shows": ("Shows",),
 }
 
 
@@ -457,9 +467,30 @@ def _set_content_source(section_key, source, value=None, *, ok=True, detail=""):
     }
 
 
+def _is_meaningful_gemini_prompt_text(value):
+    text = str(value or "").strip()
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    return len(text) >= 80 and len(words) >= 12
+
+
+def _normalize_gemini_prompt_for_compare(value):
+    lines = []
+    previous_blank = False
+    for raw_line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = re.sub(r"[ \t]+", " ", raw_line.strip())
+        if not line:
+            if not previous_blank:
+                lines.append("")
+            previous_blank = True
+            continue
+        lines.append(line)
+        previous_blank = False
+    return "\n".join(lines).strip()
+
+
 # Canonical list of content sections tracked across loaders. Keep in sync with
 # DEFAULTS_FILE_MAP / CONTENT_SHEET_TAB_MAP plus the donor sub-keys produced by
-# _normalize_callers and the markdown keys produced by _load_google_doc_overrides.
+# _normalize_callers and the markdown keys produced by the Help/FAQ doc loader.
 TRACKED_CONTENT_KEYS = (
     "donors_new",
     "donors_existing",
@@ -506,6 +537,12 @@ def _set_ticker_fetch_status(source, status, message_count=0):
         "timestamp": _status_timestamp(),
         "message_count": int(message_count or 0),
     })
+    logger.info(
+        "[TICKER] Source=%s valid_rows=%s status=%s",
+        str(source or "unknown").upper(),
+        int(message_count or 0),
+        status,
+    )
 
 
 def _defaults_dir_candidates():
@@ -600,6 +637,16 @@ def _fetch_google_sheet_tab_csv(sheet_id, tab_name):
         return response.read().decode("utf-8-sig")
 
 
+def _content_sheet_tab_candidates(content_key, tab_name):
+    seen = set()
+    candidates = [tab_name, *(CONTENT_SHEET_TAB_ALIASES.get(content_key) or ())]
+    for candidate in candidates:
+        normalized = str(candidate or "").strip()
+        if normalized and normalized.lower() not in seen:
+            seen.add(normalized.lower())
+            yield normalized
+
+
 def _fetch_google_doc_text(doc_id, fmt="md"):
     url = f"https://docs.google.com/document/d/{doc_id}/export?format={fmt}"
     with urlopen(url, timeout=10) as response:
@@ -667,7 +714,11 @@ def _normalize_faq_markdown(text):
 
 
 def _read_csv_rows(csv_text):
-    return list(csv.DictReader(io.StringIO(csv_text or "")))
+    rows = list(csv.DictReader(io.StringIO(csv_text or "")))
+    headers = list(rows[0].keys()) if rows else []
+    if headers:
+        logger.info("[SAM] Parsed CSV headers: %s", headers)
+    return rows
 
 
 def _normalize_text_list(rows, required_headers=None):
@@ -765,6 +816,12 @@ HEADSET_VALUE_MARKERS = {
 }
 
 DEFAULT_MANAGED_SETTINGS_KEYS = {
+    "shows",
+    "donors_new",
+    "donors_existing",
+    "donors_increase",
+    "call_types",
+    "sup_reasons",
     "discord_templates",
     "discord_screenshots",
     "call_coaching",
@@ -808,6 +865,14 @@ def _csv_header_lookup(rows):
 def _find_csv_header(rows, aliases):
     lookup = _csv_header_lookup(rows)
     return next((lookup[alias] for alias in aliases if alias in lookup), "")
+
+
+def _row_value(row, header_map, aliases):
+    for alias in aliases:
+        header = header_map.get(_normalize_content_header(alias))
+        if header is not None:
+            return row.get(header)
+    return ""
 
 
 def _rows_have_discord_post_shape(rows):
@@ -948,17 +1013,21 @@ def _normalize_fail_reasons(rows, section_key, source_label, use_builtin_fallbac
 
 def _normalize_shows(rows):
     items = []
+    header_map = _csv_header_lookup(rows)
+    logger.info("[SAM] Shows column headers: %s", list(header_map.values()))
     for row in rows:
         row = row or {}
-        show_name = str(row.get("ShowName") or "").strip()
+        show_name = str(_row_value(row, header_map, {"showname", "show", "name", "title"}) or "").strip()
         if not show_name:
             continue
         items.append([
             show_name,
-            str(row.get("OneTimeAmount") or "").strip(),
-            str(row.get("MonthlyAmount") or "").strip(),
-            str(row.get("Gift") or "").strip(),
+            str(_row_value(row, header_map, {"onetimeamount", "onetime", "one-timeamount", "donationamount"}) or "").strip(),
+            str(_row_value(row, header_map, {"monthlyamount", "monthly", "sustainingamount"}) or "").strip(),
+            str(_row_value(row, header_map, {"gift", "reward", "thankyougift", "premium"}) or "").strip(),
+            str(_row_value(row, header_map, {"notes", "note", "scenarioinstructions", "scenarioinstruction", "scenario"}) or "").strip(),
         ])
+    logger.info("[SAM] Loaded %d shows", len(items))
     return items
 
 
@@ -985,23 +1054,26 @@ def _normalize_callers(rows):
         "donors_existing": [],
         "donors_increase": [],
     }
+    header_map = _csv_header_lookup(rows)
+    logger.info("[SAM] Callers column headers: %s", list(header_map.values()))
 
     for row in rows:
         row = row or {}
-        category = _normalize_caller_category(row.get("Category"))
-        first = str(row.get("First") or "").strip()
-        last = str(row.get("Last") or "").strip()
+        category = _normalize_caller_category(_row_value(row, header_map, {"category", "type", "callertype", "donortype", "membertype"}))
+        first = str(_row_value(row, header_map, {"first", "firstname", "first_name"}) or "").strip()
+        last = str(_row_value(row, header_map, {"last", "lastname", "last_name"}) or "").strip()
         if not category or (not first and not last):
             continue
         entry = [
             first,
             last,
-            str(row.get("Address") or "").strip(),
-            str(row.get("City") or "").strip(),
-            str(row.get("State") or "").strip(),
-            str(row.get("Zip") or "").strip(),
-            str(row.get("Phone") or "").strip(),
-            str(row.get("Email") or "").strip(),
+            str(_row_value(row, header_map, {"address", "street", "streetaddress"}) or "").strip(),
+            str(_row_value(row, header_map, {"city"}) or "").strip(),
+            str(_row_value(row, header_map, {"state", "st"}) or "").strip(),
+            str(_row_value(row, header_map, {"zip", "zipcode", "postalcode"}) or "").strip(),
+            str(_row_value(row, header_map, {"phone", "phonenumber", "telephone"}) or "").strip(),
+            str(_row_value(row, header_map, {"email", "emailaddress"}) or "").strip(),
+            str(_row_value(row, header_map, {"notes", "note", "scenarioinstructions", "scenarioinstruction", "scenario"}) or "").strip(),
         ]
         if category == "new":
             grouped["donors_new"].append(entry)
@@ -1009,6 +1081,52 @@ def _normalize_callers(rows):
             grouped["donors_existing"].append(entry)
         elif category == "increase":
             grouped["donors_increase"].append(entry)
+    logger.info(
+        "[SAM] Loaded %d callers (%d new, %d existing, %d increase)",
+        sum(len(value) for value in grouped.values()),
+        len(grouped["donors_new"]),
+        len(grouped["donors_existing"]),
+        len(grouped["donors_increase"]),
+    )
+    return grouped
+
+
+def _normalize_callers_for_category(rows, category):
+    grouped = {
+        "donors_new": [],
+        "donors_existing": [],
+        "donors_increase": [],
+    }
+    normalized_category = _normalize_caller_category(category)
+    if not normalized_category:
+        return grouped
+    header_map = _csv_header_lookup(rows)
+    logger.info("[SAM] %s callers column headers: %s", normalized_category, list(header_map.values()))
+
+    for row in rows or []:
+        row = row or {}
+        first = str(_row_value(row, header_map, {"first", "firstname", "first_name"}) or "").strip()
+        last = str(_row_value(row, header_map, {"last", "lastname", "last_name"}) or "").strip()
+        if not first and not last:
+            continue
+        entry = [
+            first,
+            last,
+            str(_row_value(row, header_map, {"address", "street", "streetaddress"}) or "").strip(),
+            str(_row_value(row, header_map, {"city"}) or "").strip(),
+            str(_row_value(row, header_map, {"state", "st"}) or "").strip(),
+            str(_row_value(row, header_map, {"zip", "zipcode", "postalcode"}) or "").strip(),
+            str(_row_value(row, header_map, {"phone", "phonenumber", "telephone"}) or "").strip(),
+            str(_row_value(row, header_map, {"email", "emailaddress"}) or "").strip(),
+            str(_row_value(row, header_map, {"notes", "note", "scenarioinstructions", "scenarioinstruction", "scenario"}) or "").strip(),
+        ]
+        if normalized_category == "new":
+            grouped["donors_new"].append(entry)
+        elif normalized_category == "existing":
+            grouped["donors_existing"].append(entry)
+        elif normalized_category == "increase":
+            grouped["donors_increase"].append(entry)
+    logger.info("[SAM] Loaded %d %s callers", len(grouped[f"donors_{normalized_category}"]), normalized_category)
     return grouped
 
 
@@ -1156,6 +1274,7 @@ def _load_local_defaults_content():
         logger.warning("[CONTENT] No backend/defaults directory found; using built-in defaults when needed")
         return {}
 
+    logger.info("[SAM] Falling back to CSV defaults at %s", defaults_dir)
     logger.info("[CONTENT] Loading packaged defaults from %s", defaults_dir)
     loaded = {}
 
@@ -1163,6 +1282,12 @@ def _load_local_defaults_content():
         path = defaults_dir / filename
         if not path.is_file():
             logger.warning("[CONTENT] Missing local defaults file: %s", path)
+            return None
+        return _read_csv_rows(path.read_text(encoding="utf-8-sig"))
+
+    def read_optional_csv_file(filename):
+        path = defaults_dir / filename
+        if not path.is_file():
             return None
         return _read_csv_rows(path.read_text(encoding="utf-8-sig"))
 
@@ -1176,9 +1301,22 @@ def _load_local_defaults_content():
     try:
         rows = read_csv_file(DEFAULTS_FILE_MAP["callers"])
         if rows is not None:
+            logger.info("[SAM] Loading callers from CSV file %s", DEFAULTS_FILE_MAP["callers"])
             loaded.update(_normalize_callers(rows))
     except Exception as exc:
         logger.warning("[CONTENT] Failed to parse local callers defaults: %s", exc)
+
+    for section_key, category in (("new_callers", "new"), ("existing_callers", "existing")):
+        try:
+            rows = read_optional_csv_file(DEFAULTS_FILE_MAP[section_key])
+            if rows is not None:
+                logger.info("[SAM] Loading %s from CSV file %s", section_key, DEFAULTS_FILE_MAP[section_key])
+                normalized = _normalize_callers_for_category(rows, category)
+                for target_key, entries in normalized.items():
+                    if entries:
+                        loaded[target_key] = entries
+        except Exception as exc:
+            logger.warning("[CONTENT] Failed to parse local %s defaults: %s", DEFAULTS_FILE_MAP[section_key], exc)
 
     local_csv_loaders = {
         "shows": lambda: _normalize_shows(read_csv_file(DEFAULTS_FILE_MAP["shows"]) or []),
@@ -1218,29 +1356,41 @@ def _load_local_defaults_content():
     return loaded
 
 
-def _normalize_prompt_sheet_text(csv_text):
-    rows = _read_csv_rows(csv_text)
-    if _rows_have_headset_shape(rows):
-        logger.warning("[CONTENT] Gemini prompt sheet has headset-like columns and was rejected.")
-        return ""
-    prompt_header = _find_csv_header(rows, {"prompt", "instruction", "instructions", "text", "markdown"})
-    if not prompt_header:
-        logger.warning("[CONTENT] Gemini prompt sheet requires a Prompt/Instruction/Text/Markdown column and was rejected.")
+def _parse_gemini_prompt_sheet_override(csv_text, local_prompt, prompt_name):
+    rows = list(csv.reader(io.StringIO(csv_text or "")))
+    meaningful_rows = [
+        row for row in rows
+        if any(str(cell or "").strip() for cell in row)
+    ]
+    if len(meaningful_rows) != 2:
+        logger.warning("[Gemini] Invalid Google Sheet %s prompt structure; using markdown fallback", prompt_name)
         return ""
 
-    lines = []
-    for row in rows:
-        if not row:
-            continue
-        value = row.get(prompt_header)
-        text = str(value or "").strip()
-        if text:
-            lines.append(text)
-
-    if _values_look_like_headsets(lines):
-        logger.warning("[CONTENT] Gemini prompt sheet produced headset-like values and was rejected.")
+    header_row, prompt_row = meaningful_rows
+    header = str(header_row[0] if header_row else "").strip()
+    extra_header_values = [str(cell or "").strip() for cell in header_row[1:] if str(cell or "").strip()]
+    extra_prompt_values = [str(cell or "").strip() for cell in prompt_row[1:] if str(cell or "").strip()]
+    if header != "prompt" or extra_header_values or extra_prompt_values:
+        logger.warning("[Gemini] Invalid Google Sheet %s prompt structure; using markdown fallback", prompt_name)
         return ""
-    return "\n".join(lines).strip()
+
+    prompt = str(prompt_row[0] if prompt_row else "").strip()
+    if not prompt:
+        logger.warning("[Gemini] Invalid Google Sheet %s prompt structure; using markdown fallback", prompt_name)
+        return ""
+    if _values_look_like_headsets([prompt]):
+        logger.warning("[Gemini] Invalid Google Sheet %s prompt structure; using markdown fallback", prompt_name)
+        return ""
+    if not _is_meaningful_gemini_prompt_text(prompt):
+        logger.warning("[Gemini] Invalid Google Sheet %s prompt structure; using markdown fallback", prompt_name)
+        return ""
+
+    if _normalize_gemini_prompt_for_compare(prompt) == _normalize_gemini_prompt_for_compare(local_prompt):
+        logger.info("[Gemini] Google Sheet %s prompt matches markdown default; using bundled prompt", prompt_name)
+        return ""
+
+    logger.info("[Gemini] Google Sheet %s override active", prompt_name)
+    return prompt
 
 
 CONTENT_SHEET_PARSERS = {
@@ -1255,44 +1405,93 @@ CONTENT_SHEET_PARSERS = {
     "discord_templates": lambda csv_text: {"discord_templates": _normalize_discord_posts(_read_csv_rows(csv_text))},
     "discord_screenshots": lambda csv_text: {"discord_screenshots": _normalize_screenshots(_read_csv_rows(csv_text))},
     "approved_headsets": lambda csv_text: {"approved_headsets": _normalize_approved_headsets(_read_csv_rows(csv_text))},
-    "gemini_coaching_prompt": lambda csv_text: {"gemini_coaching_prompt": _normalize_prompt_sheet_text(csv_text)},
-    "gemini_fail_prompt": lambda csv_text: {"gemini_fail_prompt": _normalize_prompt_sheet_text(csv_text)},
 }
 
 
-def _load_google_sheet_content(runtime_config):
+def _load_google_sheet_content(runtime_config, local_content=None):
     sheet_id = _resolve_content_sheet_id(runtime_config or {})
     if not sheet_id:
         return {}
 
     loaded = {}
+    local_content = local_content or {}
     for content_key, tab_name in CONTENT_SHEET_TAB_MAP.items():
-        try:
-            csv_text = _fetch_google_sheet_tab_csv(sheet_id, tab_name)
-            row_count = len(_read_csv_rows(csv_text))
-            parsed = CONTENT_SHEET_PARSERS[content_key](csv_text)
-            for key, value in parsed.items():
-                if value:
-                    loaded[key] = value
-            if not any(parsed.values()):
+        loaded_this_key = False
+        last_error = None
+        for candidate_tab in _content_sheet_tab_candidates(content_key, tab_name):
+            logger.info("[SAM] Loading %s from Google Sheets tab '%s'...", content_key, candidate_tab)
+            logger.info("[CONTENT] Loading Google Sheet tab '%s' for %s", candidate_tab, content_key)
+            try:
+                csv_text = _fetch_google_sheet_tab_csv(sheet_id, candidate_tab)
+                rows_for_diagnostics = _read_csv_rows(csv_text)
+                row_count = len(rows_for_diagnostics)
+                headers = list(rows_for_diagnostics[0].keys()) if rows_for_diagnostics else []
+                logger.info("[SAM] Active sheet tab '%s' headers: %s", candidate_tab, headers)
+                logger.info("[SAM] Active sheet tab '%s' row count: %d", candidate_tab, row_count)
+                if content_key == "gemini_coaching_prompt":
+                    parsed = {
+                        content_key: _parse_gemini_prompt_sheet_override(
+                            csv_text,
+                            local_content.get(content_key) or "",
+                            "coaching",
+                        )
+                    }
+                elif content_key == "gemini_fail_prompt":
+                    parsed = {
+                        content_key: _parse_gemini_prompt_sheet_override(
+                            csv_text,
+                            local_content.get(content_key) or "",
+                            "fail",
+                        )
+                    }
+                else:
+                    parsed = CONTENT_SHEET_PARSERS[content_key](csv_text)
+                if content_key in {"gemini_coaching_prompt", "gemini_fail_prompt"} and not any(parsed.values()):
+                    break
+                for key, value in parsed.items():
+                    if value:
+                        loaded[key] = value
+                        loaded_this_key = True
+                        logger.info("[SAM] Loaded %d %s from Google Sheets tab '%s'", _content_count(value), key, candidate_tab)
+                if loaded_this_key:
+                    break
                 if row_count:
                     logger.warning(
+                        "[SAM] Falling back to CSV for %s because Google Sheets parsed no usable rows from tab '%s'",
+                        content_key,
+                        candidate_tab,
+                    )
+                    logger.warning(
                         "[CONTENT] Google Sheet tab '%s' has %d row(s) but produced no usable %s data — check tab columns; using local defaults",
-                        tab_name,
+                        candidate_tab,
                         row_count,
                         content_key,
                     )
                 else:
                     logger.warning(
+                        "[SAM] Falling back to CSV for %s because Google Sheets tab '%s' is empty",
+                        content_key,
+                        candidate_tab,
+                    )
+                    logger.warning(
                         "[CONTENT] Google Sheet tab '%s' was empty; using local defaults for %s",
-                        tab_name,
+                        candidate_tab,
                         content_key,
                     )
-        except Exception as exc:
-            logger.warning("[CONTENT] Failed to load Google Sheet tab '%s'; using local defaults for %s: %s", tab_name, content_key, exc)
+            except Exception as exc:
+                last_error = exc
+                logger.warning("[SAM] Falling back to CSV for %s after Google Sheets failure on tab '%s': %s", content_key, candidate_tab, exc)
+                logger.warning(
+                    "[CONTENT] Failed to load Google Sheet tab '%s'; using local defaults for %s and continuing other tabs: %s",
+                    candidate_tab,
+                    content_key,
+                    exc,
+                )
+        if not loaded_this_key and last_error:
+            logger.warning("[SAM] No Google Sheets tab candidate loaded for %s; last error: %s", content_key, last_error)
     return loaded
 
-def _load_google_doc_overrides(runtime_config):
+def _load_help_faq_google_doc_overrides(runtime_config):
     loaded = {}
     docs_to_load = {
         "help_markdown": (
@@ -1304,16 +1503,6 @@ def _load_google_doc_overrides(runtime_config):
             ("admin_faq_doc_url", "faq_doc_url"),
             ("admin_faq_doc_id", "faq_doc_id"),
             DEFAULT_FAQ_DOC_URL,
-        ),
-        "gemini_coaching_prompt": (
-            ("admin_gemini_coaching_prompt_doc_url", "gemini_coaching_prompt_doc_url"),
-            ("admin_gemini_coaching_prompt_doc_id", "gemini_coaching_prompt_doc_id"),
-            "",
-        ),
-        "gemini_fail_prompt": (
-            ("admin_gemini_fail_prompt_doc_url", "gemini_fail_prompt_doc_url"),
-            ("admin_gemini_fail_prompt_doc_id", "gemini_fail_prompt_doc_id"),
-            "",
         ),
     }
 
@@ -1363,8 +1552,6 @@ def _load_google_doc_overrides(runtime_config):
                 "[CONTENT] Loaded %d FAQ entries from Google Doc",
                 question_count,
             )
-        elif content_key in {"gemini_coaching_prompt", "gemini_fail_prompt"}:
-            loaded[content_key] = text.strip()
         else:
             loaded[content_key] = text
     return loaded
@@ -1372,9 +1559,24 @@ def _load_google_doc_overrides(runtime_config):
 
 def _load_external_content():
     runtime_config = _load_backend_runtime_config()
-    local_content = _load_local_defaults_content()
-    sheet_content = _load_google_sheet_content(runtime_config)
-    doc_content = _load_google_doc_overrides(runtime_config)
+    remote_pipeline_failures = []
+    try:
+        local_content = _load_local_defaults_content()
+    except Exception as exc:
+        logger.warning("[CONTENT] Local defaults load failed; continuing with built-in defaults: %s", exc)
+        local_content = {}
+    try:
+        sheet_content = _load_google_sheet_content(runtime_config, local_content)
+    except Exception as exc:
+        logger.warning("[CONTENT] Google Sheet content pipeline failed without disabling other content sources: %s", exc)
+        remote_pipeline_failures.append(f"sheets: {exc}")
+        sheet_content = {}
+    try:
+        doc_content = _load_help_faq_google_doc_overrides(runtime_config)
+    except Exception as exc:
+        logger.warning("[CONTENT] Google Doc content pipeline failed without disabling other content sources: %s", exc)
+        remote_pipeline_failures.append(f"docs: {exc}")
+        doc_content = {}
 
     merged = {}
     for key, value in (local_content or {}).items():
@@ -1383,7 +1585,8 @@ def _load_external_content():
 
     for key, value in (sheet_content or {}).items():
         merged[key] = value
-        _set_content_source(key, "google", value, ok=True, detail="google_sheet")
+        detail = "google_sheet_override" if key in {"gemini_coaching_prompt", "gemini_fail_prompt"} else "google_sheet"
+        _set_content_source(key, "google", value, ok=True, detail=detail)
 
     for key, value in (doc_content or {}).items():
         merged[key] = value
@@ -1392,6 +1595,23 @@ def _load_external_content():
     remote_keys = sorted(set(sheet_content.keys()) | set(doc_content.keys()))
     if remote_keys:
         logger.info("[CONTENT] Loaded remote admin overrides for: %s", ", ".join(remote_keys))
+    if remote_pipeline_failures:
+        logger.warning(
+            "[CONTENT] Remote content pipeline had isolated failure(s), but did not short-circuit other loaders: %s",
+            "; ".join(remote_pipeline_failures),
+        )
+        logger.warning("[SAM] Fallback mode is active: %s", "; ".join(remote_pipeline_failures))
+    else:
+        logger.info("[CONTENT] Remote content pipeline completed without short-circuiting other loaders.")
+    for key in ("shows", "donors_new", "donors_existing", "donors_increase"):
+        status = _content_source_status.get(key) or {}
+        logger.info(
+            "[SAM] Active %s source: %s%s (%d item(s))",
+            key,
+            status.get("source") or "builtin",
+            f" via {status.get('detail')}" if status.get("detail") else "",
+            status.get("count") or _content_count(merged.get(key)),
+        )
     return merged
 
 
@@ -1513,8 +1733,6 @@ TICKER_MESSAGES = [
     "Tip: Use the Discord Post button to quickly copy common messages",
     "Need help? Check the Help tab for step-by-step setup guides",
 ]
-
-UPDATE_DOC_URL = "https://docs.google.com/document/d/1-eNbA4KriCkE8pKnnpj0FReUhUmMvTVjG8Y7B7ppu_A/export?format=txt"
 
 DEFAULT_FORM_URL = "https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl"
 
@@ -1837,7 +2055,7 @@ The Google Sheet tab names must match the local file base names exactly:
 
 `help.md` and `faq.md` are local markdown defaults. If Google Doc overrides are configured and available, they replace those local files for runtime help content.
 
-`gemini-coaching-prompt.md` and `gemini-fail-prompt.md` are editable local defaults for Gemini summary wording. They can also be overridden by Google Sheet tabs named `gemini-coaching-prompt` and `gemini-fail-prompt`, or by Google Docs configured with `admin_gemini_coaching_prompt_doc_url` and `admin_gemini_fail_prompt_doc_url`.
+`gemini-coaching-prompt.md` and `gemini-fail-prompt.md` are the primary Gemini summary prompts. Google Sheet tabs named `gemini-coaching-prompt` and `gemini-fail-prompt` are optional overrides only when A1 is `prompt`, A2 contains the full prompt, and the normalized content differs from the bundled markdown file.
 """
 
 
@@ -2179,6 +2397,940 @@ def empty_session():
     }
 
 
+SHARED_CANDIDATE_SESSIONS_TAB = "Candidate Sessions"
+SHARED_PENDING_SUP_TRANSFERS_TAB = "Pending Sup Transfers"
+
+SHARED_CANDIDATE_SESSION_HEADERS = [
+    "session_id",
+    "candidate_name",
+    "candidate_first_name",
+    "candidate_last_initial",
+    "tester_name",
+    "session_type",
+    "attempt_number",
+    "final_attempt",
+    "status",
+    "created_at",
+    "completed_at",
+    "mock_calls_completed",
+    "sup_transfers_completed",
+    "call_1_result",
+    "call_2_result",
+    "call_3_result",
+    "sup_transfer_1_result",
+    "sup_transfer_2_result",
+    "coaching_summary",
+    "fail_summary",
+    "review_notes",
+    "needs_sup_transfer",
+    "pending_sup_transfer_id",
+    "withdrawn",
+    "withdrawn_at",
+    "extra_attempt_granted",
+    "extra_attempt_reason",
+    "retention_until",
+    "archived",
+]
+
+SHARED_PENDING_SUP_TRANSFER_HEADERS = [
+    "pending_id",
+    "candidate_name",
+    "candidate_first_name",
+    "candidate_last_initial",
+    "original_tester_name",
+    "original_session_id",
+    "created_at",
+    "status",
+    "final_attempt",
+    "mock_call_summary",
+    "call_1_result",
+    "call_2_result",
+    "call_3_result",
+    "needed_reason",
+    "completed_by",
+    "completed_at",
+    "completed_status",
+    "notes",
+]
+
+UPDATE_MTS_TAB = "update-MTS"
+UPDATE_SAM_TAB = "update-SAM"
+UPDATE_TAB_HEADERS = [
+    "Version",
+    "RequiredVersion",
+    "Release Date",
+    "Release Title",
+    "URL",
+    "Notes",
+]
+
+
+def _shared_tracking_required_setup():
+    return {
+        SHARED_CANDIDATE_SESSIONS_TAB: SHARED_CANDIDATE_SESSION_HEADERS,
+        SHARED_PENDING_SUP_TRANSFERS_TAB: SHARED_PENDING_SUP_TRANSFER_HEADERS,
+    }
+
+
+def _shared_tracking_manual_setup(sheet_id="", service_account_email=""):
+    return {
+        "spreadsheetId": sheet_id or _shared_tracking_sheet_id(),
+        "serviceAccountEmail": service_account_email or _get_service_account_email(),
+        "message": (
+            "Create the required tabs below in the master Google Sheet or grant Editor access "
+            "to the listed service account so the app can create them automatically."
+        ),
+        "tabs": _shared_tracking_required_setup(),
+    }
+
+
+def _update_sheet_required_setup():
+    return {
+        UPDATE_MTS_TAB: UPDATE_TAB_HEADERS,
+        UPDATE_SAM_TAB: UPDATE_TAB_HEADERS,
+    }
+
+
+def _shared_tracking_sheet_id():
+    runtime_config = _load_backend_runtime_config()
+    return _resolve_content_sheet_id(runtime_config or {})
+
+
+def _get_service_account_email():
+    creds_path = _resolve_notification_service_account_file()
+    if not creds_path:
+        return ""
+    try:
+        with open(creds_path, "r", encoding="utf-8") as f:
+            return str((json.load(f) or {}).get("client_email") or "").strip()
+    except Exception as exc:
+        logger.warning("[SHARED] Unable to read service account email from %s: %s", creds_path, exc)
+        return ""
+
+
+def _get_shared_tracking_sheet_service():
+    sheet_id = _shared_tracking_sheet_id()
+    if not sheet_id:
+        return {
+            "ok": False,
+            "error": "No admin content Google Sheet is configured for shared candidate tracking.",
+            "setup": _shared_tracking_manual_setup(),
+        }
+
+    creds_path = _resolve_notification_service_account_file()
+    service_account_email = _get_service_account_email()
+    if not creds_path:
+        return {
+            "ok": False,
+            "error": "Google service account credentials are not configured, so shared candidate tracking cannot write to the master sheet.",
+            "sheet_id": sheet_id,
+            "serviceAccountEmail": service_account_email,
+            "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+        }
+
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+    except Exception as exc:
+        return {"ok": False, "error": f"Google Sheets dependencies are unavailable: {exc}", "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = service_account.Credentials.from_service_account_file(str(creds_path), scopes=scopes)
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        return {"ok": True, "service": service, "sheet_id": sheet_id, "serviceAccountEmail": service_account_email}
+    except Exception as exc:
+        return {"ok": False, "error": f"Unable to initialize Google Sheets credentials for shared tracking: {exc}", "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+
+
+def _shared_permission_hint(exc):
+    text = str(exc or "")
+    if "403" in text or "PERMISSION_DENIED" in text or "permission" in text.lower():
+        return "missing_permission"
+    if "404" in text or "not found" in text.lower():
+        return "wrong_spreadsheet_or_missing_access"
+    return "google_sheets_error"
+
+
+def _ensure_shared_tracking_tabs(service, sheet_id, service_account_email=""):
+    statuses = []
+    try:
+        sheets_api = service.spreadsheets()
+        metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+        tabs = {
+            ((sheet.get("properties") or {}).get("title") or ""): sheet
+            for sheet in metadata.get("sheets", [])
+        }
+
+        requests = []
+        for title in _shared_tracking_required_setup().keys():
+            if title not in tabs:
+                statuses.append({"tab": title, "exists": False, "action": "create_pending"})
+                requests.append({"addSheet": {"properties": {"title": title}}})
+            else:
+                logger.info("[SHARED] Required tracking tab already exists: %s", title)
+                statuses.append({"tab": title, "exists": True, "action": "already_exists"})
+
+        if requests:
+            try:
+                logger.info("[SHARED] Creating missing shared tracking tabs in spreadsheet %s: %s", _mask_config_value(sheet_id), [r["addSheet"]["properties"]["title"] for r in requests])
+                sheets_api.batchUpdate(spreadsheetId=sheet_id, body={"requests": requests}).execute()
+                for status in statuses:
+                    if status.get("action") == "create_pending":
+                        status["action"] = "created"
+                        logger.info("[SHARED] Created tracking tab: %s", status["tab"])
+            except Exception as exc:
+                reason = _shared_permission_hint(exc)
+                missing_tabs = [
+                    status["tab"]
+                    for status in statuses
+                    if status.get("action") == "create_pending"
+                ]
+                logger.error(
+                    "[SHARED] Failed to create shared tracking tabs. reason=%s service_account=%s spreadsheet=%s missing_tabs=%s error=%s",
+                    reason,
+                    service_account_email or "unknown",
+                    _mask_config_value(sheet_id),
+                    missing_tabs,
+                    exc,
+                )
+                return {
+                    "ok": False,
+                    "error": (
+                        "Missing shared tracking tabs could not be created. "
+                        f"Reason: {reason}. Service account requiring Editor access: {service_account_email or 'unknown'}."
+                    ),
+                    "reason": reason,
+                    "sheetId": sheet_id,
+                    "serviceAccountEmail": service_account_email,
+                    "statuses": statuses,
+                    "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+                }
+            metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+            tabs = {
+                ((sheet.get("properties") or {}).get("title") or ""): sheet
+                for sheet in metadata.get("sheets", [])
+            }
+
+        for title, headers in _shared_tracking_required_setup().items():
+            if title not in tabs:
+                logger.error("[SHARED] Required shared tracking tab is still missing after setup attempt: %s", title)
+                return {
+                    "ok": False,
+                    "error": f"Required shared tracking tab is missing and could not be created: {title}",
+                    "sheetId": sheet_id,
+                    "serviceAccountEmail": service_account_email,
+                    "statuses": statuses,
+                    "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+                }
+            quoted = _quote_sheet_title_for_a1(title)
+            last_col = _column_letter(len(headers))
+            current = sheets_api.values().get(
+                spreadsheetId=sheet_id,
+                range=f"{quoted}!A1:{last_col}1",
+            ).execute().get("values", [[]])[0]
+            if current[: len(headers)] != headers:
+                has_conflicting_header = any(_normalize_notification_text(value) for value in current)
+                if has_conflicting_header:
+                    logger.error("[SHARED] Shared tracking tab '%s' has unexpected non-empty headers: %s", title, current)
+                    return {
+                        "ok": False,
+                        "error": f"Shared tracking tab '{title}' has unexpected headers.",
+                        "sheetId": sheet_id,
+                        "serviceAccountEmail": service_account_email,
+                        "statuses": statuses,
+                        "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+                    }
+                logger.info("[SHARED] Writing headers for shared tracking tab: %s", title)
+                sheets_api.values().update(
+                    spreadsheetId=sheet_id,
+                    range=f"{quoted}!A1:{last_col}1",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [headers]},
+                ).execute()
+                statuses.append({"tab": title, "headers": "written"})
+            else:
+                logger.info("[SHARED] Headers verified for shared tracking tab: %s", title)
+                statuses.append({"tab": title, "headers": "verified"})
+        return {
+            "ok": True,
+            "sheetId": sheet_id,
+            "serviceAccountEmail": service_account_email,
+            "statuses": statuses,
+            "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+        }
+    except Exception as exc:
+        reason = _shared_permission_hint(exc)
+        logger.error(
+            "[SHARED] Unable to verify shared tracking tabs. reason=%s service_account=%s spreadsheet=%s error=%s",
+            reason,
+            service_account_email or "unknown",
+            _mask_config_value(sheet_id),
+            exc,
+        )
+        return {
+            "ok": False,
+            "error": f"Unable to create or verify shared tracking tabs. Reason: {reason}. Google Sheets error: {exc}",
+            "reason": reason,
+            "sheetId": sheet_id,
+            "serviceAccountEmail": service_account_email,
+            "statuses": statuses,
+            "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+        }
+
+
+def _shared_sheet_context():
+    service_result = _get_shared_tracking_sheet_service()
+    if not service_result.get("ok"):
+        return service_result
+    ensure_result = _ensure_shared_tracking_tabs(
+        service_result["service"],
+        service_result["sheet_id"],
+        service_result.get("serviceAccountEmail") or "",
+    )
+    if not ensure_result.get("ok"):
+        return ensure_result
+    return {**service_result, "setupStatus": ensure_result}
+
+
+def _verify_shared_session_sheets():
+    service_result = _get_shared_tracking_sheet_service()
+    if not service_result.get("ok"):
+        logger.error("[SHARED] Shared session sheet verification failed before Sheets access: %s", service_result.get("error"))
+        return {
+            **service_result,
+            "checkedAt": datetime.now(timezone.utc).isoformat(),
+        }
+    ensure_result = _ensure_shared_tracking_tabs(
+        service_result["service"],
+        service_result["sheet_id"],
+        service_result.get("serviceAccountEmail") or "",
+    )
+    return {
+        **ensure_result,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _split_candidate_name(candidate_name):
+    parts = [part for part in str(candidate_name or "").strip().split() if part]
+    first = parts[0] if parts else ""
+    last_initial = (parts[-1][0].upper() if len(parts) > 1 and parts[-1] else "")
+    return first, last_initial
+
+
+def _shared_bool(value):
+    return "TRUE" if bool(value) else "FALSE"
+
+
+def _shared_truthy(value):
+    return str(value or "").strip().lower() in {"true", "yes", "1", "y"}
+
+
+def _shared_status(status):
+    status = str(status or "").strip()
+    mapping = {
+        "Pass": "PASS",
+        "Fail": "FAIL",
+        "Incomplete": "INCOMPLETE",
+        "NC/NS": "FAIL",
+    }
+    return mapping.get(status, status or "INCOMPLETE")
+
+
+def _count_completed(session, prefix, total):
+    return sum(1 for i in range(1, total + 1) if (session.get(f"{prefix}_{i}") or {}).get("result"))
+
+
+def _candidate_needs_sup_transfer(session, status):
+    if session.get("supervisor_only"):
+        return False
+    if status not in {"Incomplete", "INCOMPLETE"}:
+        return False
+    calls_passed = _count_results(session, "call", 3, "Pass")
+    sups_passed = _count_results(session, "sup_transfer", 2, "Pass")
+    sups_failed = _count_results(session, "sup_transfer", 2, "Fail")
+    return calls_passed >= 2 and sups_passed == 0 and sups_failed < 2
+
+
+def _add_business_days(start_dt, business_days):
+    current = start_dt
+    added = 0
+    while added < business_days:
+        current = current + timedelta(days=1)
+        if current.weekday() < 5:
+            added += 1
+    return current
+
+
+def _shared_retention_until(status, session):
+    if status in {"FAIL-Final Attempt", "WITHDREW FROM CERTIFICATION"} or session.get("withdrawn"):
+        return _add_business_days(datetime.now(timezone.utc), 10).date().isoformat()
+    return ""
+
+
+def _session_attempt_number(existing_rows, candidate_name):
+    normalized_name = " ".join(str(candidate_name or "").lower().split())
+    attempts = [
+        row for row in existing_rows
+        if " ".join(str(row.get("candidate_name") or "").lower().split()) == normalized_name
+    ]
+    return len(attempts) + 1
+
+
+def _shared_read_rows(sheets_api, sheet_id, tab_name, headers):
+    quoted = _quote_sheet_title_for_a1(tab_name)
+    last_col = _column_letter(len(headers))
+    values = sheets_api.values().get(
+        spreadsheetId=sheet_id,
+        range=f"{quoted}!A2:{last_col}",
+    ).execute().get("values", [])
+    rows = []
+    for index, row in enumerate(values, start=2):
+        rows.append({
+            "_row_number": index,
+            **{
+                headers[col_index]: (row[col_index] if col_index < len(row) else "")
+                for col_index in range(len(headers))
+            },
+        })
+    return rows
+
+
+def _shared_update_or_append_row(sheets_api, sheet_id, tab_name, headers, key_name, key_value, row_values):
+    existing = _shared_read_rows(sheets_api, sheet_id, tab_name, headers)
+    quoted = _quote_sheet_title_for_a1(tab_name)
+    last_col = _column_letter(len(headers))
+    target = next((row for row in existing if str(row.get(key_name) or "").strip() == str(key_value or "").strip()), None)
+    if target:
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A{target['_row_number']}:{last_col}{target['_row_number']}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [row_values]},
+        ).execute()
+        return "updated"
+    sheets_api.values().append(
+        spreadsheetId=sheet_id,
+        range=f"{quoted}!A2",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [row_values]},
+    ).execute()
+    return "appended"
+
+
+def _shared_update_existing_row(sheets_api, sheet_id, tab_name, headers, row_number, row_values):
+    quoted = _quote_sheet_title_for_a1(tab_name)
+    last_col = _column_letter(len(headers))
+    sheets_api.values().update(
+        spreadsheetId=sheet_id,
+        range=f"{quoted}!A{row_number}:{last_col}{row_number}",
+        valueInputOption="USER_ENTERED",
+        body={"values": [row_values]},
+    ).execute()
+
+
+def _shared_row_values(row, headers):
+    return [row.get(header, "") for header in headers]
+
+
+def _candidate_name_key(value):
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _candidate_row_active(row):
+    if _shared_truthy(row.get("archived")):
+        return False
+    retention_until = str(row.get("retention_until") or "").strip()
+    if retention_until:
+        try:
+            return datetime.now(timezone.utc).date() <= datetime.fromisoformat(retention_until).date()
+        except ValueError:
+            return True
+    return True
+
+
+def _candidate_qualifying_failure(row):
+    status = str(row.get("status") or "").strip().upper()
+    if status in {"FAIL", "FAIL-FINAL ATTEMPT", "NC/NS"}:
+        return True
+    sup_results = [str(row.get(f"sup_transfer_{i}_result") or "").strip().lower() for i in range(1, 3)]
+    call_results = [str(row.get(f"call_{i}_result") or "").strip().lower() for i in range(1, 4)]
+    return call_results.count("pass") >= 2 and sup_results.count("fail") >= 2
+
+
+def _candidate_attempt_summary(rows):
+    qualifying_failures = sum(1 for row in rows if _candidate_qualifying_failure(row))
+    extra_attempt = any(_shared_truthy(row.get("extra_attempt_granted")) for row in rows)
+    withdrawn = any(_shared_truthy(row.get("withdrawn")) or str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION" for row in rows)
+    return {
+        "attempt_count": qualifying_failures,
+        "final_attempt_risk": qualifying_failures >= 2 and not extra_attempt,
+        "extra_attempt_granted": extra_attempt,
+        "withdrawn": withdrawn,
+    }
+
+
+def _shared_admin_candidate_snapshot():
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "error": context.get("error"), "setup": context.get("setup"), "candidates": [], "pending": []}
+
+    try:
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        candidate_rows = [
+            _normalize_shared_row(row)
+            for row in _shared_read_rows(
+                sheets_api,
+                sheet_id,
+                SHARED_CANDIDATE_SESSIONS_TAB,
+                SHARED_CANDIDATE_SESSION_HEADERS,
+            )
+        ]
+        pending_rows = [
+            _normalize_shared_row(row)
+            for row in _shared_read_rows(
+                sheets_api,
+                sheet_id,
+                SHARED_PENDING_SUP_TRANSFERS_TAB,
+                SHARED_PENDING_SUP_TRANSFER_HEADERS,
+            )
+        ]
+    except Exception as exc:
+        logger.exception("[SHARED] Failed to read admin candidate tracking rows: %s", exc)
+        return {"ok": False, "error": f"Unable to read shared candidate tracking: {exc}", "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
+
+    active_candidates = [row for row in candidate_rows if _candidate_row_active(row)]
+    grouped = {}
+    for row in active_candidates:
+        grouped.setdefault(_candidate_name_key(row.get("candidate_name")), []).append(row)
+
+    candidate_summaries = []
+    for key, rows in grouped.items():
+        if not key:
+            continue
+        rows.sort(key=lambda row: str(row.get("completed_at") or row.get("created_at") or ""), reverse=True)
+        latest = rows[0]
+        summary = _candidate_attempt_summary(rows)
+        candidate_summaries.append({
+            **latest,
+            **summary,
+            "latest_session_id": latest.get("session_id") or "",
+            "latest_status": latest.get("status") or "",
+            "last_session_date": latest.get("completed_at") or latest.get("created_at") or "",
+        })
+
+    pending_active = [
+        row for row in pending_rows
+        if str(row.get("status") or "").strip().lower() in {"pending", "resumed"}
+    ]
+    failed_not_final = [
+        row for row in candidate_summaries
+        if row.get("attempt_count", 0) >= 1
+        and not row.get("final_attempt_risk")
+        and not row.get("withdrawn")
+        and str(row.get("latest_status") or "").upper() != "FAIL-FINAL ATTEMPT"
+    ]
+    incomplete = [
+        row for row in candidate_summaries
+        if str(row.get("latest_status") or "").upper() == "INCOMPLETE" and not row.get("withdrawn")
+    ]
+    withdrawn = [row for row in candidate_summaries if row.get("withdrawn")]
+    extra_attempt = [row for row in candidate_summaries if row.get("extra_attempt_granted")]
+
+    return {
+        "ok": True,
+        "setup": _shared_tracking_required_setup(),
+        "candidates": candidate_summaries,
+        "pending": pending_active,
+        "views": {
+            "pending": pending_active,
+            "failedNotFinal": failed_not_final,
+            "incomplete": incomplete,
+            "withdrawn": withdrawn,
+            "extraAttemptGranted": extra_attempt,
+            "allActive": [row for row in candidate_summaries if not row.get("withdrawn")],
+        },
+    }
+
+
+def _shared_admin_candidate_action(payload):
+    action = str((payload or {}).get("action") or "").strip()
+    candidate_name = str((payload or {}).get("candidate_name") or "").strip()
+    session_id = str((payload or {}).get("session_id") or (payload or {}).get("latest_session_id") or "").strip()
+    pending_id = str((payload or {}).get("pending_id") or "").strip()
+    reason = str((payload or {}).get("reason") or "").strip()
+    if action not in {"withdraw", "grant_extra_attempt", "cancel_pending"}:
+        return {"ok": False, "error": "Unsupported candidate tracking action."}
+    if not candidate_name and not session_id and not pending_id:
+        return {"ok": False, "error": "Candidate name, session id, or pending id is required."}
+
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "error": context.get("error"), "setup": context.get("setup")}
+
+    try:
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        candidate_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+        pending_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
+        target_key = _candidate_name_key(candidate_name)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        retention_until = _add_business_days(datetime.now(timezone.utc), 10).date().isoformat()
+        updated_candidates = 0
+        updated_pending = 0
+
+        for row in candidate_rows:
+            matches = (
+                (session_id and str(row.get("session_id") or "").strip() == session_id)
+                or (target_key and _candidate_name_key(row.get("candidate_name")) == target_key)
+            )
+            if not matches:
+                continue
+            if action == "withdraw":
+                row["status"] = "WITHDREW FROM CERTIFICATION"
+                row["withdrawn"] = "TRUE"
+                row["withdrawn_at"] = now_iso
+                row["retention_until"] = row.get("retention_until") or retention_until
+            elif action == "grant_extra_attempt":
+                row["extra_attempt_granted"] = "TRUE"
+                row["extra_attempt_reason"] = reason
+                row["withdrawn"] = "FALSE"
+                if str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION":
+                    row["status"] = "INCOMPLETE"
+            _shared_update_existing_row(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS, row["_row_number"], _shared_row_values(row, SHARED_CANDIDATE_SESSION_HEADERS))
+            updated_candidates += 1
+
+        for row in pending_rows:
+            matches = (
+                (pending_id and str(row.get("pending_id") or "").strip() == pending_id)
+                or (session_id and str(row.get("original_session_id") or "").strip() == session_id)
+                or (target_key and _candidate_name_key(row.get("candidate_name")) == target_key)
+            )
+            if not matches:
+                continue
+            if action == "withdraw":
+                row["status"] = "withdrawn"
+                row["completed_at"] = now_iso
+                row["completed_status"] = "WITHDREW FROM CERTIFICATION"
+                row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", "Admin marked candidate as withdrew from certification."] if part)
+            elif action == "grant_extra_attempt":
+                row["status"] = "pending"
+                row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", f"Extra attempt granted. {reason}".strip()] if part)
+            elif action == "cancel_pending":
+                row["status"] = "cancelled"
+                row["completed_at"] = now_iso
+                row["completed_status"] = "cancelled"
+                row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", "Admin cancelled pending supervisor transfer."] if part)
+            _shared_update_existing_row(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS, row["_row_number"], _shared_row_values(row, SHARED_PENDING_SUP_TRANSFER_HEADERS))
+            updated_pending += 1
+
+        return {"ok": True, "updatedCandidates": updated_candidates, "updatedPending": updated_pending, "action": action}
+    except Exception as exc:
+        logger.exception("[SHARED] Candidate admin action failed: %s", exc)
+        return {"ok": False, "error": f"Candidate tracking update failed: {exc}", "setup": _shared_tracking_required_setup()}
+
+
+def _ensure_update_tabs(service, sheet_id):
+    try:
+        sheets_api = service.spreadsheets()
+        metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+        tabs = {
+            ((sheet.get("properties") or {}).get("title") or ""): sheet
+            for sheet in metadata.get("sheets", [])
+        }
+        requests = [
+            {"addSheet": {"properties": {"title": title}}}
+            for title in _update_sheet_required_setup().keys()
+            if title not in tabs
+        ]
+        if requests:
+            sheets_api.batchUpdate(spreadsheetId=sheet_id, body={"requests": requests}).execute()
+        for title, headers in _update_sheet_required_setup().items():
+            quoted = _quote_sheet_title_for_a1(title)
+            last_col = _column_letter(len(headers))
+            current = sheets_api.values().get(
+                spreadsheetId=sheet_id,
+                range=f"{quoted}!A1:{last_col}1",
+            ).execute().get("values", [[]])[0]
+            if current[: len(headers)] != headers:
+                has_conflicting_header = any(_normalize_notification_text(value) for value in current)
+                if has_conflicting_header:
+                    return {"ok": False, "error": f"Update tab '{title}' has unexpected headers.", "setup": _update_sheet_required_setup()}
+                sheets_api.values().update(
+                    spreadsheetId=sheet_id,
+                    range=f"{quoted}!A1:{last_col}1",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [headers]},
+                ).execute()
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": f"Unable to create or verify update tabs: {exc}", "setup": _update_sheet_required_setup()}
+
+
+def _parse_update_notes(value):
+    return [
+        line.strip().lstrip("-").strip()
+        for line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if line.strip()
+    ]
+
+
+def _get_update_metadata(app_name):
+    normalized = str(app_name or "").strip().lower()
+    tab_name = UPDATE_SAM_TAB if normalized in {"sam", "notification-manager", "notification"} else UPDATE_MTS_TAB
+    service_result = _get_shared_tracking_sheet_service()
+    if not service_result.get("ok"):
+        return {"ok": False, "error": service_result.get("error"), "setup": _update_sheet_required_setup()}
+    ensure_result = _ensure_update_tabs(service_result["service"], service_result["sheet_id"])
+    if not ensure_result.get("ok"):
+        return ensure_result
+
+    try:
+        sheets_api = service_result["service"].spreadsheets()
+        rows = _shared_read_rows(sheets_api, service_result["sheet_id"], tab_name, UPDATE_TAB_HEADERS)
+        row = next((candidate for candidate in rows if str(candidate.get("Version") or "").strip()), None)
+        if not row:
+            return {"ok": True, "app": normalized or "mts", "tab": tab_name, "latestVersion": "", "requiredVersion": "", "downloadUrl": "", "releaseDate": "", "releaseTitle": "", "notes": []}
+        return {
+            "ok": True,
+            "app": "sam" if tab_name == UPDATE_SAM_TAB else "mts",
+            "tab": tab_name,
+            "latestVersion": str(row.get("Version") or "").strip(),
+            "requiredVersion": str(row.get("RequiredVersion") or "").strip(),
+            "releaseDate": str(row.get("Release Date") or "").strip(),
+            "releaseTitle": str(row.get("Release Title") or "").strip(),
+            "downloadUrl": str(row.get("URL") or "").strip(),
+            "notes": _parse_update_notes(row.get("Notes") or ""),
+            "source": "master-google-sheet",
+            "setup": _update_sheet_required_setup(),
+        }
+    except Exception as exc:
+        logger.warning("[UPDATE] Failed to read update metadata from %s: %s", tab_name, exc)
+        return {"ok": False, "error": f"Unable to read update metadata from {tab_name}: {exc}", "setup": _update_sheet_required_setup()}
+
+
+def _mock_call_summary(session):
+    parts = []
+    for i in range(1, 4):
+        call = session.get(f"call_{i}") or {}
+        if call.get("result"):
+            parts.append(f"Call {i}: {call.get('result')} ({call.get('type') or 'Unknown type'})")
+    return "; ".join(parts)
+
+
+def _candidate_session_row(session, existing_rows=None):
+    existing_rows = existing_rows or []
+    status = compute_final_status(session)
+    shared_status = _shared_status(status)
+    session_id = str(session.get("history_id") or session.get("resume_source_history_id") or uuid.uuid4())
+    candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
+    first, last_initial = _split_candidate_name(candidate_name)
+    pending_id = str(session.get("pending_sup_transfer_id") or session.get("shared_pending_id") or "").strip()
+    needs_sup = _candidate_needs_sup_transfer(session, status)
+    if needs_sup and not pending_id:
+        pending_id = f"pending-{session_id}"
+    created_at = str(session.get("timestamp_iso") or session.get("created_at") or datetime.now(timezone.utc).isoformat())
+    completed_at = str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat())
+    attempt_number = session.get("attempt_number") or _session_attempt_number(existing_rows, candidate_name)
+    return [
+        session_id,
+        candidate_name,
+        first,
+        last_initial,
+        session.get("tester_name") or "",
+        "sup_transfer_only" if session.get("supervisor_only") else "mock_session",
+        attempt_number,
+        _shared_bool(session.get("final_attempt")),
+        shared_status,
+        created_at,
+        completed_at,
+        _count_completed(session, "call", 3),
+        _count_completed(session, "sup_transfer", 2),
+        (session.get("call_1") or {}).get("result") or "",
+        (session.get("call_2") or {}).get("result") or "",
+        (session.get("call_3") or {}).get("result") or "",
+        (session.get("sup_transfer_1") or {}).get("result") or "",
+        (session.get("sup_transfer_2") or {}).get("result") or "",
+        session.get("coaching_summary") or "",
+        session.get("fail_summary") or "",
+        session.get("review_notes") or "",
+        _shared_bool(needs_sup),
+        pending_id,
+        _shared_bool(session.get("withdrawn") or shared_status == "WITHDREW FROM CERTIFICATION"),
+        session.get("withdrawn_at") or "",
+        _shared_bool(session.get("extra_attempt_granted")),
+        session.get("extra_attempt_reason") or "",
+        _shared_retention_until(shared_status, session),
+        _shared_bool(False),
+    ], pending_id, needs_sup
+
+
+def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=False):
+    status = compute_final_status(session)
+    candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
+    first, last_initial = _split_candidate_name(candidate_name)
+    original_session_id = str(session.get("resume_source_history_id") or session.get("history_id") or "").strip()
+    if not original_session_id:
+        original_session_id = str(session.get("session_id") or "").strip()
+    if not original_session_id:
+        original_session_id = str(uuid.uuid4())
+    is_completed = completed or _shared_status(status) in {"PASS", "FAIL", "FAIL-Final Attempt", "RESUMED-PASS"}
+    pending_status = "pending"
+    if is_completed:
+        pending_status = "completed" if status in {"Pass", "RESUMED-PASS"} else "failed_final" if status == "FAIL-Final Attempt" else "completed"
+    elif session.get("withdrawn"):
+        pending_status = "withdrawn"
+    elif session.get("resumed_sup_transfer_only") or session.get("shared_pending_sup_transfer"):
+        pending_status = "resumed"
+    created_at = (existing_row or {}).get("created_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()
+    completed_at = datetime.now(timezone.utc).isoformat() if is_completed else ""
+    notes = "\n\n".join(
+        part for part in [
+            session.get("coaching_summary") or "",
+            session.get("fail_summary") or "",
+            session.get("review_notes") or "",
+        ]
+        if str(part or "").strip()
+    )
+    return [
+        pending_id,
+        candidate_name,
+        first,
+        last_initial,
+        session.get("resume_source_tester") or session.get("tester_name") or (existing_row or {}).get("original_tester_name") or "",
+        original_session_id,
+        created_at,
+        pending_status,
+        _shared_bool(session.get("final_attempt")),
+        _mock_call_summary(session),
+        (session.get("call_1") or {}).get("result") or "",
+        (session.get("call_2") or {}).get("result") or "",
+        (session.get("call_3") or {}).get("result") or "",
+        "Mock calls passed; supervisor transfer still required.",
+        session.get("tester_name") or "" if is_completed else "",
+        completed_at,
+        _shared_status(status) if is_completed else "",
+        notes,
+    ]
+
+
+def _sync_shared_candidate_tracking(session):
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        logger.warning("[SHARED] Candidate tracking unavailable: %s Required setup: %s", context.get("error"), context.get("setup"))
+        return {"ok": False, "error": context.get("error"), "setup": context.get("setup")}
+
+    try:
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        candidate_rows = _shared_read_rows(
+            sheets_api,
+            sheet_id,
+            SHARED_CANDIDATE_SESSIONS_TAB,
+            SHARED_CANDIDATE_SESSION_HEADERS,
+        )
+        row_values, pending_id, needs_sup = _candidate_session_row(session, candidate_rows)
+        session_id = row_values[0]
+        candidate_action = _shared_update_or_append_row(
+            sheets_api,
+            sheet_id,
+            SHARED_CANDIDATE_SESSIONS_TAB,
+            SHARED_CANDIDATE_SESSION_HEADERS,
+            "session_id",
+            session_id,
+            row_values,
+        )
+
+        pending_action = ""
+        if needs_sup or session.get("shared_pending_sup_transfer") or session.get("pending_sup_transfer_id"):
+            pending_id = pending_id or str(session.get("pending_sup_transfer_id") or f"pending-{session_id}")
+            pending_rows = _shared_read_rows(
+                sheets_api,
+                sheet_id,
+                SHARED_PENDING_SUP_TRANSFERS_TAB,
+                SHARED_PENDING_SUP_TRANSFER_HEADERS,
+            )
+            existing_pending = next((row for row in pending_rows if row.get("pending_id") == pending_id), None)
+            pending_row = _pending_sup_transfer_row(
+                session,
+                pending_id,
+                existing_pending,
+                completed=not needs_sup,
+            )
+            pending_action = _shared_update_or_append_row(
+                sheets_api,
+                sheet_id,
+                SHARED_PENDING_SUP_TRANSFERS_TAB,
+                SHARED_PENDING_SUP_TRANSFER_HEADERS,
+                "pending_id",
+                pending_id,
+                pending_row,
+            )
+
+        return {"ok": True, "candidateAction": candidate_action, "pendingAction": pending_action}
+    except Exception as exc:
+        logger.exception("[SHARED] Failed to sync candidate tracking: %s", exc)
+        return {"ok": False, "error": f"Shared candidate tracking sync failed: {exc}", "setup": _shared_tracking_required_setup()}
+
+
+def _normalize_shared_row(row):
+    cleaned = {k: v for k, v in (row or {}).items() if not str(k).startswith("_")}
+    for key, value in list(cleaned.items()):
+        if isinstance(value, str) and value.upper() in {"TRUE", "FALSE"}:
+            cleaned[key] = value.upper() == "TRUE"
+    return cleaned
+
+
+def _lookup_shared_candidate_sessions(candidate_name):
+    query = " ".join(str(candidate_name or "").lower().split())
+    if len(query) < 2:
+        return {"ok": True, "matches": [], "finalAttempt": False, "withdrawn": False, "extraAttemptGranted": False}
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
+    sheets_api = context["service"].spreadsheets()
+    rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+    matches = []
+    for row in rows:
+        candidate = " ".join(str(row.get("candidate_name") or "").lower().split())
+        if query in candidate:
+            matches.append(_normalize_shared_row(row))
+    matches.sort(key=lambda row: str(row.get("completed_at") or row.get("created_at") or ""), reverse=True)
+    active_matches = [row for row in matches if not row.get("archived")]
+    qualifying_failures = [
+        row for row in active_matches
+        if str(row.get("status") or "").upper() in {"FAIL", "FAIL-FINAL ATTEMPT", "FAIL-Final Attempt".upper()}
+    ]
+    withdrawn = any(row.get("withdrawn") or str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION" for row in active_matches)
+    extra_attempt = any(row.get("extra_attempt_granted") for row in active_matches)
+    return {
+        "ok": True,
+        "matches": active_matches[:20],
+        "finalAttempt": len(qualifying_failures) >= 2 and not extra_attempt,
+        "qualifyingFailureCount": len(qualifying_failures),
+        "withdrawn": withdrawn,
+        "extraAttemptGranted": extra_attempt,
+    }
+
+
+def _get_shared_pending_sup_transfers():
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "items": [], "error": context.get("error"), "setup": context.get("setup")}
+    sheets_api = context["service"].spreadsheets()
+    rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
+    items = [
+        _normalize_shared_row(row)
+        for row in rows
+        if str(row.get("status") or "").strip().lower() in {"pending", "resumed"}
+    ]
+    items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    return {"ok": True, "items": items}
+
+
 # ══════════════════════════════════════════════════════════════════
 # GEMINI SERVICE (summary generation)
 # ══════════════════════════════════════════════════════════════════
@@ -2193,7 +3345,7 @@ def _get_coaching_items(data):
         elif checked and "_" in key:
             items.append(key.split("_", 1)[1].lower())
     notes = data.get("coach_notes", "")
-    if coaching.get("Other") and notes:
+    if notes:
         items.append(notes)
     return items
 
@@ -2207,13 +3359,13 @@ def _get_fail_items(data):
         if checked and key != "Other":
             items.append(key.lower())
     notes = data.get("fail_notes", "")
-    if fails.get("Other") and notes:
+    if notes:
         items.append(notes)
     return items
 
 
 DISCORD_SCREENSHOT_SUMMARY_TEXT = (
-    "Provided coaching using the standard screenshots and instructions in Discord chat."
+    "Coaching was provided using the standard screenshots and Discord chat."
 )
 
 
@@ -2304,7 +3456,7 @@ def _has_discord_screenshot_coaching(data):
             return True
 
     notes = data.get("coach_notes", "")
-    return bool(coaching.get("Other") and _looks_like_discord_screenshot_coaching(notes))
+    return bool(_looks_like_discord_screenshot_coaching(notes))
 
 
 def _dedupe_preserve_order(items):
@@ -2328,6 +3480,39 @@ def _format_management_list(items):
     if len(cleaned) == 2:
         return f"{cleaned[0]} and {cleaned[1]}"
     return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
+
+
+SPECIAL_COACHING_GUIDANCE = (
+    (
+        "dont ask just verify address and phone number",
+        (
+            "Coaching was provided on verifying donor information. For an existing member "
+            "who already gives the correct address and phone number to confirm the donor "
+            "account, those details do not need to be asked again on the Call Info screen. "
+            "The information still needs to be verified back to the caller, including the "
+            "street-name spelling and phone type."
+        ),
+    ),
+    (
+        "phonetics table provided",
+        "A phonetics table of the sound-alike letters was provided to the candidate for reference.",
+    ),
+)
+
+
+def _normalize_coaching_item_key(value):
+    text = str(value or "").lower().replace("'", "").replace("’", "")
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def _get_special_coaching_guidance(item):
+    normalized = _normalize_coaching_item_key(item)
+    if not normalized:
+        return ""
+    for marker, guidance in SPECIAL_COACHING_GUIDANCE:
+        if marker in normalized:
+            return guidance
+    return ""
 
 
 def _extract_coaching_summary_parts(section):
@@ -2405,23 +3590,54 @@ def _collect_all_fail_items(session):
     return _dedupe_preserve_order(items)
 
 
-def _build_section_coaching_summary(section, label):
+def _is_resumed_sup_transfer_session(session):
+    return bool(
+        session
+        and session.get("supervisor_only")
+        and (
+            session.get("resumed_sup_transfer_only")
+            or session.get("resume_source_history_id")
+            or session.get("resume_source_timestamp_iso")
+        )
+    )
+
+
+def _build_section_coaching_summary(section, label, include_fail_details=False):
     result = (section or {}).get("result")
     if result not in {"Pass", "Fail"}:
         return ""
 
     coaching = (section or {}).get("coaching", {}) or {}
     coaching_items = _extract_coaching_summary_parts(section)
-    coaching_notes = _normalize_notes_sentence((section or {}).get("coach_notes", "")) if coaching.get("Other") else ""
+    coaching_notes = _normalize_notes_sentence((section or {}).get("coach_notes", ""))
     has_discord_screenshot = _has_discord_screenshot_coaching(section)
 
     details = []
     if coaching_items:
-        details.append("Coaching addressed " + _format_management_list(coaching_items) + ".")
+        general_items = []
+        special_guidance = []
+        for item in coaching_items:
+            if _looks_like_discord_screenshot_coaching(item):
+                continue
+            guidance = _get_special_coaching_guidance(item)
+            if guidance:
+                special_guidance.append(guidance)
+            else:
+                general_items.append(item)
+        if general_items:
+            details.append("Coaching addressed " + _format_management_list(general_items) + ".")
+        details.extend(_dedupe_preserve_order(special_guidance))
     if has_discord_screenshot:
         details.append(DISCORD_SCREENSHOT_SUMMARY_TEXT)
     if coaching_notes:
         details.append(f"Coaching notes: {coaching_notes}.")
+    if result == "Fail" and include_fail_details:
+        fail_items = _extract_fail_summary_parts(section)
+        fail_notes = _normalize_notes_sentence((section or {}).get("fail_notes", ""))
+        if fail_items:
+            details.append("Failed-call reasons documented during coaching: " + _format_management_list(fail_items) + ".")
+        if fail_notes:
+            details.append(f"Failed-call other notes: {fail_notes}.")
     if not details:
         details.append("No coaching items were selected for this portion of the session.")
 
@@ -2434,7 +3650,7 @@ def _build_section_fail_summary(section, label):
 
     fails = (section or {}).get("fails", {}) or {}
     fail_items = _extract_fail_summary_parts(section)
-    fail_notes = _normalize_notes_sentence((section or {}).get("fail_notes", "")) if fails.get("Other") else ""
+    fail_notes = _normalize_notes_sentence((section or {}).get("fail_notes", ""))
     details = []
 
     if fail_items:
@@ -2449,48 +3665,75 @@ def _build_section_fail_summary(section, label):
 
 
 def _is_fail_na(session):
-    """Fail Summary is only for auto-fails or session-level mock-call failures."""
+    """Fail Summary is only for session-level failures, not coaching/incomplete outcomes."""
     if session.get("auto_fail_reason"):
         return False
-    if session.get("supervisor_only", False):
-        return True
-    call_fails = sum(1 for i in range(1, 4) if (session.get(f"call_{i}") or {}).get("result") == "Fail")
-    return call_fails < 2
+    return compute_final_status(session) not in {"Fail", "FAIL-Final Attempt", "NC/NS"}
 
 
 def compute_final_status(session):
     auto_fail = session.get("auto_fail_reason")
     sup_only = session.get("supervisor_only", False)
     calls_passed = sum(1 for i in range(1, 4) if (session.get(f"call_{i}") or {}).get("result") == "Pass")
+    calls_failed = sum(1 for i in range(1, 4) if (session.get(f"call_{i}") or {}).get("result") == "Fail")
     sups_passed = sum(1 for i in range(1, 3) if (session.get(f"sup_transfer_{i}") or {}).get("result") == "Pass")
+    sups_failed = sum(1 for i in range(1, 3) if (session.get(f"sup_transfer_{i}") or {}).get("result") == "Fail")
     newbie = session.get("newbie_shift_data")
+    final_attempt = bool(session.get("final_attempt"))
+    resumed_sup = _is_resumed_sup_transfer_session(session)
 
-    final_status = "Fail"
-    if not auto_fail:
-        if sup_only:
-            if sups_passed >= 1:
-                final_status = "Pass"
-            elif newbie is not None:
-                final_status = "Incomplete"
-        elif calls_passed >= 2:
-            if sups_passed >= 1:
-                final_status = "Pass"
-            elif newbie is not None:
-                final_status = "Incomplete"
+    if auto_fail:
+        auto_fail_text = str(auto_fail or "").strip().lower()
+        if auto_fail_text.startswith("nc"):
+            return "NC/NS"
+        return "FAIL-Final Attempt" if final_attempt else "Fail"
 
-    return final_status
+    if sup_only:
+        if sups_passed >= 1:
+            return "RESUMED-PASS" if resumed_sup else "Pass"
+        if sups_failed >= 2:
+            return "FAIL-Final Attempt" if final_attempt else "Incomplete"
+        if newbie is not None:
+            return "Incomplete"
+        return "Incomplete"
+
+    if calls_passed >= 2:
+        if sups_passed >= 1:
+            return "Pass"
+        if sups_failed >= 2:
+            return "FAIL-Final Attempt" if final_attempt else "Incomplete"
+        if newbie is not None:
+            return "Incomplete"
+        return "Incomplete"
+
+    if calls_failed >= 2:
+        return "FAIL-Final Attempt" if final_attempt else "Fail"
+
+    return "Incomplete"
 
 
 def normalize_history_status(entry):
     explicit_status = entry.get("status")
-    if explicit_status in {"Pass", "Fail", "Incomplete", "NC/NS"}:
+    computed_status = compute_final_status(entry)
+    if computed_status == "FAIL-Final Attempt":
+        return "FAIL-Final Attempt"
+    if explicit_status == "Incomplete" and computed_status in {"Pass", "RESUMED-PASS", "Fail", "NC/NS"}:
+        return computed_status
+    if explicit_status == "Fail" and entry.get("final_attempt"):
+        return "FAIL-Final Attempt"
+    if explicit_status == "Pass" and _is_resumed_sup_transfer_session(entry):
+        return "RESUMED-PASS"
+    if explicit_status in {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "Incomplete", "NC/NS"}:
         return explicit_status
 
     explicit_final_status = entry.get("final_status")
-    if explicit_final_status in {"Pass", "Fail", "Incomplete"}:
+    if explicit_final_status == "Fail" and entry.get("final_attempt"):
+        return "FAIL-Final Attempt"
+    if explicit_final_status == "Pass" and _is_resumed_sup_transfer_session(entry):
+        return "RESUMED-PASS"
+    if explicit_final_status in {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "Incomplete", "NC/NS"}:
         return explicit_final_status
 
-    computed_status = compute_final_status(entry)
     if computed_status != "Fail":
         return computed_status
 
@@ -2541,17 +3784,214 @@ def _normalize_history_timestamp(entry):
         return
 
 
+def _history_identity(record):
+    history_id = str((record or {}).get("history_id") or "").strip()
+    if history_id:
+        return history_id
+    candidate = str((record or {}).get("candidate_name") or (record or {}).get("candidate") or "").strip().lower()
+    tester = str((record or {}).get("tester_name") or "").strip().lower()
+    timestamp = str((record or {}).get("timestamp_iso") or (record or {}).get("timestamp") or "").strip()
+    return "|".join([timestamp, tester, candidate])
+
+
+def _resume_source_filter(session):
+    source_history_id = str((session or {}).get("resume_source_history_id") or "").strip()
+    if source_history_id:
+        return {"history_id": source_history_id}
+    source_timestamp = str((session or {}).get("resume_source_timestamp_iso") or "").strip()
+    source_candidate = str((session or {}).get("resume_source_candidate") or "").strip()
+    source_tester = str((session or {}).get("resume_source_tester") or "").strip()
+    if source_timestamp:
+        return {
+            "timestamp_iso": source_timestamp,
+            "candidate": source_candidate,
+            "candidate_name": source_candidate,
+            "tester_name": source_tester,
+        }
+    return {}
+
+
+def _history_record_matches_source(record, source_filter):
+    if not source_filter:
+        return False
+    if source_filter.get("history_id"):
+        existing_history_id = str((record or {}).get("history_id") or "").strip()
+        return existing_history_id == source_filter["history_id"] or _history_identity(record) == source_filter["history_id"]
+    if source_filter.get("timestamp_iso") and str((record or {}).get("timestamp_iso") or "").strip() != source_filter["timestamp_iso"]:
+        return False
+    candidate = str((record or {}).get("candidate") or (record or {}).get("candidate_name") or "").strip().lower()
+    expected_candidate = str(source_filter.get("candidate") or source_filter.get("candidate_name") or "").strip().lower()
+    tester = str((record or {}).get("tester_name") or "").strip().lower()
+    expected_tester = str(source_filter.get("tester_name") or "").strip().lower()
+    if expected_candidate and candidate != expected_candidate:
+        return False
+    if expected_tester and tester != expected_tester:
+        return False
+    return True
+
+
+def _history_record_matches_identifier(record, identifier):
+    normalized_identifier = str(identifier or "").strip()
+    if not normalized_identifier:
+        return False
+    history_id = str((record or {}).get("history_id") or "").strip()
+    return history_id == normalized_identifier or _history_identity(record) == normalized_identifier
+
+
+def _history_record_references_source(record, deleted_record):
+    if not record or not deleted_record:
+        return False
+
+    deleted_history_id = str(deleted_record.get("history_id") or "").strip()
+    deleted_identity = _history_identity(deleted_record)
+    source_history_id = str(record.get("resume_source_history_id") or "").strip()
+    if source_history_id and source_history_id in {deleted_history_id, deleted_identity}:
+        return True
+
+    source_timestamp = str(record.get("resume_source_timestamp_iso") or "").strip()
+    deleted_timestamp = str(deleted_record.get("timestamp_iso") or "").strip()
+    if not source_timestamp or source_timestamp != deleted_timestamp:
+        return False
+
+    source_candidate = str(record.get("resume_source_candidate") or "").strip().lower()
+    deleted_candidate = str(deleted_record.get("candidate_name") or deleted_record.get("candidate") or "").strip().lower()
+    source_tester = str(record.get("resume_source_tester") or "").strip().lower()
+    deleted_tester = str(deleted_record.get("tester_name") or "").strip().lower()
+    if source_candidate and deleted_candidate and source_candidate != deleted_candidate:
+        return False
+    if source_tester and deleted_tester and source_tester != deleted_tester:
+        return False
+    return True
+
+
+def _unlink_resume_source_fields(record):
+    cleaned = SQLiteCollection.clone(record or {})
+    for key in (
+        "resume_source_history_id",
+        "resume_source_timestamp_iso",
+        "resume_source_candidate",
+        "resume_source_tester",
+        "original_timestamp",
+        "original_timestamp_iso",
+    ):
+        cleaned.pop(key, None)
+    cleaned["resumed_from_history"] = False
+    cleaned["resumed_sup_transfer_only"] = False
+    return cleaned
+
+
+async def _cleanup_deleted_history_references(deleted_record):
+    rows = db.history.store.fetchall(
+        "SELECT id, data FROM history_documents ORDER BY id DESC",
+        (),
+    )
+    cleaned_history = 0
+    for row in rows:
+        existing = json.loads(row["data"])
+        if not _history_record_references_source(existing, deleted_record):
+            continue
+        cleaned = _unlink_resume_source_fields(existing)
+        db.history.store.execute(
+            "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+            (
+                json.dumps(cleaned, ensure_ascii=False, default=str),
+                str(cleaned.get("timestamp_iso") or cleaned.get("timestamp") or ""),
+                row["id"],
+            ),
+        )
+        cleaned_history += 1
+
+    active_session = await db.sessions.find_one({"_id": "active_session"})
+    cleaned_active_session = False
+    if active_session and _history_record_references_source(active_session, deleted_record):
+        cleaned = _unlink_resume_source_fields(active_session)
+        cleaned["_id"] = "active_session"
+        await db.sessions.replace_one({"_id": "active_session"}, cleaned, upsert=True)
+        cleaned_active_session = True
+
+    return {"history_records_unlinked": cleaned_history, "active_session_unlinked": cleaned_active_session}
+
+
+async def _delete_history_record_by_identifier(identifier):
+    rows = db.history.store.fetchall(
+        "SELECT id, data FROM history_documents ORDER BY id DESC",
+        (),
+    )
+    for row in rows:
+        existing = json.loads(row["data"])
+        if not _history_record_matches_identifier(existing, identifier):
+            continue
+        db.history.store.execute("DELETE FROM history_documents WHERE id = ?", (row["id"],))
+        cleanup = await _cleanup_deleted_history_references(existing)
+        return existing, cleanup
+    return None, {"history_records_unlinked": 0, "active_session_unlinked": False}
+
+
+async def _upsert_history_record(record, source_session=None):
+    document = SQLiteCollection.clone(record)
+    document["history_id"] = str(document.get("history_id") or uuid.uuid4())
+    document_status = normalize_history_status(document)
+    document["status"] = document_status
+    document["final_status"] = document_status
+    source_filter = _resume_source_filter(source_session or {})
+    if source_filter:
+        rows = db.history.store.fetchall(
+            "SELECT id, data FROM history_documents ORDER BY id DESC",
+            (),
+        )
+        for row in rows:
+            existing = json.loads(row["data"])
+            if not _history_record_matches_source(existing, source_filter):
+                continue
+            merged = {
+                **existing,
+                **document,
+                "history_id": existing.get("history_id") or document["history_id"],
+                "resumed_from_history": True,
+                "resumed_sup_transfer_only": True,
+                "supervisor_only": bool(document.get("supervisor_only", False)),
+                "resume_source_history_id": existing.get("history_id") or source_filter.get("history_id") or "",
+                "resume_source_timestamp_iso": existing.get("timestamp_iso") or source_filter.get("timestamp_iso") or "",
+                "original_timestamp": existing.get("timestamp") or "",
+                "original_timestamp_iso": existing.get("timestamp_iso") or "",
+            }
+            merged_status = normalize_history_status(merged)
+            merged["status"] = merged_status
+            merged["final_status"] = merged_status
+            merged["smart_resume_finalized"] = merged_status in {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "NC/NS"}
+            db.history.store.execute(
+                "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+                (
+                    json.dumps(merged, ensure_ascii=False, default=str),
+                    str(merged.get("timestamp_iso") or merged.get("timestamp") or ""),
+                    row["id"],
+                ),
+            )
+            return merged, "updated"
+
+    document["smart_resume_finalized"] = document_status in {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "NC/NS"}
+    await db.history.insert_one(document)
+    return document, "inserted"
+
+
 def build_clean_coaching(session):
     auto_fail = session.get("auto_fail_reason")
     lines = []
-    for i in range(1, 4):
-        line = _build_section_coaching_summary(session.get(f"call_{i}"), f"Call {i}")
-        if line:
-            lines.append(line)
+    include_fail_details = _is_fail_na(session)
+    if not session.get("supervisor_only", False):
+        for i in range(1, 4):
+            line = _build_section_coaching_summary(
+                session.get(f"call_{i}"),
+                f"Call {i}",
+                include_fail_details=include_fail_details,
+            )
+            if line:
+                lines.append(line)
     for i in range(1, 3):
         line = _build_section_coaching_summary(
             session.get(f"sup_transfer_{i}"),
             f"Supervisor Transfer {i}",
+            include_fail_details=include_fail_details,
         )
         if line:
             lines.append(line)
@@ -2580,10 +4020,21 @@ def build_clean_fail(session):
         )
 
     lines = []
-    for i in range(1, 4):
-        line = _build_section_fail_summary(session.get(f"call_{i}"), f"Call {i}")
-        if line:
-            lines.append(line)
+    if session.get("supervisor_only", False):
+        for i in range(1, 3):
+            line = _build_section_fail_summary(session.get(f"sup_transfer_{i}"), f"Supervisor Transfer {i}")
+            if line:
+                lines.append(line)
+    else:
+        for i in range(1, 4):
+            line = _build_section_fail_summary(session.get(f"call_{i}"), f"Call {i}")
+            if line:
+                lines.append(line)
+        if compute_final_status(session) == "FAIL-Final Attempt":
+            for i in range(1, 3):
+                line = _build_section_fail_summary(session.get(f"sup_transfer_{i}"), f"Supervisor Transfer {i}")
+                if line:
+                    lines.append(line)
     if lines:
         return "\n".join(lines)
     return "N/A"
@@ -2597,13 +4048,23 @@ DEFAULT_GEMINI_COACHING_PROMPT = (
     "Use the existing session-note line structure when possible, keeping each completed call "
     "or supervisor transfer management-facing and concise. "
     "Incorporate the selected coaching checklist items directly into the summary instead of "
-    "generalizing vaguely. Reference the specific coached items in plain language. Do not "
-    "address the candidate. Do not use second-person language such as 'you' or 'your'. Do "
-    "not give advice or instructions such as 'should', 'try to', or 'remember to'. Describe "
+    "generalizing vaguely. Reference the specific coached items in plain language, and only "
+    "reference coaching items that appear in the session notes. Keep checkbox-specific "
+    "guidance from the session notes intact when it explains what was coached, including "
+    "donor-information verification guidance and phonetics-table coaching. Do not address "
+    "the candidate. Do not use second-person language such as 'you' or 'your'. Do not give "
+    "new advice or instructions that are not already reflected in the session notes. Describe "
     "the observed performance and the coaching provided during the session. If the selected "
     "coaching includes screenshots, Discord chat, or standard instructions, explicitly include "
-    "management-facing wording equivalent to 'Provided coaching using the standard screenshots "
-    "and instructions in Discord chat.' Do not invent any coaching item that was not selected."
+    "management-facing wording equivalent to 'Coaching was provided using the standard screenshots "
+    "and Discord chat.' Treat this as the coaching method, not a coaching topic. Avoid repetitive wording, group related coaching "
+    "themes naturally, and do not invent any coaching item that was not selected."
+)
+
+GEMINI_SCREENSHOT_DISCORD_RULE = (
+    'If the selected coaching includes screenshots, Discord chat, or standard instructions, include '
+    'management-facing wording equivalent to "Coaching was provided using the standard screenshots '
+    'and Discord chat." Treat this as the coaching method, not a coaching topic.'
 )
 
 DEFAULT_GEMINI_FAIL_PROMPT = (
@@ -2612,10 +4073,12 @@ DEFAULT_GEMINI_FAIL_PROMPT = (
     "clear, concise, management-facing summary of why the candidate did not pass. The "
     "summary must be objective, professional, and suitable for internal documentation. "
     "Incorporate the selected fail checklist items directly into the summary instead of "
-    "generalizing vaguely. Reference the specific fail reasons in plain language. Do not "
-    "address the candidate. Do not use second-person language such as 'you' or 'your'. Do "
-    "not give advice or instructions such as 'should', 'try to', or 'remember to'. State "
-    "what occurred during the session and any additional contributing issues."
+    "generalizing vaguely. Reference the specific fail reasons in plain language, and only "
+    "reference fail reasons that appear in the session notes. Do not address the candidate. "
+    "Do not use second-person language such as 'you' or 'your'. Do not give advice or "
+    "instructions such as 'should', 'try to', or 'remember to'. State what occurred during "
+    "the session and any additional contributing issues. Avoid repetitive wording, group "
+    "related fail reasons naturally, and do not invent fail reasons that were not selected."
 )
 
 
@@ -2630,7 +4093,27 @@ def _clean_gemini_prompt_text(value):
     return text
 
 
-def _get_gemini_prompt(settings, prompt_type):
+def _ensure_required_gemini_coaching_rules(prompt):
+    text = str(prompt or "").strip()
+    if not text:
+        return ""
+    if "Coaching was provided using the standard screenshots and Discord chat." in text:
+        return text
+    return f"{text}\n\n{GEMINI_SCREENSHOT_DISCORD_RULE}"
+
+
+def _safe_gemini_error_message(exc, api_key=""):
+    text = str(exc or "Gemini summary generation failed.").strip() or "Gemini summary generation failed."
+    key = str(api_key or "").strip()
+    if key:
+        text = text.replace(key, "[redacted]")
+    text = re.sub(r"(?i)(api[_ -]?key[=: ]+)[A-Za-z0-9_\-\.]+", r"\1[redacted]", text)
+    text = re.sub(r"AIza[0-9A-Za-z_\-]{20,}", "[redacted]", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:300]
+
+
+def _get_gemini_prompt_details(settings, prompt_type):
     if prompt_type == "fail":
         setting_key = "gemini_fail_prompt"
         fallback = DEFAULT_GEMINI_FAIL_PROMPT
@@ -2638,15 +4121,34 @@ def _get_gemini_prompt(settings, prompt_type):
         setting_key = "gemini_coaching_prompt"
         fallback = DEFAULT_GEMINI_COACHING_PROMPT
 
-    saved_prompt = _clean_gemini_prompt_text((settings or {}).get(setting_key))
-    if saved_prompt:
-        return saved_prompt
-
     remote_or_local_prompt = _clean_gemini_prompt_text(EXTERNAL_CONTENT.get(setting_key))
     if remote_or_local_prompt:
-        return remote_or_local_prompt
+        status = _content_source_status.get(setting_key) or {}
+        source = status.get("detail") or status.get("source") or "local"
+        if prompt_type != "fail":
+            remote_or_local_prompt = _ensure_required_gemini_coaching_rules(remote_or_local_prompt)
+        return remote_or_local_prompt, source
 
-    return fallback
+    if prompt_type != "fail":
+        fallback = _ensure_required_gemini_coaching_rules(fallback)
+    return fallback, "builtin"
+
+
+def _log_gemini_prompt_source(prompt_type, source):
+    prompt_name = "fail" if prompt_type == "fail" else "coaching"
+    if source == "google_sheet_override":
+        logger.info("[Gemini] Google Sheet %s override active", prompt_name)
+    elif source == "local":
+        logger.info("[Gemini] Local markdown %s prompt active", prompt_name)
+    elif source == "builtin":
+        logger.warning("[Gemini] Built-in Python %s prompt fallback active", prompt_name)
+    else:
+        logger.info("[Gemini] Loading %s prompt from %s", prompt_name, source)
+
+
+def _get_gemini_prompt(settings, prompt_type):
+    prompt, _source = _get_gemini_prompt_details(settings, prompt_type)
+    return prompt
 
 PREFERRED_GEMINI_TEXT_MODELS = (
     "gemini-2.5-flash",
@@ -2654,6 +4156,11 @@ PREFERRED_GEMINI_TEXT_MODELS = (
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
 )
+GEMINI_REQUEST_TIMEOUT_SECONDS = 20
+GEMINI_TEST_TIMEOUT_SECONDS = 10
+GEMINI_RETRY_ATTEMPTS = 2
+GEMINI_RETRY_DELAY_SECONDS = 0.6
+_gemini_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gemini-summary")
 
 
 def _extract_gemini_text(response):
@@ -2732,47 +4239,155 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
     return text
 
 
+def _generate_gemini_summary_with_timeout(source_text, prompt_template, api_key, summary_type):
+    last_error = None
+    for attempt in range(1, GEMINI_RETRY_ATTEMPTS + 1):
+        future = _gemini_executor.submit(
+            _generate_gemini_summary,
+            source_text,
+            prompt_template,
+            api_key,
+            summary_type,
+        )
+        try:
+            return future.result(timeout=GEMINI_REQUEST_TIMEOUT_SECONDS)
+        except FutureTimeoutError as exc:
+            future.cancel()
+            last_error = RuntimeError(f"Gemini {summary_type} summary timed out after {GEMINI_REQUEST_TIMEOUT_SECONDS} seconds.")
+        except Exception as exc:
+            last_error = exc
+        if attempt < GEMINI_RETRY_ATTEMPTS:
+            time.sleep(GEMINI_RETRY_DELAY_SECONDS)
+    raise last_error or RuntimeError(f"Gemini {summary_type} summary failed.")
+
+
+def _classify_gemini_test_error(exc, api_key=""):
+    text = _safe_gemini_error_message(exc, api_key)
+    lowered = text.lower()
+    if "timeout" in lowered or "timed out" in lowered:
+        return "timeout", "Gemini request timed out"
+    if "429" in lowered or "rate limit" in lowered or "quota" in lowered or "resource exhausted" in lowered:
+        return "rate_limit", "Gemini rate limit reached"
+    if "api key" in lowered and ("invalid" in lowered or "not valid" in lowered):
+        return "invalid_key", "Invalid Gemini API key"
+    if "permission" in lowered or "unauthorized" in lowered or "forbidden" in lowered or "403" in lowered:
+        return "invalid_key", "Invalid Gemini API key"
+    if "network" in lowered or "connect" in lowered or "connection" in lowered or "dns" in lowered or "name resolution" in lowered:
+        return "network_error", "Unable to connect to Gemini"
+    return "error", "Unable to connect to Gemini"
+
+
+def _perform_gemini_connection_test(api_key):
+    if not api_key:
+        return {"ok": False, "code": "no_key", "message": "No Gemini API key configured"}
+
+    import google.generativeai as genai
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(_select_supported_gemini_model(api_key))
+    response = model.generate_content(
+        "Return ONLY the word: OK",
+        generation_config={"max_output_tokens": 4, "temperature": 0},
+    )
+    text = _extract_gemini_text(response).strip()
+    if not text:
+        raise RuntimeError("Gemini returned an empty test response.")
+    if text.upper().strip(" .\n\t") != "OK":
+        raise RuntimeError("Gemini returned an unexpected test response.")
+    return {"ok": True, "code": "success", "message": "Gemini connection successful"}
+
+
+def test_gemini_connection_with_timeout(api_key):
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        return {"ok": False, "code": "no_key", "message": "No Gemini API key configured"}
+
+    future = _gemini_executor.submit(_perform_gemini_connection_test, api_key)
+    try:
+        return future.result(timeout=GEMINI_TEST_TIMEOUT_SECONDS)
+    except FutureTimeoutError as exc:
+        future.cancel()
+        code, message = _classify_gemini_test_error(
+            RuntimeError(f"Gemini request timed out after {GEMINI_TEST_TIMEOUT_SECONDS} seconds."),
+            api_key,
+        )
+        return {"ok": False, "code": code, "message": message}
+    except Exception as exc:
+        code, message = _classify_gemini_test_error(exc, api_key)
+        logger.warning("[Gemini] Connection test failed: %s", _safe_gemini_error_message(exc, api_key))
+        return {"ok": False, "code": code, "message": message}
+
+
 def generate_summaries(session, api_key="", settings=None):
     auto_fail_summaries = _auto_fail_review_summaries(session)
+    use_gemini = bool(settings and settings.get("enable_gemini"))
+    api_key = (api_key or "").strip()
+    coaching_prompt, coaching_prompt_source = _get_gemini_prompt_details(settings, "coaching")
+    fail_prompt, fail_prompt_source = _get_gemini_prompt_details(settings, "fail")
+    _log_gemini_prompt_source("coaching", coaching_prompt_source)
+    _log_gemini_prompt_source("fail", fail_prompt_source)
+    logger.info(
+        "[Gemini] Override source active: coaching=%s fail=%s",
+        coaching_prompt_source,
+        fail_prompt_source,
+    )
+    diagnostics = {
+        "used_gemini": False,
+        "used_fallback": True,
+        "gemini_enabled": use_gemini,
+        "gemini_key_configured": bool(api_key),
+        "coaching_prompt_source": coaching_prompt_source,
+        "fail_prompt_source": fail_prompt_source,
+        "gemini_error": "",
+    }
     if auto_fail_summaries:
-        return auto_fail_summaries
+        return {**auto_fail_summaries, **diagnostics}
 
     coaching = build_clean_coaching(session)
     fail = "N/A" if _is_fail_na(session) else build_clean_fail(session)
 
-    use_gemini = bool(settings and settings.get("enable_gemini"))
     if not use_gemini:
-        return {"coaching": coaching, "fail": fail}
-    api_key = (api_key or "").strip()
+        return {"coaching": coaching, "fail": fail, **diagnostics}
     if not api_key:
+        message = "Gemini is enabled, but no API key is saved. Using generic summaries instead."
         return {
             "coaching": coaching,
             "fail": fail,
-            "error": "Gemini is enabled, but no API key was provided. Using generic summaries instead.",
+            "error": message,
+            **{**diagnostics, "gemini_error": message},
         }
 
     try:
-        gemini_coaching = _generate_gemini_summary(
+        used_gemini = False
+        gemini_coaching = _generate_gemini_summary_with_timeout(
             coaching,
-            _get_gemini_prompt(settings, "coaching"),
+            coaching_prompt,
             api_key,
             "coaching",
         ) if coaching != "No coaching data recorded." else coaching
+        used_gemini = used_gemini or coaching != "No coaching data recorded."
 
-        gemini_fail = _generate_gemini_summary(
+        gemini_fail = _generate_gemini_summary_with_timeout(
             fail,
-            _get_gemini_prompt(settings, "fail"),
+            fail_prompt,
             api_key,
             "fail",
         ) if fail != "N/A" else fail
+        used_gemini = used_gemini or fail != "N/A"
 
-        return {"coaching": gemini_coaching, "fail": gemini_fail}
+        return {
+            "coaching": gemini_coaching,
+            "fail": gemini_fail,
+            **{**diagnostics, "used_gemini": used_gemini, "used_fallback": not used_gemini},
+        }
     except Exception as exc:
         logger.exception("[GEMINI] Summary generation failed: %s", exc)
+        message = f"Gemini summary generation failed: {_safe_gemini_error_message(exc, api_key)}"
         return {
             "coaching": coaching,
             "fail": fail,
-            "error": f"Gemini summary generation failed: {exc}",
+            "error": message,
+            **{**diagnostics, "gemini_error": message},
         }
 
 
@@ -2864,10 +4479,11 @@ def _auto_fail_review_summaries(session):
     auto_fail_type = _classify_auto_fail_reason(auto_fail_reason)
     coaching_lines = []
 
-    for i in range(1, 4):
-        line = _build_section_coaching_summary(session.get(f"call_{i}"), f"Call {i}")
-        if line:
-            coaching_lines.append(line)
+    if not session.get("supervisor_only", False):
+        for i in range(1, 4):
+            line = _build_section_coaching_summary(session.get(f"call_{i}"), f"Call {i}")
+            if line:
+                coaching_lines.append(line)
     for i in range(1, 3):
         line = _build_section_coaching_summary(session.get(f"sup_transfer_{i}"), f"Supervisor Transfer {i}")
         if line:
@@ -3031,10 +4647,18 @@ async def lifespan(app: FastAPI):
                 continue
             if key not in existing:
                 updates[key] = val
+        for key in DEFAULT_MANAGED_SETTINGS_KEYS:
+            if key in existing and not existing.get(_managed_custom_flag(key)):
+                unsets[key] = ""
+                unsets[_managed_custom_flag(key)] = ""
+                logger.info(
+                    "[SAM] Cache invalidated for %s: saved SQLite value had no customization marker and will follow active defaults.",
+                    key,
+                )
         if updates or unsets:
             await db.settings.update_one({"_id": "app_settings"}, {"$set": updates, "$unset": unsets})
             logger.info(f"[STARTUP] Migrated settings: {list(updates.keys())}")
-        for key in ("discord_templates", "discord_screenshots"):
+        for key in ("shows", "donors_new", "donors_existing", "donors_increase", "discord_templates", "discord_screenshots"):
             if key in existing and existing.get(_managed_custom_flag(key)):
                 logger.info(
                     "[CONTENT] %s served from SQLite customized settings (%s item(s)); defaults source is %s (%s item(s))",
@@ -3043,6 +4667,7 @@ async def lifespan(app: FastAPI):
                     (_content_source_status.get(key) or {}).get("source") or "builtin",
                     (_content_source_status.get(key) or {}).get("count") or 0,
                 )
+                logger.info("[SAM] Active %s source: SQLite customized settings (%s item(s))", key, _content_count(existing.get(key)))
             elif key in existing:
                 logger.info(
                     "[CONTENT] %s saved value has no customization marker and will follow %s defaults (%s item(s))",
@@ -3050,8 +4675,24 @@ async def lifespan(app: FastAPI):
                     (_content_source_status.get(key) or {}).get("source") or "builtin",
                     (_content_source_status.get(key) or {}).get("count") or 0,
                 )
+                logger.info("[SAM] Active %s source: defaults after cache invalidation", key)
+    shared_sheet_status = _verify_shared_session_sheets()
+    if shared_sheet_status.get("ok"):
+        logger.info(
+            "[STARTUP] Shared candidate tracking sheet setup verified. spreadsheet=%s service_account=%s",
+            _mask_config_value(shared_sheet_status.get("sheetId")),
+            shared_sheet_status.get("serviceAccountEmail") or "unknown",
+        )
+    else:
+        logger.error(
+            "[STARTUP] Shared candidate tracking sheet setup failed. error=%s service_account=%s manual_setup=%s",
+            shared_sheet_status.get("error"),
+            shared_sheet_status.get("serviceAccountEmail") or (shared_sheet_status.get("setup") or {}).get("serviceAccountEmail") or "unknown",
+            shared_sheet_status.get("setup"),
+        )
     logger.info(f"[STARTUP] Mock Testing Suite v{APP_VERSION}")
     yield
+    _gemini_executor.shutdown(wait=False, cancel_futures=True)
     db.close()
     logger.info("[SHUTDOWN] Server stopped")
 
@@ -3149,7 +4790,14 @@ async def reset_settings_section(payload: dict, request: Request):
 
     if section == "callers":
         updates = {}
-        unsets = {"donors_new": "", "donors_existing": "", "donors_increase": ""}
+        unsets = {
+            "donors_new": "",
+            "donors_existing": "",
+            "donors_increase": "",
+            _managed_custom_flag("donors_new"): "",
+            _managed_custom_flag("donors_existing"): "",
+            _managed_custom_flag("donors_increase"): "",
+        }
     else:
         updates = {}
         unsets = {section: "", _managed_custom_flag(section): ""}
@@ -3178,6 +4826,7 @@ async def get_defaults():
         "payment": DEFAULT_PAYMENT,
         "tech_issues": TECH_ISSUES,
         "auto_fail_reasons": AUTO_FAIL_REASONS,
+        "_content_sources": _content_source_status,
     }
 
 
@@ -3210,7 +4859,7 @@ def _refresh_help_and_faq_markdown():
 
     try:
         runtime_config = _load_backend_runtime_config()
-        overrides = _load_google_doc_overrides(runtime_config) or {}
+        overrides = _load_help_faq_google_doc_overrides(runtime_config) or {}
     except Exception as exc:
         logger.warning("[HELP] Live Google Doc refresh failed: %s. Using last good content.", exc)
         overrides = {}
@@ -3268,6 +4917,34 @@ async def get_current_session():
     return {"session": None, "has_active": False}
 
 
+@api_router.get("/shared/candidates/lookup")
+async def lookup_shared_candidate(name: str = ""):
+    return _lookup_shared_candidate_sessions(name)
+
+
+@api_router.get("/shared/pending-sup-transfers")
+async def get_shared_pending_sup_transfers():
+    return _get_shared_pending_sup_transfers()
+
+
+@api_router.get("/shared/admin/candidates")
+async def get_shared_admin_candidates(request: Request):
+    _require_admin_token(request)
+    return _shared_admin_candidate_snapshot()
+
+
+@api_router.post("/shared/admin/candidates/action")
+async def post_shared_admin_candidate_action(payload: dict, request: Request):
+    _require_admin_token(request)
+    return _shared_admin_candidate_action(payload or {})
+
+
+@api_router.get("/admin/verify-shared-session-sheets")
+async def verify_shared_session_sheets(request: Request):
+    _require_admin_token(request)
+    return _verify_shared_session_sheets()
+
+
 @api_router.post("/session/start")
 async def start_session(payload: dict, request: Request):
     session = empty_session()
@@ -3307,7 +4984,7 @@ async def finish_session_simple(request: Request):
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {"ok": False, "error": "No active session"}
-    final_status = doc.get("final_status") or compute_final_status(doc)
+    final_status = compute_final_status(doc)
     timestamp_fields = _format_local_history_timestamp(datetime.now(timezone.utc))
     record = {
         **doc,
@@ -3316,11 +4993,22 @@ async def finish_session_simple(request: Request):
         "tester_name": doc.get("tester_name", ""),
         "final_status": final_status,
         "status": final_status,
+        "history_id": doc.get("history_id") or doc.get("resume_source_history_id") or str(uuid.uuid4()),
     }
-    await db.history.insert_one(record)
+    saved_record, action = await _upsert_history_record(record, doc)
+    shared_result = _sync_shared_candidate_tracking(saved_record)
     db.backup("after-finish-session")
     await db.sessions.delete_one({"_id": "active_session"})
-    return {"ok": True, "record": {k: v for k, v in record.items() if k != "_id"}}
+    warning = ""
+    if not shared_result.get("ok"):
+        warning = "Session saved locally, but shared Google Sheet update failed."
+    return {
+        "ok": True,
+        "action": action,
+        "record": {k: v for k, v in saved_record.items() if k != "_id"},
+        "sharedTracking": shared_result,
+        "warning": warning,
+    }
 
 
 @api_router.post("/session/discard")
@@ -3340,7 +5028,8 @@ async def get_history():
         normalized_status = normalize_history_status(doc)
         doc["status"] = normalized_status
         if normalized_status != "NC/NS":
-            doc["final_status"] = doc.get("final_status") or normalized_status
+            doc["final_status"] = normalized_status
+        doc["history_id"] = doc.get("history_id") or _history_identity(doc)
     return docs
 
 
@@ -3349,8 +5038,8 @@ async def get_history_stats():
     docs = await db.history.find({}, {"_id": 0}).to_list(5000)
     total = len(docs)
     normalized_statuses = [normalize_history_status(doc) for doc in docs]
-    passes = sum(1 for status in normalized_statuses if status == "Pass")
-    fails = sum(1 for status in normalized_statuses if status == "Fail")
+    passes = sum(1 for status in normalized_statuses if status in {"Pass", "RESUMED-PASS"})
+    fails = sum(1 for status in normalized_statuses if status in {"Fail", "FAIL-Final Attempt"})
     ncns = sum(1 for status in normalized_statuses if status == "NC/NS")
     incomplete = sum(1 for status in normalized_statuses if status == "Incomplete")
     pass_rate = round((passes / total * 100) if total > 0 else 0, 1)
@@ -3362,6 +5051,19 @@ async def clear_history(request: Request):
     db.backup("before-clear-history")
     await db.history.delete_many({})
     return {"ok": True}
+
+
+@api_router.delete("/history/session/{history_id:path}")
+async def delete_history_session(history_id: str, request: Request):
+    db.backup("before-delete-history-session")
+    deleted_record, cleanup = await _delete_history_record_by_identifier(history_id)
+    if not deleted_record:
+        raise HTTPException(status_code=404, detail="History session not found.")
+    return {
+        "ok": True,
+        "deleted_history_id": deleted_record.get("history_id") or _history_identity(deleted_record),
+        "cleanup": cleanup,
+    }
 
 # ══════════════════════════════════════════════════════════════════
 # TICKER / NOTIFICATIONS (fetches from admin-configured Google Sheet, falls back to cache/defaults)
@@ -3551,7 +5253,7 @@ def _normalize_notification_manager_item(item):
         "Type": normalized_type,
         "Title": _normalize_notification_text(item.get("Title")),
         "Message": _normalize_notification_text(item.get("Message")),
-        "ShowTicker": item.get("ShowTicker") if isinstance(item.get("ShowTicker"), bool) else (_normalize_notification_bool(item.get("ShowTicker")) or (_normalize_notification_text(item.get("ShowTicker")) == "" and legacy_ticker_type)),
+        "ShowTicker": item.get("ShowTicker") if isinstance(item.get("ShowTicker"), bool) else (legacy_ticker_type or _normalize_notification_bool(item.get("ShowTicker"))),
         "ShowPopup": item.get("ShowPopup") if isinstance(item.get("ShowPopup"), bool) else _normalize_notification_bool(item.get("ShowPopup")),
         "ShowBanner": item.get("ShowBanner") if isinstance(item.get("ShowBanner"), bool) else _normalize_notification_bool(item.get("ShowBanner")),
         "Persistent": item.get("Persistent") if isinstance(item.get("Persistent"), bool) else _normalize_notification_bool(item.get("Persistent")),
@@ -3831,6 +5533,11 @@ def _load_notification_items_from_google_sheets_api():
         return service_result
 
     try:
+        logger.info(
+            "[NOTIFICATIONS] Reading Google Sheet via authenticated API: sheet=%s gid=%s",
+            _mask_config_value(config.get("sheet_id")),
+            config.get("gid") or "0",
+        )
         sheets_api = service_result["service"].spreadsheets()
         metadata = sheets_api.get(spreadsheetId=config["sheet_id"]).execute()
         sheets = metadata.get("sheets", [])
@@ -3848,6 +5555,7 @@ def _load_notification_items_from_google_sheets_api():
             return {"ok": False, "error": "The configured spreadsheet does not contain any worksheets."}
 
         sheet_title = (target_sheet.get("properties") or {}).get("title") or "Sheet1"
+        logger.info("[NOTIFICATIONS] Using Google Sheet tab '%s' for notifications/ticker", sheet_title)
         quoted_title = _quote_sheet_title_for_a1(sheet_title)
         last_column = _column_letter(len(NOTIFICATION_SHEET_COLUMNS))
         raw_values = sheets_api.values().get(
@@ -3870,6 +5578,7 @@ def _load_notification_items_from_google_sheets_api():
             if item is not None:
                 items.append(item)
 
+        logger.info("[NOTIFICATIONS] Parsed %s valid notification rows from tab '%s'", len(items), sheet_title)
         return {"ok": True, "items": items, "sheetTitle": sheet_title}
     except Exception as exc:
         logger.warning("[NOTIFICATIONS] Authenticated Google Sheets read failed: %s", exc)
@@ -4013,6 +5722,79 @@ def _save_notification_to_google_sheet(item):
         return {"ok": False, "error": f"Google Sheets write failed: {exc}"}
 
 
+def _delete_notification_from_google_sheet(notification_id):
+    target_id = _normalize_notification_text(notification_id)
+    if not target_id:
+        return {"ok": False, "error": "Notification ID is required."}
+
+    config = _get_admin_notification_sheet_config()
+    sheet_id = config["sheet_id"]
+    target_gid = str(config["gid"] or "0")
+    service_result = _get_notification_sheet_service()
+    if not service_result.get("ok"):
+        return {"ok": False, "error": service_result.get("error") or "Direct Google Sheets write is not configured."}
+
+    try:
+        sheets_api = service_result["service"].spreadsheets()
+        metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+        sheets = metadata.get("sheets", [])
+        target_sheet = next(
+            (
+                sheet for sheet in sheets
+                if str((sheet.get("properties") or {}).get("sheetId")) == target_gid
+            ),
+            None,
+        )
+        if target_sheet is None and sheets:
+            target_sheet = sheets[0]
+        if target_sheet is None:
+            return {"ok": False, "error": "The configured spreadsheet does not contain any worksheets."}
+
+        sheet_props = target_sheet.get("properties") or {}
+        sheet_title = sheet_props.get("title") or "Sheet1"
+        sheet_gid = sheet_props.get("sheetId")
+        quoted_title = _quote_sheet_title_for_a1(sheet_title)
+        last_column = _column_letter(len(NOTIFICATION_SHEET_COLUMNS))
+        raw_values = sheets_api.values().get(
+            spreadsheetId=sheet_id,
+            range=f"{quoted_title}!A2:{last_column}",
+        ).execute().get("values", [])
+
+        target_row_number = None
+        for row_index, row in enumerate(raw_values, start=2):
+            existing_id = _normalize_notification_text(row[1] if len(row) > 1 else "")
+            if existing_id == target_id:
+                target_row_number = row_index
+                break
+
+        if target_row_number is None:
+            return {"ok": False, "error": "Notification was not found in the configured Google Sheet."}
+
+        sheets_api.batchUpdate(
+            spreadsheetId=sheet_id,
+            body={
+                "requests": [
+                    {
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": sheet_gid,
+                                "dimension": "ROWS",
+                                "startIndex": target_row_number - 1,
+                                "endIndex": target_row_number,
+                            },
+                        },
+                    },
+                ],
+            },
+        ).execute()
+
+        _clear_notification_caches()
+        return {"ok": True, "action": "deleted", "id": target_id, "sheetTitle": sheet_title, "sheetId": sheet_id}
+    except Exception as exc:
+        logger.exception("[NOTIFICATIONS] Failed to delete notification from Google Sheets: %s", exc)
+        return {"ok": False, "error": f"Google Sheets delete failed: {exc}"}
+
+
 def _resolve_notification_sheet_url(value):
     raw = _normalize_notification_text(value)
     if not raw:
@@ -4104,10 +5886,18 @@ async def _fetch_notifications_from_sheet():
 
     config = _get_admin_notification_sheet_config()
     sheet_url = config["export_url"]
+    logger.info(
+        "[NOTIFICATIONS] Ticker sheet config source=%s tab_gid=%s sheet_id=%s export_url_present=%s",
+        config.get("source") or "unknown",
+        config.get("gid") or "0",
+        _mask_config_value(config.get("sheet_id")),
+        bool(sheet_url),
+    )
     if not sheet_url:
         logger.warning("[NOTIFICATIONS] No admin notification sheet URL is configured. Using cached/default notifications.")
-        _set_ticker_fetch_status("builtin", "missing notification sheet URL", 0)
+        _set_ticker_fetch_status("fallback", "missing notification sheet URL", 0)
         if _notification_cache["groups"] is not None:
+            logger.info("[NOTIFICATIONS] Source=CACHE returning cached notifications because sheet URL is missing.")
             return _notification_cache["groups"]
         return _notification_defaults
 
@@ -4117,6 +5907,10 @@ async def _fetch_notifications_from_sheet():
         and _notification_cache["url"] == sheet_url
         and (now - _notification_cache["last_fetch"]) < NOTIFICATION_CACHE_TTL_SECONDS
     ):
+        logger.info(
+            "[NOTIFICATIONS] Source=CACHE valid_ticker_rows=%s",
+            len(_notification_cache["groups"].get("tickerMessages", [])),
+        )
         return _notification_cache["groups"]
 
     try:
@@ -4133,7 +5927,7 @@ async def _fetch_notifications_from_sheet():
                 _notification_cache["last_fetch"] = now
                 _notification_cache["url"] = sheet_url
                 logger.info(
-                    "[NOTIFICATIONS] Loaded %s ticker, %s banner, %s popup items from admin sheet via authenticated Sheets API",
+                    "[NOTIFICATIONS] Source=GOOGLE loaded %s ticker, %s banner, %s popup items from admin sheet via authenticated Sheets API",
                     len(groups["tickerMessages"]),
                     len(groups["banners"]),
                     len(groups["popups"]),
@@ -4160,36 +5954,38 @@ async def _fetch_notifications_from_sheet():
                         else "public CSV request returned an HTML page (sheet is private; service account is configured but authenticated read did not succeed)"
                     )
                     logger.warning(
-                        "[NOTIFICATIONS] %s. Using built-in fallback ticker. URL=%s",
+                        "[NOTIFICATIONS] Source=FALLBACK %s. URL=%s",
                         reason,
                         _mask_config_value(sheet_url),
                     )
-                    _set_ticker_fetch_status("builtin", reason, 0)
+                    _set_ticker_fetch_status("fallback", reason, 0)
                 else:
                     groups = _parse_notification_csv(resp.text)
                     _notification_cache["groups"] = groups
                     _notification_cache["last_fetch"] = now
                     _notification_cache["url"] = sheet_url
                     logger.info(
-                        "[NOTIFICATIONS] Loaded %s ticker, %s banner, %s popup items from admin sheet",
+                        "[NOTIFICATIONS] Source=GOOGLE loaded %s ticker, %s banner, %s popup items from admin sheet public CSV tab gid=%s",
                         len(groups["tickerMessages"]),
                         len(groups["banners"]),
                         len(groups["popups"]),
+                        config.get("gid") or "0",
                     )
                     _set_ticker_fetch_status("google", "public CSV read succeeded", len(groups["tickerMessages"]))
                     return groups
             else:
                 reason = f"public CSV request returned status {resp.status_code}"
                 logger.warning("[NOTIFICATIONS] Notification sheet request returned status %s. Using cached/default notifications.", resp.status_code)
-                _set_ticker_fetch_status("builtin", reason, 0)
+                _set_ticker_fetch_status("fallback", reason, 0)
     except Exception as exc:
         logger.warning("[NOTIFICATIONS] Failed to fetch notification sheet: %s", exc)
-        _set_ticker_fetch_status("builtin", f"Google notification fetch failed: {exc}", 0)
+        _set_ticker_fetch_status("fallback", f"Google notification fetch failed: {exc}", 0)
 
     if _notification_cache["groups"] is not None:
-        logger.info("[NOTIFICATIONS] Reusing last cached notification payload after fetch failure.")
-        _set_ticker_fetch_status("local", "reusing cached notification payload after Google fetch failure", len(_notification_cache["groups"].get("tickerMessages", [])))
+        logger.info("[NOTIFICATIONS] Source=CACHE reusing last cached notification payload after fetch failure.")
+        _set_ticker_fetch_status("cache", "reusing cached notification payload after Google fetch failure", len(_notification_cache["groups"].get("tickerMessages", [])))
         return _notification_cache["groups"]
+    logger.info("[NOTIFICATIONS] Source=FALLBACK returning built-in notification defaults.")
     return _notification_defaults
 
 @api_router.get("/ticker")
@@ -4207,7 +6003,7 @@ async def get_ticker():
         _ticker_cache["last_fetch"] = time.time()
         _ticker_cache["using_fallback"] = False
         if _ticker_fetch_status.get("source") != "google":
-            _set_ticker_fetch_status("local", _ticker_fetch_status.get("status") or "ticker loaded from cached/local notifications", len(messages))
+            _set_ticker_fetch_status(_ticker_fetch_status.get("source") or "cache", _ticker_fetch_status.get("status") or "ticker loaded from cached/local notifications", len(messages))
         return {
             "messages": messages,
             "source": _ticker_fetch_status.get("source") or "unknown",
@@ -4219,10 +6015,10 @@ async def get_ticker():
     _ticker_cache["last_fetch"] = time.time()
     _ticker_cache["using_fallback"] = True
     previous_status = _ticker_fetch_status.get("status") or "Google ticker was not fetched"
-    _set_ticker_fetch_status("builtin", f"{previous_status}; no active ticker rows; using built-in fallback", len(TICKER_MESSAGES))
+    _set_ticker_fetch_status("fallback", f"{previous_status}; no active ticker rows; using built-in fallback", len(TICKER_MESSAGES))
     return {
         "messages": TICKER_MESSAGES,
-        "source": "builtin",
+        "source": "fallback",
         "fallback": True,
     }
 
@@ -4353,6 +6149,12 @@ async def save_notification_manage(payload: dict, request: Request):
     return result
 
 
+@api_router.delete("/notifications/manage/{notification_id:path}")
+async def delete_notification_manage(notification_id: str, request: Request):
+    _require_admin_token(request)
+    return _delete_notification_from_google_sheet(notification_id)
+
+
 async def _fetch_approved_headsets():
     import time
 
@@ -4381,12 +6183,19 @@ async def get_approved_headsets():
 async def gen_summaries(payload: dict):
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
-        return {"coaching": "No active session.", "fail": "No active session."}
+        return {
+            "coaching": "No active session.",
+            "fail": "No active session.",
+            "used_gemini": False,
+            "used_fallback": True,
+            "gemini_enabled": False,
+            "gemini_key_configured": False,
+            "coaching_prompt_source": "builtin",
+            "fail_prompt_source": "builtin",
+            "gemini_error": "No active session.",
+        }
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
-    payload_api_key = str((payload or {}).get("api_key") or "").strip()
-    if _is_masked_sensitive_placeholder(payload_api_key):
-        payload_api_key = ""
-    api_key = payload_api_key or _get_stored_gemini_api_key(settings)
+    api_key = _get_stored_gemini_api_key(settings)
     result = generate_summaries(doc, api_key, settings)
     return result
 
@@ -4398,14 +6207,18 @@ async def regen_summary(payload: dict):
     if not doc:
         return {"ok": False, "error": "No active session"}
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
-    payload_api_key = str((payload or {}).get("api_key") or "").strip()
-    if _is_masked_sensitive_placeholder(payload_api_key):
-        payload_api_key = ""
-    api_key = payload_api_key or _get_stored_gemini_api_key(settings)
+    api_key = _get_stored_gemini_api_key(settings)
     result = generate_summaries(doc, api_key, settings)
     if result.get("error"):
-        return {"ok": False, "error": result["error"], "text": result.get(summary_type, "")}
-    return {"ok": True, "text": result.get(summary_type, "")}
+        return {"ok": False, "error": result["error"], "text": result.get(summary_type, ""), **result}
+    return {"ok": True, "text": result.get(summary_type, ""), **result}
+
+
+@api_router.post("/test-gemini")
+async def test_gemini_connection():
+    settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
+    api_key = _get_stored_gemini_api_key(settings)
+    return test_gemini_connection_with_timeout(api_key)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4416,7 +6229,7 @@ async def finish_all(payload: dict, request: Request):
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {"ok": False, "error": "No active session"}
-    final_status = doc.get("final_status") or compute_final_status(doc)
+    final_status = compute_final_status(doc)
     timestamp_fields = _format_local_history_timestamp(datetime.now(timezone.utc))
     record = {
         **doc,
@@ -4427,20 +6240,25 @@ async def finish_all(payload: dict, request: Request):
         "status": final_status,
         "coaching_summary": payload.get("coaching_summary", ""),
         "fail_summary": payload.get("fail_summary", ""),
+        "history_id": doc.get("history_id") or doc.get("resume_source_history_id") or str(uuid.uuid4()),
     }
 
-    await db.history.insert_one(record)
+    _saved_record, action = await _upsert_history_record(record, doc)
+    shared_result = _sync_shared_candidate_tracking(_saved_record)
     await db.sessions.delete_one({"_id": "active_session"})
     db.backup("after-finish-session")
-    return {"ok": True, "message": "Session saved successfully!"}
+    message = "Resumed session updated successfully!" if action == "updated" else "Session saved successfully!"
+    if not shared_result.get("ok"):
+        message = f"{message} Session saved locally, but shared Google Sheet update failed."
+    return {"ok": True, "message": message, "action": action, "sharedTracking": shared_result}
 
 
 # ══════════════════════════════════════════════════════════════════
 # UPDATE / FORM (stubs)
 # ══════════════════════════════════════════════════════════════════
 @api_router.get("/update")
-async def check_update():
-    return {"update_available": False, "current_version": APP_VERSION}
+async def check_update(app: str = "mts"):
+    return _get_update_metadata(app)
 
 
 @api_router.get("/update/status")

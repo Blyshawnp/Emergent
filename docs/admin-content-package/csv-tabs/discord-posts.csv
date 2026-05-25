@@ -52,6 +52,7 @@ On DTE, click the Icon with the Person and Check Mark till it shows
 
 https://gyazo.com/01a435d23c45e300087dd5c39d172fd5"
 DTE Status,"Ok, I show your status as Ready on my end. I am now going to call. You should receive the call in a moment."
+Stars Post-Sup Transfer ,WXYZ: Supervisor Test Call Being Queued
 You May Transfer,You may transfer the call now.
 Disposition,"Click the cancel button in the script (red phone) and disposition as Test / Training
 
@@ -60,7 +61,6 @@ Disposition,"Click the cancel button in the script (red phone) and disposition a
 Next, Please Disposition the call in Call Corp.
 
 You will choose the option from the list that best matches what happened on the call. And then DTE will go back to “ Ready Status” automatically."
-Stars Post-Sup Transfer ,WXYZ: Supervisor Test Call Being Queued
 Passed All,"**:tada: Congratulations! Great job! You have successfully completed your test calls.  Watch your inbox for your step 4 final instructions - your Welcome Team TLMS information. Please log out of CallCorp and Simple Script with the Log Out links (never X out of these windows). Welcome to ACDD! Have a fabulous remainder of your day! • If you haven't already done so be sure to complete any additional courses assigned in your TLMS. Email certification@acdsupport.com for any questions on courses.• If you're signed up on any additional mock or testing shifts, please take a moment to go to Current Schedule under My Schedule in Gateway and remove them.
 **Welcome to ACDD! Have a fabulous remainder of your day!** "
 Failed 1st Sup Transfer,Unfortunately our call did not result in a successful transfer to a supervisor. Please take a moment to review the steps that we went through here in chat and let me know when you're ready to try again.

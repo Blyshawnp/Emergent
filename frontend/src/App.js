@@ -102,8 +102,12 @@ function formatNotificationModalBody(notification) {
 }
 
 function getNotificationModalTitle(notification) {
-  if (notification?.type === 'urgent') return 'Urgent';
-  if (notification?.type === 'warning') return 'Warning';
+  const title = String(notification?.title || '').trim();
+  if (title && title.toLowerCase() !== 'sam' && title.toLowerCase() !== 's.a.m.') {
+    return title;
+  }
+  if (notification?.type === 'urgent') return 'System Alert';
+  if (notification?.type === 'warning') return 'Alert';
   return 'Notification';
 }
 
@@ -174,10 +178,11 @@ function formatUpdateBody(updateInfo, includeDeferredNote = false, notesAsBullet
     updateInfo.releaseDate ? `<div class="text-muted">Released ${updateInfo.releaseDate}</div>` : '',
     `<div style="margin-top:12px;"><strong>Current:</strong> v${updateInfo.currentVersion}</div>`,
     `<div><strong>New:</strong> v${updateInfo.latestVersion}</div>`,
+    updateInfo.requiredVersion ? `<div><strong>Required:</strong> v${updateInfo.requiredVersion}</div>` : '',
     notesContent
       ? `<div style="margin-top:12px;"><strong>Notes:</strong>${notesAsBullets ? `<ul style="margin:8px 0 0 18px;">${notesContent}</ul>` : `<div style="margin-top:8px;">${notesContent}</div>`}</div>`
       : '',
-    updateInfo.downloadUrl ? '' : '<div style="margin-top:12px;"><strong>Installer link:</strong> Not published in the update document yet.</div>',
+    updateInfo.downloadUrl ? '' : '<div style="margin-top:12px;"><strong>Installer link:</strong> Not published in the update sheet yet.</div>',
     includeDeferredNote ? '<div style="margin-top:12px;">This update can be installed later from Settings by clicking <strong>Install Update</strong>.</div>' : '',
   ].filter(Boolean);
 
@@ -188,22 +193,33 @@ function ElectronEventBridge({ navigate, setUpdateState }) {
   const modal = useModal();
 
   const showUpdateModal = useCallback(async (updateInfo) => {
+    const required = Boolean(updateInfo?.required);
     const confirmed = await modal.showModal({
       type: 'confirm',
-      title: `Update Available — Version ${updateInfo.latestVersion}`,
+      title: `${required ? 'Update Required' : 'Update Available'} — Version ${updateInfo.latestVersion}`,
       body: formatUpdateBody(updateInfo),
       graphic: 'update',
-      buttons: [
-        { label: 'Install Update', cls: 'btn-success', value: true },
-        { label: 'Later', cls: 'btn-muted', value: false },
-      ],
+      buttons: required
+        ? [{ label: 'Update Now', cls: 'btn-success', value: true }]
+        : [
+          { label: 'Update Now', cls: 'btn-success', value: true },
+          { label: 'Later', cls: 'btn-muted', value: false },
+        ],
     });
 
     if (confirmed) {
       const result = await window.electronAPI?.installPendingUpdate?.();
       if (!result?.ok) {
         await modal.error('Update Failed', result?.error || 'Unable to launch the update download.');
+        if (required) {
+          await showUpdateModal(updateInfo);
+        }
       }
+      return;
+    }
+
+    if (required) {
+      await showUpdateModal(updateInfo);
       return;
     }
 

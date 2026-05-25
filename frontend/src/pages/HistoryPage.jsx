@@ -26,8 +26,32 @@ export default function HistoryPage({ onNavigate, navigationState }) {
     }
   }, [navigationState]);
 
-  const filtered = history.filter(s => (s.candidate || '').toLowerCase().includes(search.toLowerCase()));
-  const badgeClass = (s) => ({ Pass: 'badge-pass', Fail: 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
+  const filtered = history.filter(s => ((s.candidate || s.candidate_name || '')).toLowerCase().includes(search.toLowerCase()));
+  const badgeClass = (s) => ({ Pass: 'badge-pass', 'RESUMED-PASS': 'badge-pass', Fail: 'badge-fail', 'FAIL-Final Attempt': 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
+
+  const getHistoryIdentity = (record) => {
+    if (record?.history_id) return record.history_id;
+    return [
+      record?.timestamp_iso || record?.timestamp || '',
+      record?.tester_name || '',
+      record?.candidate_name || record?.candidate || '',
+    ].join('|');
+  };
+
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]));
+
+  const isLinkedResumeSession = (record) => Boolean(
+    record?.resumed_from_history
+      || record?.resumed_sup_transfer_only
+      || record?.resume_source_history_id
+      || record?.resume_source_timestamp_iso
+  );
 
   const colorResult = (r) => {
     if (r === 'Pass') return <span style={{ color: 'var(--color-success)', fontWeight: 700 }}>PASS</span>;
@@ -52,6 +76,42 @@ export default function HistoryPage({ onNavigate, navigationState }) {
       await modal.error('Form Fill Failed', response.message || 'Unable to send this historical session to the Cert Form.');
     } catch (error) {
       await modal.error('Form Fill Failed', error.message || 'Unable to send this historical session to the Cert Form.');
+    }
+  };
+
+  const handleDeleteSession = async (record) => {
+    if (!record) return;
+    const identity = getHistoryIdentity(record);
+    const candidate = record.candidate || record.candidate_name || 'Unknown';
+    const status = record.status || record.final_status || '?';
+    const linkedWarning = isLinkedResumeSession(record)
+      ? '<br /><br /><strong>This session is linked to a resumed supervisor-transfer session. Deleting it will remove the linked session relationship.</strong>'
+      : '';
+    const confirmed = await modal.showModal({
+      type: 'danger',
+      title: 'Delete Session?',
+      body: `
+        <strong>Candidate:</strong> ${escapeHtml(candidate)}<br />
+        <strong>Date:</strong> ${escapeHtml(record.timestamp || record.timestamp_iso || 'Unknown')}<br />
+        <strong>Status:</strong> ${escapeHtml(status)}
+        ${linkedWarning}
+        <br /><br />This action cannot be undone.
+      `,
+      icon: 'trash-2',
+      graphic: 'warning',
+      buttons: [
+        { label: 'Delete Session', cls: 'btn-danger', value: true },
+        { label: 'Cancel', cls: 'btn-muted', value: false },
+      ],
+    });
+    if (!confirmed) return;
+    try {
+      await api.deleteHistorySession(identity);
+      if (detail && getHistoryIdentity(detail) === identity) setDetail(null);
+      await load();
+      await modal.alert('Deleted', 'The session was deleted and Smart Resume references were cleaned up.');
+    } catch (error) {
+      await modal.error('Delete Failed', error.response?.data?.detail || error.message || 'Unable to delete this history session.');
     }
   };
 
@@ -84,15 +144,20 @@ export default function HistoryPage({ onNavigate, navigationState }) {
           <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-tertiary)' }}>No session history yet.</div>
         ) : (
           <table className="hist-table">
-            <thead><tr><th>Date</th><th>Candidate</th><th>Tester</th><th>Status</th><th style={{ width: 70 }}></th></tr></thead>
+            <thead><tr><th>Date</th><th>Candidate</th><th>Tester</th><th>Status</th><th style={{ width: 150 }}>Actions</th></tr></thead>
             <tbody>
               {filtered.map((s, i) => (
-                <tr key={i} className="hist-row">
+                <tr key={getHistoryIdentity(s) || i} className="hist-row">
                   <td className="hist-date">{s.timestamp || 'Unknown'}</td>
-                  <td className="hist-name">{s.candidate || 'Unknown'}</td>
+                  <td className="hist-name">{s.candidate || s.candidate_name || 'Unknown'}</td>
                   <td className="hist-tester">{s.tester_name || ''}</td>
                   <td><span className={`badge ${badgeClass(s.status)}`}>{s.status || '?'}</span></td>
-                  <td><button className="btn btn-primary btn-sm" onClick={() => setDetail(s)} data-testid={`history-view-${i}`}>View</button></td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button className="btn btn-primary btn-sm" onClick={() => setDetail(s)} data-testid={`history-view-${i}`}>View</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => handleDeleteSession(s)} data-testid={`history-delete-${i}`}>Delete</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -104,7 +169,7 @@ export default function HistoryPage({ onNavigate, navigationState }) {
         <div className="modal-overlay open" onClick={e => { if (e.target === e.currentTarget) setDetail(null); }}>
           <div className="modal" style={{ width: 700, maxHeight: '85vh' }}>
             <div className="modal-header">
-              <h2>{detail.candidate || 'Unknown'} — <span style={{ color: ({ Pass: 'var(--color-success)', Fail: 'var(--color-danger)', Incomplete: 'var(--color-warning)' }[detail.status]) || 'var(--text-secondary)' }}>{(detail.status || '').toUpperCase()}</span></h2>
+              <h2>{detail.candidate || detail.candidate_name || 'Unknown'} — <span style={{ color: ({ Pass: 'var(--color-success)', 'RESUMED-PASS': 'var(--color-success)', Fail: 'var(--color-danger)', 'FAIL-Final Attempt': 'var(--color-danger)', Incomplete: 'var(--color-warning)' }[detail.status]) || 'var(--text-secondary)' }}>{(detail.status || '').toUpperCase()}</span></h2>
               <button className="modal-close" onClick={() => setDetail(null)}>&times;</button>
             </div>
             <div className="modal-body" style={{ lineHeight: 1.7 }}>
@@ -144,6 +209,7 @@ export default function HistoryPage({ onNavigate, navigationState }) {
             </div>
             <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
               <button className="btn btn-muted" onClick={() => setDetail(null)}>Close</button>
+              <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
               <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">Fill Cert Form</button>
               <button
                 className="btn btn-primary"

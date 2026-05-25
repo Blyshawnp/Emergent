@@ -31,7 +31,11 @@ Home is the launcher for every session type and the entry point to history.
 ## 5. Smart Resume
 Smart Resume restores work in progress so you do not lose data from a paused or interrupted session.
 - If you reopen the app while a session is in progress, Home offers to resume it.
-- For Supervisor Transfer Only, Smart Resume can continue from a saved record when prior mock calls match the candidate.
+- For Supervisor Transfer Only, Smart Resume can continue from local history when you conducted the original mock calls.
+- If another tester conducted the original mock calls, choose No when prompted to load the shared pending supervisor-transfer queue from the master Google Sheet.
+- Shared pending entries show candidate name, original tester, call results, created date/time, and available prior coaching or review notes.
+- Selecting a shared pending candidate loads the saved session data, skips Basics, and opens Supervisor Transfer Call 1.
+- If shared lookup is unavailable, the app falls back to local session mode so testing can continue.
 - Choosing not to resume starts a brand-new session and keeps the previous work in History.
 
 ## 6. Basics Screen
@@ -40,6 +44,11 @@ Basics verifies candidate readiness before any scoring begins.
 - Final Attempt marks this as the candidate's last allowed mock attempt and affects routing later.
 - Headset must be USB with a noise-cancelling microphone.
 - VPN must be off, and required browser checks must pass before you can continue.
+- Candidate lookup checks prior shared sessions while you type. It never overwrites Basics fields unless you choose Load Basics.
+- Use Review Previous Session to inspect prior tester, status, coaching summary, fail summary, final-attempt risk, and pending supervisor-transfer status.
+- If prior qualifying failures show this may be the final attempt, the app warns you and sets Final Attempt automatically.
+- Withdrawn candidates are shown as withdrew from certification and cannot be resumed unless an admin reverses the withdrawal in SAM.
+- Candidates with an extra attempt granted can continue, with the notice shown during lookup.
 - Continue validates readiness and routes into Calls (or Supervisor Transfer Only when applicable).
 
 ## 7. Headset Lookup
@@ -96,8 +105,11 @@ Supervisor Transfer verifies the candidate can complete the transfer process cor
 ## 15. Supervisor Transfer Only
 Use this when mock calls were already completed earlier and only the transfer portion remains.
 - Choose Supervisor Transfer Only from Home.
-- Smart Resume can continue from a saved record if prior mock calls match the candidate.
-- Fresh supervisor-only sessions still run through Basics first.
+- Choose Yes when you conducted the original mock calls; the app uses local Smart Resume and matching local history.
+- Choose No when another tester conducted the original mock calls; the app loads the shared pending supervisor-transfer queue.
+- Selecting a shared pending candidate loads the prior call results and prior notes, then goes directly to Supervisor Transfer Call 1.
+- If the shared Google Sheet cannot be reached, the app shows a local-only notice and continues without blocking the workflow.
+- Fresh supervisor-only sessions still run through Basics first when no resumable local or shared record is selected.
 
 ## 16. Newbie Shift
 Newbie Shift schedules follow-up work when a candidate cannot complete the flow today.
@@ -109,8 +121,11 @@ Newbie Shift schedules follow-up work when a candidate cannot complete the flow 
 Review is the final checkpoint before filling forms or saving the session.
 - Confirm the final status, call results, transfer results, and any auto-fail reason.
 - Read the Coaching Summary and Fail Summary before using them anywhere else.
+- Failed call or failed supervisor-transfer details stay in Coaching Summary when the overall session passed or remains incomplete.
+- Reason for Fail Summary is only used when the overall session fails.
 - Use Fill Form to push session data into the certification form.
-- Save and Finish stores the session in History and clears the active draft.
+- Save and Finish stores the session in local History, immediately updates shared Candidate Sessions, and updates Pending Sup Transfers when applicable.
+- If the shared Google Sheet update fails, the local save still completes and the app warns you without crashing.
 
 ## 18. Generic Summaries
 Generic summaries are built from your coaching and fail-reason selections without using AI.
@@ -180,7 +195,10 @@ The ticker and notification system surfaces operational messages without blockin
 
 ## 26. Updates and About
 Update checks and app version info live in the app menu and Settings.
-- Use the app menu or Settings update panel to check for updates.
+- Use the app menu or Settings update panel to check the master Google Sheet update-MTS tab for updates.
+- Update metadata includes Version, RequiredVersion, Release Date, Release Title, URL, and multiline Notes.
+- If RequiredVersion is newer than your installed version, the update is required and normal use is blocked until Update Now is selected.
+- Optional updates show release notes and can be installed now or deferred.
 - Deferred updates can be installed later from Settings when available.
 - About shows the app version and support identity details (also shown on this Help screen).
 

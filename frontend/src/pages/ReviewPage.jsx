@@ -9,29 +9,48 @@ function computeFinalStatus(session) {
 
   const autoFail = session.auto_fail_reason;
   const supOnly = session.supervisor_only || false;
+  const resumedSup = Boolean(session.resumed_sup_transfer_only || session.resume_source_history_id || session.resume_source_timestamp_iso);
+  const finalAttempt = Boolean(session.final_attempt);
   const callsPassed = [
     (session.call_1 || {}).result,
     (session.call_2 || {}).result,
     (session.call_3 || {}).result,
   ].filter((result) => result === 'Pass').length;
+  const callsFailed = [
+    (session.call_1 || {}).result,
+    (session.call_2 || {}).result,
+    (session.call_3 || {}).result,
+  ].filter((result) => result === 'Fail').length;
   const supsPassed = [
     (session.sup_transfer_1 || {}).result,
     (session.sup_transfer_2 || {}).result,
   ].filter((result) => result === 'Pass').length;
+  const supsFailed = [
+    (session.sup_transfer_1 || {}).result,
+    (session.sup_transfer_2 || {}).result,
+  ].filter((result) => result === 'Fail').length;
   const newbie = session.newbie_shift_data;
 
-  let finalStatus = 'Fail';
-  if (!autoFail) {
-    if (supOnly) {
-      if (supsPassed >= 1) finalStatus = 'Pass';
-      else if (newbie) finalStatus = 'Incomplete';
-    } else if (callsPassed >= 2) {
-      if (supsPassed >= 1) finalStatus = 'Pass';
-      else if (newbie) finalStatus = 'Incomplete';
-    }
+  if (autoFail) {
+    const autoFailText = String(autoFail || '').trim().toLowerCase();
+    if (autoFailText.startsWith('nc')) return 'NC/NS';
+    return finalAttempt ? 'FAIL-Final Attempt' : 'Fail';
   }
 
-  return finalStatus;
+  if (supOnly) {
+    if (supsPassed >= 1) return resumedSup ? 'RESUMED-PASS' : 'Pass';
+    if (supsFailed >= 2) return finalAttempt ? 'FAIL-Final Attempt' : 'Incomplete';
+    return newbie ? 'Incomplete' : 'Incomplete';
+  }
+
+  if (callsPassed >= 2) {
+    if (supsPassed >= 1) return 'Pass';
+    if (supsFailed >= 2) return finalAttempt ? 'FAIL-Final Attempt' : 'Incomplete';
+    return newbie ? 'Incomplete' : 'Incomplete';
+  }
+
+  if (callsFailed >= 2) return finalAttempt ? 'FAIL-Final Attempt' : 'Fail';
+  return 'Incomplete';
 }
 
 function normalizeReviewSession(session) {
@@ -50,26 +69,23 @@ function getHistoricalFailSummary(session) {
   const saved = (session?.fail_summary || '').trim();
   if (saved) return saved;
   const finalStatus = session?.final_status || computeFinalStatus(session);
-  if (finalStatus === 'Pass' || finalStatus === 'Incomplete') return 'N/A';
+  if (['Pass', 'RESUMED-PASS', 'Incomplete'].includes(finalStatus)) return 'N/A';
   return 'No saved fail summary is available for this historical record.';
 }
 
 function getReviewBackTarget(session, isHistoricalReview) {
-  if (isHistoricalReview) return 'history';
-  if (!session) return 'home';
-  if (session.newbie_shift_data) return 'newbieshift';
+  if (isHistoricalReview) return { page: 'history' };
+  if (!session) return { page: 'home' };
+  if (session.newbie_shift_data) return { page: 'newbieshift' };
 
-  const hasSupTransferData = [session.sup_transfer_1, session.sup_transfer_2].some(
-    (transfer) => transfer && transfer.result
-  );
-  if (session.supervisor_only || hasSupTransferData) return 'suptransfer';
+  if (session.sup_transfer_2?.result) return { page: 'suptransfer', state: { transferNum: 2 } };
+  if (session.sup_transfer_1?.result || session.supervisor_only) return { page: 'suptransfer', state: { transferNum: 1 } };
 
-  const hasCallData = [session.call_1, session.call_2, session.call_3].some(
-    (call) => call && call.result
-  );
-  if (hasCallData) return 'calls';
+  for (let i = 3; i >= 1; i -= 1) {
+    if (session[`call_${i}`]?.result) return { page: 'calls', state: { callNum: i } };
+  }
 
-  return 'basics';
+  return { page: 'basics' };
 }
 
 export default function ReviewPage({ onNavigate, navigationState }) {
@@ -84,6 +100,8 @@ export default function ReviewPage({ onNavigate, navigationState }) {
   const [filling, setFilling] = useState(false);
   const [regenerating, setRegenerating] = useState('');
   const [hasFilledForm, setHasFilledForm] = useState(false);
+  const [summaryDiagnostics, setSummaryDiagnostics] = useState(null);
+  const reviewHydratedRef = useRef(false);
   const historyRecord = navigationState?.historyRecord || null;
   const isHistoricalReview = Boolean(historyRecord);
 
@@ -93,6 +111,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
 
   useEffect(() => {
     let cancelled = false;
+    reviewHydratedRef.current = false;
     (async () => {
       try {
         if (historyRecord) {
@@ -112,7 +131,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
         if (cancelled) return;
         if (!s || !s.candidate_name) { setSession(null); setLoading(false); return; }
         setSettings(currentSettings || {});
-        const finalStatus = s.final_status || computeFinalStatus(s);
+        const finalStatus = computeFinalStatus(s);
         const resolvedSession = normalizeReviewSession({ ...s, final_status: finalStatus });
         setSession(resolvedSession);
 
@@ -120,14 +139,23 @@ export default function ReviewPage({ onNavigate, navigationState }) {
           await api.updateSession({ final_status: finalStatus });
         }
 
+        const savedCoaching = (s.coaching_summary || '').trim();
+        const savedFail = (s.fail_summary || '').trim();
+        if (savedCoaching || savedFail) {
+          setCoaching(savedCoaching);
+          setFail(savedFail || (['Pass', 'RESUMED-PASS', 'Incomplete'].includes(finalStatus) ? 'N/A' : ''));
+          setLoading(false);
+          reviewHydratedRef.current = true;
+          return;
+        }
+
         // Generate summaries
         const summaries = await api.generateSummaries();
         if (!cancelled) {
           setCoaching(summaries.coaching || '');
           setFail(summaries.fail || '');
-          if (summaries.error) {
-            await modalRef.current.alert('Gemini Notice', summaries.error, 'info', 'popup');
-          }
+          setSummaryDiagnostics(summaries);
+          reviewHydratedRef.current = true;
         }
       } catch (err) {
         if (!cancelled) {
@@ -138,6 +166,16 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     })();
     return () => { cancelled = true; };
   }, [historyRecord]);
+
+  useEffect(() => {
+    if (isHistoricalReview || !reviewHydratedRef.current || !session?.candidate_name) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      api.updateSession({ coaching_summary: coaching, fail_summary: fail }).catch(() => {});
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [coaching, fail, isHistoricalReview, session?.candidate_name]);
 
   if (loading) return <div className="page-loading" data-testid="review-page">{historyRecord ? 'Loading review...' : 'Generating review summaries...'}</div>;
   if (!session) return <div className="stub-page" data-testid="review-page"><h1>No Active Session</h1><p>Start a session from the Home screen.</p></div>;
@@ -152,11 +190,11 @@ export default function ReviewPage({ onNavigate, navigationState }) {
   const s2r = (s.sup_transfer_2 || {}).result;
   const newbie = s.newbie_shift_data;
 
-  const finalStatus = s.final_status || computeFinalStatus(s);
+  const finalStatus = computeFinalStatus(s);
   let bannerClass, bannerText;
-  if (finalStatus === 'Pass') { bannerClass = 'banner-pass'; bannerText = 'SESSION PASSED'; }
+  if (finalStatus === 'Pass' || finalStatus === 'RESUMED-PASS') { bannerClass = 'banner-pass'; bannerText = finalStatus === 'RESUMED-PASS' ? 'RESUMED SESSION PASSED' : 'SESSION PASSED'; }
   else if (finalStatus === 'Incomplete') { bannerClass = 'banner-incomplete'; bannerText = 'SESSION INCOMPLETE — Pending Newbie Shift'; }
-  else { bannerClass = 'banner-fail'; bannerText = autoFail ? `AUTO-FAIL: ${autoFail.toUpperCase()}` : 'SESSION FAILED'; }
+  else { bannerClass = 'banner-fail'; bannerText = finalStatus === 'FAIL-Final Attempt' ? 'SESSION FAILED — FINAL ATTEMPT' : autoFail ? `AUTO-FAIL: ${autoFail.toUpperCase()}` : 'SESSION FAILED'; }
 
   const colorResult = (r) => {
     if (r === 'Pass') return <span style={{ color: 'var(--color-success)', fontWeight: 700 }}>PASS</span>;
@@ -176,15 +214,18 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     setRegenerating(type);
     try {
       const r = await api.regenerateSummary(type);
+      setSummaryDiagnostics(r);
       if (r.ok) {
         if (type === 'coaching') setCoaching(r.text);
         else setFail(r.text);
 
-        if (r.error) {
-          await modal.alert('Gemini Notice', r.error, 'info', 'popup');
-        }
       } else {
-        await modal.error('Regeneration Failed', r.error || 'Unknown error');
+        if (r.text) {
+          if (type === 'coaching') setCoaching(r.text);
+          else setFail(r.text);
+        } else {
+          await modal.error('Regeneration Failed', r.error || 'Unknown error');
+        }
       }
     } catch (e) { await modal.error('Error', e.message); }
     finally { setRegenerating(''); }
@@ -269,8 +310,12 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     setFinishing(false);
   };
 
-  const handleBack = () => {
-    onNavigate(getReviewBackTarget(session, isHistoricalReview));
+  const handleBack = async () => {
+    if (!isHistoricalReview && session?.candidate_name) {
+      await api.updateSession({ coaching_summary: coaching, fail_summary: fail }).catch(() => {});
+    }
+    const target = getReviewBackTarget(session, isHistoricalReview);
+    onNavigate(target.page, target.state);
   };
 
   const handleDiscardSession = async () => {
@@ -289,6 +334,13 @@ export default function ReviewPage({ onNavigate, navigationState }) {
   };
 
   const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
+  const summaryStatus = (() => {
+    if (isHistoricalReview || !summaryDiagnostics) return '';
+    if (summaryDiagnostics.gemini_error) return `Gemini unavailable: ${summaryDiagnostics.gemini_error}`;
+    if (summaryDiagnostics.used_gemini) return 'Gemini summaries generated';
+    if (summaryDiagnostics.used_fallback) return 'Using fallback summaries';
+    return '';
+  })();
 
   return (
     <div className="page-with-sticky-actions" data-testid="review-page">
@@ -334,6 +386,11 @@ export default function ReviewPage({ onNavigate, navigationState }) {
       </div>
 
       <div style={{ marginTop: 32 }}>
+        {summaryStatus && (
+          <div className="gemini-summary-status" data-testid="review-gemini-status">
+            {summaryStatus}
+          </div>
+        )}
         <div className="review-summary-heading">
           <h3>Coaching Summary</h3>
           {geminiActive && (

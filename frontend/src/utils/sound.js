@@ -3,6 +3,7 @@ const SOUND_FILES = {
   warning: 'error.mp3',
   success: 'chimes.mp3',
   setup: 'setup-welcome.mp3',
+  notificationApp: 'notification-app.mp3',
 };
 
 const DEFAULT_VOLUME = 0.26;
@@ -11,6 +12,7 @@ const SOUND_VOLUMES = {
   warning: 0.28,
   success: 0.27,
   setup: 0.28,
+  notificationApp: 0.55,
   welcome: 0.28,
 };
 
@@ -178,7 +180,7 @@ export function unlockSounds() {
 }
 
 export async function playSound(type, testerName = '') {
-  if (!soundsEnabled) return;
+  if (!soundsEnabled) return false;
 
   if (!soundsUnlocked) {
     unlockSounds();
@@ -190,13 +192,12 @@ export async function playSound(type, testerName = '') {
 
     if (customUrl !== fallbackUrl) {
       const playedCustom = await safePlayUrl(customUrl, 'welcome');
-      if (playedCustom) return;
+      if (playedCustom) return true;
     }
 
-    await safePlayUrl(fallbackUrl, 'welcome');
-    return;
+    return safePlayUrl(fallbackUrl, 'welcome');
   }
 
   const url = getSoundUrl(type, testerName);
-  await safePlayUrl(url, type);
+  return safePlayUrl(url, type);
 }

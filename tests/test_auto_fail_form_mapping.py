@@ -9,8 +9,10 @@ if str(BACKEND_DIR) not in sys.path:
 
 from server import (  # noqa: E402
     build_form_fill_payload,
+    compute_final_status,
     empty_session,
     generate_summaries,
+    normalize_history_status,
     normalize_settings_payload,
     sanitize_settings,
 )
@@ -252,6 +254,101 @@ def test_supervisor_transfer_fail_after_mock_pass_has_na_fail_summary():
     assert "Supervisor Transfer 1 - FAIL" in summaries["coaching"]
     assert "Discord permission" in summaries["coaching"]
     assert "Transferred to wrong queue" not in summaries["fail"]
+
+
+def test_resumed_supervisor_transfer_pass_status_is_resumed_pass():
+    session = _session(
+        supervisor_only=True,
+        resumed_sup_transfer_only=True,
+        resume_source_history_id="history-1",
+        call_1={"result": "Pass", "coaching": {"Show appreciation": True}},
+        call_2={"result": "Pass", "coaching": {"Verification": True}},
+        sup_transfer_1={"result": "Pass", "coaching": {"Discord permission": True}},
+    )
+
+    assert compute_final_status(session) == "RESUMED-PASS"
+    assert normalize_history_status({**session, "status": "Pass"}) == "RESUMED-PASS"
+
+
+def test_resumed_supervisor_transfer_non_final_fail_remains_incomplete():
+    session = _session(
+        supervisor_only=True,
+        resumed_sup_transfer_only=True,
+        resume_source_history_id="history-1",
+        final_attempt=False,
+        call_1={"result": "Pass", "coaching": {"Show appreciation": True}},
+        call_2={"result": "Pass", "coaching": {"Verification": True}},
+        sup_transfer_1={"result": "Fail", "fails": {"Transferred to wrong queue": True}},
+        sup_transfer_2={"result": "Fail", "fails": {"Did not ask permission to transfer": True}},
+        newbie_shift_data={"newbie_date": "2026-05-18", "newbie_time": "9:00 AM", "newbie_tz": "ET"},
+    )
+
+    assert compute_final_status(session) == "Incomplete"
+    assert normalize_history_status({**session, "status": "Incomplete"}) == "Incomplete"
+
+
+def test_final_attempt_fail_normalizes_for_regular_and_resumed_sessions():
+    regular = _session(
+        final_attempt=True,
+        call_1={"result": "Fail", "fails": {"Skipped parts of script": True}},
+        call_2={"result": "Fail", "fails": {"Wrong donation": True}},
+    )
+    resumed = _session(
+        supervisor_only=True,
+        resumed_sup_transfer_only=True,
+        resume_source_history_id="history-1",
+        final_attempt=True,
+        sup_transfer_1={"result": "Fail", "fails": {"Transferred to wrong queue": True}},
+        sup_transfer_2={"result": "Fail", "fails": {"Did not ask permission to transfer": True}},
+    )
+
+    assert compute_final_status(regular) == "FAIL-Final Attempt"
+    assert normalize_history_status({**regular, "status": "Incomplete"}) == "FAIL-Final Attempt"
+    assert compute_final_status(resumed) == "FAIL-Final Attempt"
+    assert normalize_history_status({**resumed, "status": "Incomplete"}) == "FAIL-Final Attempt"
+
+
+def test_resumed_supervisor_transfer_summaries_ignore_prior_mock_call_data():
+    session = _session(
+        supervisor_only=True,
+        resumed_sup_transfer_only=True,
+        resume_source_history_id="history-1",
+        call_1={
+            "result": "Pass",
+            "coaching": {"Show appreciation": True, "Other": True},
+            "coach_notes": "Old mock call coaching should not appear.",
+        },
+        call_2={
+            "result": "Fail",
+            "fails": {"Skipped parts of script": True, "Other": True},
+            "fail_notes": "Old mock call fail reason should not appear.",
+        },
+        sup_transfer_1={
+            "result": "Fail",
+            "coaching": {"Discord permission": True},
+            "fails": {"Transferred to wrong queue": True, "Other": True},
+            "fail_notes": "Queue was not changed.",
+        },
+        sup_transfer_2={
+            "result": "Fail",
+            "coaching": {"Screenshots/Discord Chat": True},
+            "fails": {"Did not inform caller of transfer": True},
+        },
+        final_status="Incomplete",
+    )
+
+    summaries = generate_summaries(session)
+
+    assert "Supervisor Transfer 1 - FAIL" in summaries["coaching"]
+    assert "Supervisor Transfer 2 - FAIL" in summaries["coaching"]
+    assert "Discord permission" in summaries["coaching"]
+    assert "Old mock call coaching should not appear" not in summaries["coaching"]
+    assert "Show appreciation" not in summaries["coaching"]
+    assert "Supervisor Transfer 1 - FAIL" in summaries["fail"]
+    assert "Transferred to wrong queue" in summaries["fail"]
+    assert "Queue was not changed" in summaries["fail"]
+    assert "Old mock call fail reason should not appear" not in summaries["fail"]
+    assert "Skipped parts of script" not in summaries["fail"]
 
 
 def test_headset_like_selection_data_is_rejected_from_summaries():

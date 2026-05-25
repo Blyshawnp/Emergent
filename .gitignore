@@ -2,17 +2,26 @@
 node_modules/
 dist/
 desktop/dist-notification-manager/
+desktop/dist-regression-mts/
 build/
 out/
 release/
+production-ready-backups/
+desktop/preload.js
 
 # Logs
 *.log
 
 # Env files
 .env
+.env.*
 backend/config/google-service-account.json
 backend/config/service-account.json
+**/backend/config/google-service-account.json
+**/backend/config/service-account.json
+**/*service-account*.json
+!**/*service-account*.example.json
+!**/*service-account*.sample.json
 
 # Python
 __pycache__/

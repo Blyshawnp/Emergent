@@ -15,7 +15,7 @@ import geminiGraphic from '../assets/images/Gemini2.png';
 import mtsLogo from '../assets/images/MTSLogonew.png';
 
 const ModalContext = createContext(null);
-const notificationGraphic = `${process.env.PUBLIC_URL || ''}/notification-popup.png`;
+const notificationGraphic = `${process.env.PUBLIC_URL || ''}/sam-banner.png`;
 
 export function useModal() {
   return useContext(ModalContext);

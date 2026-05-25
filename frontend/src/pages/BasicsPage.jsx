@@ -31,6 +31,9 @@ export default function BasicsPage({ onNavigate }) {
   const [approvedHeadsets, setApprovedHeadsets] = useState([]);
   const [headsetLookupError, setHeadsetLookupError] = useState('');
   const [headsetLookupLoading, setHeadsetLookupLoading] = useState(true);
+  const [candidateLookup, setCandidateLookup] = useState({ loading: false, matches: [], error: '', finalAttempt: false, withdrawn: false, extraAttemptGranted: false });
+  const [previousSessionOpen, setPreviousSessionOpen] = useState(false);
+  const [finalAttemptNoticeShownFor, setFinalAttemptNoticeShownFor] = useState('');
   const [form, setForm] = useState({
     candidate_name: '', tester_name: '', final_attempt: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
@@ -106,7 +109,70 @@ export default function BasicsPage({ onNavigate }) {
     return () => window.clearTimeout(timer);
   }, [form, supervisorOnlyMode]);
 
+  useEffect(() => {
+    const candidateName = form.candidate_name.trim();
+    if (!hydratedRef.current || candidateName.length < 2) {
+      setCandidateLookup({ loading: false, matches: [], error: '', finalAttempt: false, withdrawn: false, extraAttemptGranted: false });
+      return undefined;
+    }
+
+    setCandidateLookup((current) => ({ ...current, loading: true, error: '' }));
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await api.lookupSharedCandidate(candidateName);
+        setCandidateLookup({
+          loading: false,
+          matches: Array.isArray(response?.matches) ? response.matches : [],
+          error: response?.ok === false ? 'Shared candidate lookup unavailable. Using local session mode.' : '',
+          finalAttempt: Boolean(response?.finalAttempt),
+          withdrawn: Boolean(response?.withdrawn),
+          extraAttemptGranted: Boolean(response?.extraAttemptGranted),
+        });
+      } catch (error) {
+        setCandidateLookup({
+          loading: false,
+          matches: [],
+          error: 'Shared candidate lookup unavailable. Using local session mode.',
+          finalAttempt: false,
+          withdrawn: false,
+          extraAttemptGranted: false,
+        });
+      }
+    }, 650);
+
+    return () => window.clearTimeout(timer);
+  }, [form.candidate_name]);
+
+  useEffect(() => {
+    const candidateName = form.candidate_name.trim().toLowerCase();
+    if (!candidateLookup.finalAttempt || !candidateName || finalAttemptNoticeShownFor === candidateName) {
+      return;
+    }
+    setForm((current) => ({ ...current, final_attempt: true }));
+    setFinalAttemptNoticeShownFor(candidateName);
+    modal.warning(
+      'Final Attempt Detected',
+      'Shared records show two prior qualifying failures for this candidate. Final Attempt has been set to Yes.'
+    );
+  }, [candidateLookup.finalAttempt, finalAttemptNoticeShownFor, form.candidate_name, modal]);
+
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+  const mostRecentPreviousSession = candidateLookup.matches[0] || null;
+
+  const loadBasicsFromPreviousSession = async () => {
+    if (!mostRecentPreviousSession) return;
+    const confirmed = await modal.confirm(
+      'Load Basics',
+      'Load matching Basics fields from the most recent previous session? You can still edit the fields before continuing.'
+    );
+    if (!confirmed) return;
+    setForm((current) => ({
+      ...current,
+      candidate_name: mostRecentPreviousSession.candidate_name || current.candidate_name,
+      tester_name: current.tester_name || settings.tester_name || '',
+      final_attempt: candidateLookup.finalAttempt || Boolean(mostRecentPreviousSession.final_attempt) || current.final_attempt,
+    }));
+  };
 
   const filteredHeadsets = useMemo(() => {
     const query = headsetQuery.trim().toLowerCase();
@@ -153,6 +219,10 @@ export default function BasicsPage({ onNavigate }) {
   const handleContinue = async () => {
     const d = form;
     if (!d.candidate_name.trim()) { await modal.warning('Missing Info', 'Candidate Name is required.'); return; }
+    if (candidateLookup.withdrawn) {
+      await modal.warning('Candidate Withdrawn', 'Shared records show this candidate withdrew from certification. They cannot be resumed or started again unless an admin reverses the withdrawal in SAM.');
+      return;
+    }
     if (d.headset_usb === null || d.noise_cancel === null || !d.headset_brand.trim()) { await modal.warning('Missing Info', 'All Headset fields are required.'); return; }
     if (d.vpn_on === null) { await modal.warning('Missing Info', 'VPN question must be answered.'); return; }
     if (d.vpn_on && d.vpn_off === null) { await modal.warning('Missing Info', 'Please confirm if the candidate can turn off their VPN.'); return; }
@@ -246,6 +316,46 @@ export default function BasicsPage({ onNavigate }) {
             </div>
           </div>
         </div>
+        {candidateLookup.loading && (
+          <div className="text-xs text-muted" style={{ marginTop: 10 }}>Checking shared candidate records...</div>
+        )}
+        {candidateLookup.error && (
+          <div className="text-xs" style={{ marginTop: 10, color: 'var(--color-warning)' }}>{candidateLookup.error}</div>
+        )}
+        {candidateLookup.matches.length > 0 && (
+          <div className="card" style={{ marginTop: 12, padding: 14, background: 'var(--bg-card-hover)' }} data-testid="candidate-lookup-prompt">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 800 }}>Previous session found for this candidate.</div>
+                <div className="text-xs text-muted">
+                  Most recent: {mostRecentPreviousSession?.status || 'Unknown'} by {mostRecentPreviousSession?.tester_name || 'Unknown tester'}
+                  {candidateLookup.extraAttemptGranted ? ' - extra attempt granted' : ''}
+                  {candidateLookup.withdrawn ? ' - withdrew from certification' : ''}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <button type="button" className="btn btn-muted btn-sm" onClick={() => setPreviousSessionOpen(true)}>Review Previous Session</button>
+                <button type="button" className="btn btn-primary btn-sm" onClick={loadBasicsFromPreviousSession}>Load Basics</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCandidateLookup((current) => ({ ...current, matches: [] }))}>Ignore</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {candidateLookup.finalAttempt && (
+          <div className="banner banner-fail" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
+            Shared records indicate this is the candidate&apos;s final attempt.
+          </div>
+        )}
+        {candidateLookup.extraAttemptGranted && !candidateLookup.finalAttempt && (
+          <div className="banner banner-incomplete" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
+            Shared records show an additional attempt was granted.
+          </div>
+        )}
+        {candidateLookup.withdrawn && (
+          <div className="banner banner-fail" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
+            This candidate withdrew from certification and cannot be resumed or started unless reversed by an admin.
+          </div>
+        )}
       </div>
       <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }} data-tour="basics-headset-section">
         <h3 style={{ marginBottom: 12 }}>Headset Requirements</h3>
@@ -339,8 +449,11 @@ export default function BasicsPage({ onNavigate }) {
                 onChange={(event) => setHeadsetQuery(event.target.value)}
                 placeholder="Search brand or model..."
                 data-testid="headset-lookup-search"
-                style={{ marginBottom: 16 }}
+                style={{ marginBottom: 6 }}
               />
+              <div className="text-xs text-muted headset-lookup-update-note">
+                This list is updated every 1-2 weeks.
+              </div>
               <div className="headset-lookup-results-scroll">
                 {headsetLookupError && approvedHeadsets.length === 0 ? (
                   <div className="headset-lookup-empty">
@@ -400,6 +513,13 @@ export default function BasicsPage({ onNavigate }) {
         </div>
       )}
 
+      {previousSessionOpen && (
+        <PreviousSessionModal
+          matches={candidateLookup.matches}
+          onClose={() => setPreviousSessionOpen(false)}
+        />
+      )}
+
       <div className="footer-bar sticky-action-footer" data-testid="basics-footer">
         <div className="action-safety-group">
           <button className="btn btn-muted btn-sm" onClick={() => onNavigate('home')} data-testid="basics-back">Back</button>
@@ -412,6 +532,59 @@ export default function BasicsPage({ onNavigate }) {
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="basics-tech" title="Log a technical issue (internet, calls routing, script pop, etc.)">Tech Issue</button>
         <span className="spacer" />
         <button className="btn btn-primary" onClick={handleContinue} data-testid="basics-continue">Continue</button>
+      </div>
+    </div>
+  );
+}
+
+function PreviousSessionModal({ matches, onClose }) {
+  const [expanded, setExpanded] = useState(0);
+  const sessions = Array.isArray(matches) ? matches : [];
+  return (
+    <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="modal" style={{ width: 760, maxWidth: '94vw', maxHeight: '86vh' }}>
+        <div className="modal-header">
+          <h2>Previous Candidate Sessions</h2>
+          <button className="modal-close" onClick={onClose}>&times;</button>
+        </div>
+        <div className="modal-body">
+          {sessions.map((session, index) => {
+            const isOpen = expanded === index;
+            return (
+              <div key={`${session.session_id || index}`} className="card" style={{ marginBottom: 12, padding: 16 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  style={{ width: '100%', justifyContent: 'space-between' }}
+                  onClick={() => setExpanded(isOpen ? -1 : index)}
+                >
+                  <span>{session.candidate_name || 'Unknown'} - {session.status || 'Unknown'} - {session.tester_name || 'Unknown tester'}</span>
+                  <span>{isOpen ? 'Hide' : 'Details'}</span>
+                </button>
+                {isOpen && (
+                  <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+                    <div className="text-sm"><b>Completed:</b> {session.completed_at || session.created_at || 'Unknown'}</div>
+                    <div className="text-sm"><b>Final attempt:</b> {session.final_attempt ? 'Yes' : 'No'}</div>
+                    <div className="text-sm"><b>Pending supervisor transfer:</b> {session.needs_sup_transfer ? 'Yes' : 'No'}</div>
+                    <div className="text-sm"><b>Calls:</b> {[session.call_1_result, session.call_2_result, session.call_3_result].filter(Boolean).join(', ') || 'None recorded'}</div>
+                    <div className="text-sm"><b>Supervisor transfers:</b> {[session.sup_transfer_1_result, session.sup_transfer_2_result].filter(Boolean).join(', ') || 'None recorded'}</div>
+                    <div>
+                      <div className="text-sm font-bold">Coaching Summary</div>
+                      <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{session.coaching_summary || 'None recorded'}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold">Reason for Fail Summary</div>
+                      <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{session.fail_summary || 'N/A'}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
+          <button className="btn btn-primary" onClick={onClose}>Close</button>
+        </div>
       </div>
     </div>
   );

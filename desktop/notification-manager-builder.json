@@ -1,13 +1,13 @@
 {
   "appId": "com.acddirect.mocktestingsuite.notificationmanager",
-  "productName": "MTS Notification Manager",
+  "productName": "Sam",
   "copyright": "Copyright © 2026 ACD Direct / Shawn P. Bly",
   "directories": {
     "output": "dist-notification-manager"
   },
   "extraMetadata": {
     "name": "mock-testing-suite-notification-manager",
-    "description": "Mock Testing Suite Notification Manager",
+    "description": "Sam - Smart Alert Manager",
     "main": "src/notification-main.js"
   },
   "files": [
@@ -67,18 +67,18 @@
         ]
       }
     ],
-    "icon": "assets/notification-micro.ico",
+    "icon": "assets/notification-taskbar.ico",
     "publisherName": "ACD Direct"
   },
   "nsis": {
     "oneClick": false,
     "perMachine": true,
     "allowToChangeInstallationDirectory": false,
-    "installerIcon": "assets/notification-micro.ico",
-    "uninstallerIcon": "assets/notification-micro.ico",
-    "installerHeaderIcon": "assets/notification-micro.ico",
+    "installerIcon": "assets/notification-taskbar.ico",
+    "uninstallerIcon": "assets/notification-taskbar.ico",
+    "installerHeaderIcon": "assets/notification-taskbar.ico",
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "MTS Notification Manager"
+    "shortcutName": "Sam"
   }
 }

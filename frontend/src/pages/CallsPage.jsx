@@ -97,6 +97,43 @@ function isOneTimeDonation(callType) {
   return callType.toLowerCase().includes('one time');
 }
 
+function cleanScenarioSentence(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.!?;:])/g, '$1')
+    .trim()
+    .replace(/[.!?]+$/g, '');
+}
+
+function sentenceCase(value) {
+  const text = cleanScenarioSentence(value);
+  if (!text) return '';
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+function formatScenarioNote(note) {
+  const text = cleanScenarioSentence(note);
+  if (!text) return '';
+
+  if (/^(ask|inquire|request|choose|for|please|mention|confirm|verify|use|select)\b/i.test(text)) {
+    return `${sentenceCase(text)}.`;
+  }
+
+  if (/^(you|i|we|they|he|she|sam|mark|alison)\b/i.test(text)) {
+    return `${sentenceCase(text)}.`;
+  }
+
+  if (/^(how|which|what|when|where|why|whether|if)\b/i.test(text)) {
+    return `You are also wondering ${text}.`;
+  }
+
+  return `You are also asking about ${text}.`;
+}
+
+function buildScenarioNotes(showData) {
+  return formatScenarioNote(showData?.[4]);
+}
+
 function ScenarioCard({ currentCaller, callSetup, randFlags, donations, onRegenerate, showData }) {
   if (!currentCaller.length) return <div className="card card-scenario"><p className="text-muted">Select call type, show, and caller.</p></div>;
   const fname = currentCaller[0];
@@ -110,6 +147,7 @@ function ScenarioCard({ currentCaller, callSetup, randFlags, donations, onRegene
   else if (ct.includes('sustaining') || ct.includes('monthly')) action = 'start a new sustaining donation of';
   const donation = callSetup.donation || donations[0] || '';
   const gift = showData && showData[3] ? showData[3] : '';
+  const scenarioNotes = buildScenarioNotes(showData);
 
   return (
     <div className="card card-scenario" data-testid="scenario-card">
@@ -118,7 +156,7 @@ function ScenarioCard({ currentCaller, callSetup, randFlags, donations, onRegene
         <button className="btn btn-ghost btn-sm" onClick={onRegenerate} data-testid="scenario-regen" title="Re-roll random variables">{'\uD83D\uDD04'} Regenerate</button>
       </div>
       <p style={{ lineHeight: 1.7, marginBottom: 16 }}>
-        <b>For this call you will portray {fullName}.</b> {fname} is {donorType} wishing to {action} {donation} to support {callSetup.show}.
+        <b>For this call you will portray {fullName}.</b> {fname} is {donorType} wishing to {action} {donation} to support {callSetup.show}.{scenarioNotes ? ` ${scenarioNotes}` : ''}
       </p>
       <div className="scenario-vars">
         {gift && <div className="scenario-var"><span className="scenario-var-label">Thank You Gift:</span><span className="scenario-var-value scenario-highlight">{gift}</span></div>}
@@ -189,7 +227,28 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
 }
 
 // --- Main Component ---
-export default function CallsPage({ onNavigate }) {
+function getLastCompletedCallNum(session) {
+  for (let i = 3; i >= 1; i -= 1) {
+    if (session?.[`call_${i}`]?.result) return i;
+  }
+  return 1;
+}
+
+function getCallRecordForNum(session, callNum) {
+  const normalized = Math.max(1, Math.min(3, Number(callNum) || 1));
+  return session?.[`call_${normalized}`] || null;
+}
+
+function fireAndForgetSessionUpdate(payload) {
+  try {
+    const pending = api.updateSession(payload);
+    if (pending && typeof pending.catch === 'function') {
+      pending.catch(() => {});
+    }
+  } catch (_error) {}
+}
+
+export default function CallsPage({ onNavigate, navigationState }) {
   const modal = useModal();
   const [callNum, setCallNum] = useState(1);
   const [result, setResult] = useState(null);
@@ -219,28 +278,51 @@ export default function CallsPage({ onNavigate }) {
         if (cancelled) return;
         setDefaults(d);
         setSettings(s);
+        const source = d?._content_sources || {};
+        console.log('[SAM] Loading shows from Google Sheets...');
+        console.log(`[SAM] Active shows source: ${source.shows?.source || 'unknown'}${source.shows?.detail ? ` (${source.shows.detail})` : ''}`);
+        console.log(`[SAM] Loaded ${(s.shows || d.shows || []).length} shows`);
+        console.log(`[SAM] Loaded ${[
+          ...(s.donors_new || d.donors_new || []),
+          ...(s.donors_existing || d.donors_existing || []),
+          ...(s.donors_increase || d.donors_increase || []),
+        ].length} callers`);
+        if ((source.shows?.source || '').toLowerCase() !== 'google') {
+          console.log('[SAM] Falling back to CSV...');
+        }
         const types = s.call_types || d.call_types || [];
         const shows = s.shows || d.shows || [];
+        const requestedCallNum = Math.max(1, Math.min(3, Number(navigationState?.callNum) || 0));
         const savedDraft = session?.current_call_draft || null;
         const nextOpenCallIndex = [session?.call_1, session?.call_2, session?.call_3].findIndex((call) => !call?.result);
-        const resolvedCallNum = savedDraft?.call_num || (nextOpenCallIndex >= 0 ? nextOpenCallIndex + 1 : 3);
-        setCallNum(Math.max(1, Math.min(3, resolvedCallNum || 1)));
+        const resolvedCallNum = requestedCallNum || savedDraft?.call_num || (nextOpenCallIndex >= 0 ? nextOpenCallIndex + 1 : 3);
+        const normalizedCallNum = Math.max(1, Math.min(3, resolvedCallNum || 1));
+        const savedCall = getCallRecordForNum(session, normalizedCallNum);
+        const draftMatchesRequestedCall = savedDraft && Number(savedDraft.call_num || 0) === normalizedCallNum;
+        const draftHasUserState = Boolean(
+          savedDraft?.result ||
+          Object.values(savedDraft?.coaching || {}).some(Boolean) ||
+          Object.values(savedDraft?.fails || {}).some(Boolean) ||
+          String(savedDraft?.coach_notes || savedDraft?.fail_notes || '').trim()
+        );
+        const hydrateSource = draftMatchesRequestedCall && (requestedCallNum || draftHasUserState) ? savedDraft : savedCall;
+        setCallNum(normalizedCallNum);
 
         if (!cancelled && session) {
           setIsFinal(session.final_attempt || false);
           setCandidateName(session.candidate_name || '');
           setCallSetup({
-            type: savedDraft?.type || types[0] || '',
-            show: savedDraft?.show || shows[0]?.[0] || '',
-            caller: savedDraft?.caller || '',
-            donation: savedDraft?.donation || '',
+            type: hydrateSource?.type || types[0] || '',
+            show: hydrateSource?.show || shows[0]?.[0] || '',
+            caller: hydrateSource?.caller || '',
+            donation: hydrateSource?.donation || '',
           });
-          setResult(savedDraft?.result || null);
-          setCoaching(savedDraft?.coaching || {});
-          setCoachNotes(savedDraft?.coach_notes || '');
-          setFails(savedDraft?.fails || {});
-          setFailNotes(savedDraft?.fail_notes || '');
-          setRandFlags(savedDraft?.rand_flags || generateRandomFlags());
+          setResult(hydrateSource?.result || null);
+          setCoaching(hydrateSource?.coaching || {});
+          setCoachNotes(hydrateSource?.coach_notes || '');
+          setFails(hydrateSource?.fails || {});
+          setFailNotes(hydrateSource?.fail_notes || '');
+          setRandFlags(hydrateSource?.rand_flags || generateRandomFlags());
         } else {
           if (types.length) setCallSetup(prev => ({ ...prev, type: types[0] }));
           if (shows.length) setCallSetup(prev => ({ ...prev, show: shows[0][0] }));
@@ -252,7 +334,7 @@ export default function CallsPage({ onNavigate }) {
       if (!cancelled) hydratedRef.current = true;
     })();
     return () => { cancelled = true; };
-  }, [rollRandom]);
+  }, [rollRandom, navigationState]);
 
   const callTypes = settings.call_types || defaults.call_types || [];
   const shows = settings.shows || defaults.shows || [];
@@ -296,7 +378,7 @@ export default function CallsPage({ onNavigate }) {
     latestDraftPayloadRef.current = payload;
 
     const timer = window.setTimeout(() => {
-      api.updateSession(payload).catch(() => {});
+      fireAndForgetSessionUpdate(payload);
     }, 250);
 
     return () => window.clearTimeout(timer);
@@ -305,7 +387,7 @@ export default function CallsPage({ onNavigate }) {
   useEffect(() => {
     return () => {
       if (latestDraftPayloadRef.current) {
-        api.updateSession(latestDraftPayloadRef.current).catch(() => {});
+        fireAndForgetSessionUpdate(latestDraftPayloadRef.current);
       }
     };
   }, []);
@@ -379,8 +461,21 @@ export default function CallsPage({ onNavigate }) {
 
   const handleBack = useCallback(async () => {
     await saveCallDraftNow();
+    if (callNum > 2) {
+      try {
+        const { session } = await api.getCurrentSession();
+        for (let i = callNum - 1; i >= 2; i -= 1) {
+          if (session?.[`call_${i}`]?.result) {
+            onNavigate('calls', { callNum: i });
+            return;
+          }
+        }
+      } catch (_error) {
+        // Fall through to Basics if the latest session cannot be read.
+      }
+    }
     onNavigate('basics');
-  }, [saveCallDraftNow, onNavigate]);
+  }, [callNum, saveCallDraftNow, onNavigate]);
 
   const handleStoppedResponding = useCallback(async () => {
     const confirmed = await modal.confirm(

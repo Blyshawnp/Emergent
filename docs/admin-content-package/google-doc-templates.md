@@ -1,15 +1,15 @@
-# Google Doc admin templates — FAQ and Help
+# Google Doc admin templates - FAQ and Help
 
-The Mock Testing Suite reads Help, FAQ, and optional Gemini prompt Google Docs as live admin overrides:
+The Mock Testing Suite reads Help and FAQ Google Docs as live admin overrides:
 
-- **FAQ doc** — URL key `admin_faq_doc_url` in `backend/config/runtime_config.json`
-- **Help doc** — URL key `admin_help_doc_url`
-- **Gemini coaching prompt doc** — URL key `admin_gemini_coaching_prompt_doc_url`
-- **Gemini fail prompt doc** — URL key `admin_gemini_fail_prompt_doc_url`
+- **FAQ doc** - URL key `admin_faq_doc_url` in `backend/config/runtime_config.json`
+- **Help doc** - URL key `admin_help_doc_url`
 
 The backend fetches each via `https://docs.google.com/document/d/<id>/export?format=md`, with a `format=txt` fallback. **Both formats are accepted** for the FAQ — you can author either way and the backend converts it to canonical markdown before serving.
 
 If a remote doc fetch succeeds but produces zero recognizable FAQ entries, the backend logs a warning and falls back to the local `backend/defaults/faq.md`. The same applies to Help. So a malformed remote will never break the app — it will quietly fall back.
+
+Gemini prompts are not loaded from Google Docs. They use bundled markdown defaults, with optional Google Sheet overrides only.
 
 ---
 
@@ -103,43 +103,6 @@ For help, email blyshawnp@gmail.com or message shawnbly on Discord.
 4. **Use bullet lists** (`-` or `*`) for lists. Numbered (`1.`) lists are also supported.
 5. **Inline formatting supported:** `**bold**`, `` `code` ``, `[link text](url)`.
 6. **Tables and images** in the Google Doc do not export cleanly via the markdown route. Use bullet lists and inline formatting instead.
-
----
-
-## Gemini prompt docs — recommended format
-
-Use one Google Doc for the coaching prompt and one Google Doc for the fail prompt. Keep them plain and direct.
-
-### Coaching prompt example
-
-```
-You are writing an internal certification test call results summary for management.
-
-Rules:
-- Be objective, professional, and suitable for internal documentation.
-- Include the selected coaching items directly.
-- Do not address the candidate.
-- Do not invent coaching items that were not selected.
-```
-
-### Fail prompt example
-
-```
-You are writing an internal certification test call failure summary for management.
-
-Rules:
-- Be objective, professional, and suitable for internal documentation.
-- Include the selected fail reasons directly.
-- Do not address the candidate.
-- Do not invent fail reasons that were not selected.
-```
-
-### Prompt rules
-
-1. Do not put a Gemini API key in the prompt doc.
-2. Do not include private candidate data in the prompt doc.
-3. The backend still appends the actual session notes at runtime.
-4. Restart the backend/app after editing the Google Doc so the new prompt is loaded.
 
 ---
 

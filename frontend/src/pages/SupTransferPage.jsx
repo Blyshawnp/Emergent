@@ -24,7 +24,54 @@ const DEFAULT_SUP_REASONS = [
   'Damaged Gift', "Didn't Receive Gift", 'Cancel Sustaining', 'Use Own/Other',
 ];
 
-export default function SupTransferPage({ onNavigate }) {
+function cleanScenarioSentence(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.!?;:])/g, '$1')
+    .trim()
+    .replace(/[.!?]+$/g, '');
+}
+
+function formatScenarioNote(note) {
+  const text = cleanScenarioSentence(note);
+  if (!text) return '';
+  const sentence = `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+  if (/^(ask|inquire|request|choose|for|please|mention|confirm|verify|use|select|you|i|we|they|he|she)\b/i.test(text)) {
+    return `${sentence}.`;
+  }
+  if (/^(how|which|what|when|where|why|whether|if)\b/i.test(text)) {
+    return `You are also wondering ${text}.`;
+  }
+  return `You are also asking about ${text}.`;
+}
+
+function getLastCompletedTransferNum(session) {
+  if (session?.sup_transfer_2?.result) return 2;
+  return 1;
+}
+
+function getLastCompletedCallNum(session) {
+  for (let i = 3; i >= 1; i -= 1) {
+    if (session?.[`call_${i}`]?.result) return i;
+  }
+  return 1;
+}
+
+function getTransferRecordForNum(session, transferNum) {
+  const normalized = Math.max(1, Math.min(2, Number(transferNum) || 1));
+  return session?.[`sup_transfer_${normalized}`] || null;
+}
+
+function fireAndForgetSessionUpdate(payload) {
+  try {
+    const pending = api.updateSession(payload);
+    if (pending && typeof pending.catch === 'function') {
+      pending.catch(() => {});
+    }
+  } catch (_error) {}
+}
+
+export default function SupTransferPage({ onNavigate, navigationState }) {
   const modal = useModal();
   const [transferNum, setTransferNum] = useState(1);
   const [result, setResult] = useState(null);
@@ -42,6 +89,7 @@ export default function SupTransferPage({ onNavigate }) {
   const [candidateName, setCandidateName] = useState('');
   const hydratedRef = useRef(false);
   const latestDraftPayloadRef = useRef(null);
+  const sessionRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,24 +98,49 @@ export default function SupTransferPage({ onNavigate }) {
         const [{ session }, d, s] = await Promise.all([api.getCurrentSession(), api.getDefaults(), api.getSettings()]);
         if (cancelled) return;
         setDefaults(d); setSettings(s);
+        const source = d?._content_sources || {};
+        console.log('[SAM] Loading shows from Google Sheets...');
+        console.log(`[SAM] Active shows source: ${source.shows?.source || 'unknown'}${source.shows?.detail ? ` (${source.shows.detail})` : ''}`);
+        console.log(`[SAM] Loaded ${(s.shows || d.shows || []).length} shows`);
+        console.log(`[SAM] Loaded ${[
+          ...(s.donors_new || d.donors_new || []),
+          ...(s.donors_existing || d.donors_existing || []),
+          ...(s.donors_increase || d.donors_increase || []),
+        ].length} callers`);
+        if ((source.shows?.source || '').toLowerCase() !== 'google') {
+          console.log('[SAM] Falling back to CSV...');
+        }
         const initialSupReasons = s.sup_reasons || d.sup_reasons || DEFAULT_SUP_REASONS;
+        sessionRef.current = session || null;
+        const requestedTransferNum = Math.max(1, Math.min(2, Number(navigationState?.transferNum) || 0));
         const savedDraft = session?.current_sup_transfer_draft || null;
+        const resolvedTransferNum = requestedTransferNum || savedDraft?.transfer_num || (session?.sup_transfer_1?.result ? 2 : 1);
+        const normalizedTransferNum = Math.max(1, Math.min(2, resolvedTransferNum || 1));
+        const savedTransfer = getTransferRecordForNum(session, normalizedTransferNum);
+        const draftMatchesRequestedTransfer = savedDraft && Number(savedDraft.transfer_num || 0) === normalizedTransferNum;
+        const draftHasUserState = Boolean(
+          savedDraft?.result ||
+          Object.values(savedDraft?.coaching || {}).some(Boolean) ||
+          Object.values(savedDraft?.fails || {}).some(Boolean) ||
+          String(savedDraft?.coach_notes || savedDraft?.fail_notes || '').trim()
+        );
+        const hydrateSource = draftMatchesRequestedTransfer && (requestedTransferNum || draftHasUserState) ? savedDraft : savedTransfer;
         setSetup({
-          caller: savedDraft?.caller || '',
-          show: savedDraft?.show || '',
-          reason: savedDraft?.reason || initialSupReasons[0] || '',
+          caller: hydrateSource?.caller || '',
+          show: hydrateSource?.show || '',
+          reason: hydrateSource?.reason || initialSupReasons[0] || '',
         });
         if (!cancelled && session) {
           setIsFinal(session.final_attempt || false);
           setIsSupervisorOnly(session.supervisor_only || false);
           setCandidateName(session.candidate_name || '');
-          setTransferNum(savedDraft?.transfer_num || (session.sup_transfer_1?.result ? 2 : 1));
-          setResult(savedDraft?.result || null);
-          setCoaching(savedDraft?.coaching || {});
-          setCoachNotes(savedDraft?.coach_notes || '');
-          setFails(savedDraft?.fails || {});
-          setFailNotes(savedDraft?.fail_notes || '');
-          setSupRandFlags(savedDraft?.rand_flags || {
+          setTransferNum(normalizedTransferNum);
+          setResult(hydrateSource?.result || null);
+          setCoaching(hydrateSource?.coaching || {});
+          setCoachNotes(hydrateSource?.coach_notes || '');
+          setFails(hydrateSource?.fails || {});
+          setFailNotes(hydrateSource?.fail_notes || '');
+          setSupRandFlags(hydrateSource?.rand_flags || {
             phone: ['Mobile', 'Landline'][Math.floor(Math.random() * 2)],
             sms: ['Yes', 'No'][Math.floor(Math.random() * 2)],
             enews: ['Yes', 'No'][Math.floor(Math.random() * 2)],
@@ -80,7 +153,7 @@ export default function SupTransferPage({ onNavigate }) {
       if (!cancelled) hydratedRef.current = true;
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [navigationState]);
 
   useLayoutEffect(() => {
     const el = document.querySelector('[data-testid="page-content"]');
@@ -125,6 +198,8 @@ export default function SupTransferPage({ onNavigate }) {
   }, [callers, setup.caller]);
   const callerIdx = Math.max(0, callers.findIndex(c => `${c[0]} ${c[1]}` === setup.caller));
   const currentCaller = useMemo(() => callers[callerIdx] || callers[0] || [], [callers, callerIdx]);
+  const showData = useMemo(() => shows.find(s => s[0] === setup.show) || [], [shows, setup.show]);
+  const scenarioNotes = useMemo(() => formatScenarioNote(showData?.[4]), [showData]);
 
   const [supRandFlags, setSupRandFlags] = useState(() => ({
     phone: ['Mobile', 'Landline'][Math.floor(Math.random() * 2)],
@@ -174,7 +249,7 @@ export default function SupTransferPage({ onNavigate }) {
     latestDraftPayloadRef.current = payload;
 
     const timer = window.setTimeout(() => {
-      api.updateSession(payload).catch(() => {});
+      fireAndForgetSessionUpdate(payload);
     }, 250);
 
     return () => window.clearTimeout(timer);
@@ -183,7 +258,7 @@ export default function SupTransferPage({ onNavigate }) {
   useEffect(() => {
     return () => {
       if (latestDraftPayloadRef.current) {
-        api.updateSession(latestDraftPayloadRef.current).catch(() => {});
+        fireAndForgetSessionUpdate(latestDraftPayloadRef.current);
       }
     };
   }, []);
@@ -240,7 +315,7 @@ export default function SupTransferPage({ onNavigate }) {
     } else {
       if (result === 'Fail') {
         const { session } = await api.getCurrentSession();
-        if (session && session.final_attempt) { await api.updateSession({ final_status: 'Fail' }); onNavigate('review'); }
+        if (session && session.final_attempt) { await api.updateSession({ final_status: 'FAIL-Final Attempt' }); onNavigate('review'); }
         else { onNavigate('newbieshift'); }
       } else { onNavigate('review'); }
     }
@@ -295,8 +370,22 @@ export default function SupTransferPage({ onNavigate }) {
 
   const handleBack = useCallback(async () => {
     await saveTransferDraftNow();
-    onNavigate(isSupervisorOnly ? 'basics' : 'calls');
-  }, [saveTransferDraftNow, isSupervisorOnly, onNavigate]);
+    if (transferNum > 1) {
+      onNavigate('suptransfer', { transferNum: 1 });
+      return;
+    }
+    if (isSupervisorOnly) {
+      onNavigate('basics');
+      return;
+    }
+    try {
+      const { session } = await api.getCurrentSession();
+      sessionRef.current = session || sessionRef.current;
+    } catch (_error) {
+      // Use the last hydrated session if the refresh fails.
+    }
+    onNavigate('calls', { callNum: getLastCompletedCallNum(sessionRef.current) });
+  }, [transferNum, saveTransferDraftNow, isSupervisorOnly, onNavigate]);
 
   const toggle = (key, setter) => setter(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -355,7 +444,7 @@ export default function SupTransferPage({ onNavigate }) {
           {currentCaller.length > 0 ? (
             <>
               <p style={{ lineHeight: 1.7, marginBottom: 16 }}>
-                <b>For this call you will portray {currentCaller[0]} {currentCaller[1]}.</b> {currentCaller[0]} would like to speak with a supervisor. The caller {buildReasonText(setup.reason)} during a previous call.
+                <b>For this call you will portray {currentCaller[0]} {currentCaller[1]}.</b> {currentCaller[0]} would like to speak with a supervisor. The caller {buildReasonText(setup.reason)} during a previous call.{scenarioNotes ? ` ${scenarioNotes}` : ''}
               </p>
               <div className="scenario-vars">
                 <div className="scenario-var"><span className="scenario-var-label">Phone Type:</span><span className={`scenario-var-value scenario-highlight ${supRandFlags.phone === 'Mobile' ? 'scenario-yes' : 'scenario-no'}`}>{supRandFlags.phone}</span></div>

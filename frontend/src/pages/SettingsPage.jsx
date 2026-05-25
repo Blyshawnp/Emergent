@@ -82,6 +82,18 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
         if (cancelled) return;
         setS(settings);
         setDefaults(defs);
+        const source = defs?._content_sources || {};
+        console.log('[SAM] Loading shows from Google Sheets...');
+        console.log(`[SAM] Active shows source: ${source.shows?.source || 'unknown'}${source.shows?.detail ? ` (${source.shows.detail})` : ''}`);
+        console.log(`[SAM] Loaded ${(settings.shows || defs.shows || []).length} shows`);
+        console.log(`[SAM] Loaded ${[
+          ...(settings.donors_new || defs.donors_new || []),
+          ...(settings.donors_existing || defs.donors_existing || []),
+          ...(settings.donors_increase || defs.donors_increase || []),
+        ].length} callers`);
+        if ((source.shows?.source || '').toLowerCase() !== 'google') {
+          console.log('[SAM] Falling back to CSV...');
+        }
         savedSnapshotRef.current = JSON.stringify(settings);
       } catch (_err) {
         // Settings load failed
@@ -313,7 +325,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
             onClick={handleCheckForUpdates}
             disabled={checkingForUpdates}
             data-testid="settings-check-updates"
-            title="Check the published update document for a newer installer"
+            title="Check the master Google Sheet update-MTS tab for a newer installer"
           >
             {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
           </button>
@@ -570,7 +582,7 @@ function ShowsTab({ s, set, defaults, feedback, onFeedback }) {
     onFeedback?.('shows', 'Updated. Click Save Settings to keep changes.');
   };
   const add = () => {
-    set('shows', [...shows, ['New Show', '$0', '$0', 'Gift description']]);
+    set('shows', [...shows, ['New Show', '$0', '$0', 'Gift description', '']]);
     setSelectedIndex(shows.length);
     onFeedback?.('shows', 'Added. Click Save Settings to keep changes.');
   };
@@ -589,7 +601,7 @@ function ShowsTab({ s, set, defaults, feedback, onFeedback }) {
   return (
     <AdminEditorLayout
       title="Shows / Donation Packages"
-      description="Each show has a name, one-time amount, monthly amount, and gift description."
+      description="Each show has a name, one-time amount, monthly amount, gift description, and optional scenario note."
       items={shows}
       selectedIndex={selectedIndex}
       onSelect={setSelectedIndex}
@@ -612,6 +624,7 @@ function ShowsTab({ s, set, defaults, feedback, onFeedback }) {
         <label className="settings-admin-field"><span>One-Time Amount</span><input type="text" value={selected[1] || ''} onChange={e => update(1, e.target.value)} /></label>
         <label className="settings-admin-field"><span>Monthly Amount</span><input type="text" value={selected[2] || ''} onChange={e => update(2, e.target.value)} /></label>
         <label className="settings-admin-field full"><span>Gift Description</span><textarea rows={4} value={selected[3] || ''} onChange={e => update(3, e.target.value)} /></label>
+        <label className="settings-admin-field full"><span>Notes</span><textarea rows={3} value={selected[4] || ''} onChange={e => update(4, e.target.value)} /></label>
       </div>
     </AdminEditorLayout>
   );
@@ -680,7 +693,7 @@ function CallersTab({ s, set, defaults, feedback, onFeedback }) {
     onFeedback?.('callers', 'Updated. Click Save Settings to keep changes.');
   };
   const add = () => {
-    set(field, [...callers, ['First', 'Last', 'Address', 'City', 'ST', '00000', '000-000-0000', 'email@test.com']]);
+    set(field, [...callers, ['First', 'Last', 'Address', 'City', 'ST', '00000', '000-000-0000', 'email@test.com', '']]);
     setSelectedIndex(callers.length);
     onFeedback?.('callers', 'Added. Click Save Settings to keep changes.');
   };
@@ -696,7 +709,7 @@ function CallersTab({ s, set, defaults, feedback, onFeedback }) {
   };
   const apply = () => onFeedback?.('callers', 'Applied to pending list. Click Save Settings to keep changes.');
 
-  const headers = ['First', 'Last', 'Address', 'City', 'State', 'Zip', 'Phone', 'Email'];
+  const headers = ['First', 'Last', 'Address', 'City', 'State', 'Zip', 'Phone', 'Email', 'Notes'];
 
   return (
     <div className="card" data-testid="settings-callers">
@@ -754,13 +767,15 @@ function CallersTab({ s, set, defaults, feedback, onFeedback }) {
               </div>
               <div className="settings-admin-field-grid">
                 {headers.map((label, fieldIndex) => (
-                  <label key={label} className={`settings-admin-field ${fieldIndex === 2 || fieldIndex === 7 ? 'full' : ''}`}>
+                  <label key={label} className={`settings-admin-field ${fieldIndex === 2 || fieldIndex >= 7 ? 'full' : ''}`}>
                     <span>{label}</span>
                     {fieldIndex === 4 ? (
                       <select value={selected[fieldIndex] || ''} onChange={e => update(fieldIndex, e.target.value)}>
                         <option value="">--</option>
                         {US_STATES.map(st => <option key={st}>{st}</option>)}
                       </select>
+                    ) : fieldIndex === 8 ? (
+                      <textarea rows={3} value={selected[fieldIndex] || ''} onChange={e => update(fieldIndex, e.target.value)} />
                     ) : (
                       <input type="text" value={selected[fieldIndex] || ''} onChange={e => update(fieldIndex, e.target.value)} />
                     )}
@@ -1037,6 +1052,32 @@ function PaymentTab({ s, set }) {
 /* GEMINI TAB                                                      */
 /* ═══════════════════════════════════════════════════════════════ */
 function GeminiTab({ s, set }) {
+  const [testStatus, setTestStatus] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const configured = Boolean(s.gemini_api_key_configured);
+  const pendingKey = Boolean(String(s.gemini_api_key || '').trim());
+
+  const handleTestConnection = async () => {
+    if (testing) return;
+    setTesting(true);
+    setTestStatus(null);
+    try {
+      const result = await api.testGeminiConnection();
+      setTestStatus({
+        ok: Boolean(result?.ok),
+        message: result?.message || (result?.ok ? 'Gemini connection successful' : 'Unable to connect to Gemini'),
+      });
+    } catch (error) {
+      const backendMessage = error?.response?.data?.message || error?.response?.data?.error;
+      setTestStatus({
+        ok: false,
+        message: backendMessage || 'Unable to connect to Gemini',
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className="card" data-testid="settings-gemini">
       <div className="settings-gemini-layout">
@@ -1056,6 +1097,38 @@ function GeminiTab({ s, set }) {
               data-testid="settings-gemini-key"
             />
           </SettingsRow>
+          <div className="gemini-config-status" data-testid="settings-gemini-config-status">
+            {configured ? (
+              <span className="gemini-status-badge gemini-status-success">✓ Gemini API key configured</span>
+            ) : (
+              <span className="gemini-status-badge gemini-status-neutral">No Gemini API key configured</span>
+            )}
+          </div>
+          <div className="gemini-test-row">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={handleTestConnection}
+              disabled={testing}
+              data-testid="settings-gemini-test"
+            >
+              {testing && <span className="btn-spinner" aria-hidden="true" />}
+              {testing ? 'Testing...' : 'Test Gemini Connection'}
+            </button>
+            {testStatus && (
+              <span
+                className={`gemini-status-badge ${testStatus.ok ? 'gemini-status-success' : 'gemini-status-error'}`}
+                data-testid="settings-gemini-test-status"
+              >
+                {testStatus.ok ? '✓ ' : ''}{testStatus.message}
+              </span>
+            )}
+          </div>
+          {pendingKey && (
+            <p className="text-muted text-sm" style={{ marginTop: 8 }}>
+              Save settings before testing a newly entered key.
+            </p>
+          )}
         </div>
         <img className="settings-gemini-image" src={geminiSettingsGraphic} alt="Gemini" />
       </div>

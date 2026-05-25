@@ -15,6 +15,7 @@ const DEFAULT_APP_VERSION = '1.0.1';
 contextBridge.exposeInMainWorld('electronAPI', {
   getVersion: () => ipcRenderer.sendSync('app:getVersion') || desktopPackage.version || DEFAULT_APP_VERSION,
   isNotificationManager: () => Boolean(ipcRenderer.sendSync('app:isNotificationManager')),
+  getBackendUrl: () => ipcRenderer.sendSync('backend:getUrl') || '',
   getAdminToken: () => ipcRenderer.sendSync('app:getAdminToken') || '',
   isElectron: true,
   platform: process.platform,
@@ -27,6 +28,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installPendingUpdate: () => ipcRenderer.invoke('updates:installPending'),
   acknowledgeInstalledUpdate: () => ipcRenderer.invoke('updates:ackInstalled'),
   getAboutInfo: () => ipcRenderer.invoke('app:getAboutInfo'),
+  getBackendState: () => ipcRenderer.invoke('backend:getState'),
+  retryBackendStartup: () => ipcRenderer.invoke('backend:retryStartup'),
+  getAssetUrl: (filename) => ipcRenderer.invoke('assets:getUrl', filename),
   onAppEvent: (callback) => {
     if (typeof callback !== 'function') {
       return () => {};

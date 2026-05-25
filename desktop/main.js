@@ -2,12 +2,13 @@
  * Mock Testing Suite — Electron Main Process
  * Manages the application window, system tray, backend server, and auto-updates.
  */
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn, spawnSync, execFileSync } = require('child_process');
 const http = require('http');
+const { pathToFileURL } = require('url');
 const Store = require('electron-store');
 let desktopPackage = {};
 
@@ -17,18 +18,26 @@ try {
   console.warn('[APP] Could not load desktop package metadata:', err.message);
 }
 
-const store = new Store();
 const APP_ID = 'com.acddirect.mocktestingsuite';
 const NOTIFICATION_MANAGER_APP_ID = 'com.acddirect.mocktestingsuite.notificationmanager';
-const BACKEND_PORT = 8600;
 const isDev = !app.isPackaged;
 const isNotificationManagerMode = process.env.MTS_NOTIFICATION_MANAGER === '1';
+const BACKEND_PORT = isNotificationManagerMode ? 8601 : 8600;
 const DEFAULT_APP_VERSION = '1.0.1';
-const APP_DISPLAY_NAME = isNotificationManagerMode ? 'MTS Notification Manager' : 'Mock Testing Suite';
+const APP_DISPLAY_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing Suite';
 const APP_RUNTIME_ID = isNotificationManagerMode ? NOTIFICATION_MANAGER_APP_ID : APP_ID;
+const APP_STORAGE_DIR_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing Suite';
 const BACKEND_STARTUP_RETRY_DELAY_MS = 500;
 const BACKEND_STARTUP_RETRIES = isDev ? 40 : 120;
 const BACKEND_READY_REQUEST_TIMEOUT_MS = 1500;
+const ADMIN_TOKEN_HEADER = 'X-MTS-Admin-Token';
+
+app.setName(APP_DISPLAY_NAME);
+app.setPath('userData', path.join(app.getPath('appData'), APP_STORAGE_DIR_NAME));
+
+const store = new Store({
+  name: isNotificationManagerMode ? 'sam-config' : 'mock-testing-suite-config',
+});
 
 let mainWindow = null;
 let tray = null;
@@ -44,6 +53,11 @@ let hasRegisteredProcessCleanupHandlers = false;
 let quitConfirmationResolver = null;
 let sharedAdminToken = '';
 let heartbeatTimer = null;
+let backendStartedByThisApp = false;
+let backendConnectionStatus = 'initializing';
+let backendReadyRetryCount = 0;
+let backendLastError = '';
+let backendRetryTimer = null;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
@@ -92,7 +106,7 @@ function getSqliteDbPath() {
 }
 
 function getSharedAppDataPath(subpath = '') {
-  return path.join(app.getPath('appData'), 'Mock Testing Suite', subpath);
+  return path.join(app.getPath('appData'), APP_STORAGE_DIR_NAME, subpath);
 }
 
 function getSharedAdminToken() {
@@ -218,14 +232,37 @@ function getAssetPath(filename) {
 }
 
 function getAppIconPath() {
-  if (process.platform === 'win32') {
-    return getAssetPath('newMTS.ico');
-  }
-  return getAssetPath('newMTS.ico');
+  return getAssetPath(isNotificationManagerMode ? 'notification-taskbar.ico' : 'mts-micro.ico');
 }
 
 function getTrayIconPath() {
-  return getAssetPath(process.platform === 'win32' ? 'systray.ico' : 'systray-32.png');
+  return getAssetPath(isNotificationManagerMode ? 'notification-tray.ico' : 'mts-tray.ico');
+}
+
+function getNotificationTrayPngPath() {
+  const scaleFactor = Math.max(1, screen.getPrimaryDisplay?.().scaleFactor || 1);
+  const targetSize = Math.round(16 * scaleFactor);
+  const traySize = targetSize <= 16 ? 16 : targetSize <= 20 ? 20 : targetSize <= 24 ? 24 : 32;
+  return getAssetPath(`notification-tray-${traySize}.png`);
+}
+
+function createTrayIcon() {
+  if (!isNotificationManagerMode || process.platform !== 'win32') {
+    const iconPath = getTrayIconPath();
+    const icon = nativeImage.createFromPath(iconPath);
+    return icon.isEmpty() ? iconPath : icon;
+  }
+
+  const pngPath = getNotificationTrayPngPath();
+  let icon = nativeImage.createFromPath(pngPath);
+  if (icon.isEmpty()) {
+    icon = nativeImage.createFromPath(getTrayIconPath());
+  }
+  if (!icon.isEmpty()) {
+    icon.setTemplateImage(false);
+    return icon;
+  }
+  return getTrayIconPath();
 }
 
 function isSafeExternalUrl(value, allowedProtocols = ['http:', 'https:', 'mailto:']) {
@@ -387,10 +424,37 @@ function registerProcessCleanupHandlers() {
   hasRegisteredProcessCleanupHandlers = true;
 }
 
+function getBackendState() {
+  return {
+    mode: getAppModeName(),
+    port: BACKEND_PORT,
+    status: backendConnectionStatus,
+    startedByNotificationApp: Boolean(isNotificationManagerMode && backendStartedByThisApp),
+    startedByThisApp: Boolean(backendStartedByThisApp),
+    usingExternalBackend: Boolean(usingExternalBackend),
+    retryCount: backendReadyRetryCount,
+    pid: backendProcess?.pid || 0,
+    command: backendCommandLabel,
+    lastError: backendLastError,
+  };
+}
+
+function setBackendConnectionStatus(status, detail = '') {
+  backendConnectionStatus = status;
+  backendLastError = detail || '';
+  sendAppEvent('backend:state', getBackendState());
+}
+
 // ═══════════════════════════════════════════════════════════════
 // BACKEND SERVER
 // ═══════════════════════════════════════════════════════════════
 function startBackend() {
+  if (backendProcess && backendProcess.exitCode === null) {
+    return;
+  }
+
+  setBackendConnectionStatus('starting');
+
   if (!isDev) {
     const backendPath = path.join(process.resourcesPath, 'backend', 'backend.exe');
     const backendCwd = path.dirname(backendPath);
@@ -446,12 +510,15 @@ function startBackend() {
     }
 
     console.log(`[BACKEND] Spawned backend.exe with pid ${backendProcess.pid}`);
+    backendStartedByThisApp = true;
     writeBackendOwner(backendProcess.pid);
 
     backendProcess.stdout.on('data', (data) => appendBackendLog(data.toString().trim()));
     backendProcess.stderr.on('data', (data) => appendBackendLog(data.toString().trim()));
     backendProcess.on('error', (err) => {
       backendLaunchError = err;
+      backendStartedByThisApp = false;
+      setBackendConnectionStatus('error', err.message);
       backendProcess = null;
       console.error('[BACKEND] Failed to start:', err);
       if (!app.isQuitting) {
@@ -463,6 +530,9 @@ function startBackend() {
       console.log(`[BACKEND] backend.exe exited with code ${code}`);
       if (code !== 0 && code !== null) {
         backendLaunchError = new Error(`Backend executable exited with code ${code}.`);
+        setBackendConnectionStatus('error', backendLaunchError.message);
+      } else if (!app.isQuitting) {
+        setBackendConnectionStatus('stopped');
       }
       if (!app.isQuitting && code !== 0 && code !== null && mainWindow) {
         dialog.showErrorBox('Backend Error', getBackendFailureMessage(`The backend executable stopped unexpectedly (exit code ${code}).`));
@@ -501,6 +571,7 @@ function startBackend() {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
   });
+  backendStartedByThisApp = true;
 
   backendProcess.stdout.on('data', (data) => {
     const message = data.toString().trim();
@@ -516,6 +587,8 @@ function startBackend() {
 
   backendProcess.on('error', (err) => {
     backendLaunchError = err;
+    backendStartedByThisApp = false;
+    setBackendConnectionStatus('error', err.message);
     backendProcess = null;
     console.error('[BACKEND] Failed to start:', err.message);
     if (!app.isQuitting) {
@@ -531,6 +604,9 @@ function startBackend() {
     console.log(`[BACKEND] Process exited with code ${code}`);
     if (code !== 0 && code !== null) {
       backendLaunchError = new Error(`Backend exited with code ${code}.`);
+      setBackendConnectionStatus('error', backendLaunchError.message);
+    } else if (!app.isQuitting) {
+      setBackendConnectionStatus('stopped');
     }
 
     if (!app.isQuitting && code !== 0 && code !== null && mainWindow) {
@@ -540,6 +616,11 @@ function startBackend() {
 }
 
 function stopBackend() {
+  if (backendRetryTimer) {
+    clearTimeout(backendRetryTimer);
+    backendRetryTimer = null;
+  }
+
   if (backendProcess) {
     if (isOtherAppActive()) {
       console.log('[BACKEND] Leaving backend running because the companion app is active.');
@@ -550,6 +631,8 @@ function stopBackend() {
     killChildProcessTree(backendProcess, 'backend process');
     clearBackendOwnerForPid(pid);
     backendProcess = null;
+    backendStartedByThisApp = false;
+    setBackendConnectionStatus('stopped');
     return;
   }
 
@@ -559,6 +642,7 @@ function stopBackend() {
     if (pid > 0) {
       killChildProcessTree({ pid }, 'shared backend process');
       clearBackendOwnerForPid(pid);
+      setBackendConnectionStatus('stopped');
     }
   }
 }
@@ -586,20 +670,27 @@ function probeBackend() {
 function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
   return new Promise((resolve, reject) => {
     const attempt = (remaining) => {
+      backendReadyRetryCount = Math.max(0, retries - remaining);
+      setBackendConnectionStatus(backendReadyRetryCount > 0 ? 'retrying' : 'starting');
+
       if (backendLaunchError) {
+        setBackendConnectionStatus('error', backendLaunchError.message);
         return reject(new Error(getBackendFailureMessage(backendLaunchError.message)));
       }
 
       if (!backendProcess && !usingExternalBackend) {
+        setBackendConnectionStatus('error', 'Backend process was not created.');
         return reject(new Error(getBackendFailureMessage('Backend process was not created.')));
       }
 
       if (backendProcess && backendProcess.exitCode !== null) {
+        setBackendConnectionStatus('error', `Backend exited with code ${backendProcess.exitCode}.`);
         return reject(new Error(getBackendFailureMessage(`Backend exited with code ${backendProcess.exitCode}.`)));
       }
 
       if (remaining <= 0) {
         const timeoutSeconds = Math.round((BACKEND_STARTUP_RETRIES * BACKEND_STARTUP_RETRY_DELAY_MS) / 1000);
+        setBackendConnectionStatus('timeout', `Backend did not respond within ${timeoutSeconds} seconds.`);
         return reject(new Error(getBackendFailureMessage(`Backend did not respond within ${timeoutSeconds} seconds.`)));
       }
 
@@ -609,8 +700,13 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
         path: '/api/runtime/verify-token',
         headers: { 'X-MTS-Admin-Token': getSharedAdminToken() },
       }, (res) => {
-        if (res.statusCode === 200) resolve();
-        else setTimeout(() => attempt(remaining - 1), BACKEND_STARTUP_RETRY_DELAY_MS);
+        if (res.statusCode === 200) {
+          backendReadyRetryCount = Math.max(0, retries - remaining);
+          setBackendConnectionStatus('connected');
+          resolve();
+        } else {
+          setTimeout(() => attempt(remaining - 1), BACKEND_STARTUP_RETRY_DELAY_MS);
+        }
       });
       req.setTimeout(BACKEND_READY_REQUEST_TIMEOUT_MS, () => {
         req.destroy();
@@ -735,6 +831,40 @@ function createMainWindow() {
   });
 }
 
+async function ensureBackendAvailable() {
+  setBackendConnectionStatus('checking');
+  if (await probeBackend()) {
+    usingExternalBackend = true;
+    backendStartedByThisApp = false;
+    backendReadyRetryCount = 0;
+    setBackendConnectionStatus('connected');
+    console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
+    return;
+  }
+
+  usingExternalBackend = false;
+  startBackend();
+  await waitForBackend();
+  console.log('[APP] Backend is ready');
+}
+
+function scheduleNotificationBackendRetry() {
+  if (!isNotificationManagerMode || app.isQuitting || backendRetryTimer) {
+    return;
+  }
+
+  backendRetryTimer = setTimeout(async () => {
+    backendRetryTimer = null;
+    try {
+      await ensureBackendAvailable();
+    } catch (err) {
+      console.warn('[BACKEND] Sam backend retry failed:', err.message);
+      scheduleNotificationBackendRetry();
+    }
+  }, 3000);
+  backendRetryTimer.unref?.();
+}
+
 async function promptForQuitConfirmation(parentWindow = mainWindow) {
   if (app.isQuitting || isHandlingCloseConfirmation) {
     return false;
@@ -749,8 +879,8 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
         buttons: ['Exit App', 'Cancel'],
         defaultId: 1,
         cancelId: 1,
-        title: 'Exit Notification Manager',
-        message: 'Are you sure you want to exit the Notification Manager?',
+        title: 'Exit Sam',
+        message: 'Are you sure you want to exit Sam?',
       });
 
       if (response !== 0) {
@@ -840,9 +970,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
 // SYSTEM TRAY
 // ═══════════════════════════════════════════════════════════════
 function createTray() {
-  const iconPath = getTrayIconPath();
-  const trayIcon = nativeImage.createFromPath(iconPath);
-  tray = new Tray(trayIcon.isEmpty() ? iconPath : trayIcon);
+  tray = new Tray(createTrayIcon());
 
   const contextMenu = Menu.buildFromTemplate([
     { label: `${APP_DISPLAY_NAME} v${APP_VERSION}`, enabled: false },
@@ -875,8 +1003,12 @@ function createAppMenu() {
         label: 'Help',
         submenu: [
           {
-            label: 'About',
+            label: 'Help / About',
             click: () => sendAppEvent('menu:about', getAboutDetails()),
+          },
+          {
+            label: 'Replay Tutorial',
+            click: () => sendAppEvent('menu:replay-tutorial'),
           },
         ],
       },
@@ -948,6 +1080,10 @@ ipcMain.on('app:isNotificationManager', (event) => {
   event.returnValue = isNotificationManagerMode;
 });
 
+ipcMain.on('backend:getUrl', (event) => {
+  event.returnValue = `http://127.0.0.1:${BACKEND_PORT}`;
+});
+
 ipcMain.on('app:getAdminToken', (event) => {
   event.returnValue = getSharedAdminToken();
 });
@@ -990,7 +1126,7 @@ ipcMain.handle('updates:installPending', async () => {
   if (!pending.downloadUrl) {
     return {
       ok: false,
-      error: 'An update was detected, but the published update document does not include a download URL yet.',
+      error: 'An update was detected, but the published update sheet does not include a download URL yet.',
     };
   }
 
@@ -1012,11 +1148,22 @@ ipcMain.handle('app:getAboutInfo', () => {
   return getAboutDetails();
 });
 
-// ═══════════════════════════════════════════════════════════════
-// AUTO-UPDATE CHECK (from Google Doc)
-// ═══════════════════════════════════════════════════════════════
-const UPDATE_DOC_URL = 'https://docs.google.com/document/d/1-eNbA4KriCkE8pKnnpj0FReUhUmMvTVjG8Y7B7ppu_A/export?format=txt';
+ipcMain.handle('backend:getState', () => {
+  return getBackendState();
+});
 
+ipcMain.handle('assets:getUrl', (_event, filename) => {
+  const safeName = path.basename(String(filename || ''));
+  if (!safeName) {
+    return '';
+  }
+  const assetPath = getAssetPath(safeName);
+  return fs.existsSync(assetPath) ? pathToFileURL(assetPath).toString() : '';
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AUTO-UPDATE CHECK (from master Google Sheet via backend)
+// ═══════════════════════════════════════════════════════════════
 function isValidVersionString(value) {
   return isVersionString(value);
 }
@@ -1029,104 +1176,38 @@ function sendAppEvent(type, payload = null) {
   mainWindow.webContents.send('app:event', type, payload);
 }
 
-function parseColonField(lines, label) {
-  const match = lines.find((line) => new RegExp(`^${label}\\s*:`, 'i').test(line));
-  if (!match) return '';
-  return match.replace(new RegExp(`^${label}\\s*:\\s*`, 'i'), '').trim();
-}
-
-function parseEqualsField(lines, label) {
-  const match = lines.find((line) => new RegExp(`^${label}\\s*=`, 'i').test(line));
-  if (!match) return '';
-  return match.replace(new RegExp(`^${label}\\s*=\\s*`, 'i'), '').trim();
-}
-
-function parseNotesSection(lines) {
-  const notesHeaderIndex = lines.findIndex((line) => /^notes\s*:?\s*$/i.test(line));
-  if (notesHeaderIndex >= 0) {
-    return lines
-      .slice(notesHeaderIndex + 1)
-      .filter((line) => line.trim().startsWith('-'))
-      .map((line) => line.replace(/^-\s*/, '').trim())
-      .filter(Boolean);
-  }
-
-  const inlineNotes = parseEqualsField(lines, 'NOTES') || parseColonField(lines, 'NOTES');
-  if (!inlineNotes) return [];
-  return inlineNotes
-    .split(/\s*[;|]\s*/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function parseUpdateDoc(body) {
-  const lines = String(body || '')
-    .split(/\r?\n/)
-    .map((line) => String(line || '').replace(/^\uFEFF/, '').replace(/\u00A0/g, ' ').trim())
-    .filter(Boolean);
-
-  let latestVersion =
-    parseColonField(lines, 'Latest Version') ||
-    parseEqualsField(lines, 'VERSION');
-
-  if (!latestVersion && lines.length > 0 && isValidVersionString(lines[0])) {
-    latestVersion = lines[0];
-  }
-
-  const releaseDate = parseColonField(lines, 'Release Date');
-  const releaseTitle = parseColonField(lines, 'Release Title');
-  const downloadUrl =
-    parseColonField(lines, 'URL') ||
-    parseEqualsField(lines, 'URL');
-  const notes = parseNotesSection(lines);
-
-  return {
-    latestVersion,
-    releaseDate,
-    releaseTitle,
-    downloadUrl,
-    notes,
-    lines,
-  };
-}
-
-function fetchTextWithRedirects(url, redirectCount = 0) {
-  const MAX_REDIRECTS = 5;
-  const client = url.startsWith('https:') ? require('https') : require('http');
-
+function fetchUpdateMetadataFromBackend() {
   return new Promise((resolve, reject) => {
-    client
-      .get(url, (res) => {
-        const statusCode = res.statusCode || 0;
-        const location = res.headers.location;
-
-        if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
-          if (redirectCount >= MAX_REDIRECTS) {
-            reject(new Error(`Too many redirects while fetching update doc from ${url}`));
-            return;
-          }
-
-          const nextUrl = new URL(location, url).toString();
-          res.resume();
-          resolve(fetchTextWithRedirects(nextUrl, redirectCount + 1));
-          return;
-        }
-
+    const appKey = isNotificationManagerMode ? 'sam' : 'mts';
+    const request = http.get({
+      hostname: '127.0.0.1',
+      port: BACKEND_PORT,
+      path: `/api/update?app=${encodeURIComponent(appKey)}`,
+      timeout: 10000,
+      headers: { [ADMIN_TOKEN_HEADER]: getSharedAdminToken() },
+    }, (res) => {
+      const statusCode = res.statusCode || 0;
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        body += chunk;
+      });
+      res.on('end', () => {
         if (statusCode < 200 || statusCode >= 300) {
-          res.resume();
-          reject(new Error(`Update doc request failed with status ${statusCode}`));
+          reject(new Error(`Update sheet request failed with status ${statusCode}`));
           return;
         }
-
-        let body = '';
-        res.setEncoding('utf8');
-        res.on('data', (chunk) => {
-          body += chunk;
-        });
-        res.on('end', () => resolve(body));
-        res.on('error', reject);
-      })
-      .on('error', reject);
+        try {
+          resolve(JSON.parse(body || '{}'));
+        } catch (_err) {
+          reject(new Error('Update sheet response was not valid JSON.'));
+        }
+      });
+    });
+    request.on('timeout', () => {
+      request.destroy(new Error('Update sheet request timed out.'));
+    });
+    request.on('error', reject);
   });
 }
 
@@ -1173,21 +1254,40 @@ function reconcileStoredUpdateState() {
 
 async function checkForUpdates({ promptUser = true } = {}) {
   try {
-    const data = await fetchTextWithRedirects(UPDATE_DOC_URL);
-
-    const { latestVersion, downloadUrl, releaseDate, releaseTitle, notes, lines } = parseUpdateDoc(data);
-    if (!latestVersion) {
-      console.warn('[UPDATE] Could not parse a version from update doc. Expected either VERSION=x.y.z or a plain first-line version string.', lines);
+    const data = await fetchUpdateMetadataFromBackend();
+    if (!data?.ok) {
       return {
         ok: false,
-        error: 'The update document could not be parsed. Expected a valid version line.',
+        error: data?.error || 'The update sheet could not be read.',
+      };
+    }
+    const latestVersion = data.latestVersion || '';
+    const requiredVersion = data.requiredVersion || '';
+    const downloadUrl = data.downloadUrl || '';
+    const releaseDate = data.releaseDate || '';
+    const releaseTitle = data.releaseTitle || '';
+    const notes = Array.isArray(data.notes) ? data.notes : [];
+    if (!latestVersion) {
+      console.log('[UPDATE] No update metadata version published in master sheet.');
+      clearPendingUpdate();
+      return {
+        ok: true,
+        updateAvailable: false,
+        currentVersion: APP_VERSION,
       };
     }
     if (!isValidVersionString(latestVersion)) {
       console.warn('[UPDATE] Parsed remote version is invalid:', latestVersion);
       return {
         ok: false,
-        error: `The update document returned an invalid version: ${latestVersion}`,
+        error: `The update sheet returned an invalid version: ${latestVersion}`,
+      };
+    }
+    if (requiredVersion && !isValidVersionString(requiredVersion)) {
+      console.warn('[UPDATE] Parsed required version is invalid:', requiredVersion);
+      return {
+        ok: false,
+        error: `The update sheet returned an invalid required version: ${requiredVersion}`,
       };
     }
     if (!isValidVersionString(APP_VERSION)) {
@@ -1199,15 +1299,19 @@ async function checkForUpdates({ promptUser = true } = {}) {
     }
 
     console.log(`[UPDATE] Current version: ${APP_VERSION}, remote version: ${latestVersion}`);
+    const required = Boolean(requiredVersion && compareVersions(APP_VERSION, requiredVersion) < 0);
 
-    if (compareVersions(latestVersion, APP_VERSION) > 0) {
+    if (required || compareVersions(latestVersion, APP_VERSION) > 0) {
       const updateInfo = {
         latestVersion,
+        requiredVersion,
+        required,
         currentVersion: APP_VERSION,
         releaseDate,
         releaseTitle,
         notes,
         downloadUrl,
+        source: data.source || 'master-google-sheet',
       };
 
       setPendingUpdate(updateInfo);
@@ -1255,29 +1359,24 @@ app.whenReady().then(async () => {
   createAppMenu();
 
   try {
-    if (await probeBackend()) {
-      usingExternalBackend = true;
-      console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
-    } else {
-      usingExternalBackend = false;
-      startBackend();
-    }
-    await waitForBackend();
-    console.log('[APP] Backend is ready');
+    await ensureBackendAvailable();
   } catch (err) {
-    stopBackend();
-    dialog.showErrorBox('Startup Error', err.message);
-    app.quit();
-    return;
+    if (isNotificationManagerMode) {
+      console.warn('[BACKEND] Sam will keep retrying backend startup:', err.message);
+      setBackendConnectionStatus('retrying', err.message);
+      scheduleNotificationBackendRetry();
+    } else {
+      stopBackend();
+      dialog.showErrorBox('Startup Error', err.message);
+      app.quit();
+      return;
+    }
   }
 
-  if (!isNotificationManagerMode) {
-    sendAppEvent('update:state-changed', getUpdateState());
-    // Check for updates after a short delay
-    setTimeout(() => {
-      checkForUpdates({ promptUser: true });
-    }, 5000);
-  }
+  sendAppEvent('update:state-changed', getUpdateState());
+  setTimeout(() => {
+    checkForUpdates({ promptUser: true });
+  }, 5000);
 });
 
 app.on('window-all-closed', () => {

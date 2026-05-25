@@ -18,13 +18,16 @@ function hasSavedSupTransferResult(transfer) {
 }
 
 function canResumeForSupTransfer(entry, testerNames) {
+  const status = entry.status || entry.final_status || '';
   const storedTesterName = normalizeName(entry.tester_name);
   const matchesTester = testerNames.some((name) => storedTesterName && storedTesterName === normalizeName(name));
   const hasMockCalls = [entry.call_1, entry.call_2, entry.call_3].some(hasSavedCallResult);
-  const hasCompletedSupTransfers = [entry.sup_transfer_1, entry.sup_transfer_2].some(hasSavedSupTransferResult);
+  const hasPassedSupTransfer = [entry.sup_transfer_1, entry.sup_transfer_2].some((transfer) => transfer && transfer.result === 'Pass');
   const isMockCallSession = !entry.supervisor_only;
+  const isResumedIncompleteSupTransfer = Boolean(entry.resumed_sup_transfer_only && entry.supervisor_only && status === 'Incomplete');
+  const finalized = ['Pass', 'RESUMED-PASS', 'Fail', 'FAIL-Final Attempt', 'NC/NS'].includes(status);
 
-  return matchesTester && isMockCallSession && hasMockCalls && !hasCompletedSupTransfers;
+  return matchesTester && (isMockCallSession || isResumedIncompleteSupTransfer) && hasMockCalls && !hasPassedSupTransfer && !finalized;
 }
 
 function buildResumedSession(entry) {
@@ -34,6 +37,11 @@ function buildResumedSession(entry) {
     pronoun: entry.pronoun || '',
     final_attempt: !!entry.final_attempt,
     supervisor_only: true,
+    resumed_sup_transfer_only: true,
+    resume_source_history_id: entry.history_id || '',
+    resume_source_timestamp_iso: entry.timestamp_iso || '',
+    resume_source_candidate: entry.candidate_name || entry.candidate || '',
+    resume_source_tester: entry.tester_name || '',
     status: 'In Progress',
     auto_fail_reason: null,
     tech_issue: entry.tech_issue || 'N/A',
@@ -58,6 +66,47 @@ function buildResumedSession(entry) {
   };
 }
 
+function buildSharedPendingSession(entry, testerName) {
+  const priorSummary = [entry.notes, entry.mock_call_summary].filter(Boolean).join('\n\n');
+  return {
+    candidate_name: entry.candidate_name || '',
+    tester_name: testerName || '',
+    pronoun: '',
+    final_attempt: Boolean(entry.final_attempt),
+    supervisor_only: true,
+    resumed_sup_transfer_only: true,
+    shared_pending_sup_transfer: true,
+    pending_sup_transfer_id: entry.pending_id || '',
+    shared_pending_id: entry.pending_id || '',
+    resume_source_history_id: entry.original_session_id || '',
+    resume_source_timestamp_iso: '',
+    resume_source_candidate: entry.candidate_name || '',
+    resume_source_tester: entry.original_tester_name || '',
+    status: 'In Progress',
+    auto_fail_reason: null,
+    tech_issue: 'N/A',
+    headset_usb: null,
+    headset_brand: '',
+    noise_cancel: null,
+    vpn_on: null,
+    vpn_off: null,
+    chrome_default: null,
+    extensions_disabled: null,
+    popups_allowed: null,
+    call_1: entry.call_1_result ? { result: entry.call_1_result } : null,
+    call_2: entry.call_2_result ? { result: entry.call_2_result } : null,
+    call_3: entry.call_3_result ? { result: entry.call_3_result } : null,
+    sup_transfer_1: null,
+    sup_transfer_2: null,
+    time_for_sup: true,
+    newbie_shift_data: null,
+    final_status: null,
+    last_saved: null,
+    tech_issues_log: [],
+    coaching_summary: priorSummary,
+  };
+}
+
 export default function HomePage({ onNavigate }) {
   const modal = useModal();
   const [settings, setSettings] = useState({});
@@ -65,6 +114,9 @@ export default function HomePage({ onNavigate }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [resumeEntry, setResumeEntry] = useState(null);
+  const [sharedPendingEntries, setSharedPendingEntries] = useState([]);
+  const [sharedPendingEntry, setSharedPendingEntry] = useState(null);
+  const [sharedPendingError, setSharedPendingError] = useState('');
 
   const testerName = settings.tester_name || '';
   const testerNames = [settings.tester_name, settings.display_name].filter(Boolean);
@@ -102,7 +154,7 @@ export default function HomePage({ onNavigate }) {
 
   const name = settings.display_name || settings.tester_name || 'Tester';
   const recent = (history || []).slice(0, 5);
-  const badgeClass = (s) => ({ Pass: 'badge-pass', Fail: 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
+  const badgeClass = (s) => ({ Pass: 'badge-pass', 'RESUMED-PASS': 'badge-pass', Fail: 'badge-fail', 'FAIL-Final Attempt': 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
 
   const startStandardSession = () => {
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -121,7 +173,32 @@ export default function HomePage({ onNavigate }) {
     );
 
     if (!hasPriorSession) {
-      startFreshSupTransferOnly();
+      try {
+        const response = await api.getSharedPendingSupTransfers();
+        if (!response?.ok) {
+          await modal.warning(
+            'Shared Lookup Unavailable',
+            'Shared candidate lookup unavailable. Using local session mode.'
+          );
+          startFreshSupTransferOnly();
+          return;
+        }
+        const items = Array.isArray(response.items) ? response.items : [];
+        if (!items.length) {
+          await modal.warning('No Shared Pending Transfers', 'No shared pending supervisor transfer sessions were found. If this is a new local Supervisor Transfer Only session, continue with a fresh setup.');
+          startFreshSupTransferOnly();
+          return;
+        }
+        setSharedPendingEntries(items);
+        setSharedPendingEntry(items[0]);
+        setSharedPendingError('');
+      } catch (error) {
+        await modal.warning(
+          'Shared Lookup Unavailable',
+          'Shared candidate lookup unavailable. Using local session mode.'
+        );
+        startFreshSupTransferOnly();
+      }
       return;
     }
 
@@ -155,6 +232,21 @@ export default function HomePage({ onNavigate }) {
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
     await api.startSession(buildResumedSession(resumeEntry));
     setResumeEntry(null);
+    onNavigate('suptransfer');
+  };
+
+  const handleSharedPendingConfirm = async () => {
+    if (!sharedPendingEntry) return;
+    const confirmed = await modal.confirm(
+      'Confirm Shared Resume',
+      `Continue supervisor transfer for <b>${sharedPendingEntry.candidate_name || 'this candidate'}</b>?`
+    );
+    if (!confirmed) return;
+    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+    await api.startSession(buildSharedPendingSession(sharedPendingEntry, testerName || name));
+    setSharedPendingEntries([]);
+    setSharedPendingEntry(null);
+    setSharedPendingError('');
     onNavigate('suptransfer');
   };
 
@@ -219,6 +311,20 @@ export default function HomePage({ onNavigate }) {
           onSelect={setResumeEntry}
           onClose={() => setResumeEntry(null)}
           onConfirm={handleResumeConfirm}
+        />
+      )}
+      {(sharedPendingEntries.length > 0 || sharedPendingError) && (
+        <SharedPendingSupTransferModal
+          entries={sharedPendingEntries}
+          selectedEntry={sharedPendingEntry}
+          error={sharedPendingError}
+          onSelect={setSharedPendingEntry}
+          onClose={() => {
+            setSharedPendingEntries([]);
+            setSharedPendingEntry(null);
+            setSharedPendingError('');
+          }}
+          onConfirm={handleSharedPendingConfirm}
         />
       )}
     </div>
@@ -306,6 +412,94 @@ function ResumeSupTransferModal({ entries, selectedEntry, onSelect, onClose, onC
         <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
           <button className="btn btn-muted" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={onConfirm} data-testid="resume-sup-confirm">Continue</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SharedPendingSupTransferModal({ entries, selectedEntry, error, onSelect, onClose, onConfirm }) {
+  const [search, setSearch] = useState('');
+  const filteredEntries = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return entries;
+    return entries.filter((entry) => (
+      String(entry.candidate_name || '').toLowerCase().includes(query)
+      || String(entry.original_tester_name || '').toLowerCase().includes(query)
+      || String(entry.mock_call_summary || '').toLowerCase().includes(query)
+    ));
+  }, [entries, search]);
+
+  return (
+    <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" style={{ width: 860, maxHeight: '86vh' }}>
+        <div className="modal-header">
+          <h2>Shared Pending Supervisor Transfers</h2>
+          <button className="modal-close" onClick={onClose}>&times;</button>
+        </div>
+        <div className="modal-body" style={{ paddingTop: 0 }}>
+          {error ? (
+            <div className="banner banner-fail" style={{ fontSize: 'var(--font-size-sm)', marginBottom: 16 }}>
+              {error}
+            </div>
+          ) : (
+            <>
+              <p className="text-muted" style={{ marginBottom: 16 }}>
+                Select a candidate whose mock calls were completed by another tester and are waiting for supervisor transfer completion.
+              </p>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by candidate, original tester, or call summary..."
+                style={{ marginBottom: 16, width: '100%' }}
+              />
+              <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <table className="hist-table">
+                  <thead>
+                    <tr><th></th><th>Candidate</th><th>Original Tester</th><th>Calls</th><th>Created</th></tr>
+                  </thead>
+                  <tbody>
+                    {filteredEntries.length === 0 && (
+                      <tr>
+                        <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                          No shared pending transfers match that search.
+                        </td>
+                      </tr>
+                    )}
+                    {filteredEntries.map((entry, index) => (
+                      <tr key={`${entry.pending_id || entry.candidate_name || index}`} className="hist-row">
+                        <td style={{ width: 44 }}>
+                          <input
+                            type="radio"
+                            name="shared-pending-sup-transfer"
+                            checked={selectedEntry === entry}
+                            onChange={() => onSelect(entry)}
+                          />
+                        </td>
+                        <td className="hist-name">{entry.candidate_name || 'Unknown'}</td>
+                        <td>{entry.original_tester_name || 'Unknown'}</td>
+                        <td>{[entry.call_1_result, entry.call_2_result, entry.call_3_result].filter(Boolean).join(', ') || entry.mock_call_summary || 'Recorded'}</td>
+                        <td className="hist-date">{entry.created_at || 'Unknown'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {selectedEntry && (
+                <div className="card" style={{ marginTop: 16, padding: 16, background: 'var(--bg-card-hover)' }}>
+                  <div className="text-sm"><b>Prior call summary:</b> {selectedEntry.mock_call_summary || 'None recorded'}</div>
+                  <div className="text-sm" style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>
+                    <b>Notes:</b> {selectedEntry.notes || 'None recorded'}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
+          <button className="btn btn-muted" onClick={onClose}>Cancel</button>
+          {!error && <button className="btn btn-primary" onClick={onConfirm} disabled={!selectedEntry}>Continue</button>}
         </div>
       </div>
     </div>

@@ -38,9 +38,9 @@ Current runtime sources are:
     - Supervisor coaching
     - Supervisor fail reasons
 - `backend/defaults/gemini-coaching-prompt.md`
-  - Local editable Gemini coaching prompt fallback
+  - Primary bundled Gemini coaching prompt
 - `backend/defaults/gemini-fail-prompt.md`
-  - Local editable Gemini fail prompt fallback
+  - Primary bundled Gemini fail prompt
 - `frontend/src/pages/HelpPage.jsx`
   - Current Help screen content
   - Current FAQ content
@@ -106,7 +106,7 @@ Because of that, the `Approved Headsets` worksheet in the workbook is a structur
 3. If you want a simpler import path, use the files in `csv-tabs/` instead of the XML workbook.
 4. In Google Sheets, create one tab per CSV and import each file into its matching tab name exactly.
 5. Use `help-content.rtf` and `faq-content.rtf` as the starting point for Google Docs versions of Help and FAQ.
-6. Use `google-doc-templates.md` as the starting point for Gemini coaching/fail prompt Google Docs.
+6. Use the Google Sheet tabs `gemini-coaching-prompt` and `gemini-fail-prompt` only if you need intentional remote Gemini prompt overrides.
 7. Use `admin-master-guide.rtf` as the starting point for the admin-only Google Doc.
 8. Keep `backend/content/app_content.json` as the safest current runtime-editable master until a Google-backed import path is implemented.
 
@@ -138,21 +138,18 @@ Each tab is fetched using the exact tab name with:
 
 If a tab is missing or empty, the backend logs a warning and falls back to the local content defaults for that section.
 
-Gemini prompt tabs are optional. Google Docs or local markdown files are recommended for Gemini prompt instructions because prompts are prose-heavy. If you use Sheet tabs instead, create tabs named `gemini-coaching-prompt` and `gemini-fail-prompt` with a `Prompt` column. The backend joins the prompt rows together and uses them instead of the local markdown prompt files.
+Gemini prompt tabs are optional overrides. Local markdown files remain the primary source. To override remotely, create tabs named `gemini-coaching-prompt` and `gemini-fail-prompt`; each tab must use A1 `prompt` and A2 containing the full prompt text. The backend uses the Sheet prompt only when the normalized A2 text differs from the bundled markdown file.
 
 ## Google Docs notes
 
 1. Upload `help-content.rtf` into Google Docs for the Help source.
 2. Upload `faq-content.rtf` into Google Docs for the FAQ source.
 3. Upload `admin-master-guide.rtf` into Google Docs for the admin guide source.
-4. Optional and recommended for remote prompt editing: create Google Docs for the Gemini coaching and fail prompts.
-5. Add these optional URL keys to `backend/config/runtime_config.json` when using Gemini prompt docs:
-   - `admin_gemini_coaching_prompt_doc_url`
-   - `admin_gemini_fail_prompt_doc_url`
-6. After you create the Google Docs and Google Sheet, send me:
+4. Do not create Google Docs for Gemini prompts; Gemini prompt overrides are Sheet-only.
+5. After you create the Google Docs and Google Sheet, send me:
    - the Google Sheet URL
    - each worksheet/tab name
-   - the Google Doc URLs for Help, FAQ, Admin Guide, and any Gemini prompt docs
+   - the Google Doc URLs for Help, FAQ, and Admin Guide
 
 ## Files inspected during audit
 
