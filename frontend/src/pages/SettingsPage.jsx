@@ -1073,8 +1073,8 @@ function PaymentTab({ s, set }) {
 function GeminiTab({ s, set }) {
   const [testStatus, setTestStatus] = useState(null);
   const [testing, setTesting] = useState(false);
-  const configured = Boolean(s.gemini_api_key_configured);
   const pendingKey = Boolean(String(s.gemini_api_key || '').trim());
+  const configured = Boolean(s.gemini_api_key_configured || pendingKey);
 
   const handleTestConnection = async () => {
     if (testing) return;
@@ -1082,7 +1082,7 @@ function GeminiTab({ s, set }) {
     setTestStatus(null);
     try {
       const result = await api.testGeminiConnection();
-      const detail = result?.detail && !result?.ok ? `: ${result.detail}` : '';
+      const detail = result?.detail && !result?.ok && result?.code !== 'blocked_or_empty' ? `: ${result.detail}` : '';
       setTestStatus({
         ok: Boolean(result?.ok),
         message: `${result?.message || (result?.ok ? 'Gemini connection successful' : 'Unable to connect to Gemini')}${detail}`,

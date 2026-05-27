@@ -81,7 +81,7 @@ function getEasternParts(date = new Date()) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false,
+    hourCycle: 'h23',
   });
 
   const parts = Object.fromEntries(
@@ -93,8 +93,8 @@ function getEasternParts(date = new Date()) {
 
   return {
     date: `${parts.year}-${parts.month}-${parts.day}`,
-    time24: `${parts.hour}:${parts.minute}`,
-    timestamp: `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}-04:00`,
+    time24: `${parts.hour === '24' ? '00' : parts.hour}:${parts.minute}`,
+    timestamp: `${parts.year}-${parts.month}-${parts.day}T${parts.hour === '24' ? '00' : parts.hour}:${parts.minute}:${parts.second}-04:00`,
   };
 }
 
@@ -114,8 +114,9 @@ export function toTwelveHour(value) {
   if (!match) return input;
   const hours = Number(match[1]);
   const minutes = match[2];
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const normalizedHours = hours % 12 || 12;
+  const normalized24 = hours === 24 ? 0 : hours;
+  const period = normalized24 >= 12 ? 'PM' : 'AM';
+  const normalizedHours = normalized24 % 12 || 12;
   return `${normalizedHours}:${minutes} ${period}`;
 }
 
@@ -152,7 +153,7 @@ function getEasternOffsetMinutes(date) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false,
+    hourCycle: 'h23',
   });
 
   const parts = Object.fromEntries(
@@ -166,7 +167,7 @@ function getEasternOffsetMinutes(date) {
     Number(parts.year),
     Number(parts.month) - 1,
     Number(parts.day),
-    Number(parts.hour),
+    Number(parts.hour === '24' ? '00' : parts.hour),
     Number(parts.minute),
     Number(parts.second),
   );

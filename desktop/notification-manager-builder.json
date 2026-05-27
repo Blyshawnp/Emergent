@@ -31,9 +31,9 @@
       "from": "../backend/config",
       "to": "backend/config",
       "filter": [
-        "runtime_config.json",
-        "google-service-account.json",
-        "service-account.json"
+        "**/runtime_config.json",
+        "**/google-service-account.json",
+        "**/service-account.json"
       ]
     },
     {

@@ -3,6 +3,7 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
+import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 
 function computeFinalStatus(session) {
   if (!session) return 'Fail';
@@ -115,6 +116,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
   const [summaryDiagnostics, setSummaryDiagnostics] = useState(null);
   const reviewHydratedRef = useRef(false);
   const historyRecord = navigationState?.historyRecord || null;
+  const reviewSessionPayload = navigationState?.reviewSession || navigationState?.session || null;
   const isHistoricalReview = Boolean(historyRecord);
 
   useEffect(() => {
@@ -141,10 +143,21 @@ export default function ReviewPage({ onNavigate, navigationState }) {
           api.getSettings(),
         ]);
         if (cancelled) return;
+        if ((!s || !s.candidate_name) && reviewSessionPayload?.candidate_name) {
+          const restored = normalizeReviewSession(mergeBasicsIntoSession(reviewSessionPayload, buildBasicsFromRecord(reviewSessionPayload)));
+          await api.startSession(restored).catch(() => {});
+          setSettings(currentSettings || {});
+          setSession({ ...restored, final_status: computeFinalStatus(restored) });
+          setCoaching((restored.coaching_summary || '').trim());
+          setFail((restored.fail_summary || '').trim());
+          setLoading(false);
+          reviewHydratedRef.current = true;
+          return;
+        }
         if (!s || !s.candidate_name) { setSession(null); setLoading(false); return; }
         setSettings(currentSettings || {});
         const finalStatus = computeFinalStatus(s);
-        const resolvedSession = normalizeReviewSession({ ...s, final_status: finalStatus });
+        const resolvedSession = normalizeReviewSession(mergeBasicsIntoSession({ ...s, final_status: finalStatus }, buildBasicsFromRecord(s)));
         setSession(resolvedSession);
 
         if (!s.final_status) {
@@ -177,7 +190,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
       if (!cancelled) setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [historyRecord]);
+  }, [historyRecord, reviewSessionPayload]);
 
   useEffect(() => {
     if (isHistoricalReview || !reviewHydratedRef.current || !session?.candidate_name) {

@@ -44,24 +44,37 @@ Basics verifies candidate readiness before any scoring begins.
 - Final Attempt marks this as the candidate's last allowed mock attempt and affects routing later.
 - Headset must be USB with a noise-cancelling microphone.
 - VPN must be off, and required browser checks must pass before you can continue.
-- Candidate lookup checks prior shared sessions while you type. It never overwrites Basics fields unless you choose Load Basics.
-- Use Review Previous Session to inspect prior tester, status, coaching summary, fail summary, final-attempt risk, and pending supervisor-transfer status.
-- If prior qualifying failures show this may be the final attempt, the app warns you and sets Final Attempt automatically.
-- Withdrawn candidates are shown as withdrew from certification and cannot be resumed unless an admin reverses the withdrawal in SAM.
+- When checking for VPN or proxy, use more than one linked checker because databases can update at different times.
+- The VPN/proxy checker websites are https://www.ip2location.com/, https://ip.teoh.io/vpn-detection, and https://nodedata.io/vpn-detection-test.
+- Click a VPN/proxy website to copy it to your clipboard. The item changes to Copied for 3 seconds, and the app does not navigate away.
+- Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.
+- When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.
+- Choose Correct Candidate only after confirming the match. The app loads the matching Basics context and starts Calls, or Supervisor Transfer 1 for Supervisor Transfer Only.
+- If the most recent previous session was NC/NS, the app looks for older usable Basics information for that candidate.
+- If no previous Basics information exists, the app keeps the candidate linked and returns you to Basics with a message to complete the screen before continuing.
+- If prior qualifying failures show this is truly the final attempt, the app warns you and sets Final Attempt automatically after candidate confirmation.
+- If the shared record shows the final attempt was already used, testing is blocked unless you use the override flow and notify Admin in the Discord Tester Room.
+- Blocked candidates should email certification@acddirect.com if there are issues, and testers can post in the Discord Tester Room for help.
+- Withdrawn candidates are blocked unless an admin restores the candidate or grants an extra attempt in SAM.
 - Candidates with an extra attempt granted can continue, with the notice shown during lookup.
 - Continue validates readiness and routes into Calls (or Supervisor Transfer Only when applicable).
 
-## 7. Headset Lookup
-Use the approved headset lookup to confirm a candidate is using an allowed USB noise-cancelling model.
-- Click Lookup Approved Headsets next to the Brand / Model field.
-- Search by brand or model, then select a listed model to auto-fill the field.
+## 7. Headset Autocomplete
+Use the Brand / Model autocomplete to confirm a candidate is using an allowed USB noise-cancelling model.
+- Start typing in Brand / Model to search approved headsets.
+- Click the dropdown arrow in the field to view approved headset options.
 - If the model is not listed, double-check that the headset is USB and has a noise-cancelling microphone before continuing.
+- If the headset is confirmed USB with a noise-cancelling microphone, type it manually in the field.
+- Manually entered headset models that are not on the approved list may be logged to the headset-review-log tab for admin review.
+- Approved but unlisted headsets are reviewed and added to the approved list every 7-10 days.
 
 ## 8. NC/NS and Not Ready Auto-Fails
 These red buttons end the session immediately. Use them only when the candidate cannot start testing.
 - NC/NS = the candidate did not join the session at all.
+- NC/NS badges use a bright fuchsia/magenta color so they are visually distinct from normal red Fail statuses.
 - Not Ready = the candidate is present but cannot start (no headset, VPN on, wrong browser, etc.).
 - Both buttons end the session and route directly to Review with the auto-fail reason recorded.
+- If a candidate's most recent session was NC/NS and no previous Basics information exists, complete the Basics screen before continuing.
 
 ## 9. Tech Issue Flow
 Use Tech Issue when a real technical problem is interrupting the session, before deciding to end it.
@@ -69,6 +82,10 @@ Use Tech Issue when a real technical problem is interrupting the session, before
 - Choose the issue type: internet, DTE, browser, routing, or Other.
 - Follow the prompts to continue the session, route to Review, or schedule a Newbie Shift if the candidate cannot finish today.
 - A Tech Issue does not automatically fail the candidate; it just guides the next step.
+- For internet speed issues, have the candidate run www.speedtest.net first, then enter upload and download speeds when prompted.
+- If the speed test is below the required threshold, the flow records the low speed result and routes to Review.
+- If Other is unresolved and the session cannot continue, Review still opens with the active candidate/session data instead of No Active Session.
+- If an unresolved technical issue ends the session, Review preserves the current candidate and session data.
 
 ## 10. Calls Screen
 The Calls screen scores up to three mock calls.
@@ -107,7 +124,8 @@ Use this when mock calls were already completed earlier and only the transfer po
 - Choose Supervisor Transfer Only from Home.
 - Choose Yes when you conducted the original mock calls; the app uses local Smart Resume and matching local history.
 - Choose No when another tester conducted the original mock calls; the app loads the shared pending supervisor-transfer queue.
-- Selecting a shared pending candidate loads the prior call results and prior notes, then goes directly to Supervisor Transfer Call 1.
+- Selecting a shared pending candidate loads the prior call results, prior notes, and available Basics information, then goes directly to Supervisor Transfer Call 1.
+- If a pending shared record is missing Basics, the app searches prior sessions for the most recent usable Basics for that candidate.
 - If the shared Google Sheet cannot be reached, the app shows a local-only notice and continues without blocking the workflow.
 - Fresh supervisor-only sessions still run through Basics first when no resumable local or shared record is selected.
 
@@ -120,9 +138,13 @@ Newbie Shift schedules follow-up work when a candidate cannot complete the flow 
 ## 17. Review Screen
 Review is the final checkpoint before filling forms or saving the session.
 - Confirm the final status, call results, transfer results, and any auto-fail reason.
+- Review should show the Basics information for the session, including headset, VPN, and browser checks when available.
 - Read the Coaching Summary and Fail Summary before using them anywhere else.
+- If the overall session passes with one failed call, that failed call information belongs in Coaching Summary, not the Fail Summary.
+- Failed supervisor-transfer details also stay in Coaching Summary when the session passes or remains incomplete.
 - Failed call or failed supervisor-transfer details stay in Coaching Summary when the overall session passed or remains incomplete.
 - Reason for Fail Summary is only used when the overall session fails.
+- Summaries can always be edited manually before Fill Form or Save and Finish.
 - Use Fill Form to push session data into the certification form.
 - Save and Finish stores the session in local History, immediately updates shared Candidate Sessions, and updates Pending Sup Transfers when applicable.
 - If the shared Google Sheet update fails, the local save still completes and the app warns you without crashing.
@@ -138,6 +160,9 @@ Gemini summaries rewrite the generic summary into more polished management-facin
 - Gemini is optional. The app still creates generic summaries without it.
 - Gemini only rewrites the wording; it does not change pass/fail status or routing.
 - Turn Gemini on in Settings → Gemini AI after adding an API key (next section).
+- Use Test Gemini Connection after saving the key. If it fails, the status shows the backend failure reason without exposing the key.
+- If the API key is typed or already saved, Settings shows the key as configured instead of saying no key is configured.
+- If Gemini connects but the test response is blocked or empty, the app explains that safety/API settings may need a simpler prompt or adjustment.
 - Typical usage in this app is light, often fewer than 5 AI calls per day.
 
 ## 20. How to get and add a free Gemini API key
@@ -167,8 +192,10 @@ Fill Form pushes session data into the configured Microsoft certification form u
 - If Fill Form fails, check the form URL and browser setting in Settings.
 
 ## 22. History and Historical Fill Form
-History stores saved sessions. You can reopen a session in read-only Review or fill the form from it again.
-- Open History from Home to see all saved sessions.
+History stores recent local sessions. You can reopen a session in read-only Review or fill the form from it again.
+- Open History from Home to see recent sessions tested on this app/user.
+- Local History is retained for recent work only and can be cleared or deleted by the tester without deleting SAM admin candidate history.
+- Shared Google Sheet candidate lookup remains available for older or cross-tester records unless an admin deletes the shared candidate history in SAM or the rows are manually deleted from the Google Sheet.
 - Click a session to view summary details, or open it in Historical Review (read-only).
 - Historical Fill Form re-runs Fill Form from a saved record without changing the active session.
 
@@ -177,19 +204,20 @@ Settings controls your profile, integrations, and app preferences.
 - General: tester identity, form/spreadsheet links, browser behavior, sounds, theme, and ticker speed.
 - Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.
 - Help content is not editable from normal Settings.
-- The notification ticker sheet URL is managed by the admin and is not exposed to normal users.
+- Notifications are managed by admins in SAM through the master Google Sheet, not from normal MTS Settings.
 
 ## 24. Discord Posts and Screenshots
 The Discord panel keeps reusable Discord messages and screenshot images close at hand during a session.
 - Open Discord Post from the sidebar.
-- Search templates and copy message text with one click.
-- Switch to Screenshots to preview and copy any configured screenshot image.
+- Search templates and copy message text with one click. Copy buttons change to Copied for 3 seconds.
+- Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.
+- Use the Phonetics Table button on Calls or Supervisor Transfer screens to open Phonetics.png and copy it for Discord when supported.
 - Templates and screenshots are managed in Settings.
 
 ## 25. Ticker and Notifications
 The ticker and notification system surfaces operational messages without blocking normal work.
 - Ticker messages scroll across the top of the app.
-- Ticker content comes from the admin-configured Google ticker sheet, with a built-in fallback when the sheet is unavailable.
+- Ticker, banner, and popup content is managed by admins through SAM and the master sam-notifications sheet.
 - Banner and popup notifications can also appear from the same source.
 - Ticker Speed is controlled in Settings; the ticker URL is admin-only.
 
@@ -205,6 +233,7 @@ Update checks and app version info live in the app menu and Settings.
 ## 27. Troubleshooting
 Use the built-in troubleshooting paths before ending a session for technical reasons.
 - Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.
+- Use Phonetics Table on Call or Supervisor Transfer coaching screens to preview and copy the phonetics image for Discord.
 - Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.
 - If the app itself is misbehaving, restart it. Active session drafts are saved automatically.
 - When reporting an app issue, include the screen name, the action you took, and any visible error text.

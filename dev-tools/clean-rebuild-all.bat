@@ -67,6 +67,8 @@ call :require_command yarn "Yarn was not found on PATH."
 if errorlevel 1 goto :fail
 call :require_command powershell "Windows PowerShell was not found on PATH."
 if errorlevel 1 goto :fail
+call :require_command certutil "certutil was not found on PATH."
+if errorlevel 1 goto :fail
 call :require_command python "Python was not found on PATH."
 if errorlevel 1 goto :fail
 
@@ -378,11 +380,12 @@ exit /b 0
 set "HASH_SOURCE=%~1"
 set "HASH_FILE=%~2"
 set "HASH_LABEL=%~3"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$h=(Get-FileHash -Algorithm SHA256 -LiteralPath '%HASH_SOURCE%').Hash; Set-Content -LiteralPath '%HASH_FILE%' -Value ('%HASH_LABEL% SHA256: ' + $h); Write-Output $h" >>"%LOG_FILE%" 2>&1
+call :sha256_file "%HASH_SOURCE%" HASH_VALUE
 if errorlevel 1 (
   call :log "ERROR: failed to write hash file: %HASH_FILE%"
   exit /b 1
 )
+>"%HASH_FILE%" echo %HASH_LABEL% SHA256: !HASH_VALUE!
 call :log "Hash updated: %HASH_FILE%"
 exit /b 0
 
@@ -390,12 +393,44 @@ exit /b 0
 set "HASH_LEFT=%~1"
 set "HASH_RIGHT=%~2"
 set "HASH_NAME=%~3"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$a=(Get-FileHash -Algorithm SHA256 -LiteralPath '%HASH_LEFT%').Hash; $b=(Get-FileHash -Algorithm SHA256 -LiteralPath '%HASH_RIGHT%').Hash; if($a -ne $b){ Write-Output ('HASH MISMATCH: %HASH_NAME%'); exit 1 }; Write-Output ('%HASH_NAME% match: ' + $a.Substring(0,16))" >>"%LOG_FILE%" 2>&1
+call :sha256_file "%HASH_LEFT%" HASH_LEFT_VALUE
 if errorlevel 1 (
+  call :log "ERROR: failed to hash source for %HASH_NAME%: %HASH_LEFT%"
+  exit /b 1
+)
+call :sha256_file "%HASH_RIGHT%" HASH_RIGHT_VALUE
+if errorlevel 1 (
+  call :log "ERROR: failed to hash destination for %HASH_NAME%: %HASH_RIGHT%"
+  exit /b 1
+)
+if /I not "!HASH_LEFT_VALUE!"=="!HASH_RIGHT_VALUE!" (
+  >>"%LOG_FILE%" echo HASH MISMATCH: %HASH_NAME%
+  >>"%LOG_FILE%" echo Source:      !HASH_LEFT_VALUE!
+  >>"%LOG_FILE%" echo Destination: !HASH_RIGHT_VALUE!
   call :log "ERROR: hash mismatch for %HASH_NAME%."
   exit /b 1
 )
+>>"%LOG_FILE%" echo %HASH_NAME% match: !HASH_LEFT_VALUE:~0,16!
 call :log "Verified: %HASH_NAME%"
+exit /b 0
+
+:sha256_file
+set "SHA_SOURCE=%~1"
+set "SHA_RETURN_VAR=%~2"
+set "SHA_VALUE="
+if not exist "%SHA_SOURCE%" (
+  call :log "ERROR: hash source missing: %SHA_SOURCE%"
+  exit /b 1
+)
+for /f "skip=1 tokens=* delims=" %%H in ('certutil -hashfile "%SHA_SOURCE%" SHA256') do (
+  if not defined SHA_VALUE set "SHA_VALUE=%%H"
+)
+set "SHA_VALUE=!SHA_VALUE: =!"
+if "!SHA_VALUE!"=="" (
+  call :log "ERROR: unable to calculate SHA256 for %SHA_SOURCE%"
+  exit /b 1
+)
+set "%SHA_RETURN_VAR%=!SHA_VALUE!"
 exit /b 0
 
 :pushd_fail

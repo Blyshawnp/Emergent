@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
+import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionDateOf, sessionIdOf } from '../utils/sessionBasics';
 
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 
@@ -28,6 +29,27 @@ function canResumeForSupTransfer(entry, testerNames) {
   const finalized = ['Pass', 'RESUMED-PASS', 'Fail', 'FAIL-Final Attempt', 'NC/NS'].includes(status);
 
   return matchesTester && (isMockCallSession || isResumedIncompleteSupTransfer) && hasMockCalls && !hasPassedSupTransfer && !finalized;
+}
+
+function isMissingBasicsValue(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return !normalized || normalized === 'n/a' || normalized === 'na' || normalized === 'none' || normalized === 'unknown';
+}
+
+function hasUsableBasicsInfo(entry) {
+  return buildBasicsFromRecord(entry).usable;
+}
+
+function findLatestCandidateBasics(history, candidateName, excludedSessionId = '') {
+  return (history || [])
+    .filter((entry) => String(sessionIdOf(entry)) !== String(excludedSessionId || ''))
+    .filter(hasUsableBasicsInfo)
+    .sort((a, b) => sessionDateOf(b).localeCompare(sessionDateOf(a)))
+    .find((entry) => normalizeName(entry.candidate_name || entry.candidate) === normalizeName(candidateName)) || null;
+}
+
+function applyBasicsToSession(session, basicsSource) {
+  return mergeBasicsIntoSession(session, buildBasicsFromRecord(basicsSource));
 }
 
 function buildResumedSession(entry) {
@@ -66,9 +88,9 @@ function buildResumedSession(entry) {
   };
 }
 
-function buildSharedPendingSession(entry, testerName) {
+function buildSharedPendingSession(entry, testerName, basicsSource = null) {
   const priorSummary = [entry.notes, entry.mock_call_summary].filter(Boolean).join('\n\n');
-  return {
+  return applyBasicsToSession({
     candidate_name: entry.candidate_name || '',
     tester_name: testerName || '',
     pronoun: '',
@@ -106,7 +128,7 @@ function buildSharedPendingSession(entry, testerName) {
     coaching_summary: priorSummary,
     fail_summary: entry.completed_status || '',
     review_notes: entry.notes || '',
-  };
+  }, basicsSource);
 }
 
 export default function HomePage({ onNavigate }) {
@@ -245,7 +267,15 @@ export default function HomePage({ onNavigate }) {
     );
     if (!confirmed) return;
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    await api.startSession(buildSharedPendingSession(sharedPendingEntry, testerName || name));
+    const basicsResult = findBestBasicsRecord([sharedPendingEntry, ...history], sharedPendingEntry.candidate_name, sharedPendingEntry);
+    const basicsSource = basicsResult?.record || findLatestCandidateBasics(history, sharedPendingEntry.candidate_name, sharedPendingEntry.original_session_id);
+    console.info('[MTS] Pending sup transfer basics recovery', {
+      candidate: sharedPendingEntry.candidate_name || '',
+      selectedSession: sharedPendingEntry.original_session_id || sharedPendingEntry.pending_id || '',
+      basicsFound: Boolean(basicsSource),
+      source: basicsResult?.basics?.source || '',
+    });
+    await api.startSession(buildSharedPendingSession(sharedPendingEntry, testerName || name, basicsSource));
     setSharedPendingEntries([]);
     setSharedPendingEntry(null);
     setSharedPendingError('');

@@ -265,10 +265,28 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   }, []);
 
   const saveTransferDraftNow = useCallback(async () => {
+    const payload = latestDraftPayloadRef.current || {};
     if (latestDraftPayloadRef.current) {
-      await api.updateSession(latestDraftPayloadRef.current);
+      const response = await api.updateSession(latestDraftPayloadRef.current).catch((error) => ({ ok: false, error }));
+      if (response?.ok !== false) return response?.session || { ...(sessionRef.current || {}), ...payload };
     }
-  }, []);
+    const current = await api.getCurrentSession().catch(() => null);
+    if (!current?.session?.candidate_name && candidateName) {
+      const fallbackSession = {
+        ...(sessionRef.current || {}),
+        candidate_name: candidateName,
+        tester_name: sessionRef.current?.tester_name || settings.tester_name || '',
+        final_attempt: isFinal,
+        supervisor_only: isSupervisorOnly,
+        status: 'In Progress',
+        tech_issue: 'Technical issue unresolved',
+        ...payload,
+      };
+      await api.startSession(fallbackSession);
+      return fallbackSession;
+    }
+    return current?.session || { ...(sessionRef.current || {}), ...payload };
+  }, [candidateName, isFinal, isSupervisorOnly, settings.tester_name]);
 
   const resetTransfer = () => {
     setResult(null);

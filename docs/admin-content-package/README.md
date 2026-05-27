@@ -57,15 +57,18 @@ are reference docs only. They are not read by the frontend or backend at runtime
 
 ## Exact Google Sheet tab names
 
-The backend loader uses the exact `csv-tabs/` file base names as Google Sheet tab names:
+The backend loader uses one canonical caller source. Caller records belong in a
+single `callers` tab or `backend/defaults/callers.csv` file with a `Category`
+column. Use `Category` values `New`, `Existing`, or `Increase`; the app splits
+those rows internally into New, Existing, and Increase caller groups.
+
+The backend loader uses these Google Sheet tab names:
 
 - `discord-posts.csv`
 - `screenshots.csv`
 - `call-coaching.csv`
 - `call-fails.csv`
-- `callers-new.csv`
-- `callers-existing.csv`
-- `callers-increase.csv`
+- `callers.csv`
 - `call-types.csv`
 - `shows.csv`
 - `sup-reasons.csv`
@@ -79,9 +82,7 @@ That means the worksheet/tab names must be:
 - `screenshots`
 - `call-coaching`
 - `call-fails`
-- `callers-new`
-- `callers-existing`
-- `callers-increase`
+- `callers`
 - `call-types`
 - `shows`
 - `sup-reasons`

@@ -568,14 +568,67 @@ body.notification-manager-body.nm-dialog-open {
   width: auto !important;
 }
 
+.nm-candidate-table .nm-select-column {
+  width: 42px !important;
+  min-width: 42px;
+  text-align: center;
+}
+
 .nm-candidate-table .nm-actions-column,
 .nm-candidate-table td:last-child {
-  min-width: 230px;
+  min-width: 310px;
 }
 
 .nm-notes-cell {
   max-width: 360px;
-  white-space: pre-wrap;
+  white-space: normal;
+}
+
+.nm-notes-preview {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nm-link-button {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #93c5fd;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.nm-link-button:hover {
+  color: #bfdbfe;
+  text-decoration: underline;
+}
+
+.nm-candidate-detail-row td {
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.nm-candidate-details {
+  display: grid;
+  gap: 8px;
+  color: #dbeafe;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.nm-attempt-list {
+  display: grid;
+  gap: 8px;
+}
+
+.nm-attempt-detail {
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.34);
 }
 
 .nm-update-details {

@@ -308,12 +308,44 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
 
   const handleClose = useCallback(() => { reset(); onClose(); }, [reset, onClose]);
 
-  const goToReview = useCallback(async () => {
-    if (onBeforeNavigate) await onBeforeNavigate();
-    await api.getCurrentSession().catch(() => null);
+  const finalizeTechIssueToReview = useCallback(async (reviewFields = {}, issueLabel = '', resolved = false) => {
+    const sourcePage = context || 'calls';
+    let preparedSession = null;
+    if (onBeforeNavigate) {
+      preparedSession = await onBeforeNavigate();
+    }
+    let current = await api.getCurrentSession().catch(() => null);
+    const hadActiveSession = Boolean(current?.session?.candidate_name);
+    if (!hadActiveSession && preparedSession?.candidate_name) {
+      await api.startSession(preparedSession).catch(() => {});
+      current = await api.getCurrentSession().catch(() => null);
+    }
+    const baseSession = current?.session || preparedSession || {};
+    const log = Array.isArray(baseSession.tech_issues_log) ? [...baseSession.tech_issues_log] : [];
+    if (issueLabel) {
+      log.push({ issue: issueLabel, resolved, timestamp: new Date().toISOString() });
+    }
+    const reviewSession = {
+      ...baseSession,
+      ...reviewFields,
+      status: reviewFields.status || baseSession.status || 'In Progress',
+      tech_issue: reviewFields.tech_issue || issueLabel || baseSession.tech_issue || 'Technical issue unresolved',
+      tech_issues_log: log,
+    };
+    console.info('[MTS] Tech issue finalize to Review', {
+      type: issueLabel || reviewFields.tech_issue || 'Technical issue',
+      sourcePage,
+      hadActiveSession,
+      reviewSessionCreated: Boolean(reviewSession.candidate_name),
+    });
+    if (reviewSession.candidate_name) {
+      await api.startSession(reviewSession).catch(() => api.updateSession(reviewSession).catch(() => {}));
+    } else if (Object.keys(reviewFields || {}).length) {
+      await api.updateSession(reviewFields).catch(() => {});
+    }
     handleClose();
-    onNavigate('review');
-  }, [handleClose, onBeforeNavigate, onNavigate]);
+    onNavigate('review', { reviewSession });
+  }, [context, handleClose, onBeforeNavigate, onNavigate]);
   const goToNewbie = useCallback(async () => {
     if (onBeforeNavigate) await onBeforeNavigate();
     handleClose();
@@ -376,9 +408,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
         }} />;
       case 'speed-fail':
         return <SpeedFailStep speedDown={speedDown} speedUp={speedUp} isFinalAttempt={isFinalAttempt} onGoToReview={async () => {
-          await logIssue('Internet speed issues - failed speed test', false);
-          await api.updateSession({ auto_fail_reason: 'Internet speed too low', final_status: 'Fail' });
-          await goToReview();
+          await finalizeTechIssueToReview({ auto_fail_reason: 'Internet speed too low', final_status: 'Fail' }, 'Internet speed issues - failed speed test', false);
         }} />;
       case 'dte-ask':
         return <DteAskStep isSupervisorTransfer={isSupervisorTransfer} onNo={() => setStep('dte-fix')} onYes={() => setStep('browser-ask')} />;
@@ -413,7 +443,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
       case 'other-notes':
         return <OtherNotesStep notes={otherNotes} onNotesChange={setOtherNotes} onNotResolved={async () => { await logIssue(`Other: ${otherNotes}`, false); setStep('complete-ask'); }} onResolved={async () => { await logIssue(`Other: ${otherNotes}`, true); continueToNextIssue(); }} />;
       case 'complete-ask':
-        return <CompleteAskStep onEndSession={async () => { await api.updateSession({ final_status: 'Fail' }); await goToReview(); }} onContinue={handleClose} />;
+        return <CompleteAskStep onEndSession={async () => { await finalizeTechIssueToReview({ auto_fail_reason: 'Technical issue unresolved', final_status: 'Fail', tech_issue: `Other: ${otherNotes || 'Unresolved technical issue'}` }, `Other: ${otherNotes || 'Unresolved technical issue'}`, false); }} onContinue={handleClose} />;
       default:
         return null;
     }

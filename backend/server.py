@@ -394,9 +394,6 @@ DEFAULT_FAQ_DOC_URL = "https://docs.google.com/document/d/1gRXHn3hB8mXaogqNX14NZ
 
 DEFAULTS_FILE_MAP = {
     "callers": "callers.csv",
-    "new_callers": "new_callers.csv",
-    "existing_callers": "existing_callers.csv",
-    "increase_callers": "callers-increase.csv",
     "shows": "shows.csv",
     "call_types": "call-types.csv",
     "sup_reasons": "sup-reasons.csv",
@@ -416,9 +413,6 @@ DEFAULTS_FILE_MAP = {
 
 CONTENT_SHEET_TAB_MAP = {
     "callers": "callers",
-    "new_callers": "callers-new",
-    "existing_callers": "callers-existing",
-    "increase_callers": "callers-increase",
     "shows": "shows",
     "call_types": "call-types",
     "sup_reasons": "sup-reasons",
@@ -435,9 +429,6 @@ CONTENT_SHEET_TAB_MAP = {
 
 CONTENT_SHEET_TAB_ALIASES = {
     "callers": ("Callers",),
-    "new_callers": ("new_callers", "New Callers"),
-    "existing_callers": ("existing_callers", "Existing Callers"),
-    "increase_callers": ("callers-increase", "increase_callers", "Increase Callers"),
     "shows": ("Shows",),
     "call_coaching": ("coaching", "call-coaching"),
     "call_fails": ("fail reasons", "call-fails", "call-fail-reasons"),
@@ -446,8 +437,6 @@ CONTENT_SHEET_TAB_ALIASES = {
 
 LOCAL_DEFAULT_FILE_ALIASES = {
     "headsets.csv": ("approved-headsets.csv",),
-    "new_callers.csv": ("callers-new.csv",),
-    "existing_callers.csv": ("callers-existing.csv",),
     "call-fail-reasons.csv": ("call-fails.csv",),
     "sup-fail-reasons.csv": ("sup-fails.csv",),
 }
@@ -1467,22 +1456,17 @@ def _load_local_defaults_content():
     try:
         rows = read_csv_file(DEFAULTS_FILE_MAP["callers"])
         if rows is not None:
-            logger.info("[SAM] Loading callers from CSV file %s", DEFAULTS_FILE_MAP["callers"])
-            loaded.update(_normalize_callers(rows))
+            logger.info("[SAM] Loaded callers from backend/defaults/%s", DEFAULTS_FILE_MAP["callers"])
+            parsed_callers = _normalize_callers(rows)
+            loaded.update(parsed_callers)
+            logger.info(
+                "[SAM] Split callers by Category: %d new, %d existing, %d increase",
+                len(parsed_callers.get("donors_new") or []),
+                len(parsed_callers.get("donors_existing") or []),
+                len(parsed_callers.get("donors_increase") or []),
+            )
     except Exception as exc:
         logger.warning("[CONTENT] Failed to parse local callers defaults: %s", exc)
-
-    for section_key, category in (("new_callers", "new"), ("existing_callers", "existing"), ("increase_callers", "increase")):
-        try:
-            rows = read_optional_csv_file(DEFAULTS_FILE_MAP[section_key])
-            if rows is not None:
-                logger.info("[SAM] Loading %s from CSV file %s", section_key, DEFAULTS_FILE_MAP[section_key])
-                normalized = _normalize_callers_for_category(rows, category)
-                for target_key, entries in normalized.items():
-                    if entries:
-                        loaded[target_key] = entries
-        except Exception as exc:
-            logger.warning("[CONTENT] Failed to parse local %s defaults: %s", DEFAULTS_FILE_MAP[section_key], exc)
 
     local_csv_loaders = {
         "shows": lambda: _normalize_shows(read_csv_file(DEFAULTS_FILE_MAP["shows"]) or []),
@@ -1561,9 +1545,6 @@ def _parse_gemini_prompt_sheet_override(csv_text, local_prompt, prompt_name):
 
 CONTENT_SHEET_PARSERS = {
     "callers": lambda csv_text: _normalize_callers(_read_csv_rows(csv_text)),
-    "new_callers": lambda csv_text: _normalize_callers_for_category(_read_csv_rows(csv_text), "new"),
-    "existing_callers": lambda csv_text: _normalize_callers_for_category(_read_csv_rows(csv_text), "existing"),
-    "increase_callers": lambda csv_text: _normalize_callers_for_category(_read_csv_rows(csv_text), "increase"),
     "shows": lambda csv_text: {"shows": _normalize_shows(_read_csv_rows(csv_text))},
     "call_types": lambda csv_text: {"call_types": _normalize_text_list(_read_csv_rows(csv_text))},
     "sup_reasons": lambda csv_text: {"sup_reasons": _normalize_text_list(_read_csv_rows(csv_text))},
@@ -1622,6 +1603,14 @@ def _load_google_sheet_content(runtime_config, local_content=None):
                         loaded[key] = value
                         loaded_this_key = True
                         logger.info("[SAM] Loaded %d %s from Google Sheets tab '%s'", _content_count(value), key, candidate_tab)
+                if content_key == "callers" and loaded_this_key:
+                    logger.info("[SAM] Loaded callers from Google Sheet tab callers")
+                    logger.info(
+                        "[SAM] Split callers by Category: %d new, %d existing, %d increase",
+                        len(parsed.get("donors_new") or []),
+                        len(parsed.get("donors_existing") or []),
+                        len(parsed.get("donors_increase") or []),
+                    )
                 if loaded_this_key:
                     break
                 if row_count:
@@ -2650,6 +2639,15 @@ SHARED_CANDIDATE_SESSION_HEADERS = [
     "extra_attempt_reason",
     "retention_until",
     "archived",
+    "headset_usb",
+    "noise_cancel",
+    "headset_brand",
+    "vpn_on",
+    "vpn_off",
+    "chrome_default",
+    "extensions_disabled",
+    "popups_allowed",
+    "skills",
 ]
 
 SHARED_PENDING_SUP_TRANSFER_HEADERS = [
@@ -2671,6 +2669,15 @@ SHARED_PENDING_SUP_TRANSFER_HEADERS = [
     "completed_at",
     "completed_status",
     "notes",
+    "headset_usb",
+    "noise_cancel",
+    "headset_brand",
+    "vpn_on",
+    "vpn_off",
+    "chrome_default",
+    "extensions_disabled",
+    "popups_allowed",
+    "skills",
 ]
 
 UPDATE_MTS_TAB = "update-MTS"
@@ -2823,6 +2830,17 @@ def _verify_header_tab(sheets_api, sheet_id, title, expected_headers, feature, t
         ).execute()
         status["headerStatus"] = "written"
         logger.info("[SHEETS] Wrote headers for master sheet tab '%s'.", title)
+        return status
+
+    if normalized_current and normalized_current == expected[: len(normalized_current)]:
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A1:{last_col}1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [expected_headers]},
+        ).execute()
+        status["headerStatus"] = "extended"
+        logger.info("[SHEETS] Extended headers for master sheet tab '%s'.", title)
         return status
 
     status.update({
@@ -3220,6 +3238,17 @@ def _ensure_shared_tracking_tabs(service, sheet_id, service_account_email=""):
                 range=f"{quoted}!A1:{last_col}1",
             ).execute().get("values", [[]])[0]
             if current[: len(headers)] != headers:
+                has_append_only_header = current and current == headers[: len(current)]
+                if has_append_only_header:
+                    logger.info("[SHARED] Appending new shared tracking headers for tab: %s", title)
+                    sheets_api.values().update(
+                        spreadsheetId=sheet_id,
+                        range=f"{quoted}!A1:{last_col}1",
+                        valueInputOption="USER_ENTERED",
+                        body={"values": [headers]},
+                    ).execute()
+                    statuses.append({"tab": title, "headers": "extended"})
+                    continue
                 has_conflicting_header = any(_normalize_notification_text(value) for value in current)
                 if has_conflicting_header:
                     logger.error("[SHARED] Shared tracking tab '%s' has unexpected non-empty headers: %s", title, current)
@@ -3311,6 +3340,12 @@ def _split_candidate_name(candidate_name):
 
 def _shared_bool(value):
     return "TRUE" if bool(value) else "FALSE"
+
+
+def _shared_optional_bool(value):
+    if value is None or value == "":
+        return ""
+    return _shared_bool(_shared_truthy(value))
 
 
 def _shared_truthy(value):
@@ -3554,12 +3589,6 @@ def _candidate_name_key(value):
 def _candidate_row_active(row):
     if _shared_truthy(row.get("archived")):
         return False
-    retention_until = str(row.get("retention_until") or "").strip()
-    if retention_until:
-        try:
-            return datetime.now(timezone.utc).date() <= datetime.fromisoformat(retention_until).date()
-        except ValueError:
-            return True
     return True
 
 
@@ -3592,6 +3621,15 @@ def _candidate_attempt_summary(rows):
     }
 
 
+def _shared_sheet_gid(sheets_api, sheet_id, tab_name):
+    metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+    for sheet in metadata.get("sheets", []):
+        props = sheet.get("properties") or {}
+        if props.get("title") == tab_name:
+            return props.get("sheetId")
+    return None
+
+
 def _shared_admin_candidate_snapshot():
     context = _shared_sheet_context()
     if not context.get("ok"):
@@ -3622,25 +3660,32 @@ def _shared_admin_candidate_snapshot():
         logger.exception("[SHARED] Failed to read admin candidate tracking rows: %s", exc)
         return {"ok": False, "error": f"Unable to read shared candidate tracking: {exc}", "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
 
-    active_candidates = [row for row in candidate_rows if _candidate_row_active(row)]
-    grouped = {}
-    for row in active_candidates:
-        grouped.setdefault(_candidate_name_key(row.get("candidate_name")), []).append(row)
+    def summarize_candidate_groups(rows_to_group):
+        grouped = {}
+        for row in rows_to_group:
+            grouped.setdefault(_candidate_name_key(row.get("candidate_name")), []).append(row)
 
-    candidate_summaries = []
-    for key, rows in grouped.items():
-        if not key:
-            continue
-        rows.sort(key=lambda row: str(row.get("completed_at") or row.get("created_at") or ""), reverse=True)
-        latest = rows[0]
-        summary = _candidate_attempt_summary(rows)
-        candidate_summaries.append({
-            **latest,
-            **summary,
-            "latest_session_id": latest.get("session_id") or "",
-            "latest_status": latest.get("status") or "",
-            "last_session_date": latest.get("completed_at") or latest.get("created_at") or "",
-        })
+        summaries = []
+        for key, rows in grouped.items():
+            if not key:
+                continue
+            rows.sort(key=lambda row: str(row.get("completed_at") or row.get("created_at") or ""), reverse=True)
+            latest = rows[0]
+            summary = _candidate_attempt_summary(rows)
+            summaries.append({
+                **latest,
+                **summary,
+                "attempts": rows,
+                "latest_session_id": latest.get("session_id") or "",
+                "latest_status": latest.get("status") or "",
+                "last_session_date": latest.get("completed_at") or latest.get("created_at") or "",
+            })
+        return summaries
+
+    active_candidates = [row for row in candidate_rows if _candidate_row_active(row)]
+    archived_candidates = [row for row in candidate_rows if _shared_truthy(row.get("archived"))]
+    candidate_summaries = summarize_candidate_groups(active_candidates)
+    archived_summaries = summarize_candidate_groups(archived_candidates)
 
     pending_active = [
         row for row in pending_rows
@@ -3662,11 +3707,16 @@ def _shared_admin_candidate_snapshot():
     ]
     withdrawn = [row for row in candidate_summaries if _candidate_row_withdrawn(row)]
     extra_attempt = [row for row in candidate_summaries if _candidate_row_extra_attempt(row)]
+    passed_certifications = [
+        row for row in candidate_summaries
+        if str(row.get("latest_status") or "").upper() in {"PASS", "RESUMED-PASS"}
+        and not _candidate_row_withdrawn(row)
+    ]
 
     return {
         "ok": True,
         "setup": _shared_tracking_required_setup(),
-        "candidates": candidate_summaries,
+        "candidates": candidate_summaries + archived_summaries,
         "pending": pending_active,
         "views": {
             "pending": pending_active,
@@ -3675,6 +3725,8 @@ def _shared_admin_candidate_snapshot():
             "incomplete": incomplete,
             "withdrawn": withdrawn,
             "extraAttemptGranted": extra_attempt,
+            "passedCertifications": passed_certifications,
+            "archived": archived_summaries,
             "allActive": [row for row in candidate_summaries if not _candidate_row_withdrawn(row)],
         },
     }
@@ -3686,10 +3738,12 @@ def _shared_admin_candidate_action(payload):
     session_id = str((payload or {}).get("session_id") or (payload or {}).get("latest_session_id") or "").strip()
     pending_id = str((payload or {}).get("pending_id") or "").strip()
     reason = str((payload or {}).get("reason") or "").strip()
-    if action not in {"withdraw", "restore_withdrawal", "grant_extra_attempt", "cancel_pending"}:
+    if action not in {"withdraw", "restore_withdrawal", "grant_extra_attempt", "cancel_pending", "delete_candidate_history"}:
         return {"ok": False, "error": "Unsupported candidate tracking action."}
     if not candidate_name and not session_id and not pending_id:
-        return {"ok": False, "error": "Candidate name, session id, or pending id is required."}
+        targets = (payload or {}).get("targets") or []
+        if action != "delete_candidate_history" or not isinstance(targets, list) or not targets:
+            return {"ok": False, "error": "Candidate name, session id, or pending id is required."}
 
     context = _shared_sheet_context()
     if not context.get("ok"):
@@ -3705,6 +3759,102 @@ def _shared_admin_candidate_action(payload):
         retention_until = _add_business_days(datetime.now(timezone.utc), 10).date().isoformat()
         updated_candidates = 0
         updated_pending = 0
+
+        if action == "delete_candidate_history":
+            raw_targets = (payload or {}).get("targets")
+            if not isinstance(raw_targets, list) or not raw_targets:
+                raw_targets = [{
+                    "candidate_name": candidate_name,
+                    "session_id": session_id,
+                    "pending_id": pending_id,
+                }]
+
+            target_names = {
+                _candidate_name_key(target.get("candidate_name"))
+                for target in raw_targets
+                if isinstance(target, dict) and target.get("candidate_name")
+            }
+            target_session_ids = {
+                str(target.get("session_id") or target.get("latest_session_id") or "").strip()
+                for target in raw_targets
+                if isinstance(target, dict) and (target.get("session_id") or target.get("latest_session_id"))
+            }
+            target_pending_ids = {
+                str(target.get("pending_id") or "").strip()
+                for target in raw_targets
+                if isinstance(target, dict) and target.get("pending_id")
+            }
+            target_session_ids.discard("")
+            target_pending_ids.discard("")
+            target_names.discard("")
+
+            candidate_delete_rows = [
+                row for row in candidate_rows
+                if (
+                    str(row.get("session_id") or "").strip() in target_session_ids
+                    or _candidate_name_key(row.get("candidate_name")) in target_names
+                )
+            ]
+            pending_delete_rows = [
+                row for row in pending_rows
+                if (
+                    str(row.get("pending_id") or "").strip() in target_pending_ids
+                    or str(row.get("original_session_id") or "").strip() in target_session_ids
+                    or _candidate_name_key(row.get("candidate_name")) in target_names
+                )
+            ]
+            if not candidate_delete_rows and not pending_delete_rows:
+                return {"ok": False, "error": "No matching Candidate Sessions or Pending Sup Transfers rows were found to delete."}
+
+            requests = []
+            candidate_gid = _shared_sheet_gid(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB)
+            pending_gid = _shared_sheet_gid(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB)
+            if candidate_delete_rows and candidate_gid is None:
+                return {"ok": False, "error": "Candidate Sessions sheet id could not be resolved."}
+            if pending_delete_rows and pending_gid is None:
+                return {"ok": False, "error": "Pending Sup Transfers sheet id could not be resolved."}
+
+            for row in sorted(candidate_delete_rows, key=lambda item: int(item.get("_row_number") or 0), reverse=True):
+                row_number = int(row.get("_row_number") or 0)
+                if row_number > 1:
+                    requests.append({
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": candidate_gid,
+                                "dimension": "ROWS",
+                                "startIndex": row_number - 1,
+                                "endIndex": row_number,
+                            },
+                        },
+                    })
+            for row in sorted(pending_delete_rows, key=lambda item: int(item.get("_row_number") or 0), reverse=True):
+                row_number = int(row.get("_row_number") or 0)
+                if row_number > 1:
+                    requests.append({
+                        "deleteDimension": {
+                            "range": {
+                                "sheetId": pending_gid,
+                                "dimension": "ROWS",
+                                "startIndex": row_number - 1,
+                                "endIndex": row_number,
+                            },
+                        },
+                    })
+            if not requests:
+                return {"ok": False, "error": "No deletable shared candidate rows were found."}
+            sheets_api.batchUpdate(spreadsheetId=sheet_id, body={"requests": requests}).execute()
+            logger.info(
+                "[SHARED] Deleted SAM candidate history rows. candidates=%s pending=%s targets=%s",
+                len(candidate_delete_rows),
+                len(pending_delete_rows),
+                len(raw_targets),
+            )
+            return {
+                "ok": True,
+                "action": action,
+                "deletedCandidateRows": len(candidate_delete_rows),
+                "deletedPendingRows": len(pending_delete_rows),
+            }
 
         for row in candidate_rows:
             matches = (
@@ -4058,6 +4208,15 @@ def _candidate_session_row(session, existing_rows=None):
         session.get("extra_attempt_reason") or "",
         _shared_retention_until(shared_status, session),
         _shared_bool(False),
+        _shared_optional_bool(session.get("headset_usb")),
+        _shared_optional_bool(session.get("noise_cancel")),
+        session.get("headset_brand") or "",
+        _shared_optional_bool(session.get("vpn_on")),
+        _shared_optional_bool(session.get("vpn_off")),
+        _shared_optional_bool(session.get("chrome_default")),
+        _shared_optional_bool(session.get("extensions_disabled")),
+        _shared_optional_bool(session.get("popups_allowed")),
+        ", ".join(session.get("skills") or []) if isinstance(session.get("skills"), list) else session.get("skills") or "",
     ], pending_id, needs_sup
 
 
@@ -4107,6 +4266,15 @@ def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=
         completed_at,
         _shared_status(status) if is_completed else "",
         notes,
+        _shared_optional_bool(session.get("headset_usb")),
+        _shared_optional_bool(session.get("noise_cancel")),
+        session.get("headset_brand") or "",
+        _shared_optional_bool(session.get("vpn_on")),
+        _shared_optional_bool(session.get("vpn_off")),
+        _shared_optional_bool(session.get("chrome_default")),
+        _shared_optional_bool(session.get("extensions_disabled")),
+        _shared_optional_bool(session.get("popups_allowed")),
+        ", ".join(session.get("skills") or []) if isinstance(session.get("skills"), list) else session.get("skills") or "",
     ]
 
 
@@ -4219,6 +4387,37 @@ def _shared_status_upper(row):
     return str((row or {}).get("status") or (row or {}).get("final_status") or "").strip().upper()
 
 
+def _shared_row_date(row):
+    value = str((row or {}).get("completed_at") or (row or {}).get("created_at") or (row or {}).get("displayDate") or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _shared_candidate_suggestion_visible(row, now=None):
+    now = now or datetime.now(timezone.utc)
+    row_dt = _shared_row_date(row)
+    if not row_dt:
+        return True
+    if row_dt.tzinfo is None:
+        row_dt = row_dt.replace(tzinfo=timezone.utc)
+    age_days = max(0, (now - row_dt).days)
+    status = _shared_status_upper(row)
+    extra_attempt = _candidate_row_extra_attempt(row)
+    if _candidate_row_withdrawn(row):
+        return age_days <= 10
+    if status in {"PASS", "RESUMED-PASS"}:
+        return age_days <= 10
+    if status == "FAIL-FINAL ATTEMPT" and not extra_attempt:
+        return age_days <= 10
+    if extra_attempt:
+        return age_days <= 30
+    return age_days <= 30
+
+
 def _lookup_shared_candidate_sessions(candidate_name):
     query = " ".join(str(candidate_name or "").lower().split())
     if len(query) < 2:
@@ -4252,9 +4451,10 @@ def _lookup_shared_candidate_sessions(candidate_name):
     final_attempt_used = any(_shared_status_upper(row) == "FAIL-FINAL ATTEMPT" for row in confirmed_matches)
     withdrawn = any(_candidate_row_withdrawn(row) or _shared_status_upper(row) == "WITHDREW FROM CERTIFICATION" for row in confirmed_matches)
     extra_attempt = any(_candidate_row_extra_attempt(row) for row in confirmed_matches)
+    visible_matches = [row for row in active_matches if _shared_candidate_suggestion_visible(row)]
     return {
         "ok": True,
-        "matches": active_matches[:20],
+        "matches": visible_matches[:20],
         "finalAttempt": len(qualifying_failures) >= 2 and not extra_attempt and not final_attempt_used,
         "finalAttemptUsed": final_attempt_used and not extra_attempt,
         "qualifyingFailureCount": len(qualifying_failures),
@@ -4754,7 +4954,7 @@ def _history_record_datetime(entry):
     return None
 
 
-def _history_record_is_recent(entry, retention_days=15):
+def _history_record_is_recent(entry, retention_days=30):
     record_dt = _history_record_datetime(entry)
     if not record_dt:
         return True
@@ -5150,7 +5350,10 @@ _gemini_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gemini-
 
 
 def _extract_gemini_text(response):
-    text = (getattr(response, "text", "") or "").strip()
+    try:
+        text = (getattr(response, "text", "") or "").strip()
+    except Exception:
+        text = ""
     if text:
         return text
 
@@ -5164,6 +5367,15 @@ def _extract_gemini_text(response):
                 return candidate_text
 
     return ""
+
+
+def _gemini_response_finish_reasons(response):
+    reasons = []
+    for candidate in getattr(response, "candidates", None) or []:
+        reason = getattr(candidate, "finish_reason", "")
+        if reason:
+            reasons.append(str(reason))
+    return reasons
 
 @lru_cache(maxsize=8)
 def _select_supported_gemini_model(api_key: str) -> str:
@@ -5277,7 +5489,20 @@ def _perform_gemini_connection_test(api_key):
     )
     text = _extract_gemini_text(response).strip()
     if not text:
-        raise RuntimeError("Gemini returned an empty test response.")
+        finish_reasons = _gemini_response_finish_reasons(response)
+        if any(reason in {"2", "FinishReason.SAFETY", "SAFETY"} or "SAFETY" in reason.upper() for reason in finish_reasons):
+            return {
+                "ok": False,
+                "code": "blocked_or_empty",
+                "message": "Gemini connected, but the test response was blocked or empty. Try a simpler test prompt or check Gemini safety/API settings.",
+                "detail": f"Gemini finish reason: {', '.join(finish_reasons)}",
+            }
+        return {
+            "ok": False,
+            "code": "blocked_or_empty",
+            "message": "Gemini connected, but the test response was blocked or empty. Try a simpler test prompt or check Gemini safety/API settings.",
+            "detail": "Gemini returned no text for the connection test.",
+        }
     if text.upper().strip(" .\n\t") != "OK":
         raise RuntimeError("Gemini returned an unexpected test response.")
     return {"ok": True, "code": "success", "message": "Gemini connection successful"}

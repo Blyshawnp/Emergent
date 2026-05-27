@@ -3,8 +3,20 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
-const HEADSET_HELPER_TEXT = '*If the brand/model is not listed, confirm it is USB and has a noise-cancelling microphone. Unsure? Post in Discord Tester Room.';
+const HEADSET_HELPER_TEXT = 'Start typing or click the dropdown arrow to view approved headsets.';
+const HEADSET_DETAIL_BULLETS = [
+  'If the brand/model is not listed, confirm it is USB and has a noise-cancelling microphone.',
+  'Unsure? Post in Discord Tester Room.',
+  'If confirmed USB and it has a noise-cancelling microphone, type it in the field.',
+  'Headsets not listed, but approved, will be added to the list every 7-10 days.',
+];
+const VPN_CHECK_URLS = [
+  'https://www.ip2location.com/',
+  'https://ip.teoh.io/vpn-detection',
+  'https://nodedata.io/vpn-detection-test',
+];
 
 function normalizeName(value) {
   return String(value || '').trim().replace(/\s+/g, ' ');
@@ -65,24 +77,13 @@ function findMostRecentHeadset(matches, candidateName) {
   const normalized = normalizeName(candidateName).toLowerCase();
   const match = (matches || []).find((record) => (
     normalizeName(record?.candidate_name).toLowerCase() === normalized &&
-    !isMissingHeadsetValue(record?.headset_brand)
+    !isMissingHeadsetValue(buildBasicsFromRecord(record).headset_brand)
   ));
-  return String(match?.headset_brand || '').trim();
+  return String(buildBasicsFromRecord(match).headset_brand || '').trim();
 }
 
 function hasUsableBasicsInfo(record) {
-  if (!record || isMissingHeadsetValue(record.headset_brand)) return false;
-  const required = [
-    record.headset_usb,
-    record.noise_cancel,
-    record.vpn_on,
-    record.chrome_default,
-    record.extensions_disabled,
-    record.popups_allowed,
-  ];
-  if (required.some((value) => booleanOrCurrent(value, null) === null)) return false;
-  if (booleanOrCurrent(record.vpn_on, null) === true && booleanOrCurrent(record.vpn_off, null) === null) return false;
-  return true;
+  return buildBasicsFromRecord(record).usable;
 }
 
 function sortedCandidateRecords(records, candidateName) {
@@ -93,11 +94,13 @@ function sortedCandidateRecords(records, candidateName) {
 }
 
 function findUsableBasicsRecord(records, candidateName, excludeSessionId = '') {
-  return sortedCandidateRecords(records, candidateName).find((record) => (
-    String(record?.session_id || record?.history_id || '') !== String(excludeSessionId || '') &&
-    !candidateIsNcns(record) &&
-    hasUsableBasicsInfo(record)
-  )) || null;
+  const result = findBestBasicsRecord(
+    sortedCandidateRecords(records, candidateName).filter((record) => (
+      String(sessionIdOf(record)) !== String(excludeSessionId || '') && !candidateIsNcns(record)
+    )),
+    candidateName
+  );
+  return result?.record || null;
 }
 
 function headsetIsApproved(value, approvedHeadsets) {
@@ -141,6 +144,7 @@ export default function BasicsPage({ onNavigate }) {
   const [confirmedCandidateMatch, setConfirmedCandidateMatch] = useState(null);
   const [previousSessionOpen, setPreviousSessionOpen] = useState(false);
   const [finalAttemptNoticeShownFor, setFinalAttemptNoticeShownFor] = useState('');
+  const [copiedVpnUrl, setCopiedVpnUrl] = useState('');
   const [form, setForm] = useState({
     candidate_name: '', tester_name: '', final_attempt: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
@@ -278,6 +282,18 @@ export default function BasicsPage({ onNavigate }) {
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
   const mostRecentPreviousSession = candidateLookup.matches[0] || null;
 
+  const copyVpnUrl = async (url) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedVpnUrl(url);
+      window.setTimeout(() => {
+        setCopiedVpnUrl((current) => (current === url ? '' : current));
+      }, 3000);
+    } catch (_error) {
+      await modal.warning('Copy Failed', 'Unable to copy this website automatically. Please select and copy the URL manually.');
+    }
+  };
+
   const discardWithoutConfirmation = async () => {
     await api.discardSession();
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -353,20 +369,13 @@ export default function BasicsPage({ onNavigate }) {
   };
 
   const buildBasicsRecoveredForm = (source, candidateName, finalAttempt, blockResult) => ({
-    ...form,
+    ...mergeBasicsIntoSession(form, buildBasicsFromRecord(source)),
     candidate_name: candidateName || form.candidate_name,
     tester_name: form.tester_name || settings.tester_name || source?.tester_name || '',
     final_attempt: finalAttempt,
-    headset_usb: booleanOrCurrent(source?.headset_usb, form.headset_usb),
-    noise_cancel: booleanOrCurrent(source?.noise_cancel, form.noise_cancel),
-    headset_brand: isMissingHeadsetValue(source?.headset_brand)
+    headset_brand: isMissingHeadsetValue(buildBasicsFromRecord(source).headset_brand)
       ? (findMostRecentHeadset(candidateLookup.matches, candidateName) || form.headset_brand)
-      : String(source?.headset_brand || '').trim(),
-    vpn_on: booleanOrCurrent(source?.vpn_on, form.vpn_on),
-    vpn_off: booleanOrCurrent(source?.vpn_off, form.vpn_off),
-    chrome_default: booleanOrCurrent(source?.chrome_default, form.chrome_default),
-    extensions_disabled: booleanOrCurrent(source?.extensions_disabled, form.extensions_disabled),
-    popups_allowed: booleanOrCurrent(source?.popups_allowed, form.popups_allowed),
+      : buildBasicsFromRecord(source).headset_brand,
     candidate_override_used: Boolean(blockResult.override),
     candidate_override_reason: blockResult.override ? 'Tester override after shared final-attempt block.' : '',
   });
@@ -392,11 +401,14 @@ export default function BasicsPage({ onNavigate }) {
       } catch (_error) {
         history = [];
       }
-      basicsSource = findUsableBasicsRecord(
-        [...history, ...candidateLookup.matches],
-        candidateName,
-        match.session_id || match.history_id || ''
-      );
+      const basicsResult = findBestBasicsRecord([...history, ...candidateLookup.matches], candidateName, match);
+      basicsSource = basicsResult?.record || findUsableBasicsRecord([...history, ...candidateLookup.matches], candidateName, match.session_id || match.history_id || '');
+      console.info('[MTS] Basics recovery', {
+        candidate: candidateName,
+        selectedSession: match.session_id || match.history_id || '',
+        basicsFound: Boolean(basicsSource),
+        source: basicsResult?.basics?.source || '',
+      });
       if (!basicsSource) {
         const linkedForm = {
           ...form,
@@ -484,6 +496,9 @@ export default function BasicsPage({ onNavigate }) {
       if (candidateBlockResult.override) {
         set('candidate_override_used', true);
       }
+    } else if (candidateLookup.withdrawn || candidateLookup.finalAttemptUsed) {
+      candidateBlockResult = await handleCandidateBlockOrOverride({ candidate_name: d.candidate_name });
+      if (!candidateBlockResult.allowed) return;
     }
     if (d.headset_usb === null || d.noise_cancel === null || !d.headset_brand.trim()) { await modal.warning('Missing Info', 'All Headset fields are required.'); return; }
     if (d.vpn_on === null) { await modal.warning('Missing Info', 'VPN question must be answered.'); return; }
@@ -647,40 +662,37 @@ export default function BasicsPage({ onNavigate }) {
           </div>
         )}
       </div>
-      <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }} data-tour="basics-headset-section">
+      <div className="card basics-headset-card" data-tour="basics-headset-section">
         <h3 style={{ marginBottom: 12 }}>Headset Requirements</h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <label className="text-sm font-bold" style={{ minWidth: 160 }}>Is the headset USB?</label>
-            <RadioGroup name="b-usb" value={form.headset_usb} onChange={v => set('headset_usb', v)} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <label className="text-sm font-bold" style={{ minWidth: 160 }}>Noise Cancelling Mic?</label>
-            <RadioGroup name="b-noise" value={form.noise_cancel} onChange={v => set('noise_cancel', v)} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <label className="text-sm font-bold" style={{ minWidth: 160 }}>Brand / Model</label>
-            <input type="text" value={form.headset_brand} onChange={e => set('headset_brand', e.target.value)} placeholder="e.g. Logitech H390" style={{ maxWidth: 280 }} list="approved-headset-options" data-testid="basics-brand" />
-            <datalist id="approved-headset-options">
-              {approvedHeadsets.flatMap((group) => (group.models || []).map((model) => selectedHeadsetLabel(group, model))).slice(0, 160).map((label) => (
-                <option key={label} value={label} />
-              ))}
-            </datalist>
-          </div>
-          <div style={{ marginTop: 4 }}>
-            <div className="basics-headset-actions">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm basics-headset-lookup-btn"
-                onClick={() => setHeadsetLookupOpen(true)}
-                data-testid="basics-headset-lookup"
-              >
-                {'\uD83D\uDD0D'} Lookup Approved Headsets
-              </button>
+        <div className="basics-headset-layout">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <label className="text-sm font-bold" style={{ minWidth: 160 }}>Is the headset USB?</label>
+              <RadioGroup name="b-usb" value={form.headset_usb} onChange={v => set('headset_usb', v)} />
             </div>
-            <div className="text-xs text-muted basics-headset-note">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <label className="text-sm font-bold" style={{ minWidth: 160 }}>Noise Cancelling Mic?</label>
+              <RadioGroup name="b-noise" value={form.noise_cancel} onChange={v => set('noise_cancel', v)} />
+            </div>
+            <div className="basics-headset-brand-row">
+              <label className="text-sm font-bold" style={{ minWidth: 160 }}>Brand / Model</label>
+              <input type="text" value={form.headset_brand} onChange={e => set('headset_brand', e.target.value)} placeholder="e.g. Logitech H390" list="approved-headset-options" data-testid="basics-brand" />
+              <datalist id="approved-headset-options">
+                {approvedHeadsets.flatMap((group) => (group.models || []).map((model) => selectedHeadsetLabel(group, model))).slice(0, 160).map((label) => (
+                  <option key={label} value={label} />
+                ))}
+              </datalist>
+            </div>
+            <div className="basics-headset-note">
               {HEADSET_HELPER_TEXT}
             </div>
+          </div>
+          <div className="basics-headset-info-panel">
+            <ul>
+              {HEADSET_DETAIL_BULLETS.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
           </div>
         </div>
       </div>
@@ -698,10 +710,20 @@ export default function BasicsPage({ onNavigate }) {
             </div>
             <div className="text-xs text-muted vpn-help-links">
               If checking for VPN or proxy is necessary, more than one check is recommended because some databases do not update as often as others. You can have the candidate navigate to one or more of the following websites:
-              <div>
-                <a href="https://www.ip2location.com/" target="_blank" rel="noreferrer">ip2location.com</a>
-                <a href="https://ip.teoh.io/vpn-detection" target="_blank" rel="noreferrer">ip.teoh.io/vpn-detection</a>
-                <a href="https://nodedata.io/vpn-detection-test" target="_blank" rel="noreferrer">nodedata.io/vpn-detection-test</a>
+              <div className="vpn-copy-helper">Click a website to copy it to your clipboard. Then paste it into Discord.</div>
+              <div className="vpn-copy-list">
+                {VPN_CHECK_URLS.map((url) => (
+                  <button
+                    key={url}
+                    type="button"
+                    className="vpn-copy-link"
+                    onClick={() => copyVpnUrl(url)}
+                    title={`Copy ${url}`}
+                  >
+                    <span>{url}</span>
+                    <strong>{copiedVpnUrl === url ? 'Copied' : 'Copy'}</strong>
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -819,6 +841,7 @@ export default function BasicsPage({ onNavigate }) {
       {previousSessionOpen && (
         <PreviousSessionModal
           matches={candidateLookup.matches}
+          candidateName={form.candidate_name}
           onClose={() => setPreviousSessionOpen(false)}
         />
       )}
@@ -840,7 +863,7 @@ export default function BasicsPage({ onNavigate }) {
   );
 }
 
-function PreviousSessionModal({ matches, onClose }) {
+function PreviousSessionModal({ matches, candidateName, onClose }) {
   const [expanded, setExpanded] = useState(0);
   const sessions = Array.isArray(matches) ? matches : [];
   return (
@@ -853,6 +876,7 @@ function PreviousSessionModal({ matches, onClose }) {
         <div className="modal-body">
           {sessions.map((session, index) => {
             const isOpen = expanded === index;
+            const recovered = findBestBasicsRecord(sessions, candidateName || session.candidate_name, session)?.basics || buildBasicsFromRecord(session);
             return (
               <div key={`${session.session_id || index}`} className="card" style={{ marginBottom: 12, padding: 16 }}>
                 <button
@@ -873,6 +897,14 @@ function PreviousSessionModal({ matches, onClose }) {
                     <div className="text-sm"><b>Completed:</b> {session.completed_at || session.created_at || 'Unknown'}</div>
                     <div className="text-sm"><b>Attempt:</b> {session.attempt_number || session.attempt_count || 'Unknown'}</div>
                     <div className="text-sm"><b>Final attempt:</b> {session.final_attempt ? 'Yes' : 'No'}</div>
+                    <div className="text-sm"><b>Headset USB:</b> {recovered.headset_usb === true ? 'Yes' : recovered.headset_usb === false ? 'No' : 'N/A'}</div>
+                    <div className="text-sm"><b>Noise Cancelling Mic:</b> {recovered.noise_cancel === true ? 'Yes' : recovered.noise_cancel === false ? 'No' : 'N/A'}</div>
+                    <div className="text-sm"><b>Headset:</b> {recovered.headset_brand || 'N/A'}</div>
+                    <div className="text-sm"><b>VPN:</b> {recovered.vpn_on === true ? 'Yes' : recovered.vpn_on === false ? 'No' : 'N/A'}</div>
+                    {recovered.vpn_on === true && <div className="text-sm"><b>VPN Can Turn Off:</b> {recovered.vpn_off === true ? 'Yes' : recovered.vpn_off === false ? 'No' : 'N/A'}</div>}
+                    <div className="text-sm"><b>Default Browser:</b> {recovered.chrome_default === true ? 'Yes' : recovered.chrome_default === false ? 'No' : 'N/A'}</div>
+                    <div className="text-sm"><b>Extensions Off:</b> {recovered.extensions_disabled === true ? 'Yes' : recovered.extensions_disabled === false ? 'No' : 'N/A'}</div>
+                    <div className="text-sm"><b>Pop-ups Allowed:</b> {recovered.popups_allowed === true ? 'Yes' : recovered.popups_allowed === false ? 'No' : 'N/A'}</div>
                     <div className="text-sm"><b>Pending supervisor transfer:</b> {session.needs_sup_transfer ? 'Yes' : 'No'}</div>
                     <div className="text-sm"><b>Calls:</b> {[session.call_1_result, session.call_2_result, session.call_3_result].filter(Boolean).join(', ') || 'None recorded'}</div>
                     <div className="text-sm"><b>Supervisor transfers:</b> {[session.sup_transfer_1_result, session.sup_transfer_2_result].filter(Boolean).join(', ') || 'None recorded'}</div>

@@ -38,25 +38,25 @@ const SAM_TUTORIAL_STEPS = [
   {
     target: 'notification-list',
     title: 'Notification list',
-    body: 'The Notifications screen reads and writes alert rows from the master sam-notifications tab.',
+    body: 'Notifications reads and writes alert rows from the master sam-notifications tab.',
     placement: 'left',
   },
   {
     target: 'add-notification',
     title: 'Add notifications',
-    body: 'Add Notification opens the editor in a modal. New rows default to ticker only, and the editor scrolls for delivery and schedule options.',
+    body: 'Add Notification opens the editor in a modal. New rows default to Ticker only. Save closes the modal and MTS should update within about a minute.',
     placement: 'bottom',
   },
   {
     target: 'status-chips',
     title: 'Statuses',
-    body: 'These chips show backend health, active sheet source, and the configured SAM user.',
+    body: 'These chips show backend health, the active master sheet source, and the configured SAM user.',
     placement: 'left',
   },
   {
     target: 'help-access',
     title: 'Help',
-    body: 'Open Help for setup, centralized Google Sheet details, candidate admin workflows, updates, and tutorial replay.',
+    body: 'Open Help for assigned name and PIN setup, master Google Sheet details, candidate admin workflows, updates, and tutorial replay.',
     placement: 'bottom',
   },
   {
@@ -68,7 +68,7 @@ const SAM_TUTORIAL_STEPS = [
   {
     target: 'candidate-tracking',
     title: 'Candidate tracking',
-    body: 'Use the Candidate Tracking screen, filters, and candidate-name search to manage pending transfers, failed final attempts, withdrawn candidates, and extra-attempt approvals.',
+    body: 'Use Candidate Tracking filters, candidate-name search, View Details, and confirmation popups to manage pending transfers, failed final attempts, withdrawn candidates, passed certifications, archived history, and extra attempts.',
     placement: 'top',
   },
 ];
@@ -173,7 +173,7 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>First-Run Setup</h3>
-            <p>SAM requires an assigned name and PIN from the master Google Sheet before the dashboard opens. Disabled users cannot complete setup.</p>
+            <p>SAM requires an assigned name and PIN from the master Google Sheet before the dashboard opens. The setup checks the sam-authorized-users tab. Disabled users cannot complete setup, and PINs should not be shared.</p>
           </div>
           <div className="nm-help-card">
             <h3>Access Management</h3>
@@ -181,7 +181,7 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Central Sheet</h3>
-            <p>The master Google Sheet stores sam-notifications, Candidate Sessions, Pending Sup Transfers, update-SAM, and SAM authorized-user setup data.</p>
+            <p>The master Google Sheet stores sam-notifications, Candidate Sessions, Pending Sup Transfers, sam-authorized-users, update-MTS, and update-SAM. Do not casually rename tabs or headers.</p>
           </div>
           <div className="nm-help-card">
             <h3>Notification Types</h3>
@@ -197,15 +197,15 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Scheduling</h3>
-            <p>Start and expiration times are interpreted in Eastern Time. Empty expiration fields keep a notification live until it is disabled or removed.</p>
+            <p>Start and expiration times are interpreted in Eastern Time. AM/PM is respected, including midnight as AM. Empty expiration fields keep a notification live until it is disabled or removed.</p>
           </div>
           <div className="nm-help-card">
             <h3>Views</h3>
-            <p>The top section buttons switch between Notifications, Live Preview, Candidate Tracking views, and Help so SAM is not one long scrolling page. Current shows enabled, non-expired notifications. Disabled / Expired shows inactive rows. All Notifications keeps the full sheet view available.</p>
+            <p>The top section buttons are Notifications, Live Preview, Candidate Tracking, Pending Sup Transfers, and Settings/Help. Candidate categories such as Failed Final Attempts, Withdrawn, Extra Attempt Granted, Passed Certifications, and Archived Candidates are filters inside Candidate Tracking.</p>
           </div>
           <div className="nm-help-card">
             <h3>Create</h3>
-            <p>Use Add Notification to open the editor. New rows default to ticker only; scroll inside the editor for delivery, schedule, and action options, then submit to the sheet.</p>
+            <p>Use Add Notification to open the editor. New rows default to Ticker checked and Popup, Banner, and Persistent unchecked. Scroll inside the editor for delivery, schedule, and action options, then submit to the sheet.</p>
           </div>
           <div className="nm-help-card">
             <h3>Edit</h3>
@@ -217,11 +217,19 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Google Sheets Sync</h3>
-            <p>Refresh reads the master sam-notifications tab. Submit writes the selected notification back to that tab using the working notification schema.</p>
+            <p>Refresh reads the master sam-notifications tab. Submit writes the selected notification back to that tab using the working schema and Google Sheets checkbox-compatible boolean fields. After success, the modal closes and MTS should update within about a minute.</p>
           </div>
           <div className="nm-help-card">
             <h3>Candidate Tracking</h3>
-            <p>SAM can be used by admins to review candidate availability signals from shared tracking, including pending supervisor-transfer, incomplete, failed-not-final, failed final attempt, withdrawn, extra-attempt, and all-active filters. Use the candidate-name search field inside the tracking screen to narrow long lists.</p>
+            <p>SAM can be used by admins to review candidate availability signals from shared tracking. Filters include Pending Sup Transfers, Incomplete, Failed Not Final, Failed Final Attempts, Withdrawn, Extra Attempt Granted, Passed Certifications, Archived Candidates, and All Active Candidates. Use candidate-name search to narrow long lists.</p>
+          </div>
+          <div className="nm-help-card">
+            <h3>Details</h3>
+            <p>Candidate rows stay compact by default. Notes show a preview. Use View Details to expand full notes, coaching, fail summary, Basics, call results, supervisor-transfer results, and attempt history. Admin candidate history remains searchable indefinitely, including records moved to the archive after 90 days.</p>
+          </div>
+          <div className="nm-help-card">
+            <h3>Candidate Deletion</h3>
+            <p>Tester local History can be cleared in MTS without deleting SAM admin records. Shared candidate history can only be deleted from SAM by an admin after a confirmation. Delete one candidate row or select multiple rows and use Delete Selected. Rows manually deleted from the Google Sheet no longer appear in SAM or MTS lookup/autocomplete.</p>
           </div>
           <div className="nm-help-card">
             <h3>Pending Sup Transfers</h3>
@@ -233,7 +241,7 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Admin Actions</h3>
-            <p>Withdraw, Restore/Revert Withdrawal, Extra Attempt, and Pending Sup Transfer cancellation all require confirmation and refresh the shared candidate list after the Google Sheet update.</p>
+            <p>Withdraw, Restore/Revert Withdrawal, Extra Attempt, Pending Sup Transfer cancellation, and candidate-history deletion all require confirmation and refresh the shared candidate list after the Google Sheet update. Extra attempts and restored withdrawals can make a candidate eligible again in MTS.</p>
           </div>
           <div className="nm-help-card">
             <h3>Updates</h3>
@@ -245,7 +253,7 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Local Fallback</h3>
-            <p>If the master sheet cannot be reached, SAM shows a non-blocking warning. Legacy notification sheets are read only as migration/fallback sources.</p>
+            <p>If the master sheet cannot be reached, SAM shows a non-blocking warning. If notifications do not save or candidate records do not update, check service account access, tab names, headers, and sheet sharing first.</p>
           </div>
           <div className="nm-help-card">
             <h3>Attribution</h3>
@@ -312,6 +320,30 @@ function StatusModal({ message, kind = 'info', onClose }) {
         </div>
         <div className="nm-help-actions">
           <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>OK</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmModal({ state, onConfirm, onCancel }) {
+  if (!state?.message) return null;
+  return (
+    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <section className="nm-help-modal nm-status-modal" role="dialog" aria-modal="true">
+        <div className="nm-help-header">
+          <div>
+            <div className="nm-overline">{state.kind === 'danger' ? 'CONFIRM ACTION' : 'CONFIRM'}</div>
+            <h2>{state.title || 'Confirm'}</h2>
+            <p>{state.message}</p>
+          </div>
+          <button type="button" className="nm-modal-close" onClick={onCancel} aria-label="Cancel">×</button>
+        </div>
+        <div className="nm-help-actions">
+          <button type="button" className="nm-btn nm-btn-secondary" onClick={onCancel}>{state.cancelLabel || 'Cancel'}</button>
+          <button type="button" className={`nm-btn ${state.kind === 'danger' ? 'nm-btn-danger' : 'nm-btn-primary'}`} onClick={onConfirm}>
+            {state.confirmLabel || 'OK'}
+          </button>
         </div>
       </section>
     </div>
@@ -409,6 +441,8 @@ const CANDIDATE_VIEW_LABELS = {
   failedFinalAttempts: 'Failed Final Attempts',
   withdrawn: 'Withdrawn',
   extraAttemptGranted: 'Extra Attempt Granted',
+  passedCertifications: 'Passed Certifications',
+  archived: 'Archived Candidates',
   allActive: 'All Active Candidates',
 };
 
@@ -417,48 +451,108 @@ const SECTION_NAV_ITEMS = [
   { key: 'preview', label: 'Live Preview', target: 'sam-live-preview' },
   { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive' },
   { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending' },
-  { key: 'candidates', label: 'Failed Candidates', target: 'sam-candidate-tracking', candidateView: 'failedNotFinal' },
-  { key: 'candidates', label: 'Failed Final Attempts', target: 'sam-candidate-tracking', candidateView: 'failedFinalAttempts' },
-  { key: 'candidates', label: 'Withdrawn', target: 'sam-candidate-tracking', candidateView: 'withdrawn' },
-  { key: 'candidates', label: 'Extra Attempts', target: 'sam-candidate-tracking', candidateView: 'extraAttemptGranted' },
   { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
 ];
 
-function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction }) {
+function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm }) {
   const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState({});
+  const [selectedTargets, setSelectedTargets] = useState({});
   const rows = data?.views?.[view] || [];
   const searchText = search.trim().toLowerCase();
+  const searchPool = searchText ? (data?.candidates || rows) : rows;
   const visibleRows = searchText
-    ? rows.filter((row) => String(row.candidate_name || '').toLowerCase().includes(searchText))
+    ? searchPool.filter((row) => String(row.candidate_name || '').toLowerCase().includes(searchText))
     : rows;
+  const getCandidateRowKey = (row) => [
+    row.pending_id || '',
+    row.session_id || row.latest_session_id || row.original_session_id || '',
+    row.candidate_name || '',
+    row.completed_at || row.last_session_date || row.created_at || '',
+  ].join('::');
+  const buildCandidateTarget = (row) => ({
+    candidate_name: row.candidate_name || '',
+    session_id: row.session_id || row.latest_session_id || row.original_session_id || '',
+    pending_id: row.pending_id || '',
+  });
+  const visibleEntries = visibleRows.map((row, index) => ({
+    row,
+    index,
+    key: getCandidateRowKey(row) || `${row.candidate_name || 'candidate'}-${index}`,
+  }));
+  const selectedList = Object.values(selectedTargets);
+  const selectedCount = selectedList.length;
+  const allVisibleSelected = visibleEntries.length > 0 && visibleEntries.every((entry) => selectedTargets[entry.key]);
   const setup = data?.setup || {};
   const requiredSetup = Object.entries(setup)
     .map(([tab, headers]) => `${tab}: ${Array.isArray(headers) ? headers.join(', ') : String(headers || '')}`)
     .join('\n');
 
   const handleWithdraw = async (row) => {
-    const confirmed = window.confirm(`Mark ${row.candidate_name || 'this candidate'} as withdrew from certification?`);
+    const confirmed = await onConfirm(`Mark ${row.candidate_name || 'this candidate'} as withdrew from certification?`, { kind: 'danger', confirmLabel: 'Withdraw' });
     if (!confirmed) return;
     await onAction({ action: 'withdraw', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id });
   };
 
   const handleRestore = async (row) => {
-    const confirmed = window.confirm(`Restore ${row.candidate_name || 'this candidate'} from withdrew from certification status?`);
+    const confirmed = await onConfirm(`Restore ${row.candidate_name || 'this candidate'} from withdrew from certification status?`, { confirmLabel: 'Restore' });
     if (!confirmed) return;
     await onAction({ action: 'restore_withdrawal', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id });
   };
 
   const handleExtraAttempt = async (row) => {
-    const confirmed = window.confirm(`Grant an additional attempt for ${row.candidate_name || 'this candidate'}?`);
+    const confirmed = await onConfirm(`Grant an additional attempt for ${row.candidate_name || 'this candidate'}?`, { confirmLabel: 'Grant' });
     if (!confirmed) return;
-    const reason = window.prompt('Reason for granting an extra attempt?') || '';
+    const reason = '';
     await onAction({ action: 'grant_extra_attempt', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id, reason });
   };
 
   const handleCancel = async (row) => {
-    const confirmed = window.confirm(`Cancel pending supervisor transfer for ${row.candidate_name || 'this candidate'}?`);
+    const confirmed = await onConfirm(`Cancel pending supervisor transfer for ${row.candidate_name || 'this candidate'}?`, { kind: 'danger', confirmLabel: 'Cancel Transfer' });
     if (!confirmed) return;
     await onAction({ action: 'cancel_pending', candidate_name: row.candidate_name, pending_id: row.pending_id, session_id: row.original_session_id });
+  };
+
+  const handleDeleteTargets = async (targets, label) => {
+    if (!targets.length) return;
+    const confirmed = await onConfirm(
+      `Permanently delete ${label} from shared Candidate Sessions and Pending Sup Transfers? This removes the record from SAM admin views and MTS autocomplete/lookup. Tester local History is not changed.`,
+      { kind: 'danger', confirmLabel: 'Delete' },
+    );
+    if (!confirmed) return;
+    await onAction({ action: 'delete_candidate_history', targets });
+    setSelectedTargets({});
+  };
+
+  const handleDeleteRow = async (row) => {
+    await handleDeleteTargets([buildCandidateTarget(row)], `candidate history for ${row.candidate_name || 'this candidate'}`);
+  };
+
+  const toggleRowSelection = (entry, checked) => {
+    const target = buildCandidateTarget(entry.row);
+    setSelectedTargets((current) => {
+      const next = { ...current };
+      if (checked) {
+        next[entry.key] = target;
+      } else {
+        delete next[entry.key];
+      }
+      return next;
+    });
+  };
+
+  const toggleVisibleSelection = (checked) => {
+    setSelectedTargets((current) => {
+      const next = { ...current };
+      visibleEntries.forEach((entry) => {
+        if (checked) {
+          next[entry.key] = buildCandidateTarget(entry.row);
+        } else {
+          delete next[entry.key];
+        }
+      });
+      return next;
+    });
   };
 
   return (
@@ -470,6 +564,14 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
         </div>
         <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={onRefresh} disabled={loading}>
           {loading ? 'Refreshing...' : 'Refresh'}
+        </button>
+        <button
+          type="button"
+          className="nm-btn nm-btn-danger nm-btn-table"
+          onClick={() => handleDeleteTargets(selectedList, `${selectedCount} selected candidate record${selectedCount === 1 ? '' : 's'}`)}
+          disabled={!selectedCount || loading}
+        >
+          Delete Selected
         </button>
       </div>
       {!data?.ok && data?.error ? (
@@ -505,6 +607,14 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
         <table className="nm-table nm-candidate-table">
           <thead>
             <tr>
+              <th className="nm-select-column">
+                <input
+                  type="checkbox"
+                  aria-label="Select all visible candidate rows"
+                  checked={allVisibleSelected}
+                  onChange={(event) => toggleVisibleSelection(event.target.checked)}
+                />
+              </th>
               <th>Candidate</th>
               <th>Status</th>
               <th>Attempts</th>
@@ -517,33 +627,82 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           </thead>
           <tbody>
             {!visibleRows.length ? (
-              <tr><td colSpan={8}><div className="nm-empty">No candidates in this view.</div></td></tr>
-            ) : visibleRows.map((row, index) => {
+              <tr><td colSpan={9}><div className="nm-empty">No candidates in this view.</div></td></tr>
+            ) : visibleEntries.map(({ row, index, key: rowKey }) => {
               const results = [row.call_1_result, row.call_2_result, row.call_3_result, row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || row.mock_call_summary || 'Recorded';
+              const notes = row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded';
+              const attempts = Array.isArray(row.attempts) ? row.attempts : [];
+              const isExpanded = Boolean(expanded[rowKey]);
               return (
-                <tr key={`${row.pending_id || row.session_id || row.latest_session_id || row.candidate_name}-${index}`}>
-                  <td>
-                    <div className="nm-row-title">{row.candidate_name || 'Unknown'}</div>
-                    <div className="nm-meta">{sheetTruthy(row.final_attempt) || sheetTruthy(row.final_attempt_risk) ? 'Final-attempt risk' : sheetTruthy(row.extra_attempt_granted) ? 'Extra attempt granted' : 'Active'}</div>
-                  </td>
-                  <td>{row.status || row.latest_status || 'Unknown'}</td>
-                  <td>{row.attempt_count ?? row.attempt_number ?? '0'}</td>
-                  <td>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
-                  <td className="nm-meta">{row.completed_at || row.last_session_date || row.created_at || 'Unknown'}</td>
-                  <td className="nm-meta">{results}</td>
-                  <td className="nm-meta nm-notes-cell">{row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded'}</td>
-                  <td>
-                    <div className="nm-row-actions">
-                      {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
-                      <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
-                      {sheetTruthy(row.withdrawn) || String(row.status || row.latest_status || '').toUpperCase() === 'WITHDREW FROM CERTIFICATION' ? (
-                        <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
-                      ) : (
-                        <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
+                <React.Fragment key={rowKey}>
+                  <tr>
+                    <td className="nm-select-column">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${row.candidate_name || 'candidate'}`}
+                        checked={Boolean(selectedTargets[rowKey])}
+                        onChange={(event) => toggleRowSelection({ row, index, key: rowKey }, event.target.checked)}
+                      />
+                    </td>
+                    <td>
+                      <div className="nm-row-title">{row.candidate_name || 'Unknown'}</div>
+                      <div className="nm-meta">{sheetTruthy(row.final_attempt) || sheetTruthy(row.final_attempt_risk) ? 'Final-attempt risk' : sheetTruthy(row.extra_attempt_granted) ? 'Extra attempt granted' : 'Active'}</div>
+                    </td>
+                    <td>{row.status || row.latest_status || 'Unknown'}</td>
+                    <td>{row.attempt_count ?? row.attempt_number ?? attempts.length ?? '0'}</td>
+                    <td>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
+                    <td className="nm-meta">{row.completed_at || row.last_session_date || row.created_at || 'Unknown'}</td>
+                    <td className="nm-meta">{results}</td>
+                    <td className="nm-meta nm-notes-cell">
+                      <div className="nm-notes-preview">{notes}</div>
+                      <button type="button" className="nm-link-button" onClick={() => setExpanded((current) => ({ ...current, [rowKey]: !current[rowKey] }))}>
+                        {isExpanded ? 'Hide Details' : 'View Details'}
+                      </button>
+                    </td>
+                    <td>
+                      <div className="nm-row-actions">
+                        {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
+                        <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
+                        {sheetTruthy(row.withdrawn) || String(row.status || row.latest_status || '').toUpperCase() === 'WITHDREW FROM CERTIFICATION' ? (
+                          <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
+                        ) : (
+                          <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
+                        )}
+                        <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleDeleteRow(row)}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                  {isExpanded ? (
+                    <tr className="nm-candidate-detail-row">
+                      <td colSpan={9}>
+                        <div className="nm-candidate-details">
+                          <div><strong>Notes:</strong> {notes}</div>
+                          <div><strong>Coaching:</strong> {row.coaching_summary || 'N/A'}</div>
+                          <div><strong>Fail Summary:</strong> {row.fail_summary || 'N/A'}</div>
+                          <div><strong>Basics:</strong> Headset {row.headset_brand || 'N/A'}; USB {row.headset_usb === true ? 'Yes' : row.headset_usb === false ? 'No' : 'N/A'}; Noise cancelling {row.noise_cancel === true ? 'Yes' : row.noise_cancel === false ? 'No' : 'N/A'}; VPN {row.vpn_on === true ? 'Yes' : row.vpn_on === false ? 'No' : 'N/A'}</div>
+                          <div><strong>Call Results:</strong> {[row.call_1_result, row.call_2_result, row.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
+                          <div><strong>Sup Transfer Results:</strong> {[row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+                          {attempts.length ? (
+                            <div className="nm-attempt-list">
+                              <strong>Attempt History</strong>
+                              {attempts.map((attempt, attemptIndex) => (
+                                <details key={`${attempt.session_id || attemptIndex}`} className="nm-attempt-detail">
+                                  <summary>{attempt.completed_at || attempt.created_at || `Attempt ${attemptIndex + 1}`} - {attempt.status || 'Unknown'} - {attempt.tester_name || 'Unknown tester'}</summary>
+                                  <div>Final attempt: {sheetTruthy(attempt.final_attempt) ? 'Yes' : 'No'}</div>
+                                  <div>Coaching: {attempt.coaching_summary || 'N/A'}</div>
+                                  <div>Fail: {attempt.fail_summary || 'N/A'}</div>
+                                  <div>Calls: {[attempt.call_1_result, attempt.call_2_result, attempt.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
+                                  <div>Sup Transfers: {[attempt.sup_transfer_1_result, attempt.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+                                  <div>Review Notes: {attempt.review_notes || 'N/A'}</div>
+                                </details>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -893,6 +1052,8 @@ export default function NotificationManagerApp() {
   const [editorDraft, setEditorDraft] = useState(null);
   const [editorIndex, setEditorIndex] = useState(null);
   const [statusModal, setStatusModal] = useState(null);
+  const [confirmModal, setConfirmModal] = useState(null);
+  const confirmResolverRef = useRef(null);
   const [tutorialStep, setTutorialStep] = useState(null);
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
@@ -903,6 +1064,22 @@ export default function NotificationManagerApp() {
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
   const showStatusModal = useCallback((message, kind = 'info') => {
     setStatusModal({ message, kind });
+  }, []);
+  const requestConfirm = useCallback((message, options = {}) => new Promise((resolve) => {
+    confirmResolverRef.current = resolve;
+    setConfirmModal({
+      message,
+      title: options.title || 'Confirm',
+      kind: options.kind || 'info',
+      confirmLabel: options.confirmLabel || 'OK',
+      cancelLabel: options.cancelLabel || 'Cancel',
+    });
+  }), []);
+  const resolveConfirm = useCallback((value) => {
+    const resolver = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmModal(null);
+    if (resolver) resolver(value);
   }, []);
   const closeEditor = useCallback(() => {
     setEditorOpen(false);
@@ -1042,6 +1219,7 @@ export default function NotificationManagerApp() {
         withdraw: 'Candidate withdrawn in the shared Google Sheet. MTS should block this candidate after refresh.',
         restore_withdrawal: 'Candidate restored in the shared Google Sheet. MTS should allow lookup again after refresh.',
         cancel_pending: 'Pending supervisor transfer cancelled in the shared Google Sheet.',
+        delete_candidate_history: 'Candidate history deleted from the shared Google Sheet. It will no longer appear in SAM or MTS lookup/autocomplete after refresh.',
       };
       setSheetState((current) => ({
         ...current,
@@ -1559,7 +1737,10 @@ export default function NotificationManagerApp() {
       closeEditor();
       return;
     }
-    const confirmed = window.confirm(`Delete "${target?.Title || target?.Message || 'this notification'}"?`);
+    const confirmed = await requestConfirm(`Delete "${target?.Title || target?.Message || 'this notification'}"?`, {
+      kind: 'danger',
+      confirmLabel: 'Delete',
+    });
     if (!confirmed) return;
 
     const targetId = target?.ID || ensureNotificationId(target);
@@ -1630,7 +1811,10 @@ export default function NotificationManagerApp() {
   const handleToggleEnabled = async (index) => {
     const target = items[index];
     const nextEnabled = !target?.Enabled;
-    const confirmed = window.confirm(`${nextEnabled ? 'Enable' : 'Disable'} "${target?.Title || target?.Message || 'this notification'}"?`);
+    const confirmed = await requestConfirm(`${nextEnabled ? 'Enable' : 'Disable'} "${target?.Title || target?.Message || 'this notification'}"?`, {
+      kind: nextEnabled ? 'info' : 'danger',
+      confirmLabel: nextEnabled ? 'Enable' : 'Disable',
+    });
     if (!confirmed) return;
     const toggled = normalizeManagerNotification({
       ...target,
@@ -1645,7 +1829,7 @@ export default function NotificationManagerApp() {
     const nextIndex = nextItems.findIndex((entry) => entry.ID === targetId);
     setSelectedIndex(nextIndex >= 0 ? nextIndex : 0);
     await persistNotification(toggled, {
-      successMessage: `Notification ${toggled.Enabled ? 'enabled' : 'disabled'} in sam-notifications. MTS should update within about a minute.`,
+      successMessage: toggled.Enabled ? 'Notification enabled.' : 'Notification disabled.',
       sourceIndex: index,
     });
   };
@@ -1677,7 +1861,7 @@ export default function NotificationManagerApp() {
       return;
     }
 
-    if (window.confirm('Are you sure you want to exit Sam?')) {
+    if (await requestConfirm('Are you sure you want to exit Sam?', { kind: 'danger', confirmLabel: 'Exit' })) {
       window.close();
     }
   };
@@ -2000,6 +2184,7 @@ export default function NotificationManagerApp() {
             loading={candidateTrackingLoading}
             onRefresh={() => loadCandidateTracking()}
             onAction={runCandidateAction}
+            onConfirm={requestConfirm}
           />
         ) : null}
       </div>
@@ -2046,6 +2231,11 @@ export default function NotificationManagerApp() {
         message={statusModal?.message || ''}
         kind={statusModal?.kind || 'info'}
         onClose={() => setStatusModal(null)}
+      />
+      <ConfirmModal
+        state={confirmModal}
+        onConfirm={() => resolveConfirm(true)}
+        onCancel={() => resolveConfirm(false)}
       />
     </div>
   );
