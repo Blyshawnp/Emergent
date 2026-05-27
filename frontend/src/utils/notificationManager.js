@@ -231,7 +231,7 @@ export function createEmptyNotification() {
     Message: '',
     ShowPopup: false,
     ShowTicker: true,
-    ShowBanner: true,
+    ShowBanner: false,
     Persistent: false,
     StartDate: defaults.startDate,
     StartTime: defaults.startTime,
@@ -244,6 +244,16 @@ export function createEmptyNotification() {
   };
 }
 
+function normalizeSheetBoolean(value, defaultValue = false) {
+  if (typeof value === 'boolean') return value;
+  if (value === null || value === undefined) return defaultValue;
+  const text = String(value).trim().toLowerCase();
+  if (!text) return defaultValue;
+  if (['true', '1', 'yes', 'y', 'on', 'checked'].includes(text)) return true;
+  if (['false', '0', 'no', 'n', 'off', 'unchecked'].includes(text)) return false;
+  return defaultValue;
+}
+
 export function normalizeManagerNotification(item = {}) {
   const base = createEmptyNotification();
   const normalizedType = String(item.Type || base.Type || 'info').toLowerCase() === 'ticker'
@@ -253,11 +263,11 @@ export function normalizeManagerNotification(item = {}) {
     ...base,
     ...item,
     Type: normalizedType,
-    Enabled: item.Enabled !== false && String(item.Enabled).toLowerCase() !== 'false',
-    ShowPopup: item.ShowPopup === true || String(item.ShowPopup).toLowerCase() === 'true',
-    ShowTicker: item.ShowTicker !== false && String(item.ShowTicker).toLowerCase() !== 'false',
-    ShowBanner: item.ShowBanner === true || String(item.ShowBanner).toLowerCase() === 'true',
-    Persistent: item.Persistent === true || String(item.Persistent).toLowerCase() === 'true',
+    Enabled: normalizeSheetBoolean(item.Enabled, false),
+    ShowPopup: normalizeSheetBoolean(item.ShowPopup, false),
+    ShowTicker: normalizeSheetBoolean(item.ShowTicker, false),
+    ShowBanner: normalizeSheetBoolean(item.ShowBanner, false),
+    Persistent: normalizeSheetBoolean(item.Persistent, false),
     StartDate: item.StartDate || base.StartDate,
     StartTime: item.StartTime || base.StartTime,
     EndDate: item.EndDate || '',
@@ -370,15 +380,15 @@ export function parseManagerCsv(csvText) {
   });
 
   return records.map((record) => normalizeManagerNotification({
-    Enabled: String(record.Enabled || '').trim().toUpperCase() !== 'FALSE',
+    Enabled: normalizeSheetBoolean(record.Enabled, false),
     ID: record.ID || '',
     Type: record.Type || 'info',
     Title: record.Title || '',
     Message: record.Message || '',
-    ShowPopup: String(record.ShowPopup || '').trim().toUpperCase() === 'TRUE',
-    ShowTicker: String(record.ShowTicker || '').trim().toUpperCase() !== 'FALSE',
-    ShowBanner: String(record.ShowBanner || '').trim().toUpperCase() === 'TRUE',
-    Persistent: String(record.Persistent || '').trim().toUpperCase() === 'TRUE',
+    ShowPopup: normalizeSheetBoolean(record.ShowPopup, false),
+    ShowTicker: normalizeSheetBoolean(record.ShowTicker, false),
+    ShowBanner: normalizeSheetBoolean(record.ShowBanner, false),
+    Persistent: normalizeSheetBoolean(record.Persistent, false),
     StartDate: record.StartDate || '',
     StartTime: record.StartTime || '',
     EndDate: record.EndDate || '',

@@ -38,3 +38,17 @@ Thumbs.db
 
 # Frontend build (optional if you rebuild each time)
 frontend/build/
+
+# Production-ready generated artifacts
+production-ready/**/resources/frontend/static/
+production-ready/**/resources/frontend/*.png
+production-ready/**/resources/frontend/*.js
+production-ready/**/resources/frontend/*.css
+production-ready/**/resources/frontend/*.map
+production-ready/**/*.asar
+production-ready/**/*HASH.txt
+production-ready/**/*Setup*.exe
+production-ready/**/*Setup*.blockmap
+production-ready/**/BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE_FIXED.bat
+production-ready/ADMIN
+production-ready/Mock

@@ -57,6 +57,59 @@ body.notification-manager-body.nm-dialog-open {
   gap: 20px;
 }
 
+.nm-setup-app {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.nm-setup-shell {
+  width: min(520px, 100%);
+}
+
+.nm-setup-panel {
+  padding: 28px;
+  border-radius: 20px;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  background: rgba(8, 18, 32, 0.92);
+  box-shadow: var(--nm-shadow);
+}
+
+.nm-setup-panel h1 {
+  margin: 4px 0 10px;
+  font-size: 42px;
+  line-height: 1;
+}
+
+.nm-setup-panel p {
+  margin: 0 0 22px;
+  color: var(--nm-muted);
+  line-height: 1.6;
+}
+
+.nm-setup-form {
+  display: grid;
+  gap: 16px;
+}
+
+.nm-setup-form label {
+  display: grid;
+  gap: 8px;
+  color: #dbeafe;
+  font-weight: 700;
+}
+
+.nm-setup-form input {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(2, 6, 14, 0.72);
+  color: var(--nm-text);
+  padding: 10px 12px;
+  font: inherit;
+}
+
 .nm-hero,
 .nm-grid > section,
 .nm-form-card {
@@ -308,6 +361,46 @@ body.notification-manager-body.nm-dialog-open {
 .nm-panel {
   min-width: 0;
   padding: 20px;
+  scroll-margin-top: 18px;
+}
+
+.nm-section-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 20px;
+  background: rgba(8, 18, 31, 0.78);
+  box-shadow: var(--nm-shadow);
+}
+
+.nm-section-nav-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.nm-section-nav .nm-btn.is-active {
+  background: linear-gradient(135deg, var(--nm-accent), var(--nm-accent-strong));
+  color: #06111e;
+  box-shadow: 0 12px 28px rgba(14, 165, 233, 0.22);
+}
+
+.nm-screen-grid {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "notifications";
+}
+
+.nm-screen-grid.nm-screen-preview {
+  grid-template-areas: "preview";
+}
+
+.nm-screen-grid .nm-preview-panel {
+  max-width: none;
+  justify-self: stretch;
 }
 
 .nm-preview-panel {
@@ -363,6 +456,30 @@ body.notification-manager-body.nm-dialog-open {
   flex-wrap: wrap;
   gap: 10px;
   margin: 0 0 14px;
+}
+
+.nm-search-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(260px, 420px);
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+}
+
+.nm-search-row label {
+  color: #cfe4fb;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.nm-search-row input {
+  min-height: 40px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(3, 10, 20, 0.58);
+  color: var(--nm-text);
+  font: inherit;
 }
 
 .nm-view-tab {
@@ -523,6 +640,30 @@ body.notification-manager-body.nm-dialog-open {
   text-align: left;
 }
 
+.nm-table .nm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--nm-border);
+  text-align: center;
+}
+
+.nm-table .nm-btn-primary {
+  background: linear-gradient(135deg, var(--nm-accent), var(--nm-accent-strong));
+  color: #06111e;
+}
+
+.nm-table .nm-btn-secondary {
+  background: rgba(15, 23, 42, 0.78);
+  color: var(--nm-text);
+}
+
+.nm-table .nm-btn-danger {
+  background: rgba(127, 29, 29, 0.82);
+  border-color: rgba(248, 113, 113, 0.3);
+  color: #fff1f2;
+}
+
 .nm-table .nm-row-select {
   width: 100%;
   min-width: 0;
@@ -636,7 +777,38 @@ body.notification-manager-body.nm-dialog-open {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 20px 22px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background:
+    linear-gradient(rgba(8, 18, 31, 0.95), rgba(8, 18, 31, 0)) top / 100% 18px no-repeat,
+    linear-gradient(rgba(8, 18, 31, 0), rgba(8, 18, 31, 0.95)) bottom / 100% 18px no-repeat;
+}
+
+.nm-editor-scroll::-webkit-scrollbar {
+  width: 12px;
+}
+
+.nm-editor-scroll::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.72);
+  border-radius: 999px;
+}
+
+.nm-editor-scroll::-webkit-scrollbar-thumb {
+  background: rgba(125, 211, 252, 0.48);
+  border: 3px solid rgba(15, 23, 42, 0.72);
+  border-radius: 999px;
+}
+
+.nm-editor-scroll-cue {
+  padding: 8px 22px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.09);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .nm-editor-footer {
@@ -1109,6 +1281,15 @@ body.notification-manager-body.nm-dialog-open {
 
   .nm-help-grid {
     grid-template-columns: 1fr;
+  }
+
+  .nm-section-nav {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .nm-section-nav-buttons {
+    justify-content: flex-start;
   }
 
   .nm-submit-bar {

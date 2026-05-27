@@ -6,6 +6,13 @@ Master source:
 
 ## Default Discord Posts
 
+
+### Welcome
+```text
+Hello. I will be helping you with your mock calls today. To get started, please respond to the direct message I sent you. You can locate your Direct Messages in the Top, lefthand corner of Discord. I will then call you on Discord. Below you will find instructions on how to join the call. Once we are connected on the audio call, I will give you instructions to share your screen, ok? https://gyazo.com/64ebbf56abfa200efe8694e185f15ba6
+
+```
+
 ### Pass
 
 ```text

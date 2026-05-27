@@ -15,6 +15,7 @@ import re
 import hmac
 import time
 import uuid
+import secrets
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
@@ -27,6 +28,7 @@ from urllib.request import urlopen
 
 import httpx
 from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -58,6 +60,30 @@ def _require_admin_token(request: Request):
 
 def _admin_token_configured():
     return bool((os.getenv("MTS_ADMIN_TOKEN") or "").strip())
+
+
+def _is_loopback_request(request: Request):
+    host = ""
+    try:
+        host = (request.client.host or "").strip().lower()
+    except Exception:
+        host = ""
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _is_development_mode():
+    env_values = [
+        os.getenv("MTS_DEV_MODE"),
+        os.getenv("MTS_DEBUG"),
+        os.getenv("APP_ENV"),
+        os.getenv("ENV"),
+    ]
+    normalized = {str(value or "").strip().lower() for value in env_values}
+    return bool(normalized & {"1", "true", "yes", "development", "dev", "debug"})
+
+
+def _can_use_local_diagnostic_auth_fallback(request: Request):
+    return _is_loopback_request(request) and _is_development_mode()
 
 
 def _load_desktop_app_version():
@@ -370,6 +396,7 @@ DEFAULTS_FILE_MAP = {
     "callers": "callers.csv",
     "new_callers": "new_callers.csv",
     "existing_callers": "existing_callers.csv",
+    "increase_callers": "callers-increase.csv",
     "shows": "shows.csv",
     "call_types": "call-types.csv",
     "sup_reasons": "sup-reasons.csv",
@@ -389,6 +416,9 @@ DEFAULTS_FILE_MAP = {
 
 CONTENT_SHEET_TAB_MAP = {
     "callers": "callers",
+    "new_callers": "callers-new",
+    "existing_callers": "callers-existing",
+    "increase_callers": "callers-increase",
     "shows": "shows",
     "call_types": "call-types",
     "sup_reasons": "sup-reasons",
@@ -405,7 +435,21 @@ CONTENT_SHEET_TAB_MAP = {
 
 CONTENT_SHEET_TAB_ALIASES = {
     "callers": ("Callers",),
+    "new_callers": ("new_callers", "New Callers"),
+    "existing_callers": ("existing_callers", "Existing Callers"),
+    "increase_callers": ("callers-increase", "increase_callers", "Increase Callers"),
     "shows": ("Shows",),
+    "call_coaching": ("coaching", "call-coaching"),
+    "call_fails": ("fail reasons", "call-fails", "call-fail-reasons"),
+    "sup_fails": ("sup-fail-reasons", "sup-fails"),
+}
+
+LOCAL_DEFAULT_FILE_ALIASES = {
+    "headsets.csv": ("approved-headsets.csv",),
+    "new_callers.csv": ("callers-new.csv",),
+    "existing_callers.csv": ("callers-existing.csv",),
+    "call-fail-reasons.csv": ("call-fails.csv",),
+    "sup-fail-reasons.csv": ("sup-fails.csv",),
 }
 
 
@@ -559,6 +603,44 @@ def _defaults_dir_candidates():
     return candidates
 
 
+def _admin_content_csv_tab_candidates():
+    candidates = []
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    if resources_root:
+        candidates.append(Path(resources_root) / "docs" / "admin-content-package" / "csv-tabs")
+        candidates.append(Path(resources_root) / "admin-content-package" / "csv-tabs")
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            candidates.append(Path(meipass) / "docs" / "admin-content-package" / "csv-tabs")
+            candidates.append(Path(meipass) / "admin-content-package" / "csv-tabs")
+        candidates.append(Path(sys.executable).resolve().parent / "docs" / "admin-content-package" / "csv-tabs")
+        candidates.append(Path(sys.executable).resolve().parent / "admin-content-package" / "csv-tabs")
+    candidates.append(ROOT_DIR.parent / "docs" / "admin-content-package" / "csv-tabs")
+    return candidates
+
+
+def _local_default_source_dirs():
+    seen = set()
+    sources = []
+    for label, candidates in (
+        ("admin-content-package csv-tabs", _admin_content_csv_tab_candidates()),
+        ("backend/defaults", _defaults_dir_candidates()),
+    ):
+        for candidate in candidates:
+            try:
+                normalized = str(candidate.resolve())
+            except Exception:
+                normalized = str(candidate)
+            if normalized.lower() in seen:
+                continue
+            seen.add(normalized.lower())
+            if candidate.is_dir():
+                sources.append((label, candidate))
+                break
+    return sources
+
+
 def _resolve_defaults_dir():
     for candidate in _defaults_dir_candidates():
         if candidate.is_dir():
@@ -631,10 +713,65 @@ def _resolve_google_doc_id(runtime_config, url_keys, id_keys, fallback_url=""):
 
 
 def _fetch_google_sheet_tab_csv(sheet_id, tab_name):
+    authenticated_text = _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name)
+    if authenticated_text:
+        return authenticated_text
     encoded_tab_name = quote(tab_name, safe="")
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_tab_name}"
     with urlopen(url, timeout=10) as response:
         return response.read().decode("utf-8-sig")
+
+
+def _early_service_account_file():
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    resource_config_dir = Path(resources_root) / "backend" / "config" if resources_root else None
+    candidates = [
+        os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"),
+        os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+        str(resource_config_dir / "google-service-account.json") if resource_config_dir else "",
+        str(resource_config_dir / "service-account.json") if resource_config_dir else "",
+        str(Path(sys.executable).resolve().parent / "config" / "google-service-account.json") if getattr(sys, "frozen", False) else "",
+        str(Path(sys.executable).resolve().parent / "config" / "service-account.json") if getattr(sys, "frozen", False) else "",
+        str(ROOT_DIR / "config" / "google-service-account.json"),
+        str(ROOT_DIR / "config" / "service-account.json"),
+    ]
+    for candidate in candidates:
+        path_text = str(candidate or "").strip()
+        if not path_text:
+            continue
+        path = Path(path_text).expanduser()
+        if path.is_file():
+            return path
+    return None
+
+
+def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
+    creds_path = _early_service_account_file()
+    if not creds_path:
+        logger.info("[CONTENT] Authenticated Google Sheet read unavailable for '%s': no service account credentials", tab_name)
+        return ""
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        creds = service_account.Credentials.from_service_account_file(str(creds_path), scopes=scopes)
+        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        result = service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=f"'{tab_name}'!A:Z",
+        ).execute()
+        values = result.get("values") or []
+        if not values:
+            return ""
+        output = io.StringIO()
+        writer = csv.writer(output, lineterminator="\n")
+        for row in values:
+            writer.writerow(row)
+        logger.info("[CONTENT] Loaded Google Sheet tab '%s' through service account", tab_name)
+        return output.getvalue()
+    except Exception as exc:
+        logger.info("[CONTENT] Authenticated Google Sheet read failed for '%s'; trying public CSV export: %s", tab_name, exc)
+        return ""
 
 
 def _content_sheet_tab_candidates(content_key, tab_name):
@@ -1269,32 +1406,61 @@ def _normalize_approved_headsets(rows):
 
 
 def _load_local_defaults_content():
+    source_dirs = _local_default_source_dirs()
     defaults_dir = _resolve_defaults_dir()
-    if not defaults_dir:
-        logger.warning("[CONTENT] No backend/defaults directory found; using built-in defaults when needed")
+    if not source_dirs:
+        logger.warning("[CONTENT] No local admin csv-tabs or backend/defaults directory found; using built-in defaults when needed")
         return {}
 
-    logger.info("[SAM] Falling back to CSV defaults at %s", defaults_dir)
-    logger.info("[CONTENT] Loading packaged defaults from %s", defaults_dir)
+    logger.info("[SAM] Falling back to local CSV/markdown defaults")
+    for label, path in source_dirs:
+        logger.info("[CONTENT] Local defaults source available: %s at %s", label, path)
     loaded = {}
 
+    def local_filename_candidates(filename):
+        seen = set()
+        for candidate in (filename, *(LOCAL_DEFAULT_FILE_ALIASES.get(filename) or ())):
+            normalized = str(candidate or "").strip()
+            if normalized and normalized.lower() not in seen:
+                seen.add(normalized.lower())
+                yield normalized
+
+    def find_local_file(filename, required=True):
+        for label, directory in source_dirs:
+            for local_name in local_filename_candidates(filename):
+                path = directory / local_name
+                if path.is_file():
+                    logger.info("[CONTENT] Using %s from %s (%s)", local_name, label, path)
+                    return path
+        if required:
+            logger.warning("[CONTENT] Missing local defaults file in all sources: %s", filename)
+        return None
+
     def read_csv_file(filename):
-        path = defaults_dir / filename
-        if not path.is_file():
-            logger.warning("[CONTENT] Missing local defaults file: %s", path)
+        path = find_local_file(filename, required=True)
+        if not path:
             return None
-        return _read_csv_rows(path.read_text(encoding="utf-8-sig"))
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            logger.warning("[CONTENT] %s is not UTF-8; reading with Windows-1252 compatibility", path)
+            text = path.read_text(encoding="cp1252")
+        return _read_csv_rows(text)
 
     def read_optional_csv_file(filename):
-        path = defaults_dir / filename
-        if not path.is_file():
+        path = find_local_file(filename, required=False)
+        if not path:
             return None
-        return _read_csv_rows(path.read_text(encoding="utf-8-sig"))
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            logger.warning("[CONTENT] %s is not UTF-8; reading with Windows-1252 compatibility", path)
+            text = path.read_text(encoding="cp1252")
+        return _read_csv_rows(text)
 
     def read_text_file(filename):
-        path = defaults_dir / filename
-        if not path.is_file():
-            logger.warning("[CONTENT] Missing local defaults file: %s", path)
+        path = find_local_file(filename, required=True)
+        if not path:
             return None
         return path.read_text(encoding="utf-8")
 
@@ -1306,7 +1472,7 @@ def _load_local_defaults_content():
     except Exception as exc:
         logger.warning("[CONTENT] Failed to parse local callers defaults: %s", exc)
 
-    for section_key, category in (("new_callers", "new"), ("existing_callers", "existing")):
+    for section_key, category in (("new_callers", "new"), ("existing_callers", "existing"), ("increase_callers", "increase")):
         try:
             rows = read_optional_csv_file(DEFAULTS_FILE_MAP[section_key])
             if rows is not None:
@@ -1395,6 +1561,9 @@ def _parse_gemini_prompt_sheet_override(csv_text, local_prompt, prompt_name):
 
 CONTENT_SHEET_PARSERS = {
     "callers": lambda csv_text: _normalize_callers(_read_csv_rows(csv_text)),
+    "new_callers": lambda csv_text: _normalize_callers_for_category(_read_csv_rows(csv_text), "new"),
+    "existing_callers": lambda csv_text: _normalize_callers_for_category(_read_csv_rows(csv_text), "existing"),
+    "increase_callers": lambda csv_text: _normalize_callers_for_category(_read_csv_rows(csv_text), "increase"),
     "shows": lambda csv_text: {"shows": _normalize_shows(_read_csv_rows(csv_text))},
     "call_types": lambda csv_text: {"call_types": _normalize_text_list(_read_csv_rows(csv_text))},
     "sup_reasons": lambda csv_text: {"sup_reasons": _normalize_text_list(_read_csv_rows(csv_text))},
@@ -1578,10 +1747,32 @@ def _load_external_content():
         remote_pipeline_failures.append(f"docs: {exc}")
         doc_content = {}
 
+    if sheet_content.get("discord_screenshots") and local_content.get("discord_screenshots"):
+        existing = {
+            (
+                str(item.get("title") or "").strip().lower(),
+                str(item.get("image_url") or "").strip().lower(),
+            )
+            for item in sheet_content.get("discord_screenshots") or []
+        }
+        additions = [
+            item for item in local_content.get("discord_screenshots") or []
+            if (
+                str(item.get("title") or "").strip().lower(),
+                str(item.get("image_url") or "").strip().lower(),
+            ) not in existing
+        ]
+        if additions:
+            sheet_content["discord_screenshots"] = [*sheet_content["discord_screenshots"], *additions]
+            logger.info(
+                "[CONTENT] Added %d packaged screenshot default(s) not present in Google Sheet screenshots tab",
+                len(additions),
+            )
+
     merged = {}
     for key, value in (local_content or {}).items():
         merged[key] = value
-        _set_content_source(key, "local", value, ok=True)
+        _set_content_source(key, "local", value, ok=True, detail="admin-content-package csv-tabs, then backend/defaults")
 
     for key, value in (sheet_content or {}).items():
         merged[key] = value
@@ -2146,6 +2337,9 @@ _log_content_source_summary()
 
 DEFAULT_SETTINGS = {
     "setup_complete": False,
+    "sam_setup_complete": False,
+    "sam_user_name": "",
+    "sam_user_role": "",
     "tutorial_completed": False,
     "tester_name": "",
     "display_name": "",
@@ -2180,6 +2374,9 @@ ADMIN_ONLY_SETTINGS_KEYS = set()
 ALLOWED_SETTINGS_KEYS = set(DEFAULT_SETTINGS.keys()) - ADMIN_ONLY_SETTINGS_KEYS
 PRESERVED_SETTINGS_KEYS_ON_RESTORE = {
     "setup_complete",
+    "sam_setup_complete",
+    "sam_user_name",
+    "sam_user_role",
     "tutorial_completed",
     "tester_name",
     "display_name",
@@ -2399,6 +2596,29 @@ def empty_session():
 
 SHARED_CANDIDATE_SESSIONS_TAB = "Candidate Sessions"
 SHARED_PENDING_SUP_TRANSFERS_TAB = "Pending Sup Transfers"
+SAM_AUTHORIZED_USERS_TAB = "sam-authorized-users"
+SAM_NOTIFICATIONS_TAB = "sam-notifications"
+HEADSET_REVIEW_LOG_TAB = "headset-review-log"
+
+SAM_AUTHORIZED_USER_HEADERS = [
+    "name",
+    "pin",
+    "role",
+    "enabled",
+    "installed",
+    "install_date",
+    "device_name",
+    "notes",
+]
+
+HEADSET_REVIEW_LOG_HEADERS = [
+    "headset_model",
+    "candidate_name",
+    "tester_name",
+    "entered_at",
+    "review_status",
+    "notes",
+]
 
 SHARED_CANDIDATE_SESSION_HEADERS = [
     "session_id",
@@ -2464,11 +2684,24 @@ UPDATE_TAB_HEADERS = [
     "Notes",
 ]
 
+GEMINI_PROMPT_TABS = {
+    "gemini_coaching_prompt": ("gemini-coaching-prompt", "gemini-coaching-prompt.md"),
+    "gemini_fail_prompt": ("gemini-fail-prompt", "gemini-fail-prompt.md"),
+}
+
 
 def _shared_tracking_required_setup():
     return {
         SHARED_CANDIDATE_SESSIONS_TAB: SHARED_CANDIDATE_SESSION_HEADERS,
         SHARED_PENDING_SUP_TRANSFERS_TAB: SHARED_PENDING_SUP_TRANSFER_HEADERS,
+        HEADSET_REVIEW_LOG_TAB: HEADSET_REVIEW_LOG_HEADERS,
+    }
+
+
+def _sam_admin_required_setup():
+    return {
+        SAM_AUTHORIZED_USERS_TAB: SAM_AUTHORIZED_USER_HEADERS,
+        SAM_NOTIFICATIONS_TAB: NOTIFICATION_SHEET_COLUMNS,
     }
 
 
@@ -2491,21 +2724,372 @@ def _update_sheet_required_setup():
     }
 
 
+def _gemini_prompt_required_setup():
+    return {
+        tab_name: ["prompt"]
+        for tab_name, _filename in GEMINI_PROMPT_TABS.values()
+    }
+
+
 def _shared_tracking_sheet_id():
     runtime_config = _load_backend_runtime_config()
     return _resolve_content_sheet_id(runtime_config or {})
 
 
+def _read_local_default_file(filename):
+    defaults_dir = _resolve_defaults_dir()
+    if not defaults_dir:
+        return ""
+    path = defaults_dir / filename
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8-sig").strip()
+
+
+def _tab_status_base(title, feature, created=False):
+    return {
+        "tab": title,
+        "feature": feature,
+        "exists": True,
+        "created": bool(created),
+        "headerStatus": "",
+        "ok": True,
+    }
+
+
+def _tab_error_status(title, feature, exc, exists=False):
+    reason = _shared_permission_hint(exc)
+    logger.error("[SHEETS] Failed to verify master sheet tab '%s'. reason=%s error=%s", title, reason, exc)
+    return {
+        "tab": title,
+        "feature": feature,
+        "exists": bool(exists),
+        "created": False,
+        "ok": False,
+        "headerStatus": "permission_error" if reason == "missing_permission" else "error",
+        "reason": reason,
+        "error": str(exc),
+    }
+
+
+def _ensure_sheet_tab(sheets_api, sheet_id, title, tabs):
+    if title in tabs:
+        logger.info("[SHEETS] Master sheet tab exists: %s", title)
+        return False, tabs[title]
+
+    logger.info("[SHEETS] Creating missing master sheet tab: %s", title)
+    sheets_api.batchUpdate(
+        spreadsheetId=sheet_id,
+        body={"requests": [{"addSheet": {"properties": {"title": title}}}]},
+    ).execute()
+    metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+    refreshed = {
+        ((sheet.get("properties") or {}).get("title") or ""): sheet
+        for sheet in metadata.get("sheets", [])
+    }
+    logger.info("[SHEETS] Created master sheet tab: %s", title)
+    return True, refreshed.get(title)
+
+
+def _read_header_row(sheets_api, sheet_id, title, header_count):
+    quoted = _quote_sheet_title_for_a1(title)
+    last_col = _column_letter(header_count)
+    return sheets_api.values().get(
+        spreadsheetId=sheet_id,
+        range=f"{quoted}!A1:{last_col}1",
+    ).execute().get("values", [[]])[0]
+
+
+def _verify_header_tab(sheets_api, sheet_id, title, expected_headers, feature, tabs):
+    created, _sheet = _ensure_sheet_tab(sheets_api, sheet_id, title, tabs)
+    status = _tab_status_base(title, feature, created)
+    quoted = _quote_sheet_title_for_a1(title)
+    last_col = _column_letter(len(expected_headers))
+    current = _read_header_row(sheets_api, sheet_id, title, len(expected_headers))
+    normalized_current = [str(value or "").strip() for value in current]
+    expected = [str(value or "").strip() for value in expected_headers]
+
+    if normalized_current[: len(expected)] == expected:
+        status["headerStatus"] = "verified"
+        logger.info("[SHEETS] Headers verified for master sheet tab '%s'.", title)
+        return status
+
+    if not any(normalized_current):
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A1:{last_col}1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [expected_headers]},
+        ).execute()
+        status["headerStatus"] = "written"
+        logger.info("[SHEETS] Wrote headers for master sheet tab '%s'.", title)
+        return status
+
+    status.update({
+        "ok": False,
+        "headerStatus": "mismatch",
+        "expectedHeaders": expected_headers,
+        "actualHeaders": current,
+        "error": f"Header mismatch on tab '{title}'. Existing row was not overwritten.",
+    })
+    logger.error("[SHEETS] Header mismatch on master sheet tab '%s'. expected=%s actual=%s", title, expected_headers, current)
+    return status
+
+
+def _verify_sam_authorized_users_tab(sheets_api, sheet_id, tabs):
+    if SAM_AUTHORIZED_USERS_TAB not in tabs:
+        logger.info("[SAM-SETUP] Required tab missing and will be created: %s", SAM_AUTHORIZED_USERS_TAB)
+    status = _verify_header_tab(
+        sheets_api,
+        sheet_id,
+        SAM_AUTHORIZED_USERS_TAB,
+        SAM_AUTHORIZED_USER_HEADERS,
+        "sam_authorized_users",
+        tabs,
+    )
+    if not status.get("ok"):
+        logger.warning(
+            "[SAM-SETUP] Header verification failed for %s expected=%s actual=%s",
+            SAM_AUTHORIZED_USERS_TAB,
+            SAM_AUTHORIZED_USER_HEADERS,
+            status.get("actualHeaders") or [],
+        )
+        return status
+    logger.info("[SAM-SETUP] Header verification ok for %s status=%s", SAM_AUTHORIZED_USERS_TAB, status.get("headerStatus") or "")
+
+    quoted = _quote_sheet_title_for_a1(SAM_AUTHORIZED_USERS_TAB)
+    last_col = _column_letter(len(SAM_AUTHORIZED_USER_HEADERS))
+    rows = sheets_api.values().get(
+        spreadsheetId=sheet_id,
+        range=f"{quoted}!A2:{last_col}",
+    ).execute().get("values", [])
+    has_user_rows = any(any(str(cell or "").strip() for cell in row) for row in rows)
+    status["defaultOwnerCreated"] = False
+    if has_user_rows:
+        logger.info("[SHEETS] SAM authorized users already configured; no default user row was written.")
+        return status
+
+    pin = f"{secrets.randbelow(900000) + 100000:06d}"
+    default_row = [
+        "Shawn Bly",
+        pin,
+        "owner",
+        "TRUE",
+        "FALSE",
+        "",
+        "",
+        "Default owner/admin generated during SAM setup initialization",
+    ]
+    sheets_api.values().append(
+        spreadsheetId=sheet_id,
+        range=f"{quoted}!A2",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body={"values": [default_row]},
+    ).execute()
+    status["defaultOwnerCreated"] = True
+    logger.info("[SHEETS] Created default SAM owner/admin row in %s. PIN was generated but not logged.", SAM_AUTHORIZED_USERS_TAB)
+    return status
+
+
+def _verify_sam_notifications_tab(sheets_api, sheet_id, tabs):
+    return _verify_header_tab(
+        sheets_api,
+        sheet_id,
+        SAM_NOTIFICATIONS_TAB,
+        NOTIFICATION_SHEET_COLUMNS,
+        "sam_notifications",
+        tabs,
+    )
+
+
+def _verify_gemini_prompt_tab(sheets_api, sheet_id, title, default_filename, tabs):
+    created, _sheet = _ensure_sheet_tab(sheets_api, sheet_id, title, tabs)
+    status = _tab_status_base(title, "gemini_prompt", created)
+    quoted = _quote_sheet_title_for_a1(title)
+    values = sheets_api.values().get(
+        spreadsheetId=sheet_id,
+        range=f"{quoted}!A1:A2",
+    ).execute().get("values", [])
+    header = str((values[0][0] if len(values) > 0 and values[0] else "") or "").strip()
+    prompt = str((values[1][0] if len(values) > 1 and values[1] else "") or "").strip()
+    local_default = _read_local_default_file(default_filename)
+    status["localDefaultPresent"] = bool(local_default)
+
+    if header == "prompt":
+        status["headerStatus"] = "verified"
+        logger.info("[SHEETS] Gemini prompt header verified for tab '%s'.", title)
+    elif not header:
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [["prompt"]]},
+        ).execute()
+        status["headerStatus"] = "written"
+        logger.info("[SHEETS] Wrote Gemini prompt header for tab '%s'.", title)
+    else:
+        status.update({
+            "ok": False,
+            "headerStatus": "mismatch",
+            "expectedHeaders": ["prompt"],
+            "actualHeaders": [header],
+            "error": f"Gemini prompt tab '{title}' A1 is not 'prompt'. Existing value was not overwritten.",
+        })
+        logger.error("[SHEETS] Gemini prompt tab '%s' has unexpected A1 value: %s", title, header)
+
+    if not prompt and local_default:
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A2",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[local_default]]},
+        ).execute()
+        status["promptStatus"] = "default_populated"
+        status["matchesLocalDefault"] = True
+        logger.info("[SHEETS] Populated blank Gemini prompt tab '%s' from %s.", title, default_filename)
+    elif prompt:
+        matches = _normalize_gemini_prompt_for_compare(prompt) == _normalize_gemini_prompt_for_compare(local_default)
+        status["promptStatus"] = "matches_local_default" if matches else "override"
+        status["matchesLocalDefault"] = matches
+        status["hasPromptText"] = True
+        logger.info("[SHEETS] Gemini prompt tab '%s' status: %s.", title, status["promptStatus"])
+    else:
+        status["promptStatus"] = "blank_no_local_default"
+        status["matchesLocalDefault"] = False
+        status["hasPromptText"] = False
+        status["ok"] = False
+        status["error"] = f"Gemini prompt tab '{title}' is blank and local default file was not found."
+        logger.error("[SHEETS] Gemini prompt tab '%s' is blank and no local default was available.", title)
+
+    return status
+
+
+def _verify_master_shared_sheets():
+    notification_config = _get_admin_notification_sheet_config()
+    service_result = _get_shared_tracking_sheet_service()
+    sheet_id = service_result.get("sheet_id") or _shared_tracking_sheet_id()
+    service_account_email = service_result.get("serviceAccountEmail") or _get_service_account_email()
+    result = {
+        "ok": False,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "spreadsheetId": sheet_id,
+        "serviceAccountEmail": service_account_email,
+        "masterSheet": {
+            "spreadsheetId": sheet_id,
+            "purpose": "Candidate Sessions, Pending Sup Transfers, Gemini prompt overrides, update-MTS, update-SAM, SAM authorized users, and SAM notifications.",
+        },
+        "notificationSheet": {
+            "spreadsheetId": notification_config.get("sheet_id"),
+            "gid": notification_config.get("gid"),
+            "configured": bool(notification_config.get("configured")),
+            "purpose": "Legacy migration/fallback source only. SAM reads/writes master sam-notifications when available.",
+        },
+        "tabs": [],
+        "setup": {
+            **_shared_tracking_required_setup(),
+            **_gemini_prompt_required_setup(),
+            **_update_sheet_required_setup(),
+            **_sam_admin_required_setup(),
+        },
+    }
+
+    logger.info(
+        "[SHEETS] Verifying master shared sheet=%s with service_account=%s. Legacy notification sheet fallback=%s gid=%s.",
+        _mask_config_value(sheet_id),
+        service_account_email or "unknown",
+        _mask_config_value(notification_config.get("sheet_id")),
+        notification_config.get("gid") or "0",
+    )
+
+    if not service_result.get("ok"):
+        result.update({"error": service_result.get("error"), "setup": service_result.get("setup") or result["setup"]})
+        logger.error("[SHEETS] Master shared sheet verification failed before access: %s", service_result.get("error"))
+        return result
+
+    try:
+        sheets_api = service_result["service"].spreadsheets()
+        metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+        tabs = {
+            ((sheet.get("properties") or {}).get("title") or ""): sheet
+            for sheet in metadata.get("sheets", [])
+        }
+
+        for title, headers in _shared_tracking_required_setup().items():
+            try:
+                status = _verify_header_tab(sheets_api, sheet_id, title, headers, "shared_candidate_tracking", tabs)
+            except Exception as exc:
+                status = _tab_error_status(title, "shared_candidate_tracking", exc, exists=title in tabs)
+            result["tabs"].append(status)
+            if status.get("created"):
+                metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+                tabs = {((sheet.get("properties") or {}).get("title") or ""): sheet for sheet in metadata.get("sheets", [])}
+
+        for _key, (title, filename) in GEMINI_PROMPT_TABS.items():
+            try:
+                status = _verify_gemini_prompt_tab(sheets_api, sheet_id, title, filename, tabs)
+            except Exception as exc:
+                status = _tab_error_status(title, "gemini_prompt", exc, exists=title in tabs)
+            result["tabs"].append(status)
+            if status.get("created"):
+                metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+                tabs = {((sheet.get("properties") or {}).get("title") or ""): sheet for sheet in metadata.get("sheets", [])}
+
+        for title, headers in _update_sheet_required_setup().items():
+            try:
+                status = _verify_header_tab(sheets_api, sheet_id, title, headers, "update_metadata", tabs)
+            except Exception as exc:
+                status = _tab_error_status(title, "update_metadata", exc, exists=title in tabs)
+            result["tabs"].append(status)
+            if status.get("created"):
+                metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+                tabs = {((sheet.get("properties") or {}).get("title") or ""): sheet for sheet in metadata.get("sheets", [])}
+
+        for verifier in (_verify_sam_authorized_users_tab, _verify_sam_notifications_tab):
+            try:
+                status = verifier(sheets_api, sheet_id, tabs)
+            except Exception as exc:
+                title = SAM_AUTHORIZED_USERS_TAB if verifier == _verify_sam_authorized_users_tab else SAM_NOTIFICATIONS_TAB
+                status = _tab_error_status(title, "sam_admin", exc, exists=title in tabs)
+            result["tabs"].append(status)
+            if status.get("created"):
+                metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+                tabs = {((sheet.get("properties") or {}).get("title") or ""): sheet for sheet in metadata.get("sheets", [])}
+
+        result["ok"] = all(tab.get("ok") for tab in result["tabs"])
+        result["tabSummary"] = {
+            "required": len(result["tabs"]),
+            "ok": sum(1 for tab in result["tabs"] if tab.get("ok")),
+            "created": sum(1 for tab in result["tabs"] if tab.get("created")),
+            "headersWritten": sum(1 for tab in result["tabs"] if tab.get("headerStatus") == "written"),
+            "headersVerified": sum(1 for tab in result["tabs"] if tab.get("headerStatus") == "verified"),
+            "promptDefaultsPopulated": sum(1 for tab in result["tabs"] if tab.get("promptStatus") == "default_populated"),
+            "promptOverrides": sum(1 for tab in result["tabs"] if tab.get("promptStatus") == "override"),
+        }
+        logger.info(
+            "[SHEETS] Master shared sheet verification complete. ok=%s tab_count=%d created=%d headers_written=%d prompt_defaults_populated=%d prompt_overrides=%d",
+            result["ok"],
+            result["tabSummary"]["required"],
+            result["tabSummary"]["created"],
+            result["tabSummary"]["headersWritten"],
+            result["tabSummary"]["promptDefaultsPopulated"],
+            result["tabSummary"]["promptOverrides"],
+        )
+        return result
+    except Exception as exc:
+        reason = _shared_permission_hint(exc)
+        logger.exception("[SHEETS] Master shared sheet verification failed. reason=%s error=%s", reason, exc)
+        result.update({
+            "ok": False,
+            "error": f"Master shared sheet verification failed. Reason: {reason}. Google Sheets error: {exc}",
+            "reason": reason,
+        })
+        return result
+
+
 def _get_service_account_email():
     creds_path = _resolve_notification_service_account_file()
-    if not creds_path:
-        return ""
-    try:
-        with open(creds_path, "r", encoding="utf-8") as f:
-            return str((json.load(f) or {}).get("client_email") or "").strip()
-    except Exception as exc:
-        logger.warning("[SHARED] Unable to read service account email from %s: %s", creds_path, exc)
-        return ""
+    return _read_service_account_client_email(creds_path)
 
 
 def _get_shared_tracking_sheet_service():
@@ -2519,6 +3103,12 @@ def _get_shared_tracking_sheet_service():
 
     creds_path = _resolve_notification_service_account_file()
     service_account_email = _get_service_account_email()
+    logger.info(
+        "[SHARED] Master MTS content/candidate sheet config spreadsheet_id=%s service_account=%s credentials_path=%s",
+        sheet_id or "",
+        service_account_email or "unknown",
+        creds_path or "",
+    )
     if not creds_path:
         return {
             "ok": False,
@@ -2724,7 +3314,26 @@ def _shared_bool(value):
 
 
 def _shared_truthy(value):
-    return str(value or "").strip().lower() in {"true", "yes", "1", "y"}
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"true", "yes", "1", "y", "on", "checked"}
+
+
+def _shared_falsey(value):
+    if isinstance(value, bool):
+        return not value
+    if value is None:
+        return True
+    return str(value).strip().lower() in {"", "false", "no", "0", "n", "off", "unchecked"}
+
+
+def _masked_pin_for_log(value):
+    text = str(value or "")
+    if not text:
+        return "<blank>"
+    return f"len={len(text)} ending={text[-2:].rjust(2, '*')}"
 
 
 def _shared_status(status):
@@ -2803,6 +3412,13 @@ def _shared_update_or_append_row(sheets_api, sheet_id, tab_name, headers, key_na
     last_col = _column_letter(len(headers))
     target = next((row for row in existing if str(row.get(key_name) or "").strip() == str(key_value or "").strip()), None)
     if target:
+        logger.info(
+            "[SHARED] Operation=update spreadsheet_id=%s tab=%s row=%s key=%s",
+            sheet_id,
+            tab_name,
+            target["_row_number"],
+            key_name,
+        )
         sheets_api.values().update(
             spreadsheetId=sheet_id,
             range=f"{quoted}!A{target['_row_number']}:{last_col}{target['_row_number']}",
@@ -2810,6 +3426,12 @@ def _shared_update_or_append_row(sheets_api, sheet_id, tab_name, headers, key_na
             body={"values": [row_values]},
         ).execute()
         return "updated"
+    logger.info(
+        "[SHARED] Operation=append spreadsheet_id=%s tab=%s key=%s",
+        sheet_id,
+        tab_name,
+        key_name,
+    )
     sheets_api.values().append(
         spreadsheetId=sheet_id,
         range=f"{quoted}!A2",
@@ -2823,12 +3445,102 @@ def _shared_update_or_append_row(sheets_api, sheet_id, tab_name, headers, key_na
 def _shared_update_existing_row(sheets_api, sheet_id, tab_name, headers, row_number, row_values):
     quoted = _quote_sheet_title_for_a1(tab_name)
     last_col = _column_letter(len(headers))
+    logger.info(
+        "[SHARED] Operation=update spreadsheet_id=%s tab=%s row=%s",
+        sheet_id,
+        tab_name,
+        row_number,
+    )
     sheets_api.values().update(
         spreadsheetId=sheet_id,
         range=f"{quoted}!A{row_number}:{last_col}{row_number}",
         valueInputOption="USER_ENTERED",
         body={"values": [row_values]},
     ).execute()
+
+
+def _normalize_headset_review_key(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _approved_headset_review_keys():
+    keys = set()
+    for group in EXTERNAL_CONTENT.get("approved_headsets") or []:
+        brand = str((group or {}).get("brand") or "").strip()
+        for model in (group or {}).get("models") or []:
+            model_text = str(model or "").strip()
+            label = f"{brand} {model_text}".strip()
+            if label:
+                keys.add(_normalize_headset_review_key(label))
+            if model_text:
+                keys.add(_normalize_headset_review_key(model_text))
+    return keys
+
+
+def _ensure_headset_review_log_tab(sheets_api, sheet_id):
+    metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+    tabs = {
+        ((sheet.get("properties") or {}).get("title") or ""): sheet
+        for sheet in metadata.get("sheets", [])
+    }
+    return _verify_header_tab(
+        sheets_api,
+        sheet_id,
+        HEADSET_REVIEW_LOG_TAB,
+        HEADSET_REVIEW_LOG_HEADERS,
+        "headset_review_log",
+        tabs,
+    )
+
+
+def _append_headset_review_log(payload):
+    headset_model = str((payload or {}).get("headset_model") or "").strip()
+    normalized_model = _normalize_headset_review_key(headset_model)
+    if not normalized_model:
+        return {"ok": True, "skipped": True, "reason": "blank_headset"}
+    if normalized_model in _approved_headset_review_keys():
+        return {"ok": True, "skipped": True, "reason": "approved_headset"}
+
+    try:
+        context = _shared_sheet_context()
+        if not context.get("ok"):
+            logger.warning("[HEADSET-REVIEW] Unable to log headset review row: %s", context.get("error"))
+            return {"ok": False, "skipped": True, "reason": "sheet_unavailable", "error": context.get("error") or ""}
+
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        status = _ensure_headset_review_log_tab(sheets_api, sheet_id)
+        if not status.get("ok"):
+            logger.warning("[HEADSET-REVIEW] Unable to verify %s tab: %s", HEADSET_REVIEW_LOG_TAB, status.get("error"))
+            return {"ok": False, "skipped": True, "reason": "tab_unavailable", "error": status.get("error") or ""}
+
+        rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, HEADSET_REVIEW_LOG_HEADERS)
+        for row in rows:
+            existing_model = _normalize_headset_review_key(row.get("headset_model"))
+            existing_status = str(row.get("review_status") or "").strip().lower()
+            if existing_model == normalized_model and existing_status in {"", "pending"}:
+                return {"ok": True, "skipped": True, "reason": "duplicate_pending"}
+
+        quoted = _quote_sheet_title_for_a1(HEADSET_REVIEW_LOG_TAB)
+        sheets_api.values().append(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A2",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [[
+                headset_model,
+                str((payload or {}).get("candidate_name") or "").strip(),
+                str((payload or {}).get("tester_name") or "").strip(),
+                datetime.now(timezone.utc).isoformat(),
+                "pending",
+                "",
+            ]]},
+        ).execute()
+        logger.info("[HEADSET-REVIEW] Logged unknown headset model for admin review: %s", headset_model)
+        return {"ok": True, "logged": True}
+    except Exception as exc:
+        logger.warning("[HEADSET-REVIEW] Failed to log unknown headset model; continuing workflow: %s", exc)
+        return {"ok": False, "skipped": True, "reason": "write_failed", "error": str(exc)}
 
 
 def _shared_row_values(row, headers):
@@ -2851,6 +3563,14 @@ def _candidate_row_active(row):
     return True
 
 
+def _candidate_row_withdrawn(row):
+    return _shared_truthy((row or {}).get("withdrawn")) or str((row or {}).get("status") or (row or {}).get("latest_status") or "").upper() == "WITHDREW FROM CERTIFICATION"
+
+
+def _candidate_row_extra_attempt(row):
+    return _shared_truthy((row or {}).get("extra_attempt_granted"))
+
+
 def _candidate_qualifying_failure(row):
     status = str(row.get("status") or "").strip().upper()
     if status in {"FAIL", "FAIL-FINAL ATTEMPT", "NC/NS"}:
@@ -2863,7 +3583,7 @@ def _candidate_qualifying_failure(row):
 def _candidate_attempt_summary(rows):
     qualifying_failures = sum(1 for row in rows if _candidate_qualifying_failure(row))
     extra_attempt = any(_shared_truthy(row.get("extra_attempt_granted")) for row in rows)
-    withdrawn = any(_shared_truthy(row.get("withdrawn")) or str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION" for row in rows)
+    withdrawn = any(_candidate_row_withdrawn(row) for row in rows)
     return {
         "attempt_count": qualifying_failures,
         "final_attempt_risk": qualifying_failures >= 2 and not extra_attempt,
@@ -2928,17 +3648,20 @@ def _shared_admin_candidate_snapshot():
     ]
     failed_not_final = [
         row for row in candidate_summaries
-        if row.get("attempt_count", 0) >= 1
-        and not row.get("final_attempt_risk")
-        and not row.get("withdrawn")
-        and str(row.get("latest_status") or "").upper() != "FAIL-FINAL ATTEMPT"
+        if str(row.get("latest_status") or "").upper() == "FAIL"
+        and not _candidate_row_withdrawn(row)
+    ]
+    failed_final_attempts = [
+        row for row in candidate_summaries
+        if str(row.get("latest_status") or "").upper() == "FAIL-FINAL ATTEMPT"
+        and not _candidate_row_withdrawn(row)
     ]
     incomplete = [
         row for row in candidate_summaries
-        if str(row.get("latest_status") or "").upper() == "INCOMPLETE" and not row.get("withdrawn")
+        if str(row.get("latest_status") or "").upper() == "INCOMPLETE" and not _candidate_row_withdrawn(row)
     ]
-    withdrawn = [row for row in candidate_summaries if row.get("withdrawn")]
-    extra_attempt = [row for row in candidate_summaries if row.get("extra_attempt_granted")]
+    withdrawn = [row for row in candidate_summaries if _candidate_row_withdrawn(row)]
+    extra_attempt = [row for row in candidate_summaries if _candidate_row_extra_attempt(row)]
 
     return {
         "ok": True,
@@ -2948,10 +3671,11 @@ def _shared_admin_candidate_snapshot():
         "views": {
             "pending": pending_active,
             "failedNotFinal": failed_not_final,
+            "failedFinalAttempts": failed_final_attempts,
             "incomplete": incomplete,
             "withdrawn": withdrawn,
             "extraAttemptGranted": extra_attempt,
-            "allActive": [row for row in candidate_summaries if not row.get("withdrawn")],
+            "allActive": [row for row in candidate_summaries if not _candidate_row_withdrawn(row)],
         },
     }
 
@@ -2962,7 +3686,7 @@ def _shared_admin_candidate_action(payload):
     session_id = str((payload or {}).get("session_id") or (payload or {}).get("latest_session_id") or "").strip()
     pending_id = str((payload or {}).get("pending_id") or "").strip()
     reason = str((payload or {}).get("reason") or "").strip()
-    if action not in {"withdraw", "grant_extra_attempt", "cancel_pending"}:
+    if action not in {"withdraw", "restore_withdrawal", "grant_extra_attempt", "cancel_pending"}:
         return {"ok": False, "error": "Unsupported candidate tracking action."}
     if not candidate_name and not session_id and not pending_id:
         return {"ok": False, "error": "Candidate name, session id, or pending id is required."}
@@ -2994,12 +3718,20 @@ def _shared_admin_candidate_action(payload):
                 row["withdrawn"] = "TRUE"
                 row["withdrawn_at"] = now_iso
                 row["retention_until"] = row.get("retention_until") or retention_until
+            elif action == "restore_withdrawal":
+                row["withdrawn"] = "FALSE"
+                row["withdrawn_at"] = ""
+                if str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION":
+                    row["status"] = "INCOMPLETE"
+                row["review_notes"] = "\n\n".join(part for part in [row.get("review_notes") or "", "Admin restored candidate from withdrew from certification status."] if part)
             elif action == "grant_extra_attempt":
                 row["extra_attempt_granted"] = "TRUE"
                 row["extra_attempt_reason"] = reason
                 row["withdrawn"] = "FALSE"
+                row["withdrawn_at"] = ""
                 if str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION":
                     row["status"] = "INCOMPLETE"
+                row["review_notes"] = "\n\n".join(part for part in [row.get("review_notes") or "", f"Extra attempt granted. {reason}".strip()] if part)
             _shared_update_existing_row(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS, row["_row_number"], _shared_row_values(row, SHARED_CANDIDATE_SESSION_HEADERS))
             updated_candidates += 1
 
@@ -3016,6 +3748,12 @@ def _shared_admin_candidate_action(payload):
                 row["completed_at"] = now_iso
                 row["completed_status"] = "WITHDREW FROM CERTIFICATION"
                 row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", "Admin marked candidate as withdrew from certification."] if part)
+            elif action == "restore_withdrawal":
+                if str(row.get("status") or "").strip().lower() == "withdrawn":
+                    row["status"] = "pending"
+                    row["completed_at"] = ""
+                    row["completed_status"] = ""
+                row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", "Admin restored candidate from withdrew from certification status."] if part)
             elif action == "grant_extra_attempt":
                 row["status"] = "pending"
                 row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", f"Extra attempt granted. {reason}".strip()] if part)
@@ -3027,10 +3765,158 @@ def _shared_admin_candidate_action(payload):
             _shared_update_existing_row(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS, row["_row_number"], _shared_row_values(row, SHARED_PENDING_SUP_TRANSFER_HEADERS))
             updated_pending += 1
 
+        if updated_candidates == 0 and updated_pending == 0:
+            return {"ok": False, "error": "No matching Candidate Sessions or Pending Sup Transfers rows were updated."}
         return {"ok": True, "updatedCandidates": updated_candidates, "updatedPending": updated_pending, "action": action}
     except Exception as exc:
         logger.exception("[SHARED] Candidate admin action failed: %s", exc)
         return {"ok": False, "error": f"Candidate tracking update failed: {exc}", "setup": _shared_tracking_required_setup()}
+
+
+def _sam_master_sheet_context():
+    service_result = _get_shared_tracking_sheet_service()
+    if not service_result.get("ok"):
+        return service_result
+    return {
+        "ok": True,
+        "service": service_result["service"],
+        "sheet_id": service_result["sheet_id"],
+        "serviceAccountEmail": service_result.get("serviceAccountEmail") or _get_service_account_email(),
+    }
+
+
+def _ensure_sam_authorized_users(sheets_api, sheet_id):
+    metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+    tabs = {
+        ((sheet.get("properties") or {}).get("title") or ""): sheet
+        for sheet in metadata.get("sheets", [])
+    }
+    logger.info("[SAM-SETUP] Tab check tab=%s found=%s", SAM_AUTHORIZED_USERS_TAB, SAM_AUTHORIZED_USERS_TAB in tabs)
+    return _verify_sam_authorized_users_tab(sheets_api, sheet_id, tabs)
+
+
+def _read_sam_authorized_users(sheets_api, sheet_id):
+    status = _ensure_sam_authorized_users(sheets_api, sheet_id)
+    if not status.get("ok"):
+        return status, []
+    rows = _shared_read_rows(sheets_api, sheet_id, SAM_AUTHORIZED_USERS_TAB, SAM_AUTHORIZED_USER_HEADERS)
+    logger.info("[SAM-SETUP] Read authorized-user rows=%d headerStatus=%s", len(rows), status.get("headerStatus") or "unknown")
+    normalized_rows = []
+    for row in rows:
+        normalized = _normalize_shared_row(row)
+        normalized["_row_number"] = row.get("_row_number")
+        normalized_rows.append(normalized)
+    return status, normalized_rows
+
+
+def _sam_setup_status():
+    context = _sam_master_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "configured": False, "error": "SAM setup requires access to the admin configuration sheet."}
+    try:
+        status, _rows = _read_sam_authorized_users(context["service"].spreadsheets(), context["sheet_id"])
+        return {
+            "ok": bool(status.get("ok")),
+            "configured": bool(status.get("ok")),
+            "defaultOwnerCreated": bool(status.get("defaultOwnerCreated")),
+            "error": status.get("error") or "",
+        }
+    except Exception as exc:
+        logger.warning("[SAM-SETUP] Unable to verify authorized users tab: %s", exc)
+        return {"ok": False, "configured": False, "error": "SAM setup requires access to the admin configuration sheet."}
+
+
+def _complete_sam_setup(payload):
+    entered_name = " ".join(str((payload or {}).get("name") or "").split())
+    entered_pin = str((payload or {}).get("pin") or "").strip()
+    device_name = str((payload or {}).get("device_name") or "").strip()[:120]
+    logger.info("[SAM-SETUP] Starting setup validation name=%s pin=%s device_present=%s", entered_name or "<blank>", _masked_pin_for_log(entered_pin), bool(device_name))
+    if not entered_name or not entered_pin:
+        reason = "Name is required." if not entered_name else "PIN is required."
+        logger.warning("[SAM-SETUP] Validation failed: %s", reason)
+        return {"ok": False, "error": reason}
+
+    context = _sam_master_sheet_context()
+    if not context.get("ok"):
+        message = context.get("error") or "SAM setup requires access to the admin configuration sheet."
+        logger.warning("[SAM-SETUP] Master sheet context unavailable: %s", message)
+        return {"ok": False, "error": message}
+
+    try:
+        sheets_api = context["service"].spreadsheets()
+        status, rows = _read_sam_authorized_users(sheets_api, context["sheet_id"])
+        if not status.get("ok"):
+            message = status.get("error") or "Missing headers on sam-authorized-users."
+            logger.warning(
+                "[SAM-SETUP] Authorized-users tab unusable tab=%s headerStatus=%s error=%s",
+                SAM_AUTHORIZED_USERS_TAB,
+                status.get("headerStatus") or "",
+                message,
+            )
+            return {"ok": False, "error": message}
+        logger.info(
+            "[SAM-SETUP] Headers found for %s: %s",
+            SAM_AUTHORIZED_USERS_TAB,
+            ", ".join(SAM_AUTHORIZED_USER_HEADERS),
+        )
+        matched_name_row = None
+        name_key = entered_name.casefold()
+        for row in rows:
+            if str(row.get("name") or "").strip().casefold() != name_key:
+                continue
+            matched_name_row = row
+            pin_ok = hmac.compare_digest(str(row.get("pin") or "").strip(), entered_pin)
+            enabled_ok = _shared_truthy(row.get("enabled"))
+            logger.info(
+                "[SAM-SETUP] Matched user row=%s name=%s pinMatch=%s enabledRaw=%r enabledParsed=%s storedPin=%s",
+                row.get("_row_number"),
+                row.get("name") or entered_name,
+                pin_ok,
+                row.get("enabled"),
+                enabled_ok,
+                _masked_pin_for_log(row.get("pin")),
+            )
+            if not pin_ok:
+                logger.warning("[SAM-SETUP] Validation failed for name=%s: PIN mismatch", entered_name)
+                return {"ok": False, "error": "PIN mismatch."}
+            if not enabled_ok:
+                logger.warning("[SAM-SETUP] Validation failed for name=%s: user disabled enabledRaw=%r", entered_name, row.get("enabled"))
+                return {"ok": False, "error": "User disabled."}
+            if pin_ok and enabled_ok:
+                target = row
+                break
+        else:
+            target = None
+        if not matched_name_row:
+            logger.warning("[SAM-SETUP] Validation failed: user not found name=%s rows=%d", entered_name, len(rows))
+            return {"ok": False, "error": "User not found."}
+        if not target:
+            logger.warning("[SAM-SETUP] Validation failed for name=%s: access not enabled", entered_name)
+            return {"ok": False, "error": "User disabled."}
+
+        target["installed"] = "TRUE"
+        target["install_date"] = datetime.now(timezone.utc).isoformat()
+        if device_name:
+            target["device_name"] = device_name
+        _shared_update_existing_row(
+            sheets_api,
+            context["sheet_id"],
+            SAM_AUTHORIZED_USERS_TAB,
+            SAM_AUTHORIZED_USER_HEADERS,
+            target["_row_number"],
+            _shared_row_values(target, SAM_AUTHORIZED_USER_HEADERS),
+        )
+        logger.info(
+            "[SAM-SETUP] Setup completed for row=%s name=%s role=%s installed=TRUE device_written=%s",
+            target.get("_row_number"),
+            target.get("name") or entered_name,
+            target.get("role") or "user",
+            bool(device_name),
+        )
+        return {"ok": True, "name": target.get("name") or entered_name, "role": target.get("role") or "user"}
+    except Exception as exc:
+        logger.exception("[SAM-SETUP] Setup validation failed because sheet access failed: %s", exc)
+        return {"ok": False, "error": f"SAM setup validation failed: {exc}"}
 
 
 def _ensure_update_tabs(service, sheet_id):
@@ -3135,6 +4021,13 @@ def _candidate_session_row(session, existing_rows=None):
     created_at = str(session.get("timestamp_iso") or session.get("created_at") or datetime.now(timezone.utc).isoformat())
     completed_at = str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat())
     attempt_number = session.get("attempt_number") or _session_attempt_number(existing_rows, candidate_name)
+    review_notes = session.get("review_notes") or ""
+    if session.get("candidate_override_used"):
+        override_note = "Final-attempt override used for this candidate."
+        if session.get("candidate_override_reason"):
+            override_note = f"{override_note} {session.get('candidate_override_reason')}"
+        review_notes = "\n\n".join(part for part in [review_notes, override_note] if str(part or "").strip())
+
     return [
         session_id,
         candidate_name,
@@ -3156,7 +4049,7 @@ def _candidate_session_row(session, existing_rows=None):
         (session.get("sup_transfer_2") or {}).get("result") or "",
         session.get("coaching_summary") or "",
         session.get("fail_summary") or "",
-        session.get("review_notes") or "",
+        review_notes,
         _shared_bool(needs_sup),
         pending_id,
         _shared_bool(session.get("withdrawn") or shared_status == "WITHDREW FROM CERTIFICATION"),
@@ -3223,9 +4116,11 @@ def _sync_shared_candidate_tracking(session):
         logger.warning("[SHARED] Candidate tracking unavailable: %s Required setup: %s", context.get("error"), context.get("setup"))
         return {"ok": False, "error": context.get("error"), "setup": context.get("setup")}
 
+    current_operation = "initialize"
     try:
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
+        current_operation = "read_candidate_rows"
         candidate_rows = _shared_read_rows(
             sheets_api,
             sheet_id,
@@ -3234,6 +4129,7 @@ def _sync_shared_candidate_tracking(session):
         )
         row_values, pending_id, needs_sup = _candidate_session_row(session, candidate_rows)
         session_id = row_values[0]
+        current_operation = "candidate_update_or_append"
         candidate_action = _shared_update_or_append_row(
             sheets_api,
             sheet_id,
@@ -3247,6 +4143,7 @@ def _sync_shared_candidate_tracking(session):
         pending_action = ""
         if needs_sup or session.get("shared_pending_sup_transfer") or session.get("pending_sup_transfer_id"):
             pending_id = pending_id or str(session.get("pending_sup_transfer_id") or f"pending-{session_id}")
+            current_operation = "read_pending_rows"
             pending_rows = _shared_read_rows(
                 sheets_api,
                 sheet_id,
@@ -3260,6 +4157,7 @@ def _sync_shared_candidate_tracking(session):
                 existing_pending,
                 completed=not needs_sup,
             )
+            current_operation = "pending_update_or_append"
             pending_action = _shared_update_or_append_row(
                 sheets_api,
                 sheet_id,
@@ -3272,8 +4170,18 @@ def _sync_shared_candidate_tracking(session):
 
         return {"ok": True, "candidateAction": candidate_action, "pendingAction": pending_action}
     except Exception as exc:
-        logger.exception("[SHARED] Failed to sync candidate tracking: %s", exc)
-        return {"ok": False, "error": f"Shared candidate tracking sync failed: {exc}", "setup": _shared_tracking_required_setup()}
+        reason = _shared_permission_hint(exc)
+        logger.exception("[SHARED] Failed to sync candidate tracking during %s. reason=%s error=%s", current_operation, reason, exc)
+        return {
+            "ok": False,
+            "failedOperation": current_operation,
+            "reason": reason,
+            "sheetId": context.get("sheet_id"),
+            "serviceAccountEmail": context.get("serviceAccountEmail") or _get_service_account_email(),
+            "permissionNeeded": _sheet_permission_needed(current_operation),
+            "error": f"Shared candidate tracking sync failed during {current_operation}: {_google_sheet_error_message(exc)}",
+            "setup": _shared_tracking_required_setup(),
+        }
 
 
 def _normalize_shared_row(row):
@@ -3284,10 +4192,37 @@ def _normalize_shared_row(row):
     return cleaned
 
 
+def _shared_candidate_match_score(query, candidate):
+    query = " ".join(str(query or "").lower().split())
+    candidate = " ".join(str(candidate or "").lower().split())
+    if not query or not candidate:
+        return 0
+    if query == candidate:
+        return 100
+    query_parts = query.split()
+    candidate_parts = candidate.split()
+    if len(query_parts) >= 2:
+        first_ok = candidate_parts and candidate_parts[0].startswith(query_parts[0])
+        last_ok = len(candidate_parts) > 1 and candidate_parts[-1].startswith(query_parts[-1])
+        if first_ok and last_ok:
+            return 90 if len(query_parts[-1]) >= 2 else 75
+        if all(any(part.startswith(qp) for part in candidate_parts) for qp in query_parts):
+            return 80
+    if candidate.startswith(query) and len(query) >= 5:
+        return 65
+    if query in candidate and len(query) >= 5:
+        return 50
+    return 0
+
+
+def _shared_status_upper(row):
+    return str((row or {}).get("status") or (row or {}).get("final_status") or "").strip().upper()
+
+
 def _lookup_shared_candidate_sessions(candidate_name):
     query = " ".join(str(candidate_name or "").lower().split())
     if len(query) < 2:
-        return {"ok": True, "matches": [], "finalAttempt": False, "withdrawn": False, "extraAttemptGranted": False}
+        return {"ok": True, "matches": [], "finalAttempt": False, "finalAttemptUsed": False, "withdrawn": False, "extraAttemptGranted": False}
     try:
         context = _shared_sheet_context()
         if not context.get("ok"):
@@ -3300,20 +4235,28 @@ def _lookup_shared_candidate_sessions(candidate_name):
     matches = []
     for row in rows:
         candidate = " ".join(str(row.get("candidate_name") or "").lower().split())
-        if query in candidate:
-            matches.append(_normalize_shared_row(row))
-    matches.sort(key=lambda row: str(row.get("completed_at") or row.get("created_at") or ""), reverse=True)
-    active_matches = [row for row in matches if not row.get("archived")]
+        score = _shared_candidate_match_score(query, candidate)
+        if score > 0:
+            normalized = _normalize_shared_row(row)
+            normalized["matchConfidence"] = score
+            normalized["matchConfirmed"] = score >= 75
+            normalized["displayDate"] = normalized.get("completed_at") or normalized.get("created_at") or ""
+            matches.append(normalized)
+    matches.sort(key=lambda row: (int(row.get("matchConfidence") or 0), str(row.get("completed_at") or row.get("created_at") or "")), reverse=True)
+    active_matches = [row for row in matches if not _shared_truthy(row.get("archived"))]
+    confirmed_matches = [row for row in active_matches if row.get("matchConfirmed")]
     qualifying_failures = [
-        row for row in active_matches
-        if str(row.get("status") or "").upper() in {"FAIL", "FAIL-FINAL ATTEMPT", "FAIL-Final Attempt".upper()}
+        row for row in confirmed_matches
+        if _shared_status_upper(row) in {"FAIL", "FAIL-FINAL ATTEMPT"}
     ]
-    withdrawn = any(row.get("withdrawn") or str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION" for row in active_matches)
-    extra_attempt = any(row.get("extra_attempt_granted") for row in active_matches)
+    final_attempt_used = any(_shared_status_upper(row) == "FAIL-FINAL ATTEMPT" for row in confirmed_matches)
+    withdrawn = any(_candidate_row_withdrawn(row) or _shared_status_upper(row) == "WITHDREW FROM CERTIFICATION" for row in confirmed_matches)
+    extra_attempt = any(_candidate_row_extra_attempt(row) for row in confirmed_matches)
     return {
         "ok": True,
         "matches": active_matches[:20],
-        "finalAttempt": len(qualifying_failures) >= 2 and not extra_attempt,
+        "finalAttempt": len(qualifying_failures) >= 2 and not extra_attempt and not final_attempt_used,
+        "finalAttemptUsed": final_attempt_used and not extra_attempt,
         "qualifyingFailureCount": len(qualifying_failures),
         "withdrawn": withdrawn,
         "extraAttemptGranted": extra_attempt,
@@ -3790,6 +4733,41 @@ def _normalize_history_timestamp(entry):
         entry.update(_format_local_history_timestamp(legacy_dt))
     except ValueError:
         return
+
+
+def _history_record_datetime(entry):
+    if not entry:
+        return None
+    timestamp_iso = str(entry.get("timestamp_iso") or "").strip()
+    if timestamp_iso:
+        try:
+            parsed = datetime.fromisoformat(timestamp_iso)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    timestamp_text = str(entry.get("timestamp") or "").strip()
+    if timestamp_text:
+        try:
+            return datetime.strptime(timestamp_text, "%Y-%m-%d %I:%M %p").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _history_record_is_recent(entry, retention_days=15):
+    record_dt = _history_record_datetime(entry)
+    if not record_dt:
+        return True
+    return record_dt >= datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+
+def _recent_history_docs(docs):
+    recent = []
+    for doc in docs:
+        _normalize_history_timestamp(doc)
+        if _history_record_is_recent(doc):
+            recent.append(doc)
+    return recent
 
 
 def _history_identity(record):
@@ -4319,11 +5297,12 @@ def test_gemini_connection_with_timeout(api_key):
             RuntimeError(f"Gemini request timed out after {GEMINI_TEST_TIMEOUT_SECONDS} seconds."),
             api_key,
         )
-        return {"ok": False, "code": code, "message": message}
+        return {"ok": False, "code": code, "message": message, "detail": f"Gemini request timed out after {GEMINI_TEST_TIMEOUT_SECONDS} seconds."}
     except Exception as exc:
         code, message = _classify_gemini_test_error(exc, api_key)
-        logger.warning("[Gemini] Connection test failed: %s", _safe_gemini_error_message(exc, api_key))
-        return {"ok": False, "code": code, "message": message}
+        detail = _safe_gemini_error_message(exc, api_key)
+        logger.warning("[Gemini] Connection test failed: %s", detail)
+        return {"ok": False, "code": code, "message": message, "detail": detail}
 
 
 def generate_summaries(session, api_key="", settings=None):
@@ -4684,16 +5663,17 @@ async def lifespan(app: FastAPI):
                     (_content_source_status.get(key) or {}).get("count") or 0,
                 )
                 logger.info("[SAM] Active %s source: defaults after cache invalidation", key)
-    shared_sheet_status = _verify_shared_session_sheets()
+    shared_sheet_status = _verify_master_shared_sheets()
     if shared_sheet_status.get("ok"):
         logger.info(
-            "[STARTUP] Shared candidate tracking sheet setup verified. spreadsheet=%s service_account=%s",
-            _mask_config_value(shared_sheet_status.get("sheetId")),
+            "[STARTUP] Master shared sheet setup verified. spreadsheet=%s service_account=%s notification_sheet=%s",
+            _mask_config_value(shared_sheet_status.get("spreadsheetId")),
             shared_sheet_status.get("serviceAccountEmail") or "unknown",
+            _mask_config_value((shared_sheet_status.get("notificationSheet") or {}).get("spreadsheetId")),
         )
     else:
         logger.error(
-            "[STARTUP] Shared candidate tracking sheet setup failed. error=%s service_account=%s manual_setup=%s",
+            "[STARTUP] Master shared sheet setup failed. error=%s service_account=%s manual_setup=%s",
             shared_sheet_status.get("error"),
             shared_sheet_status.get("serviceAccountEmail") or (shared_sheet_status.get("setup") or {}).get("serviceAccountEmail") or "unknown",
             shared_sheet_status.get("setup"),
@@ -4947,10 +5927,148 @@ async def post_shared_admin_candidate_action(payload: dict, request: Request):
     return _shared_admin_candidate_action(payload or {})
 
 
+@api_router.get("/sam/setup/status")
+async def get_sam_setup_status():
+    settings_doc = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0}) or {}
+    status = _sam_setup_status()
+    return {
+        **status,
+        "setupComplete": bool(settings_doc.get("sam_setup_complete")),
+        "userName": settings_doc.get("sam_user_name") or "",
+        "role": settings_doc.get("sam_user_role") or "",
+    }
+
+
+@api_router.post("/sam/setup/complete")
+async def post_sam_setup_complete(payload: dict):
+    result = _complete_sam_setup(payload or {})
+    if not result.get("ok"):
+        return result
+    await db.settings.update_one(
+        {"_id": "app_settings"},
+        {"$set": {
+            "sam_setup_complete": True,
+            "sam_user_name": result.get("name") or "",
+            "sam_user_role": result.get("role") or "",
+        }},
+        upsert=True,
+    )
+    return result
+
+
+@api_router.post("/sam/setup/reset")
+async def post_sam_setup_reset(request: Request):
+    _require_admin_token(request)
+    await db.settings.update_one(
+        {"_id": "app_settings"},
+        {"$set": {"sam_setup_complete": False, "sam_user_name": "", "sam_user_role": ""}},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
 @api_router.get("/admin/verify-shared-session-sheets")
 async def verify_shared_session_sheets(request: Request):
     _require_admin_token(request)
-    return _verify_shared_session_sheets()
+    return _verify_master_shared_sheets()
+
+
+@api_router.get("/admin/verify-shared-sheets")
+async def verify_shared_sheets(request: Request):
+    _require_admin_token(request)
+    return _verify_master_shared_sheets()
+
+
+@api_router.get("/admin/google-sheet-permission-check")
+async def google_sheet_permission_check(request: Request):
+    used_local_fallback = False
+    try:
+        _require_admin_token(request)
+    except HTTPException as exc:
+        if _can_use_local_diagnostic_auth_fallback(request):
+            used_local_fallback = True
+            logger.warning(
+                "[SHEETS-DIAG] Using local development auth fallback for Google Sheet diagnostics. client=%s",
+                getattr(request.client, "host", "") if request.client else "",
+            )
+        else:
+            logger.exception("[SHEETS-DIAG] Permission check request rejected before diagnostics.")
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={
+                    "ok": False,
+                    "failedOperation": "authorize_admin_endpoint",
+                    "errorType": exc.__class__.__name__,
+                    "errorMessage": str(exc.detail),
+                    "error": str(exc.detail),
+                    "spreadsheetId": "",
+                    "serviceAccountEmail": "",
+                    "appAdminAuth": {
+                        "ok": False,
+                        "usedLocalDevelopmentFallback": False,
+                        "errorMessage": str(exc.detail),
+                    },
+                    "googleSheetsPermission": {
+                        "checked": False,
+                        "ok": False,
+                        "errorMessage": "Google Sheets diagnostics were not run because app admin authorization failed.",
+                    },
+                    "permissionNeeded": "A valid admin runtime token is required to run Google Sheet diagnostics.",
+                    "operations": [
+                        {
+                            "operation": "authorize_admin_endpoint",
+                            "ok": False,
+                            "errorType": exc.__class__.__name__,
+                            "errorMessage": str(exc.detail),
+                        }
+                    ],
+                },
+            )
+    try:
+        result = _run_google_sheet_permission_check()
+        result["appAdminAuth"] = {
+            "ok": True,
+            "usedLocalDevelopmentFallback": used_local_fallback,
+            "errorMessage": "",
+        }
+        result["googleSheetsPermission"] = {
+            "checked": True,
+            "ok": bool(result.get("ok")),
+            "failedOperation": result.get("failedOperation") or "",
+            "errorType": result.get("errorType") or "",
+            "errorMessage": result.get("errorMessage") or "",
+        }
+        return result
+    except Exception as exc:
+        logger.exception("[SHEETS-DIAG] Unhandled permission check failure.")
+        return {
+            "ok": False,
+            "failedOperation": "unhandled_diagnostic_error",
+            "errorType": exc.__class__.__name__,
+            "errorMessage": str(exc),
+            "error": str(exc),
+            "spreadsheetId": "",
+            "serviceAccountEmail": "",
+            "appAdminAuth": {
+                "ok": True,
+                "usedLocalDevelopmentFallback": used_local_fallback,
+                "errorMessage": "",
+            },
+            "googleSheetsPermission": {
+                "checked": False,
+                "ok": False,
+                "errorMessage": str(exc),
+            },
+            "permissionNeeded": "Check backend logs for the full traceback.",
+            "operations": [
+                {
+                    "operation": "unhandled_diagnostic_error",
+                    "ok": False,
+                    "errorType": exc.__class__.__name__,
+                    "errorMessage": str(exc),
+                }
+            ],
+        }
 
 
 @api_router.post("/session/start")
@@ -5030,9 +6148,8 @@ async def discard_session(request: Request):
 # ══════════════════════════════════════════════════════════════════
 @api_router.get("/history")
 async def get_history():
-    docs = await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500)
+    docs = _recent_history_docs(await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500))
     for doc in docs:
-        _normalize_history_timestamp(doc)
         normalized_status = normalize_history_status(doc)
         doc["status"] = normalized_status
         if normalized_status != "NC/NS":
@@ -5043,7 +6160,7 @@ async def get_history():
 
 @api_router.get("/history/stats")
 async def get_history_stats():
-    docs = await db.history.find({}, {"_id": 0}).to_list(5000)
+    docs = _recent_history_docs(await db.history.find({}, {"_id": 0}).to_list(5000))
     total = len(docs)
     normalized_statuses = [normalize_history_status(doc) for doc in docs]
     passes = sum(1 for status in normalized_statuses if status in {"Pass", "RESUMED-PASS"})
@@ -5056,6 +6173,7 @@ async def get_history_stats():
 
 @api_router.delete("/history")
 async def clear_history(request: Request):
+    _require_admin_token(request)
     db.backup("before-clear-history")
     await db.history.delete_many({})
     return {"ok": True}
@@ -5110,7 +6228,19 @@ NOTIFICATION_SHEET_COLUMNS = [
 
 
 def _normalize_notification_bool(value):
-    return str(value or "").strip().lower() in {"true", "1", "yes", "y", "on"}
+    return _shared_truthy(value)
+
+
+def _normalize_notification_bool_with_default(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, str) and not value.strip():
+        return bool(default)
+    if _shared_truthy(value):
+        return True
+    if _shared_falsey(value):
+        return False
+    return bool(default)
 
 
 def _normalize_notification_text(value):
@@ -5135,6 +6265,13 @@ def _notification_cell(row, *aliases):
         if value is not None:
             return value
     return None
+
+
+def _notification_row_values(row, headers):
+    return [
+        row[index] if index < len(row) else ""
+        for index in range(len(headers))
+    ]
 
 
 def _normalize_notification_date(value, end_of_day=False):
@@ -5256,15 +6393,15 @@ def _normalize_notification_manager_item(item):
     if legacy_ticker_type:
         normalized_type = "info"
     normalized = {
-        "Enabled": item.get("Enabled") if isinstance(item.get("Enabled"), bool) else _normalize_notification_bool(item.get("Enabled")) or str(item.get("Enabled")).strip() == "",
+        "Enabled": _normalize_notification_bool_with_default(item.get("Enabled"), False),
         "ID": _normalize_notification_text(item.get("ID")),
         "Type": normalized_type,
         "Title": _normalize_notification_text(item.get("Title")),
         "Message": _normalize_notification_text(item.get("Message")),
-        "ShowTicker": item.get("ShowTicker") if isinstance(item.get("ShowTicker"), bool) else (legacy_ticker_type or _normalize_notification_bool(item.get("ShowTicker"))),
-        "ShowPopup": item.get("ShowPopup") if isinstance(item.get("ShowPopup"), bool) else _normalize_notification_bool(item.get("ShowPopup")),
-        "ShowBanner": item.get("ShowBanner") if isinstance(item.get("ShowBanner"), bool) else _normalize_notification_bool(item.get("ShowBanner")),
-        "Persistent": item.get("Persistent") if isinstance(item.get("Persistent"), bool) else _normalize_notification_bool(item.get("Persistent")),
+        "ShowTicker": legacy_ticker_type or _normalize_notification_bool_with_default(item.get("ShowTicker"), False),
+        "ShowPopup": _normalize_notification_bool_with_default(item.get("ShowPopup"), False),
+        "ShowBanner": _normalize_notification_bool_with_default(item.get("ShowBanner"), False),
+        "Persistent": _normalize_notification_bool_with_default(item.get("Persistent"), False),
         "StartDate": _normalize_notification_text(item.get("StartDate")),
         "StartTime": _normalize_notification_text(item.get("StartTime")),
         "EndDate": _normalize_notification_text(item.get("EndDate")),
@@ -5289,9 +6426,9 @@ def _notification_item_from_row(row, fallback_index=1):
         "Type": _notification_cell(row, "type", "category"),
         "Title": _notification_cell(row, "title"),
         "Message": _notification_cell(row, "message"),
-        "ShowPopup": _notification_cell(row, "show popup", "showpopup"),
-        "ShowTicker": _notification_cell(row, "show ticker", "showticker"),
-        "ShowBanner": _notification_cell(row, "show banner", "showbanner"),
+        "ShowPopup": _notification_cell(row, "show popup", "showpopup", "popup"),
+        "ShowTicker": _notification_cell(row, "show ticker", "showticker", "ticker"),
+        "ShowBanner": _notification_cell(row, "show banner", "showbanner", "banner"),
         "Persistent": _notification_cell(row, "persistent"),
         "StartDate": _notification_cell(row, "start date", "startdate"),
         "StartTime": _notification_cell(row, "start time", "starttime"),
@@ -5302,6 +6439,9 @@ def _notification_item_from_row(row, fallback_index=1):
         "CreatedAt": _notification_cell(row, "created at", "createdat"),
         "UpdatedAt": _notification_cell(row, "updated at", "updatedat"),
     }
+    dismissible_value = _notification_cell(row, "dismissible")
+    if row_data["Persistent"] is None and dismissible_value is not None:
+        row_data["Persistent"] = "FALSE" if _normalize_notification_bool_with_default(dismissible_value, False) else "TRUE"
 
     # Google Sheets exports can include large blank regions; skip rows with no usable content.
     if not any(_normalize_notification_text(value) for value in row_data.values()):
@@ -5484,6 +6624,81 @@ def _resolve_notification_service_account_file():
     return None
 
 
+def _read_service_account_client_email(path):
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
+        return str(data.get("client_email") or "").strip()
+    except Exception as exc:
+        logger.warning("[SHEETS] Unable to read service account client_email from %s: %s", path, exc)
+        return ""
+
+
+def _service_account_file_diagnostics():
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    packaged_candidates = []
+    if resources_root:
+        resource_config_dir = Path(resources_root) / "backend" / "config"
+        packaged_candidates.extend([
+            resource_config_dir / "google-service-account.json",
+            resource_config_dir / "service-account.json",
+        ])
+    if getattr(sys, "frozen", False):
+        exe_config_dir = Path(sys.executable).resolve().parent / "config"
+        packaged_candidates.extend([
+            exe_config_dir / "google-service-account.json",
+            exe_config_dir / "service-account.json",
+        ])
+    packaged_candidates.extend([
+        ROOT_DIR.parent / "production-ready" / "Mock Testing Suite 1.0.1" / "win-unpacked" / "resources" / "backend" / "config" / "google-service-account.json",
+        ROOT_DIR.parent / "production-ready" / "ADMIN ONLY - MTS Notification Manager 1.0.1" / "notification-manager-win-unpacked" / "resources" / "backend" / "config" / "google-service-account.json",
+    ])
+
+    dev_candidates = [
+        ROOT_DIR / "config" / "google-service-account.json",
+        ROOT_DIR / "config" / "service-account.json",
+    ]
+
+    def first_existing(candidates):
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                return Path(candidate)
+        return None
+
+    active_path = _resolve_notification_service_account_file()
+    packaged_path = first_existing(packaged_candidates)
+    dev_path = first_existing(dev_candidates)
+    packaged_files = [
+        {
+            "path": str(Path(candidate)),
+            "exists": Path(candidate).is_file(),
+            "clientEmail": _read_service_account_client_email(Path(candidate)) if Path(candidate).is_file() else "",
+        }
+        for candidate in packaged_candidates
+    ]
+    packaged_email = _read_service_account_client_email(packaged_path)
+    dev_email = _read_service_account_client_email(dev_path)
+    active_email = _read_service_account_client_email(active_path)
+    same_email = bool(packaged_email and dev_email and packaged_email == dev_email)
+    same_path = bool(packaged_path and dev_path and packaged_path.resolve() == dev_path.resolve())
+
+    return {
+        "activePath": str(active_path or ""),
+        "activeClientEmail": active_email,
+        "packagedPath": str(packaged_path or ""),
+        "packagedClientEmail": packaged_email,
+        "packagedFiles": packaged_files,
+        "devPath": str(dev_path or ""),
+        "devClientEmail": dev_email,
+        "packagedAndDevSamePath": same_path,
+        "packagedAndDevSameClientEmail": same_email,
+        "appResourcesPath": resources_root,
+        "frozen": bool(getattr(sys, "frozen", False)),
+    }
+
+
 def _get_notification_sheet_write_status():
     config = _get_admin_notification_sheet_config()
     creds_path = _resolve_notification_service_account_file()
@@ -5508,7 +6723,13 @@ def _get_notification_sheet_write_status():
                 f"{packaged_hint}"
             ),
         }
-    return {"ready": True, "credentials_path": str(creds_path)}
+    client_email = _read_service_account_client_email(creds_path)
+    logger.info(
+        "[SHEETS] Active Google service account file=%s client_email=%s",
+        creds_path,
+        client_email or "unknown",
+    )
+    return {"ready": True, "credentials_path": str(creds_path), "client_email": client_email}
 
 
 def _get_notification_sheet_service():
@@ -5529,12 +6750,298 @@ def _get_notification_sheet_service():
             scopes=scopes,
         )
         service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-        return {"ok": True, "service": service}
+        return {"ok": True, "service": service, "client_email": status.get("client_email") or ""}
     except Exception as exc:
         return {"ok": False, "error": f"Unable to initialize Google Sheets service account credentials: {exc}"}
 
 
-def _load_notification_items_from_google_sheets_api():
+def _google_sheet_error_message(exc):
+    try:
+        from googleapiclient.errors import HttpError
+        if isinstance(exc, HttpError):
+            content = exc.content.decode("utf-8", errors="replace") if getattr(exc, "content", None) else ""
+            return content or str(exc)
+    except Exception:
+        pass
+    return str(exc)
+
+
+def _google_sheet_error_type(exc):
+    if exc is None:
+        return ""
+    return exc.__class__.__name__
+
+
+def _sheet_permission_needed(operation):
+    if str(operation or "").startswith("read_"):
+        return "Viewer access to the target spreadsheet, plus Google Sheets API access for the project."
+    return "Editor access to the target spreadsheet for the active service account, plus Google Sheets API access for the project."
+
+
+def _run_google_sheet_permission_check():
+    runtime_config = {}
+    notification_config = {}
+    master_sheet_id = ""
+    credential_info = {}
+    result = {
+        "ok": False,
+        "failedOperation": "",
+        "errorType": "",
+        "errorMessage": "",
+        "error": "",
+        "spreadsheetId": "",
+        "serviceAccountEmail": "",
+        "activeServiceAccountEmail": "",
+        "activeSpreadsheetId": "",
+        "credentialFiles": {},
+        "masterMtsContentCandidateSheetConfig": {
+            "spreadsheetId": "",
+            "sourceKeys": [
+                "admin_content_sheet_id",
+                "admin_content_sheet_url",
+                "content_sheet_id",
+                "content_sheet_url",
+                "built-in default",
+            ],
+            "purpose": "Master MTS content, shared candidate tracking, Gemini prompt overrides, and update metadata.",
+        },
+        "notificationSheetConfig": {
+            "spreadsheetId": "",
+            "gid": "0",
+            "configured": False,
+            "usingDefault": False,
+            "purpose": "SAM notification rows/ticker/banner/popup only.",
+        },
+        "operations": [],
+        "permissionNeeded": "",
+    }
+
+    def apply_context():
+        result["spreadsheetId"] = master_sheet_id or result.get("spreadsheetId") or ""
+        result["activeSpreadsheetId"] = result["spreadsheetId"]
+        result["serviceAccountEmail"] = (
+            (credential_info or {}).get("activeClientEmail")
+            or result.get("serviceAccountEmail")
+            or ""
+        )
+        result["activeServiceAccountEmail"] = result["serviceAccountEmail"]
+        result["credentialFiles"] = credential_info or {}
+        result["masterMtsContentCandidateSheetConfig"]["spreadsheetId"] = result["spreadsheetId"]
+        if notification_config:
+            result["notificationSheetConfig"].update({
+                "spreadsheetId": notification_config.get("sheet_id") or "",
+                "gid": notification_config.get("gid") or "0",
+                "configured": bool(notification_config.get("configured")),
+                "usingDefault": bool(notification_config.get("using_default")),
+            })
+
+    def is_permission_error(exc):
+        text = _google_sheet_error_message(exc).lower()
+        return (
+            "403" in text
+            or "permission_denied" in text
+            or "the caller does not have permission" in text
+            or "permission" in text
+        )
+
+    def record_success(operation, **extra):
+        result["operations"].append({"operation": operation, "ok": True, **extra})
+
+    def record_failure(operation, exc, *, permission_needed=None):
+        apply_context()
+        message = _google_sheet_error_message(exc)
+        error_type = _google_sheet_error_type(exc)
+        reason = _shared_permission_hint(exc)
+        clear_message = "Service account lacks Editor access to this spreadsheet." if is_permission_error(exc) else message
+        result["operations"].append({
+            "operation": operation,
+            "ok": False,
+            "errorType": error_type,
+            "errorMessage": clear_message,
+            "googleErrorMessage": message,
+            "reason": reason,
+        })
+        result.update({
+            "ok": False,
+            "failedOperation": operation,
+            "errorType": error_type,
+            "errorMessage": clear_message,
+            "error": clear_message,
+            "reason": reason,
+            "permissionNeeded": permission_needed or _sheet_permission_needed(operation),
+        })
+        logger.exception(
+            "[SHEETS-DIAG] Operation failed. operation=%s spreadsheet_id=%s service_account=%s reason=%s error=%s",
+            operation,
+            result.get("spreadsheetId") or "",
+            result.get("serviceAccountEmail") or "unknown",
+            reason,
+            message,
+        )
+
+    try:
+        runtime_config = _load_backend_runtime_config()
+        notification_config = _get_admin_notification_sheet_config()
+        master_sheet_id = _resolve_content_sheet_id(runtime_config or {})
+        credential_info = _service_account_file_diagnostics()
+        apply_context()
+    except Exception as exc:
+        record_failure("load_configuration", exc, permission_needed="Readable backend runtime config and service account config paths.")
+        return result
+
+    logger.info(
+        "[SHEETS-DIAG] Starting permission check. master_spreadsheet_id=%s notification_spreadsheet_id=%s service_account=%s",
+        master_sheet_id or "",
+        notification_config.get("sheet_id") or "",
+        result["activeServiceAccountEmail"] or "unknown",
+    )
+
+    if not master_sheet_id:
+        message = "No master MTS content/candidate spreadsheet ID is configured."
+        result["operations"].append({"operation": "resolve_master_spreadsheet_id", "ok": False, "errorType": "ConfigurationError", "errorMessage": message})
+        result.update({
+            "failedOperation": "resolve_master_spreadsheet_id",
+            "errorType": "ConfigurationError",
+            "errorMessage": message,
+            "error": message,
+            "permissionNeeded": "Configure admin_content_sheet_id/admin_content_sheet_url, or content_sheet_id/content_sheet_url.",
+        })
+        return result
+    if not credential_info.get("activePath"):
+        message = "No active google-service-account.json was found."
+        result["operations"].append({"operation": "load_credentials", "ok": False, "errorType": "ConfigurationError", "errorMessage": message})
+        result.update({
+            "failedOperation": "load_credentials",
+            "errorType": "ConfigurationError",
+            "errorMessage": message,
+            "error": message,
+            "permissionNeeded": "Place the service account JSON where the dev or packaged app resolves it, or set GOOGLE_SERVICE_ACCOUNT_FILE.",
+        })
+        return result
+
+    service_result = {}
+    try:
+        service_result = _get_shared_tracking_sheet_service()
+        if not service_result.get("ok"):
+            message = service_result.get("error") or "Unable to initialize Google Sheets service account credentials."
+            result["operations"].append({"operation": "load_credentials", "ok": False, "errorType": "GoogleSheetsInitializationError", "errorMessage": message})
+            result.update({
+                "failedOperation": "load_credentials",
+                "errorType": "GoogleSheetsInitializationError",
+                "errorMessage": message,
+                "error": message,
+                "permissionNeeded": "Valid service account JSON with Google Sheets API enabled.",
+            })
+            return result
+        result["serviceAccountEmail"] = service_result.get("serviceAccountEmail") or result.get("serviceAccountEmail") or ""
+        result["activeServiceAccountEmail"] = result["serviceAccountEmail"]
+        record_success("load_credentials", credentialsPath=(credential_info or {}).get("activePath") or "")
+    except Exception as exc:
+        record_failure("load_credentials", exc, permission_needed="Valid service account JSON with Google Sheets API enabled.")
+        return result
+
+    sheets_api = None
+    try:
+        sheets_api = service_result["service"].spreadsheets()
+        record_success("open_spreadsheet", spreadsheetId=master_sheet_id)
+    except Exception as exc:
+        record_failure("open_spreadsheet", exc)
+        return result
+
+    test_tab_title = "_mts_permission_check"
+    test_headers = [["diagnostic", "checked_at"]]
+    metadata = None
+    tabs = {}
+
+    try:
+        logger.info("[SHEETS-DIAG] Operation=read_spreadsheet_metadata spreadsheet_id=%s", master_sheet_id)
+        metadata = sheets_api.get(spreadsheetId=master_sheet_id).execute()
+        record_success("read_spreadsheet_metadata", title=((metadata.get("properties") or {}).get("title") or ""))
+    except Exception as exc:
+        record_failure("read_spreadsheet_metadata", exc)
+        return result
+
+    try:
+        logger.info("[SHEETS-DIAG] Operation=list_tabs spreadsheet_id=%s", master_sheet_id)
+        tabs = {
+            ((sheet.get("properties") or {}).get("title") or ""): sheet
+            for sheet in metadata.get("sheets", [])
+        }
+        record_success("list_tabs", tabs=sorted(tabs.keys()))
+    except Exception as exc:
+        record_failure("list_tabs", exc)
+        return result
+
+    try:
+        if test_tab_title not in tabs:
+            logger.info("[SHEETS-DIAG] Operation=create_or_verify_test_tab spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+            sheets_api.batchUpdate(
+                spreadsheetId=master_sheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": test_tab_title}}}]},
+            ).execute()
+            record_success("create_or_verify_test_tab", tab=test_tab_title, created=True)
+        else:
+            record_success("create_or_verify_test_tab", tab=test_tab_title, created=False)
+    except Exception as exc:
+        record_failure("create_or_verify_test_tab", exc)
+        return result
+
+    quoted_test_tab = _quote_sheet_title_for_a1(test_tab_title)
+    try:
+        logger.info("[SHEETS-DIAG] Operation=read_test_tab spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+        sheets_api.values().get(
+            spreadsheetId=master_sheet_id,
+            range=f"{quoted_test_tab}!A1:B2",
+        ).execute()
+        record_success("read_test_tab", tab=test_tab_title)
+    except Exception as exc:
+        record_failure("read_test_tab", exc)
+        return result
+
+    try:
+        logger.info("[SHEETS-DIAG] Operation=write_test_cell spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+        sheets_api.values().update(
+            spreadsheetId=master_sheet_id,
+            range=f"{quoted_test_tab}!A1:B1",
+            valueInputOption="USER_ENTERED",
+            body={"values": test_headers},
+        ).execute()
+        record_success("write_test_cell", tab=test_tab_title, range="A1:B1")
+    except Exception as exc:
+        record_failure("write_test_cell", exc)
+        return result
+
+    try:
+        logger.info("[SHEETS-DIAG] Operation=append_test_row spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+        sheets_api.values().append(
+            spreadsheetId=master_sheet_id,
+            range=f"{quoted_test_tab}!A2",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [["append-check", datetime.now(timezone.utc).isoformat()]]},
+        ).execute()
+        record_success("append_test_row", tab=test_tab_title, range="A2")
+    except Exception as exc:
+        record_failure("append_test_row", exc)
+        return result
+
+    result.update({
+        "ok": True,
+        "failedOperation": "",
+        "errorType": "",
+        "errorMessage": "",
+        "error": "",
+        "permissionNeeded": "Current active service account has the read/write access required for the tested master sheet operations.",
+    })
+    logger.info(
+        "[SHEETS-DIAG] Permission check passed. master_spreadsheet_id=%s service_account=%s",
+        master_sheet_id,
+        result["activeServiceAccountEmail"] or "unknown",
+    )
+    return result
+
+
+def _load_legacy_notification_items_from_google_sheets_api():
     config = _get_admin_notification_sheet_config()
     service_result = _get_notification_sheet_service()
     if not service_result.get("ok"):
@@ -5593,6 +7100,88 @@ def _load_notification_items_from_google_sheets_api():
         return {"ok": False, "error": f"Authenticated Google Sheets read failed: {exc}"}
 
 
+def _ensure_sam_notifications_sheet(sheets_api, sheet_id):
+    metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+    tabs = {
+        ((sheet.get("properties") or {}).get("title") or ""): sheet
+        for sheet in metadata.get("sheets", [])
+    }
+    status = _verify_sam_notifications_tab(sheets_api, sheet_id, tabs)
+    refreshed = sheets_api.get(spreadsheetId=sheet_id).execute()
+    for sheet in refreshed.get("sheets", []):
+        props = sheet.get("properties") or {}
+        if props.get("title") == SAM_NOTIFICATIONS_TAB:
+            status["sheetId"] = props.get("sheetId")
+            break
+    return status
+
+
+def _read_sam_notification_items(sheets_api, sheet_id):
+    status = _ensure_sam_notifications_sheet(sheets_api, sheet_id)
+    if not status.get("ok"):
+        return status
+    items = []
+    rows = _shared_read_rows(sheets_api, sheet_id, SAM_NOTIFICATIONS_TAB, NOTIFICATION_SHEET_COLUMNS)
+    for index, row in enumerate(rows, start=1):
+        item = _notification_item_from_row(row, fallback_index=index)
+        if item is not None:
+            items.append(item)
+    return {"ok": True, "items": items, "sheetTitle": SAM_NOTIFICATIONS_TAB, "sheetId": sheet_id, "source": "master"}
+
+
+def _migrate_legacy_notifications_to_master(sheets_api, sheet_id):
+    existing_rows = _shared_read_rows(sheets_api, sheet_id, SAM_NOTIFICATIONS_TAB, NOTIFICATION_SHEET_COLUMNS)
+    existing_ids = {
+        _normalize_notification_text(row.get("ID"))
+        for row in existing_rows
+        if _normalize_notification_text(row.get("ID"))
+    }
+    legacy = _load_legacy_notification_items_from_google_sheets_api()
+    if not legacy.get("ok"):
+        return {"ok": False, "migrated": 0, "error": legacy.get("error") or ""}
+    rows_to_append = []
+    for item in legacy.get("items") or []:
+        item_id = _normalize_notification_text(item.get("ID")) or _ensure_notification_id(item)
+        if not item_id or item_id in existing_ids:
+            continue
+        existing_ids.add(item_id)
+        rows_to_append.append(_serialize_notification_sheet_row({**item, "ID": item_id}))
+    if rows_to_append:
+        quoted = _quote_sheet_title_for_a1(SAM_NOTIFICATIONS_TAB)
+        sheets_api.values().append(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A2",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": rows_to_append},
+        ).execute()
+    return {"ok": True, "migrated": len(rows_to_append)}
+
+
+def _load_notification_items_from_google_sheets_api():
+    context = _sam_master_sheet_context()
+    if context.get("ok"):
+        try:
+            sheets_api = context["service"].spreadsheets()
+            read_result = _read_sam_notification_items(sheets_api, context["sheet_id"])
+            if read_result.get("ok") and not read_result.get("items"):
+                migration = _migrate_legacy_notifications_to_master(sheets_api, context["sheet_id"])
+                if migration.get("migrated"):
+                    logger.info("[NOTIFICATIONS] Migrated %d row(s) into master %s tab.", migration["migrated"], SAM_NOTIFICATIONS_TAB)
+                    read_result = _read_sam_notification_items(sheets_api, context["sheet_id"])
+            if read_result.get("ok"):
+                logger.info("[NOTIFICATIONS] Active source=MASTER tab=%s rows=%d", SAM_NOTIFICATIONS_TAB, len(read_result.get("items") or []))
+            return read_result
+        except Exception as exc:
+            logger.warning("[NOTIFICATIONS] Master sam-notifications unavailable; using legacy fallback if available: %s", exc)
+
+    legacy = _load_legacy_notification_items_from_google_sheets_api()
+    if legacy.get("ok"):
+        legacy["source"] = "legacy_fallback"
+        logger.warning("[NOTIFICATIONS] Active source=LEGACY fallback sheet.")
+    return legacy
+
+
 def _clear_notification_caches():
     _notification_cache["groups"] = None
     _notification_cache["last_fetch"] = 0
@@ -5608,40 +7197,39 @@ def _save_notification_to_google_sheet(item):
     if validated["errors"]:
         return {"ok": False, "error": " ".join(validated["errors"])}
 
-    config = _get_admin_notification_sheet_config()
-    sheet_id = config["sheet_id"]
-    target_gid = str(config["gid"] or "0")
-    service_result = _get_notification_sheet_service()
-    if not service_result.get("ok"):
-        return {"ok": False, "error": service_result.get("error") or "Direct Google Sheets write is not configured."}
+    context = _sam_master_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "error": context.get("error") or "SAM master Google Sheet is not configured."}
+
+    sheet_id = context["sheet_id"]
+    service = context["service"]
+    client_email = context.get("serviceAccountEmail") or _get_service_account_email() or "unknown"
 
     try:
         from googleapiclient.errors import HttpError
     except Exception as exc:
         return {"ok": False, "error": f"Google Sheets dependencies are unavailable: {exc}"}
 
+    current_operation = "initialize"
     try:
-        sheets_api = service_result["service"].spreadsheets()
+        sheets_api = service.spreadsheets()
 
-        metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
-        sheets = metadata.get("sheets", [])
-        target_sheet = next(
-            (
-                sheet for sheet in sheets
-                if str((sheet.get("properties") or {}).get("sheetId")) == target_gid
-            ),
-            None,
+        current_operation = "ensure_master_notification_tab"
+        logger.info(
+            "[NOTIFICATIONS] Operation=ensure_master_notification_tab spreadsheet_id=%s tab=%s service_account=%s",
+            sheet_id,
+            SAM_NOTIFICATIONS_TAB,
+            client_email,
         )
-        if target_sheet is None and sheets:
-            target_sheet = sheets[0]
+        tab_status = _ensure_sam_notifications_sheet(sheets_api, sheet_id)
+        if not tab_status.get("ok"):
+            return {"ok": False, "error": tab_status.get("error") or "Unable to verify sam-notifications tab."}
 
-        if target_sheet is None:
-            return {"ok": False, "error": "The configured spreadsheet does not contain any worksheets."}
-
-        sheet_title = (target_sheet.get("properties") or {}).get("title") or "Sheet1"
+        sheet_title = SAM_NOTIFICATIONS_TAB
         quoted_title = _quote_sheet_title_for_a1(sheet_title)
         last_column = _column_letter(len(NOTIFICATION_SHEET_COLUMNS))
         header_range = f"{quoted_title}!A1:{last_column}1"
+        current_operation = "read_header"
         header_response = sheets_api.values().get(
             spreadsheetId=sheet_id,
             range=header_range,
@@ -5660,6 +7248,8 @@ def _save_notification_to_google_sheet(item):
             }
 
         if not header_has_data:
+            current_operation = "header_write"
+            logger.info("[NOTIFICATIONS] Operation=header_write spreadsheet_id=%s tab=%s", sheet_id, sheet_title)
             sheets_api.values().update(
                 spreadsheetId=sheet_id,
                 range=header_range,
@@ -5668,6 +7258,8 @@ def _save_notification_to_google_sheet(item):
             ).execute()
 
         data_range = f"{quoted_title}!A2:{last_column}"
+        current_operation = "read_rows"
+        logger.info("[NOTIFICATIONS] Operation=read_rows spreadsheet_id=%s tab=%s", sheet_id, sheet_title)
         existing_rows = sheets_api.values().get(
             spreadsheetId=sheet_id,
             range=data_range,
@@ -5686,6 +7278,8 @@ def _save_notification_to_google_sheet(item):
                 break
 
         if target_row_number is not None:
+            current_operation = "update"
+            logger.info("[NOTIFICATIONS] Operation=update spreadsheet_id=%s tab=%s row=%s", sheet_id, sheet_title, target_row_number)
             sheets_api.values().update(
                 spreadsheetId=sheet_id,
                 range=f"{quoted_title}!A{target_row_number}:{last_column}{target_row_number}",
@@ -5694,6 +7288,8 @@ def _save_notification_to_google_sheet(item):
             ).execute()
             action = "updated"
         else:
+            current_operation = "append"
+            logger.info("[NOTIFICATIONS] Operation=append spreadsheet_id=%s tab=%s", sheet_id, sheet_title)
             sheets_api.values().append(
                 spreadsheetId=sheet_id,
                 range=f"{quoted_title}!A2",
@@ -5713,21 +7309,26 @@ def _save_notification_to_google_sheet(item):
             }),
             "sheetTitle": sheet_title,
             "sheetId": sheet_id,
+            "source": "master",
         }
     except HttpError as exc:
-        message = str(exc)
+        message = _google_sheet_error_message(exc)
         if "PERMISSION_DENIED" in message or "The caller does not have permission" in message:
             return {
                 "ok": False,
+                "failedOperation": current_operation,
+                "serviceAccountEmail": client_email,
+                "sheetId": sheet_id,
                 "error": (
                     "Google Sheets rejected the write request. Confirm the service account JSON is valid, "
-                    "the Google Sheets API is enabled, and the spreadsheet is shared with the service account email."
+                    "the Google Sheets API is enabled, and the spreadsheet is shared with the service account email. "
+                    f"Failed operation: {current_operation}. Google error: {message}"
                 ),
             }
-        return {"ok": False, "error": f"Google Sheets write failed: {message}"}
+        return {"ok": False, "failedOperation": current_operation, "sheetId": sheet_id, "error": f"Google Sheets write failed during {current_operation}: {message}"}
     except Exception as exc:
         logger.exception("[NOTIFICATIONS] Failed to write notification to Google Sheets: %s", exc)
-        return {"ok": False, "error": f"Google Sheets write failed: {exc}"}
+        return {"ok": False, "failedOperation": current_operation, "sheetId": sheet_id, "error": f"Google Sheets write failed during {current_operation}: {exc}"}
 
 
 def _delete_notification_from_google_sheet(notification_id):
@@ -5735,32 +7336,21 @@ def _delete_notification_from_google_sheet(notification_id):
     if not target_id:
         return {"ok": False, "error": "Notification ID is required."}
 
-    config = _get_admin_notification_sheet_config()
-    sheet_id = config["sheet_id"]
-    target_gid = str(config["gid"] or "0")
-    service_result = _get_notification_sheet_service()
-    if not service_result.get("ok"):
-        return {"ok": False, "error": service_result.get("error") or "Direct Google Sheets write is not configured."}
+    context = _sam_master_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "error": context.get("error") or "SAM master Google Sheet is not configured."}
+
+    sheet_id = context["sheet_id"]
+    service = context["service"]
 
     try:
-        sheets_api = service_result["service"].spreadsheets()
-        metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
-        sheets = metadata.get("sheets", [])
-        target_sheet = next(
-            (
-                sheet for sheet in sheets
-                if str((sheet.get("properties") or {}).get("sheetId")) == target_gid
-            ),
-            None,
-        )
-        if target_sheet is None and sheets:
-            target_sheet = sheets[0]
-        if target_sheet is None:
-            return {"ok": False, "error": "The configured spreadsheet does not contain any worksheets."}
+        sheets_api = service.spreadsheets()
+        tab_status = _ensure_sam_notifications_sheet(sheets_api, sheet_id)
+        if not tab_status.get("ok"):
+            return {"ok": False, "error": tab_status.get("error") or "Unable to verify sam-notifications tab."}
 
-        sheet_props = target_sheet.get("properties") or {}
-        sheet_title = sheet_props.get("title") or "Sheet1"
-        sheet_gid = sheet_props.get("sheetId")
+        sheet_title = SAM_NOTIFICATIONS_TAB
+        sheet_gid = tab_status.get("sheetId")
         quoted_title = _quote_sheet_title_for_a1(sheet_title)
         last_column = _column_letter(len(NOTIFICATION_SHEET_COLUMNS))
         raw_values = sheets_api.values().get(
@@ -5797,7 +7387,7 @@ def _delete_notification_from_google_sheet(notification_id):
         ).execute()
 
         _clear_notification_caches()
-        return {"ok": True, "action": "deleted", "id": target_id, "sheetTitle": sheet_title, "sheetId": sheet_id}
+        return {"ok": True, "action": "deleted", "id": target_id, "sheetTitle": sheet_title, "sheetId": sheet_id, "source": "master"}
     except Exception as exc:
         logger.exception("[NOTIFICATIONS] Failed to delete notification from Google Sheets: %s", exc)
         return {"ok": False, "error": f"Google Sheets delete failed: {exc}"}
@@ -5892,10 +7482,40 @@ def _parse_notification_csv(csv_text):
 async def _fetch_notifications_from_sheet():
     import time
 
+    now = time.time()
+    master_sheet_id = _shared_tracking_sheet_id()
+    master_cache_key = f"master:{master_sheet_id}:{SAM_NOTIFICATIONS_TAB}"
+    if (
+        _notification_cache["groups"] is not None
+        and _notification_cache["url"] == master_cache_key
+        and (now - _notification_cache["last_fetch"]) < NOTIFICATION_CACHE_TTL_SECONDS
+    ):
+        logger.info(
+            "[NOTIFICATIONS] Source=CACHE valid_ticker_rows=%s",
+            len(_notification_cache["groups"].get("tickerMessages", [])),
+        )
+        return _notification_cache["groups"]
+
+    authenticated = _load_notification_items_from_google_sheets_api()
+    if authenticated.get("ok") and authenticated.get("source") == "master":
+        groups = _group_notification_manager_items(authenticated.get("items", []))
+        _notification_cache["groups"] = groups
+        _notification_cache["last_fetch"] = now
+        _notification_cache["url"] = master_cache_key
+        logger.info(
+            "[NOTIFICATIONS] Source=MASTER loaded %s ticker, %s banner, %s popup items from %s tab",
+            len(groups["tickerMessages"]),
+            len(groups["banners"]),
+            len(groups["popups"]),
+            SAM_NOTIFICATIONS_TAB,
+        )
+        _set_ticker_fetch_status("google", "master sam-notifications authenticated read succeeded", len(groups["tickerMessages"]))
+        return groups
+
     config = _get_admin_notification_sheet_config()
     sheet_url = config["export_url"]
     logger.info(
-        "[NOTIFICATIONS] Ticker sheet config source=%s tab_gid=%s sheet_id=%s export_url_present=%s",
+        "[NOTIFICATIONS] Legacy ticker sheet config source=%s tab_gid=%s sheet_id=%s export_url_present=%s",
         config.get("source") or "unknown",
         config.get("gid") or "0",
         _mask_config_value(config.get("sheet_id")),
@@ -5909,7 +7529,6 @@ async def _fetch_notifications_from_sheet():
             return _notification_cache["groups"]
         return _notification_defaults
 
-    now = time.time()
     if (
         _notification_cache["groups"] is not None
         and _notification_cache["url"] == sheet_url
@@ -5923,25 +7542,25 @@ async def _fetch_notifications_from_sheet():
 
     try:
         logger.info(
-            "[NOTIFICATIONS] Loading notification sheet from %s URL %s",
+            "[NOTIFICATIONS] Loading legacy notification sheet from %s URL %s",
             config.get("source") or "unknown",
             _mask_config_value(config.get("url")),
         )
-        if _get_notification_sheet_write_status().get("ready"):
-            authenticated = _load_notification_items_from_google_sheets_api()
-            if authenticated.get("ok"):
+        if authenticated.get("ok"):
+            if authenticated.get("source") == "legacy_fallback":
                 groups = _group_notification_manager_items(authenticated.get("items", []))
                 _notification_cache["groups"] = groups
                 _notification_cache["last_fetch"] = now
                 _notification_cache["url"] = sheet_url
                 logger.info(
-                    "[NOTIFICATIONS] Source=GOOGLE loaded %s ticker, %s banner, %s popup items from admin sheet via authenticated Sheets API",
+                    "[NOTIFICATIONS] Source=LEGACY loaded %s ticker, %s banner, %s popup items from fallback notification sheet via authenticated Sheets API",
                     len(groups["tickerMessages"]),
                     len(groups["banners"]),
                     len(groups["popups"]),
                 )
-                _set_ticker_fetch_status("google", "authenticated Sheets API read succeeded", len(groups["tickerMessages"]))
+                _set_ticker_fetch_status("google", "legacy fallback authenticated Sheets API read succeeded", len(groups["tickerMessages"]))
                 return groups
+        else:
             logger.warning("[NOTIFICATIONS] %s", authenticated.get("error") or "Authenticated Google Sheets read failed.")
 
         async with httpx.AsyncClient(timeout=10) as client:
@@ -6087,6 +7706,10 @@ async def get_config_status():
         "tickerSheetUrlMasked": _mask_config_value(config.get("url")),
         "tickerSheetExportUrlPresent": bool(config.get("export_url")),
         "tickerSheetId": _mask_config_value(config.get("sheet_id")),
+        "samNotificationSource": "master sam-notifications",
+        "samNotificationSheetId": _mask_config_value(_shared_tracking_sheet_id()),
+        "samNotificationTab": SAM_NOTIFICATIONS_TAB,
+        "legacyNotificationSheetConfigured": bool(config.get("configured")),
         "googleCredentialsFound": bool(credentials_path),
         "googleCredentialsPath": str(credentials_path or ""),
         "tickerSource": _ticker_fetch_status.get("source") or "builtin",
@@ -6104,50 +7727,50 @@ async def get_config_status():
 @api_router.get("/notifications/manage")
 async def get_notifications_manage(request: Request):
     _require_admin_token(request)
-    config = _get_admin_notification_sheet_config()
-    write_status = _get_notification_sheet_write_status()
-    response = {
-        "ok": True,
+    master_context = _sam_master_sheet_context()
+    authenticated = {"ok": False, "items": [], "error": master_context.get("error") or "SAM master Google Sheet is not configured."}
+    if master_context.get("ok"):
+        try:
+            authenticated = _read_sam_notification_items(master_context["service"].spreadsheets(), master_context["sheet_id"])
+        except Exception as exc:
+            logger.exception("[NOTIFICATIONS] Failed to read master sam-notifications for SAM manager: %s", exc)
+            authenticated = {"ok": False, "items": [], "error": f"Unable to read master sam-notifications tab: {exc}"}
+
+    if authenticated.get("ok"):
+        return {
+            "ok": True,
+            "items": authenticated.get("items", []),
+            "sheet": {
+                "configured": True,
+                "url": DEFAULT_ADMIN_CONTENT_SHEET_URL,
+                "sheetId": authenticated.get("sheetId") or _shared_tracking_sheet_id(),
+                "gid": "",
+                "sheetTitle": authenticated.get("sheetTitle") or SAM_NOTIFICATIONS_TAB,
+                "source": "master",
+            },
+            "write": {
+                "ready": True,
+                "error": "",
+            },
+        }
+
+    return {
+        "ok": False,
         "items": [],
+        "error": authenticated.get("error") or "Unable to read the master sam-notifications tab.",
         "sheet": {
-            "configured": bool(config["url"]),
-            "url": config["url"],
-            "sheetId": config["sheet_id"],
-            "gid": config["gid"],
+            "configured": bool(master_context.get("ok")),
+            "url": DEFAULT_ADMIN_CONTENT_SHEET_URL,
+            "sheetId": master_context.get("sheet_id") or _shared_tracking_sheet_id(),
+            "gid": "",
+            "sheetTitle": SAM_NOTIFICATIONS_TAB,
+            "source": "master",
         },
         "write": {
-            "ready": bool(write_status.get("ready")),
-            "error": write_status.get("error", ""),
+            "ready": False,
+            "error": authenticated.get("error") or "Notification writes require the master sam-notifications tab.",
         },
     }
-
-    if not config["export_url"]:
-        response["ok"] = False
-        response["error"] = "No notification sheet URL is configured in backend/config/runtime_config.json."
-        return response
-
-    if write_status.get("ready"):
-        authenticated = _load_notification_items_from_google_sheets_api()
-        if authenticated.get("ok"):
-            response["items"] = authenticated.get("items", [])
-            return response
-        response["ok"] = False
-        response["error"] = authenticated.get("error") or "Unable to read notification sheet with the configured service account."
-        return response
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(config["export_url"], follow_redirects=True)
-            if resp.status_code == 200:
-                response["items"] = _parse_notification_items(resp.text)
-                return response
-            response["ok"] = False
-            response["error"] = f"Notification sheet read failed with status {resp.status_code}."
-            return response
-    except Exception as exc:
-        response["ok"] = False
-        response["error"] = f"Unable to read notification sheet: {exc}"
-        return response
 
 
 @api_router.post("/notifications/manage")
@@ -6182,6 +7805,11 @@ async def _fetch_approved_headsets():
 async def get_approved_headsets():
     groups, error = await _fetch_approved_headsets()
     return {"groups": groups, "error": error}
+
+
+@api_router.post("/headsets/review-log")
+async def log_headset_review(payload: dict):
+    return _append_headset_review_log(payload or {})
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -44,10 +44,13 @@ Basics verifies candidate readiness before any scoring begins.
 - Final Attempt marks this as the candidate's last allowed mock attempt and affects routing later.
 - Headset must be USB with a noise-cancelling microphone.
 - VPN must be off, and required browser checks must pass before you can continue.
-- Candidate lookup checks prior shared sessions while you type. It never overwrites Basics fields unless you choose Load Basics.
-- Use Review Previous Session to inspect prior tester, status, coaching summary, fail summary, final-attempt risk, and pending supervisor-transfer status.
-- If prior qualifying failures show this may be the final attempt, the app warns you and sets Final Attempt automatically.
-- Withdrawn candidates are shown as withdrew from certification and cannot be resumed unless an admin reverses the withdrawal in SAM.
+- When checking for VPN or proxy, use more than one linked checker because databases can update at different times.
+- Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.
+- When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.
+- Choose Correct Candidate only after confirming the match. The app loads the matching Basics context and starts Calls, or Supervisor Transfer 1 for Supervisor Transfer Only.
+- If prior qualifying failures show this is truly the final attempt, the app warns you and sets Final Attempt automatically after candidate confirmation.
+- If the shared record shows the final attempt was already used, testing is blocked unless you use the override flow and notify Admin in the Discord Tester Room.
+- Withdrawn candidates are blocked unless an admin restores the candidate or grants an extra attempt in SAM.
 - Candidates with an extra attempt granted can continue, with the notice shown during lookup.
 - Continue validates readiness and routes into Calls (or Supervisor Transfer Only when applicable).
 
@@ -56,12 +59,14 @@ Use the approved headset lookup to confirm a candidate is using an allowed USB n
 - Click Lookup Approved Headsets next to the Brand / Model field.
 - Search by brand or model, then select a listed model to auto-fill the field.
 - If the model is not listed, double-check that the headset is USB and has a noise-cancelling microphone before continuing.
+- Manually entered headset models that are not on the approved list may be logged to the headset-review-log tab for admin review.
 
 ## 8. NC/NS and Not Ready Auto-Fails
 These red buttons end the session immediately. Use them only when the candidate cannot start testing.
 - NC/NS = the candidate did not join the session at all.
 - Not Ready = the candidate is present but cannot start (no headset, VPN on, wrong browser, etc.).
 - Both buttons end the session and route directly to Review with the auto-fail reason recorded.
+- If a candidate's most recent session was NC/NS and no previous Basics information exists, complete the Basics screen before continuing.
 
 ## 9. Tech Issue Flow
 Use Tech Issue when a real technical problem is interrupting the session, before deciding to end it.
@@ -69,6 +74,8 @@ Use Tech Issue when a real technical problem is interrupting the session, before
 - Choose the issue type: internet, DTE, browser, routing, or Other.
 - Follow the prompts to continue the session, route to Review, or schedule a Newbie Shift if the candidate cannot finish today.
 - A Tech Issue does not automatically fail the candidate; it just guides the next step.
+- For internet speed issues, have the candidate run www.speedtest.net first, then enter upload and download speeds when prompted.
+- If an unresolved technical issue ends the session, Review preserves the current candidate and session data.
 
 ## 10. Calls Screen
 The Calls screen scores up to three mock calls.
@@ -138,6 +145,7 @@ Gemini summaries rewrite the generic summary into more polished management-facin
 - Gemini is optional. The app still creates generic summaries without it.
 - Gemini only rewrites the wording; it does not change pass/fail status or routing.
 - Turn Gemini on in Settings → Gemini AI after adding an API key (next section).
+- Use Test Gemini Connection after saving the key. If it fails, the status shows the backend failure reason without exposing the key.
 - Typical usage in this app is light, often fewer than 5 AI calls per day.
 
 ## 20. How to get and add a free Gemini API key
@@ -167,8 +175,9 @@ Fill Form pushes session data into the configured Microsoft certification form u
 - If Fill Form fails, check the form URL and browser setting in Settings.
 
 ## 22. History and Historical Fill Form
-History stores saved sessions. You can reopen a session in read-only Review or fill the form from it again.
-- Open History from Home to see all saved sessions.
+History stores recent local sessions. You can reopen a session in read-only Review or fill the form from it again.
+- Open History from Home to see recent sessions tested on this app/user.
+- Local History is retained for recent work only; shared Google Sheet candidate lookup remains available for older or cross-tester records.
 - Click a session to view summary details, or open it in Historical Review (read-only).
 - Historical Fill Form re-runs Fill Form from a saved record without changing the active session.
 
@@ -205,6 +214,7 @@ Update checks and app version info live in the app menu and Settings.
 ## 27. Troubleshooting
 Use the built-in troubleshooting paths before ending a session for technical reasons.
 - Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.
+- Use Phonetics Table on Call or Supervisor Transfer coaching screens to preview and copy the phonetics image for Discord.
 - Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.
 - If the app itself is misbehaving, restart it. Active session drafts are saved automatically.
 - When reporting an app issue, include the screen name, the action you took, and any visible error text.

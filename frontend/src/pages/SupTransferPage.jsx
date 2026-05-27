@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useR
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
+import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 const DEFAULT_SUP_COACHING = [
   { label: 'Minimize dead air', helper: 'Maintain engagement throughout hold and transfer' },
@@ -413,8 +414,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         <span><b>Discord Post for Stars:</b> WXYZ Supervisor Test Call Being Queued</span>
         <button className="btn btn-primary btn-sm" onClick={() => {
           navigator.clipboard.writeText('WXYZ Supervisor Test Call Being Queued');
-          setCopied(true); setTimeout(() => setCopied(false), 1500);
-        }} data-testid="sup-copy-discord">{copied ? 'Copied!' : 'Copy'}</button>
+          setCopied(true); setTimeout(() => setCopied(false), 3000);
+        }} data-testid="sup-copy-discord">{copied ? 'Copied' : 'Copy'}</button>
       </div>
 
       <div className="split-layout">
@@ -477,7 +478,10 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       </div>
 
       <div className="card" style={{ marginBottom: 16 }} data-tour="sup-coaching">
-        <h3>Coaching Given</h3>
+        <div className="coaching-card-header">
+          <h3>Coaching Given</h3>
+          <PhoneticsTableButton />
+        </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <div className="coaching-grid">
           <div>{supCoaching.slice(0, 4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
@@ -523,7 +527,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         </div>
       )}
 
-      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} context="suptransfer" />
+      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} onBeforeNavigate={saveTransferDraftNow} context="suptransfer" />
 
       <div className="footer-bar sticky-action-footer" data-testid="sup-footer">
         <div className="action-safety-group">

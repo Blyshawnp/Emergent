@@ -6,6 +6,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain, scr
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { spawn, spawnSync, execFileSync } = require('child_process');
 const http = require('http');
 const { pathToFileURL } = require('url');
@@ -137,6 +138,10 @@ function getSharedAdminToken() {
 
 function getAppModeName() {
   return isNotificationManagerMode ? 'notification-manager' : 'main';
+}
+
+function isAdminDiagnosticsEnabled() {
+  return Boolean(isDev || String(process.env.MTS_ENABLE_ADMIN_DIAGNOSTICS || '').trim() === '1');
 }
 
 function getHeartbeatPath(mode = getAppModeName()) {
@@ -495,6 +500,7 @@ function startBackend() {
           APP_RESOURCES_PATH: process.resourcesPath,
           GOOGLE_SERVICE_ACCOUNT_FILE: googleServiceAccountPath,
           MTS_ADMIN_TOKEN: getSharedAdminToken(),
+          MTS_DEV_MODE: isDev ? '1' : '0',
         },
         windowsHide: true,
         shell: false,
@@ -570,6 +576,7 @@ function startBackend() {
       SQLITE_DB_PATH: getSqliteDbPath(),
       APP_VERSION,
       MTS_ADMIN_TOKEN: getSharedAdminToken(),
+      MTS_DEV_MODE: '1',
       PYTHONUNBUFFERED: '1'
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -1133,12 +1140,24 @@ ipcMain.on('app:isNotificationManager', (event) => {
   event.returnValue = isNotificationManagerMode;
 });
 
+ipcMain.on('app:getRuntimeFlags', (event) => {
+  event.returnValue = {
+    isDev,
+    isPackaged: app.isPackaged,
+    adminDiagnosticsEnabled: isAdminDiagnosticsEnabled(),
+  };
+});
+
 ipcMain.on('backend:getUrl', (event) => {
   event.returnValue = `http://127.0.0.1:${BACKEND_PORT}`;
 });
 
 ipcMain.on('app:getAdminToken', (event) => {
   event.returnValue = getSharedAdminToken();
+});
+
+ipcMain.on('app:getDeviceName', (event) => {
+  event.returnValue = os.hostname();
 });
 
 ipcMain.handle('app:quit-response', (_event, confirmed) => {

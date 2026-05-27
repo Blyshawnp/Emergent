@@ -955,8 +955,8 @@ function DiscordRow({ title, message }) {
       <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={() => {
         navigator.clipboard.writeText(message);
         setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}>{copied ? 'Copied!' : 'Copy'}</button>
+        setTimeout(() => setCopied(false), 3000);
+      }}>{copied ? 'Copied' : 'Copy'}</button>
     </div>
   );
 }
@@ -979,17 +979,22 @@ function DiscordScreenshotRow({ title, imageUrl }) {
       if (!blob.type.startsWith('image/')) throw new Error('Referenced file is not an image.');
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setTimeout(() => setCopied(false), 3000);
     } catch (_e) {
-      // Fallback: open image in new tab
-      window.open(resolvedImageUrl, '_blank');
+      try {
+        await navigator.clipboard.writeText(`${window.location.origin}/${resolvedImageUrl.replace(/^\/+/, '')}`);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 3000);
+      } catch (_fallbackError) {
+        window.open(resolvedImageUrl, '_blank');
+      }
     }
   };
   return (
     <div className="discord-row" style={{ flexDirection: 'column', gap: 8 }}>
       <div className="discord-screenshot-header">
         <div className="discord-title">{title}</div>
-        <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={handleCopy} disabled={!resolvedImageUrl || previewError}>{copied ? 'Copied!' : 'Copy Image'}</button>
+        <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={handleCopy} disabled={!resolvedImageUrl || previewError}>{copied ? 'Copied' : 'Copy Image'}</button>
       </div>
       {resolvedImageUrl && !previewError ? (
         <img

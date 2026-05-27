@@ -87,8 +87,9 @@ function parseCsv(text) {
 }
 
 export function normalizeBoolean(value) {
+  if (typeof value === 'boolean') return value;
   const normalized = String(value ?? '').trim().toLowerCase();
-  return ['true', '1', 'yes', 'y', 'on'].includes(normalized);
+  return ['true', '1', 'yes', 'y', 'on', 'checked'].includes(normalized);
 }
 
 function normalizeText(value) {

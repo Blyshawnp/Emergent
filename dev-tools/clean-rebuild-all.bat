@@ -51,6 +51,7 @@ for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd-HHmm
 if "%BUILD_STAMP%"=="" set "BUILD_STAMP=manual-run"
 set "LOG_FILE=%ROOT_DIR%\dev-tools\logs\clean-rebuild-all-%BUILD_STAMP%.log"
 set "START_TIME=%time%"
+set "LAST_STEP=Startup"
 
 call :section "CLEAN REBUILD ALL"
 call :log "Mode: %MODE%"
@@ -118,6 +119,7 @@ popd
 if not "%BUILD_RC%"=="0" goto :fail
 if not exist "%FRONTEND_DIR%\build\index.html" (
   call :log "ERROR: frontend\build\index.html was not generated."
+  set "LAST_STEP=Verify frontend build output: %FRONTEND_DIR%\build\index.html"
   goto :fail
 )
 
@@ -129,6 +131,7 @@ popd
 if not "%BUILD_RC%"=="0" goto :fail
 if not exist "%BACKEND_DIR%\dist\backend.exe" (
   call :log "ERROR: backend\dist\backend.exe was not generated."
+  set "LAST_STEP=Verify backend build output: %BACKEND_DIR%\dist\backend.exe"
   goto :fail
 )
 
@@ -142,10 +145,12 @@ popd
 if not "%BUILD_RC%"=="0" goto :fail
 if not exist "%MTS_DIST%\win-unpacked\Mock Testing Suite.exe" (
   call :log "ERROR: MTS win-unpacked executable was not generated."
+  set "LAST_STEP=Verify MTS executable: %MTS_DIST%\win-unpacked\Mock Testing Suite.exe"
   goto :fail
 )
 if not exist "%MTS_DIST%\%MTS_INSTALLER%" (
   call :log "ERROR: MTS installer was not generated: %MTS_DIST%\%MTS_INSTALLER%"
+  set "LAST_STEP=Verify MTS installer: %MTS_DIST%\%MTS_INSTALLER%"
   goto :fail
 )
 
@@ -160,10 +165,12 @@ popd
 if not "%BUILD_RC%"=="0" goto :fail
 if not exist "%SAM_DIST%\win-unpacked\Sam.exe" (
   call :log "ERROR: SAM win-unpacked executable was not generated."
+  set "LAST_STEP=Verify SAM executable: %SAM_DIST%\win-unpacked\Sam.exe"
   goto :fail
 )
 if not exist "%SAM_DIST%\%SAM_INSTALLER%" (
   call :log "ERROR: SAM installer was not generated: %SAM_DIST%\%SAM_INSTALLER%"
+  set "LAST_STEP=Verify SAM installer: %SAM_DIST%\%SAM_INSTALLER%"
   goto :fail
 )
 
@@ -258,12 +265,17 @@ exit /b 0
 :run
 set "RUN_LABEL=%~1"
 set "RUN_CMD=%~2"
+set "LAST_STEP=%RUN_LABEL% :: %RUN_CMD%"
 call :log "Running: %RUN_LABEL%"
+call :log "Command: %RUN_CMD%"
 >>"%LOG_FILE%" echo ---- %RUN_LABEL% ----
+>>"%LOG_FILE%" echo Command: %RUN_CMD%
 cmd /d /s /c "%RUN_CMD%" >>"%LOG_FILE%" 2>&1
 set "RUN_RC=%errorlevel%"
 if not "%RUN_RC%"=="0" (
-  call :log "ERROR: %RUN_LABEL% failed with exit code %RUN_RC%. See log for details."
+  call :log "ERROR: %RUN_LABEL% failed with exit code %RUN_RC%."
+  call :log "Failed command: %RUN_CMD%"
+  call :log "See log for details: %LOG_FILE%"
   exit /b %RUN_RC%
 )
 call :log "OK: %RUN_LABEL%"
@@ -320,13 +332,30 @@ if not errorlevel 1 (
   exit /b 1
 )
 call :log "Syncing directory: %SRC% -> %DST%"
+call :log "Preserving protected runtime credential files: google-service-account.json, service-account.json"
 if not exist "%DST%\.." mkdir "%DST%\.." >nul 2>nul
-robocopy "%SRC%" "%DST%" /MIR /R:2 /W:2 /NFL /NDL /NP /NJH /NJS >>"%LOG_FILE%" 2>&1
+set "PRESERVE_DIR=%TEMP%\mts-sync-preserve-%RANDOM%%RANDOM%"
+mkdir "%PRESERVE_DIR%" >nul 2>nul
+if exist "%DST%\resources\backend\config\google-service-account.json" copy /y "%DST%\resources\backend\config\google-service-account.json" "%PRESERVE_DIR%\google-service-account.json" >>"%LOG_FILE%" 2>&1
+if exist "%DST%\resources\backend\config\service-account.json" copy /y "%DST%\resources\backend\config\service-account.json" "%PRESERVE_DIR%\service-account.json" >>"%LOG_FILE%" 2>&1
+robocopy "%SRC%" "%DST%" /MIR /XD ".git" ".pytest_cache" "node_modules" "production-ready-backups" /XF google-service-account.json service-account.json "*.tmp" "*.temp" /R:2 /W:2 /NFL /NDL /NP /NJH /NJS >>"%LOG_FILE%" 2>&1
 set "ROBO_RC=%errorlevel%"
 if %ROBO_RC% GEQ 8 (
   call :log "ERROR: robocopy failed with code %ROBO_RC%."
   exit /b 1
 )
+if not exist "%DST%\resources\backend\config" mkdir "%DST%\resources\backend\config" >nul 2>nul
+if exist "%PRESERVE_DIR%\google-service-account.json" (
+  copy /y "%PRESERVE_DIR%\google-service-account.json" "%DST%\resources\backend\config\google-service-account.json" >>"%LOG_FILE%" 2>&1
+) else if exist "%SRC%\resources\backend\config\google-service-account.json" (
+  copy /y "%SRC%\resources\backend\config\google-service-account.json" "%DST%\resources\backend\config\google-service-account.json" >>"%LOG_FILE%" 2>&1
+)
+if exist "%PRESERVE_DIR%\service-account.json" (
+  copy /y "%PRESERVE_DIR%\service-account.json" "%DST%\resources\backend\config\service-account.json" >>"%LOG_FILE%" 2>&1
+) else if exist "%SRC%\resources\backend\config\service-account.json" (
+  copy /y "%SRC%\resources\backend\config\service-account.json" "%DST%\resources\backend\config\service-account.json" >>"%LOG_FILE%" 2>&1
+)
+if exist "%PRESERVE_DIR%" rmdir /s /q "%PRESERVE_DIR%" >nul 2>nul
 exit /b 0
 
 :copy_file
@@ -376,5 +405,6 @@ goto :fail
 :fail
 call :section "BUILD FAILED"
 call :log "The rebuild stopped before completion."
+call :log "Last step: %LAST_STEP%"
 call :log "Check the log for details: %LOG_FILE%"
 exit /b 1

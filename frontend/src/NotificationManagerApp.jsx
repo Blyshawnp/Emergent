@@ -38,32 +38,38 @@ const SAM_TUTORIAL_STEPS = [
   {
     target: 'notification-list',
     title: 'Notification list',
-    body: 'Current, disabled, expired, and all alert rows are managed from this table.',
+    body: 'The Notifications screen reads and writes alert rows from the master sam-notifications tab.',
     placement: 'left',
   },
   {
     target: 'add-notification',
     title: 'Add notifications',
-    body: 'Add Notification opens the editor in a modal so the main screen stays focused on monitoring.',
+    body: 'Add Notification opens the editor in a modal. New rows default to ticker only, and the editor scrolls for delivery and schedule options.',
     placement: 'bottom',
   },
   {
     target: 'status-chips',
     title: 'Statuses',
-    body: 'These chips are passive health and sheet indicators, not controls.',
+    body: 'These chips show backend health, active sheet source, and the configured SAM user.',
     placement: 'left',
   },
   {
     target: 'help-access',
     title: 'Help',
-    body: 'Open Help for workflow guidance, Google Sheets sync details, and tutorial replay.',
+    body: 'Open Help for setup, centralized Google Sheet details, candidate admin workflows, updates, and tutorial replay.',
     placement: 'bottom',
   },
   {
     target: 'notification-list',
     title: 'Enable and edit',
-    body: 'Use Edit to open the modal. Use Enable or Disable to control whether a row is live.',
+    body: 'Use Edit to open the modal. Enable, Disable, and Delete update sam-notifications after confirmation.',
     placement: 'left',
+  },
+  {
+    target: 'candidate-tracking',
+    title: 'Candidate tracking',
+    body: 'Use the Candidate Tracking screen, filters, and candidate-name search to manage pending transfers, failed final attempts, withdrawn candidates, and extra-attempt approvals.',
+    placement: 'top',
   },
 ];
 let notificationStartupSoundAttempted = false;
@@ -74,6 +80,12 @@ function getErrorMessage(error, fallback) {
   if (error.code === 'ECONNABORTED') return 'Backend startup is taking longer than expected.';
   if (/network error/i.test(error.message || '')) return 'Waiting for backend services to start.';
   return error.message || fallback;
+}
+
+function sheetTruthy(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === null || value === undefined) return false;
+  return ['true', '1', 'yes', 'y', 'on', 'checked'].includes(String(value).trim().toLowerCase());
 }
 
 function PreviewBanner({ item }) {
@@ -155,9 +167,21 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
         <div className="nm-help-grid">
           <div className="nm-help-card">
             <h3>What SAM Is</h3>
-            <p><strong>SAM</strong> = Smart Alert Manager. It manages real-time ticker, popup, and banner alerts used by the main testing workflow.</p>
+            <p><strong>SAM</strong> = Smart Alert Manager. It manages real-time alerts and candidate availability actions for the main testing workflow.</p>
             <p>Powered by Mock Testing Suite.</p>
             <p>Version {version}</p>
+          </div>
+          <div className="nm-help-card">
+            <h3>First-Run Setup</h3>
+            <p>SAM requires an assigned name and PIN from the master Google Sheet before the dashboard opens. Disabled users cannot complete setup.</p>
+          </div>
+          <div className="nm-help-card">
+            <h3>Access Management</h3>
+            <p>Admins manage access in the master sheet sam-authorized-users tab. Add users, disable users, change PINs, and revoke access directly in that tab.</p>
+          </div>
+          <div className="nm-help-card">
+            <h3>Central Sheet</h3>
+            <p>The master Google Sheet stores sam-notifications, Candidate Sessions, Pending Sup Transfers, update-SAM, and SAM authorized-user setup data.</p>
           </div>
           <div className="nm-help-card">
             <h3>Notification Types</h3>
@@ -177,11 +201,11 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Views</h3>
-            <p>Current shows enabled, non-expired notifications. Disabled / Expired shows inactive rows. All Notifications keeps the full sheet view available.</p>
+            <p>The top section buttons switch between Notifications, Live Preview, Candidate Tracking views, and Help so SAM is not one long scrolling page. Current shows enabled, non-expired notifications. Disabled / Expired shows inactive rows. All Notifications keeps the full sheet view available.</p>
           </div>
           <div className="nm-help-card">
             <h3>Create</h3>
-            <p>Use Add Notification to open the editor. Fill in the message, delivery options, schedule, and active status, then submit to the sheet.</p>
+            <p>Use Add Notification to open the editor. New rows default to ticker only; scroll inside the editor for delivery, schedule, and action options, then submit to the sheet.</p>
           </div>
           <div className="nm-help-card">
             <h3>Edit</h3>
@@ -189,15 +213,15 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Disable</h3>
-            <p>Disable makes a row inactive without deleting it. Re-enable it from the Disabled / Expired or All Notifications view when needed.</p>
+            <p>Disable makes a row inactive without deleting it. Disable, Enable, and Delete require confirmation and show a success status after the sheet updates.</p>
           </div>
           <div className="nm-help-card">
             <h3>Google Sheets Sync</h3>
-            <p>Refresh reads the configured sheet. Submit writes the selected notification back to the existing sheet schema.</p>
+            <p>Refresh reads the master sam-notifications tab. Submit writes the selected notification back to that tab using the working notification schema.</p>
           </div>
           <div className="nm-help-card">
             <h3>Candidate Tracking</h3>
-            <p>SAM can be used by admins to review candidate availability signals from shared tracking, including failed-not-final, incomplete, pending supervisor-transfer, and withdrawn candidate states.</p>
+            <p>SAM can be used by admins to review candidate availability signals from shared tracking, including pending supervisor-transfer, incomplete, failed-not-final, failed final attempt, withdrawn, extra-attempt, and all-active filters. Use the candidate-name search field inside the tracking screen to narrow long lists.</p>
           </div>
           <div className="nm-help-card">
             <h3>Pending Sup Transfers</h3>
@@ -205,7 +229,11 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Attempts and Withdrawal</h3>
-            <p>Failed, not-final attempts remain visible for tracking. Withdrawn candidates are not available for active testing until an admin reverses the withdrawal, and granted extra attempts allow the candidate to continue beyond the normal attempt warning.</p>
+            <p>Failed final attempts have their own filter and can receive an Extra Attempt after confirmation. Withdrawn candidates stay blocked in MTS until an admin restores the withdrawal or grants an extra attempt.</p>
+          </div>
+          <div className="nm-help-card">
+            <h3>Admin Actions</h3>
+            <p>Withdraw, Restore/Revert Withdrawal, Extra Attempt, and Pending Sup Transfer cancellation all require confirmation and refresh the shared candidate list after the Google Sheet update.</p>
           </div>
           <div className="nm-help-card">
             <h3>Updates</h3>
@@ -217,7 +245,7 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           </div>
           <div className="nm-help-card">
             <h3>Local Fallback</h3>
-            <p>If the sheet cannot be read, SAM keeps a local draft so alerts can still be prepared and exported.</p>
+            <p>If the master sheet cannot be reached, SAM shows a non-blocking warning. Legacy notification sheets are read only as migration/fallback sources.</p>
           </div>
           <div className="nm-help-card">
             <h3>Attribution</h3>
@@ -268,41 +296,173 @@ function UpdateModal({ updateInfo, onInstall, onLater }) {
   );
 }
 
+function StatusModal({ message, kind = 'info', onClose }) {
+  if (!message) return null;
+  const title = kind === 'error' ? 'Action Failed' : kind === 'warning' ? 'Warning' : 'Success';
+  return (
+    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="nm-help-modal nm-status-modal" role="dialog" aria-modal="true">
+        <div className="nm-help-header">
+          <div>
+            <div className="nm-overline">{title}</div>
+            <h2>{title}</h2>
+            <p>{message}</p>
+          </div>
+          <button type="button" className="nm-modal-close" onClick={onClose} aria-label="Close status">×</button>
+        </div>
+        <div className="nm-help-actions">
+          <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>OK</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function getSamDeviceName() {
+  try {
+    return window.electronAPI?.getDeviceName?.() || window.navigator?.platform || '';
+  } catch (_error) {
+    return '';
+  }
+}
+
+function SamSetupWizard({ status, onComplete }) {
+  const [form, setForm] = useState({ name: '', pin: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(status?.error || '');
+
+  useEffect(() => {
+    setError(status?.error || '');
+  }, [status?.error]);
+
+  const submitSetup = async (event) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await api.completeSamSetup({
+        name: form.name.trim(),
+        pin: form.pin.trim(),
+        device_name: getSamDeviceName(),
+      });
+      if (!result?.ok) {
+        setError(result?.error || 'Name or PIN was not recognized or access has been disabled.');
+        return;
+      }
+      onComplete?.(result);
+    } catch (setupError) {
+      setError(getErrorMessage(setupError, 'SAM setup requires access to the admin configuration sheet.'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="nm-app nm-setup-app">
+      <div className="nm-setup-shell">
+        <section className="nm-setup-panel">
+          <div className="nm-overline">SAM SETUP</div>
+          <h1>{SAM_TITLE}</h1>
+          <p>Enter the assigned admin name and PIN from the master Google Sheet to enable Smart Alert Manager on this device.</p>
+          <form className="nm-setup-form" onSubmit={submitSetup}>
+            <label>
+              <span>Name</span>
+              <input
+                type="text"
+                value={form.name}
+                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                autoComplete="name"
+                required
+              />
+            </label>
+            <label>
+              <span>PIN</span>
+              <input
+                type="password"
+                inputMode="numeric"
+                value={form.pin}
+                onChange={(event) => setForm((current) => ({ ...current, pin: event.target.value }))}
+                autoComplete="one-time-code"
+                required
+              />
+            </label>
+            {error ? (
+              <div className="nm-status-card is-warning">
+                <strong>Setup blocked</strong>
+                <span>{error}</span>
+              </div>
+            ) : null}
+            <button type="submit" className="nm-btn nm-btn-primary" disabled={submitting || !form.name.trim() || !form.pin.trim()}>
+              {submitting ? 'Verifying...' : 'Complete Setup'}
+            </button>
+          </form>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 const CANDIDATE_VIEW_LABELS = {
   pending: 'Pending Sup Transfers',
-  failedNotFinal: 'Failed, Not Final',
   incomplete: 'Incomplete',
+  failedNotFinal: 'Failed, Not Final',
+  failedFinalAttempts: 'Failed Final Attempts',
   withdrawn: 'Withdrawn',
   extraAttemptGranted: 'Extra Attempt Granted',
   allActive: 'All Active Candidates',
 };
 
+const SECTION_NAV_ITEMS = [
+  { key: 'notifications', label: 'Notifications', target: 'sam-notifications' },
+  { key: 'preview', label: 'Live Preview', target: 'sam-live-preview' },
+  { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive' },
+  { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending' },
+  { key: 'candidates', label: 'Failed Candidates', target: 'sam-candidate-tracking', candidateView: 'failedNotFinal' },
+  { key: 'candidates', label: 'Failed Final Attempts', target: 'sam-candidate-tracking', candidateView: 'failedFinalAttempts' },
+  { key: 'candidates', label: 'Withdrawn', target: 'sam-candidate-tracking', candidateView: 'withdrawn' },
+  { key: 'candidates', label: 'Extra Attempts', target: 'sam-candidate-tracking', candidateView: 'extraAttemptGranted' },
+  { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
+];
+
 function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction }) {
+  const [search, setSearch] = useState('');
   const rows = data?.views?.[view] || [];
+  const searchText = search.trim().toLowerCase();
+  const visibleRows = searchText
+    ? rows.filter((row) => String(row.candidate_name || '').toLowerCase().includes(searchText))
+    : rows;
   const setup = data?.setup || {};
   const requiredSetup = Object.entries(setup)
-    .map(([tab, headers]) => `${tab}: ${headers.join(', ')}`)
+    .map(([tab, headers]) => `${tab}: ${Array.isArray(headers) ? headers.join(', ') : String(headers || '')}`)
     .join('\n');
 
   const handleWithdraw = async (row) => {
-    const confirmed = window.confirm('Mark this candidate as withdrew from certification?');
+    const confirmed = window.confirm(`Mark ${row.candidate_name || 'this candidate'} as withdrew from certification?`);
     if (!confirmed) return;
     await onAction({ action: 'withdraw', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id });
   };
 
+  const handleRestore = async (row) => {
+    const confirmed = window.confirm(`Restore ${row.candidate_name || 'this candidate'} from withdrew from certification status?`);
+    if (!confirmed) return;
+    await onAction({ action: 'restore_withdrawal', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id });
+  };
+
   const handleExtraAttempt = async (row) => {
+    const confirmed = window.confirm(`Grant an additional attempt for ${row.candidate_name || 'this candidate'}?`);
+    if (!confirmed) return;
     const reason = window.prompt('Reason for granting an extra attempt?') || '';
     await onAction({ action: 'grant_extra_attempt', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id, reason });
   };
 
   const handleCancel = async (row) => {
-    const confirmed = window.confirm('Cancel this pending supervisor transfer?');
+    const confirmed = window.confirm(`Cancel pending supervisor transfer for ${row.candidate_name || 'this candidate'}?`);
     if (!confirmed) return;
     await onAction({ action: 'cancel_pending', candidate_name: row.candidate_name, pending_id: row.pending_id, session_id: row.original_session_id });
   };
 
   return (
-    <section className="nm-panel nm-candidate-panel">
+    <section className="nm-panel nm-candidate-panel" id="sam-candidate-tracking" data-sam-tour="candidate-tracking">
       <div className="nm-section-title">
         <div>
           <h2>Candidate Tracking</h2>
@@ -331,6 +491,16 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           </button>
         ))}
       </div>
+      <div className="nm-search-row">
+        <label htmlFor="sam-candidate-search">Search by candidate name</label>
+        <input
+          id="sam-candidate-search"
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Type a candidate name..."
+        />
+      </div>
       <div className="nm-table-wrap">
         <table className="nm-table nm-candidate-table">
           <thead>
@@ -346,27 +516,31 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             </tr>
           </thead>
           <tbody>
-            {!rows.length ? (
+            {!visibleRows.length ? (
               <tr><td colSpan={8}><div className="nm-empty">No candidates in this view.</div></td></tr>
-            ) : rows.map((row, index) => {
+            ) : visibleRows.map((row, index) => {
               const results = [row.call_1_result, row.call_2_result, row.call_3_result, row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || row.mock_call_summary || 'Recorded';
               return (
                 <tr key={`${row.pending_id || row.session_id || row.latest_session_id || row.candidate_name}-${index}`}>
                   <td>
                     <div className="nm-row-title">{row.candidate_name || 'Unknown'}</div>
-                    <div className="nm-meta">{row.final_attempt || row.final_attempt_risk ? 'Final-attempt risk' : row.extra_attempt_granted ? 'Extra attempt granted' : 'Active'}</div>
+                    <div className="nm-meta">{sheetTruthy(row.final_attempt) || sheetTruthy(row.final_attempt_risk) ? 'Final-attempt risk' : sheetTruthy(row.extra_attempt_granted) ? 'Extra attempt granted' : 'Active'}</div>
                   </td>
                   <td>{row.status || row.latest_status || 'Unknown'}</td>
                   <td>{row.attempt_count ?? row.attempt_number ?? '0'}</td>
                   <td>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
-                  <td className="nm-meta">{row.created_at || row.completed_at || row.last_session_date || 'Unknown'}</td>
+                  <td className="nm-meta">{row.completed_at || row.last_session_date || row.created_at || 'Unknown'}</td>
                   <td className="nm-meta">{results}</td>
-                  <td className="nm-meta nm-notes-cell">{row.notes || row.coaching_summary || row.fail_summary || 'None recorded'}</td>
+                  <td className="nm-meta nm-notes-cell">{row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded'}</td>
                   <td>
                     <div className="nm-row-actions">
                       {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
                       <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
-                      <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
+                      {sheetTruthy(row.withdrawn) || String(row.status || row.latest_status || '').toUpperCase() === 'WITHDREW FROM CERTIFICATION' ? (
+                        <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
+                      ) : (
+                        <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -525,6 +699,7 @@ function NotificationEditorModal({
             </div>
           </div>
 
+          <div className="nm-editor-scroll-cue">Scroll for delivery and schedule options.</div>
           <div className="nm-editor-scroll">
             {selectedItem ? (
               <div className="nm-form-layout">
@@ -715,13 +890,25 @@ export default function NotificationManagerApp() {
   const [samBannerSrc, setSamBannerSrc] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editorDraft, setEditorDraft] = useState(null);
+  const [editorIndex, setEditorIndex] = useState(null);
+  const [statusModal, setStatusModal] = useState(null);
   const [tutorialStep, setTutorialStep] = useState(null);
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
+  const [activeSection, setActiveSection] = useState('notifications');
   const [candidateView, setCandidateView] = useState('pending');
   const [candidateTracking, setCandidateTracking] = useState({ ok: true, views: {}, candidates: [], pending: [], error: '' });
   const [candidateTrackingLoading, setCandidateTrackingLoading] = useState(false);
-  const closeEditor = useCallback(() => setEditorOpen(false), []);
+  const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
+  const showStatusModal = useCallback((message, kind = 'info') => {
+    setStatusModal({ message, kind });
+  }, []);
+  const closeEditor = useCallback(() => {
+    setEditorOpen(false);
+    setEditorDraft(null);
+    setEditorIndex(null);
+  }, []);
 
   const clearBackendStartupRetryTimer = useCallback(() => {
     const timer = backendStartupRetryRef.current.timer;
@@ -845,19 +1032,34 @@ export default function NotificationManagerApp() {
     try {
       const result = await api.updateSharedAdminCandidate(payload);
       if (!result?.ok) {
-        setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: result?.error || 'Candidate tracking update failed.' }));
+        const message = result?.error || 'Candidate tracking update failed.';
+        setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
+        showStatusModal(message, 'error');
         return;
       }
-      setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: 'Candidate tracking updated in the shared Google Sheet.' }));
+      const actionLabels = {
+        grant_extra_attempt: 'Extra attempt granted in the shared Google Sheet. MTS should allow this candidate again after refresh.',
+        withdraw: 'Candidate withdrawn in the shared Google Sheet. MTS should block this candidate after refresh.',
+        restore_withdrawal: 'Candidate restored in the shared Google Sheet. MTS should allow lookup again after refresh.',
+        cancel_pending: 'Pending supervisor transfer cancelled in the shared Google Sheet.',
+      };
+      setSheetState((current) => ({
+        ...current,
+        statusKind: 'success',
+        statusMessage: actionLabels[payload?.action] || 'Candidate tracking updated in the shared Google Sheet.',
+      }));
+      showStatusModal(actionLabels[payload?.action] || 'Candidate tracking updated in the shared Google Sheet.', 'success');
       await loadCandidateTracking({ silent: true });
     } catch (error) {
+      const message = getErrorMessage(error, 'Candidate tracking update failed.');
       setSheetState((current) => ({
         ...current,
         statusKind: 'error',
-        statusMessage: error instanceof Error ? error.message : 'Candidate tracking update failed.',
+        statusMessage: message,
       }));
+      showStatusModal(message, 'error');
     }
-  }, [loadCandidateTracking]);
+  }, [loadCandidateTracking, showStatusModal]);
 
   useEffect(() => {
     const root = document.getElementById('root');
@@ -948,6 +1150,7 @@ export default function NotificationManagerApp() {
   }, []);
 
   useEffect(() => {
+    if (!samSetupStatus.setupComplete) return undefined;
     if (localStorage.getItem(SAM_TUTORIAL_SEEN_KEY) === '1') return;
     const timer = window.setTimeout(() => {
       setTutorialStep(0);
@@ -955,7 +1158,7 @@ export default function NotificationManagerApp() {
       localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'seen');
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [samSetupStatus.setupComplete]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1011,10 +1214,13 @@ export default function NotificationManagerApp() {
   }, [handleCheckForUpdates]);
 
   const selectedItem = items[selectedIndex] || items[0];
-  const validation = useMemo(
-    () => (selectedItem ? validateNotification(selectedItem, items) : { errors: [], id: '' }),
-    [items, selectedItem],
-  );
+  const editorValidation = useMemo(() => {
+    if (!editorDraft) return { errors: [], id: '' };
+    const comparisonItems = editorIndex === null
+      ? items
+      : items.filter((_, index) => index !== editorIndex);
+    return validateNotification(editorDraft, comparisonItems);
+  }, [editorDraft, editorIndex, items]);
 
   const refreshDiagnostics = useCallback(async () => {
     try {
@@ -1026,6 +1232,27 @@ export default function NotificationManagerApp() {
       return status;
     } catch (_error) {
       return null;
+    }
+  }, []);
+
+  const loadSamSetupStatus = useCallback(async () => {
+    try {
+      const status = await api.getSamSetupStatus();
+      const nextStatus = {
+        loading: false,
+        setupComplete: Boolean(status?.setupComplete),
+        userName: status?.userName || '',
+        userRole: status?.userRole || status?.role || '',
+        ok: status?.ok !== false,
+        error: status?.error || '',
+      };
+      setSamSetupStatus(nextStatus);
+      return nextStatus;
+    } catch (error) {
+      const message = getErrorMessage(error, 'SAM setup requires access to the admin configuration sheet.');
+      const nextStatus = { loading: false, setupComplete: false, userName: '', userRole: '', ok: false, error: message };
+      setSamSetupStatus(nextStatus);
+      return nextStatus;
     }
   }, []);
 
@@ -1056,14 +1283,14 @@ export default function NotificationManagerApp() {
         backendStatus: 'connected',
         writeReady: Boolean(response?.write?.ready),
         writeError: response?.write?.error || '',
-        readError: response?.ok === false ? (response?.error || 'Unable to read the configured notification sheet.') : '',
+        readError: response?.ok === false ? (response?.error || 'Unable to read the master sam-notifications tab.') : '',
         sheetId: response?.sheet?.sheetId || '',
         statusKind: response?.ok === false ? 'warning' : current.statusKind,
-        statusMessage: response?.ok === false ? (response?.error || 'Unable to read the configured notification sheet.') : current.statusMessage,
+        statusMessage: response?.ok === false ? (response?.error || 'Unable to read the master sam-notifications tab.') : current.statusMessage,
       }));
       refreshDiagnostics();
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to read the configured notification sheet.');
+      const message = getErrorMessage(error, 'Unable to read the master sam-notifications tab.');
       setSheetState((current) => ({
         ...current,
         isLoading: false,
@@ -1098,13 +1325,26 @@ export default function NotificationManagerApp() {
       }
 
       await refreshDiagnostics();
+      const setup = await loadSamSetupStatus();
+      if (!setup.setupComplete) {
+        setSheetState((current) => ({
+          ...current,
+          isLoading: false,
+          backendReady: true,
+          backendStatus: 'connected',
+          statusKind: setup.ok ? 'info' : 'warning',
+          statusMessage: setup.error || 'SAM setup is required before the dashboard can open.',
+          readError: setup.error || '',
+        }));
+        return;
+      }
       await loadSheetItems({ silent: false });
       await loadCandidateTracking({ silent: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Unable to start SAM backend right now.');
       scheduleBackendStartupRetry(message);
     }
-  }, [clearBackendStartupRetryTimer, loadCandidateTracking, loadSheetItems, refreshDiagnostics, scheduleBackendStartupRetry]);
+  }, [clearBackendStartupRetryTimer, loadCandidateTracking, loadSamSetupStatus, loadSheetItems, refreshDiagnostics, scheduleBackendStartupRetry]);
 
   const retryBackendStartup = useCallback(() => attemptBackendStartupRetry(true), [attemptBackendStartupRetry]);
 
@@ -1146,6 +1386,19 @@ export default function NotificationManagerApp() {
           statusMessage: '',
         }));
         await refreshDiagnostics();
+        const setup = await loadSamSetupStatus();
+        if (!setup.setupComplete) {
+          setSheetState((current) => ({
+            ...current,
+            isLoading: false,
+            backendReady: true,
+            backendStatus: 'connected',
+            statusKind: setup.ok ? 'info' : 'warning',
+            statusMessage: setup.error || 'SAM setup is required before the dashboard can open.',
+            readError: setup.error || '',
+          }));
+          return;
+        }
         await loadSheetItems();
         await loadCandidateTracking({ silent: true });
       } catch (error) {
@@ -1172,20 +1425,23 @@ export default function NotificationManagerApp() {
       cancelled = true;
       clearBackendStartupRetryTimer();
     };
-  }, [clearBackendStartupRetryTimer, loadCandidateTracking, loadSheetItems, refreshDiagnostics, scheduleBackendStartupRetry]);
+  }, [clearBackendStartupRetryTimer, loadCandidateTracking, loadSamSetupStatus, loadSheetItems, refreshDiagnostics, scheduleBackendStartupRetry]);
 
   const selectNotification = (index) => {
     setSelectedIndex(index);
   };
 
   const openEditor = (index = selectedIndex) => {
-    if (Number.isInteger(index)) {
-      setSelectedIndex(index);
+    const safeIndex = Number.isInteger(index) && items[index] ? index : selectedIndex;
+    if (items[safeIndex]) {
+      setSelectedIndex(safeIndex);
+      setEditorIndex(safeIndex);
+      setEditorDraft(normalizeManagerNotification({ ...items[safeIndex] }));
     }
     setEditorOpen(true);
   };
 
-  const persistNotification = useCallback(async (item, { successMessage = '' } = {}) => {
+  const persistNotification = useCallback(async (item, { successMessage = '', sourceIndex = editorIndex } = {}) => {
     const outgoing = normalizeManagerNotification({
       ...item,
       ID: item?.ID || ensureNotificationId(item),
@@ -1202,12 +1458,14 @@ export default function NotificationManagerApp() {
     try {
       const result = await api.saveManagedNotification(outgoing);
       if (!result?.ok) {
+        const message = result?.error || 'The backend did not confirm a successful sheet write.';
         setSheetState((current) => ({
           ...current,
           isSaving: false,
           statusKind: 'error',
-          statusMessage: result?.error || 'The backend did not confirm a successful sheet write.',
+          statusMessage: message,
         }));
+        showStatusModal(message, 'error');
         return null;
       }
 
@@ -1215,7 +1473,9 @@ export default function NotificationManagerApp() {
       setItems((current) => {
         const replaced = current.some((entry) => entry.ID === savedItem.ID)
           ? current.map((entry) => (entry.ID === savedItem.ID ? savedItem : entry))
-          : current.map((entry, index) => (index === selectedIndex ? savedItem : entry));
+          : (sourceIndex === null
+            ? [...current, savedItem]
+            : current.map((entry, index) => (index === sourceIndex ? savedItem : entry)));
         const nextItems = sortManagerItems(replaced);
         const nextIndex = nextItems.findIndex((entry) => entry.ID === savedItem.ID);
         setSelectedIndex(nextIndex >= 0 ? nextIndex : 0);
@@ -1226,38 +1486,34 @@ export default function NotificationManagerApp() {
         isSaving: false,
         writeReady: true,
         statusKind: 'success',
-        statusMessage: successMessage || `Notification ${result.action === 'updated' ? 'updated' : 'appended'} in Google Sheet${result.sheetTitle ? ` (${result.sheetTitle})` : ''}.`,
+        statusMessage: successMessage || 'Notification saved. MTS should update within about a minute.',
       }));
       await loadSheetItems({ silent: true });
+      showStatusModal(successMessage || 'Notification saved. MTS should update within about a minute.', 'success');
       return savedItem;
     } catch (error) {
+      const message = getErrorMessage(error, 'Unable to submit the notification to Google Sheets.');
       setSheetState((current) => ({
         ...current,
         isSaving: false,
         statusKind: 'error',
-        statusMessage: error instanceof Error ? error.message : 'Unable to submit the notification to Google Sheets.',
+        statusMessage: message,
       }));
+      showStatusModal(message, 'error');
       return null;
     }
-  }, [loadSheetItems, selectedIndex]);
+  }, [editorIndex, loadSheetItems, showStatusModal]);
 
   const updateSelected = (patch) => {
-    if (Object.prototype.hasOwnProperty.call(patch, 'ID') && selectedItem?.ID && patch.ID !== selectedItem.ID) {
-      const confirmed = window.confirm('Change this notification ID? Popups dismissed under the old ID will show again if the ID changes.');
-      if (!confirmed) {
-        return;
-      }
-    }
-
-    setItems((current) => current.map((entry, index) => {
-      if (index !== selectedIndex) return entry;
+    setEditorDraft((currentDraft) => {
+      if (!currentDraft) return currentDraft;
       const next = normalizeManagerNotification({
-        ...entry,
+        ...currentDraft,
         ...patch,
         UpdatedAt: new Date().toISOString(),
       });
 
-      if (patch.EndDate && !entry.EndDate && !patch.EndTime) {
+      if (patch.EndDate && !currentDraft.EndDate && !patch.EndTime) {
         next.EndTime = '12:00 AM';
       }
 
@@ -1266,7 +1522,7 @@ export default function NotificationManagerApp() {
       }
 
       return next;
-    }));
+    });
   };
 
   const handleAdd = () => {
@@ -1278,8 +1534,8 @@ export default function NotificationManagerApp() {
       CreatedAt: new Date().toISOString(),
       UpdatedAt: new Date().toISOString(),
     });
-    setItems((current) => sortManagerItems([...current, next]));
-    setSelectedIndex(0);
+    setEditorDraft(next);
+    setEditorIndex(null);
     setEditorOpen(true);
   };
 
@@ -1292,13 +1548,17 @@ export default function NotificationManagerApp() {
       CreatedAt: new Date().toISOString(),
       UpdatedAt: new Date().toISOString(),
     });
-    setItems((current) => sortManagerItems([...current, duplicate]));
-    setSelectedIndex(0);
+    setEditorDraft(duplicate);
+    setEditorIndex(null);
     setEditorOpen(true);
   };
 
   const handleDeleteIndex = async (index) => {
     const target = items[index];
+    if (!target) {
+      closeEditor();
+      return;
+    }
     const confirmed = window.confirm(`Delete "${target?.Title || target?.Message || 'this notification'}"?`);
     if (!confirmed) return;
 
@@ -1313,21 +1573,25 @@ export default function NotificationManagerApp() {
     try {
       const result = await api.deleteManagedNotification(targetId);
       if (!result?.ok) {
+        const message = result?.error || 'The backend did not confirm the notification was deleted from the sheet.';
         setSheetState((current) => ({
           ...current,
           isSaving: false,
           statusKind: 'error',
-          statusMessage: result?.error || 'The backend did not confirm the notification was deleted from the sheet.',
+          statusMessage: message,
         }));
+        showStatusModal(message, 'error');
         return;
       }
     } catch (error) {
+      const message = getErrorMessage(error, 'Unable to delete the notification from Google Sheets.');
       setSheetState((current) => ({
         ...current,
         isSaving: false,
         statusKind: 'error',
-        statusMessage: error instanceof Error ? error.message : 'Unable to delete the notification from Google Sheets.',
+        statusMessage: message,
       }));
+      showStatusModal(message, 'error');
       return;
     }
 
@@ -1349,19 +1613,28 @@ export default function NotificationManagerApp() {
       ...current,
       isSaving: false,
       statusKind: 'success',
-      statusMessage: 'Notification deleted from Google Sheet.',
+      statusMessage: 'Notification deleted from sam-notifications. MTS should update within about a minute.',
     }));
     await loadSheetItems({ silent: true });
+    showStatusModal('Notification deleted.', 'success');
   };
 
   const handleDelete = () => {
-    handleDeleteIndex(selectedIndex);
+    if (editorIndex === null) {
+      closeEditor();
+      return;
+    }
+    handleDeleteIndex(editorIndex);
   };
 
   const handleToggleEnabled = async (index) => {
+    const target = items[index];
+    const nextEnabled = !target?.Enabled;
+    const confirmed = window.confirm(`${nextEnabled ? 'Enable' : 'Disable'} "${target?.Title || target?.Message || 'this notification'}"?`);
+    if (!confirmed) return;
     const toggled = normalizeManagerNotification({
-      ...items[index],
-      Enabled: !items[index]?.Enabled,
+      ...target,
+      Enabled: nextEnabled,
       UpdatedAt: new Date().toISOString(),
     });
     const nextItems = sortManagerItems(items.map((entry, rowIndex) => (
@@ -1372,7 +1645,8 @@ export default function NotificationManagerApp() {
     const nextIndex = nextItems.findIndex((entry) => entry.ID === targetId);
     setSelectedIndex(nextIndex >= 0 ? nextIndex : 0);
     await persistNotification(toggled, {
-      successMessage: `Notification ${toggled.Enabled ? 'enabled' : 'disabled'} in Google Sheet.`,
+      successMessage: `Notification ${toggled.Enabled ? 'enabled' : 'disabled'} in sam-notifications. MTS should update within about a minute.`,
+      sourceIndex: index,
     });
   };
 
@@ -1386,6 +1660,15 @@ export default function NotificationManagerApp() {
       };
     });
     downloadCsv('mock-testing-suite-notifications.csv', serializeNotificationsToCsv(normalizedItems));
+  };
+
+  const openSection = (item) => {
+    if (item.key === 'help') {
+      setHelpOpen(true);
+      return;
+    }
+    setActiveSection(item.key || 'notifications');
+    if (item.candidateView) setCandidateView(item.candidateView);
   };
 
   const handleExitApp = async () => {
@@ -1412,17 +1695,22 @@ export default function NotificationManagerApp() {
   };
 
   const handleSubmit = async () => {
-    if (!selectedItem) return;
-    if (validation.errors.length > 0) {
+    if (!editorDraft) return;
+    if (editorValidation.errors.length > 0) {
       setSheetState((current) => ({
         ...current,
         statusKind: 'error',
-        statusMessage: validation.errors[0],
+        statusMessage: editorValidation.errors[0],
       }));
+      showStatusModal(editorValidation.errors[0], 'error');
       return;
     }
 
-    await persistNotification({ ...selectedItem, ID: validation.id });
+    const saved = await persistNotification({ ...editorDraft, ID: editorValidation.id }, {
+      successMessage: 'Notification saved. MTS should update within about a minute.',
+      sourceIndex: editorIndex,
+    });
+    if (saved) closeEditor();
   };
 
   const handleImport = async (event) => {
@@ -1456,8 +1744,9 @@ export default function NotificationManagerApp() {
     `Backend started here: ${sheetState.backendStartedByNotificationApp ? 'yes' : 'no'}`,
     `Startup retries: ${sheetState.backendRetryCount || 0}`,
     `Ticker source: ${(sheetState.tickerSource || 'unknown').toUpperCase()}`,
+    samSetupStatus.userName ? `SAM user: ${samSetupStatus.userName}` : null,
     sheetState.writeReady ? 'Direct sheet write ready' : 'Direct sheet write not configured',
-  ];
+  ].filter(Boolean);
 
   const visibleItems = items
     .map((item, index) => ({ item: normalizeManagerNotification(item), index }))
@@ -1466,6 +1755,32 @@ export default function NotificationManagerApp() {
       if (notificationView === 'disabled') return !isCurrentNotification(item);
       return true;
     });
+
+  const handleSamSetupComplete = async (result) => {
+    const nextStatus = {
+      loading: false,
+      setupComplete: true,
+      userName: result?.name || result?.userName || '',
+      userRole: result?.role || result?.userRole || '',
+      ok: true,
+      error: '',
+    };
+    setSamSetupStatus(nextStatus);
+    setSheetState((current) => ({
+      ...current,
+      backendReady: true,
+      backendStatus: 'connected',
+      statusKind: 'success',
+      statusMessage: `SAM setup complete${nextStatus.userName ? ` for ${nextStatus.userName}` : ''}.`,
+      readError: '',
+    }));
+    await loadSheetItems({ silent: false });
+    await loadCandidateTracking({ silent: true });
+  };
+
+  if (sheetState.backendReady && !samSetupStatus.loading && !samSetupStatus.setupComplete) {
+    return <SamSetupWizard status={samSetupStatus} onComplete={handleSamSetupComplete} />;
+  }
 
   return (
     <div className="nm-app">
@@ -1521,6 +1836,29 @@ export default function NotificationManagerApp() {
           </div>
         </section>
 
+        <section className="nm-section-nav" aria-label="SAM sections">
+          <div>
+            <div className="nm-toolbar-label">Sections</div>
+            <div className="nm-kicker">Jump directly to notification work or candidate administration.</div>
+          </div>
+          <div className="nm-section-nav-buttons">
+            {SECTION_NAV_ITEMS.map((item) => (
+              <button
+                key={`${item.target}-${item.label}`}
+                type="button"
+                className={`nm-btn nm-btn-secondary nm-btn-table ${
+                  item.key === 'candidates'
+                    ? (activeSection === 'candidates' && item.candidateView === candidateView ? 'is-active' : '')
+                    : (activeSection === item.key ? 'is-active' : '')
+                }`}
+                onClick={() => openSection(item)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
         {sheetState.statusMessage ? (
           <section className={`nm-status-card is-${sheetState.statusKind || 'info'}`}>
             <strong>{sheetState.statusKind === 'success' ? 'Success' : sheetState.statusKind === 'warning' ? 'Warning' : sheetState.statusKind === 'error' ? 'Status' : 'Starting'}</strong>
@@ -1535,8 +1873,9 @@ export default function NotificationManagerApp() {
           </section>
         ) : null}
 
-        <div className="nm-grid">
-          <section className="nm-panel nm-preview-panel">
+        <div className={`nm-grid nm-screen-grid nm-screen-${activeSection}`}>
+          {activeSection === 'preview' ? (
+          <section className="nm-panel nm-preview-panel" id="sam-live-preview">
             <div className="nm-preview-card">
               <div className="nm-section-title">
                 <div>
@@ -1566,8 +1905,10 @@ export default function NotificationManagerApp() {
               )}
             </div>
           </section>
+          ) : null}
 
-          <section className="nm-panel" data-sam-tour="notification-list">
+          {activeSection === 'notifications' ? (
+          <section className="nm-panel" id="sam-notifications" data-sam-tour="notification-list">
             <div className="nm-section-title">
               <div>
                 <h2>Notifications</h2>
@@ -1649,20 +1990,23 @@ export default function NotificationManagerApp() {
               </table>
             </div>
           </section>
+          ) : null}
         </div>
-        <CandidateTrackingPanel
-          data={candidateTracking}
-          view={candidateView}
-          onViewChange={setCandidateView}
-          loading={candidateTrackingLoading}
-          onRefresh={() => loadCandidateTracking()}
-          onAction={runCandidateAction}
-        />
+        {activeSection === 'candidates' ? (
+          <CandidateTrackingPanel
+            data={candidateTracking}
+            view={candidateView}
+            onViewChange={setCandidateView}
+            loading={candidateTrackingLoading}
+            onRefresh={() => loadCandidateTracking()}
+            onAction={runCandidateAction}
+          />
+        ) : null}
       </div>
       <NotificationEditorModal
         open={editorOpen}
-        selectedItem={selectedItem}
-        validation={validation}
+        selectedItem={editorDraft}
+        validation={editorValidation}
         importError={importError}
         sheetState={sheetState}
         updateSelected={updateSelected}
@@ -1697,6 +2041,11 @@ export default function NotificationManagerApp() {
         updateInfo={updateModal}
         onInstall={handleInstallUpdate}
         onLater={() => setUpdateModal(null)}
+      />
+      <StatusModal
+        message={statusModal?.message || ''}
+        kind={statusModal?.kind || 'info'}
+        onClose={() => setStatusModal(null)}
       />
     </div>
   );

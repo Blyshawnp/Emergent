@@ -51,14 +51,30 @@ function SelectStep({ selected, onToggle, onCancel, onContinue }) {
   );
 }
 
-function SpeedAskStep({ onNext }) {
+function SpeedAskStep({ onNo, onYes }) {
   return (
     <div>
       <h3 className="ti-title">Internet Speed Issues</h3>
       <p className="ti-body">Did you have the candidate do a speed test?</p>
       <div className="ti-actions">
-        <button className="btn btn-muted" onClick={onNext} data-testid="speed-test-no">No, have them do one</button>
-        <button className="btn btn-primary" onClick={onNext} data-testid="speed-test-yes">Yes</button>
+        <button className="btn btn-muted" onClick={onNo} data-testid="speed-test-no">No, have them do one</button>
+        <button className="btn btn-primary" onClick={onYes} data-testid="speed-test-yes">Yes</button>
+      </div>
+    </div>
+  );
+}
+
+function SpeedInstructionStep({ onOk }) {
+  return (
+    <div>
+      <h3 className="ti-title">Speed Test Required</h3>
+      <p className="ti-body">
+        Please have the candidate go to the website{' '}
+        <a href="http://www.speedtest.net" target="_blank" rel="noreferrer">www.speedtest.net</a>
+        {' '}to run a speed test.
+      </p>
+      <div className="ti-actions">
+        <button className="btn btn-primary" onClick={onOk} data-testid="speed-instruction-ok">OK</button>
       </div>
     </div>
   );
@@ -271,7 +287,7 @@ function CompleteAskStep({ onEndSession, onContinue }) {
 }
 
 // --- Main Controller ---
-export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavigate, context = '' }) {
+export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavigate, onBeforeNavigate, context = '' }) {
   const [step, setStep] = useState('select');
   const [selected, setSelected] = useState({});
   const [otherNotes, setOtherNotes] = useState('');
@@ -292,8 +308,17 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
 
   const handleClose = useCallback(() => { reset(); onClose(); }, [reset, onClose]);
 
-  const goToReview = useCallback(() => { handleClose(); onNavigate('review'); }, [handleClose, onNavigate]);
-  const goToNewbie = useCallback(() => { handleClose(); onNavigate('newbieshift'); }, [handleClose, onNavigate]);
+  const goToReview = useCallback(async () => {
+    if (onBeforeNavigate) await onBeforeNavigate();
+    await api.getCurrentSession().catch(() => null);
+    handleClose();
+    onNavigate('review');
+  }, [handleClose, onBeforeNavigate, onNavigate]);
+  const goToNewbie = useCallback(async () => {
+    if (onBeforeNavigate) await onBeforeNavigate();
+    handleClose();
+    onNavigate('newbieshift');
+  }, [handleClose, onBeforeNavigate, onNavigate]);
 
   useEffect(() => {
     if (open) {
@@ -340,7 +365,9 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
       case 'select':
         return <SelectStep selected={selected} onToggle={id => setSelected(prev => ({ ...prev, [id]: !prev[id] }))} onCancel={handleClose} onContinue={processIssues} />;
       case 'speed-ask':
-        return <SpeedAskStep onNext={() => setStep('speed-input')} />;
+        return <SpeedAskStep onNo={() => setStep('speed-instruction')} onYes={() => setStep('speed-input')} />;
+      case 'speed-instruction':
+        return <SpeedInstructionStep onOk={() => setStep('speed-input')} />;
       case 'speed-input':
         return <SpeedInputStep speedDown={speedDown} speedUp={speedUp} onDownChange={setSpeedDown} onUpChange={setSpeedUp} onBack={() => setStep('speed-ask')} onSubmit={() => {
           const dl = parseFloat(speedDown); const ul = parseFloat(speedUp);
@@ -351,7 +378,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
         return <SpeedFailStep speedDown={speedDown} speedUp={speedUp} isFinalAttempt={isFinalAttempt} onGoToReview={async () => {
           await logIssue('Internet speed issues - failed speed test', false);
           await api.updateSession({ auto_fail_reason: 'Internet speed too low', final_status: 'Fail' });
-          goToReview();
+          await goToReview();
         }} />;
       case 'dte-ask':
         return <DteAskStep isSupervisorTransfer={isSupervisorTransfer} onNo={() => setStep('dte-fix')} onYes={() => setStep('browser-ask')} />;
@@ -386,7 +413,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
       case 'other-notes':
         return <OtherNotesStep notes={otherNotes} onNotesChange={setOtherNotes} onNotResolved={async () => { await logIssue(`Other: ${otherNotes}`, false); setStep('complete-ask'); }} onResolved={async () => { await logIssue(`Other: ${otherNotes}`, true); continueToNextIssue(); }} />;
       case 'complete-ask':
-        return <CompleteAskStep onEndSession={async () => { await api.updateSession({ final_status: 'Fail' }); goToReview(); }} onContinue={handleClose} />;
+        return <CompleteAskStep onEndSession={async () => { await api.updateSession({ final_status: 'Fail' }); await goToReview(); }} onContinue={handleClose} />;
       default:
         return null;
     }

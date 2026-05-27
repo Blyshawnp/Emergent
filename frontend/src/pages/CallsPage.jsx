@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
+import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
@@ -541,7 +542,10 @@ export default function CallsPage({ onNavigate, navigationState }) {
       </div>
 
       <div className="card" style={{ marginBottom: 16 }} data-tour="calls-coaching">
-        <h3>Coaching Given</h3>
+        <div className="coaching-card-header">
+          <h3>Coaching Given</h3>
+          <PhoneticsTableButton />
+        </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <CoachingGrid items={callCoaching} checked={coaching} onChange={setCoaching} />
         <div style={{ marginTop: 16 }}>
@@ -578,7 +582,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
         </div>
       )}
 
-      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
+      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} onBeforeNavigate={saveCallDraftNow} />
 
       <div className="footer-bar sticky-action-footer" data-testid="calls-footer">
         <div className="action-safety-group">

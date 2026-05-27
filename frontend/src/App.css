@@ -331,6 +331,55 @@ a { color: var(--color-primary); text-decoration: none; }
   background: var(--bg-input);
   color: var(--text-tertiary);
 }
+.settings-diagnostics-result {
+  margin-top: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+.settings-diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.settings-diagnostics-grid > div {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  min-width: 0;
+}
+.settings-diagnostics-grid > div.full {
+  grid-column: 1 / -1;
+}
+.settings-diagnostics-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.settings-diagnostics-grid strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.settings-diagnostics-json {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
 .btn-spinner {
   width: 14px;
   height: 14px;
@@ -789,6 +838,14 @@ input[type="text"], input[type="password"], input[type="email"], input[type="num
 }
 input:focus, select:focus, textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.15); outline: none; }
 input::placeholder, textarea::placeholder { color: var(--text-tertiary); }
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text-primary);
+  caret-color: var(--text-primary);
+  box-shadow: 0 0 0 1000px var(--bg-input) inset;
+  transition: background-color 9999s ease-out 0s;
+}
 input:disabled, select:disabled, textarea:disabled { opacity: 0.72; cursor: not-allowed; background: color-mix(in srgb, var(--bg-input) 82%, var(--border-default)); border-color: var(--border-subtle); color: var(--text-tertiary); }
 select { cursor: pointer; }
 input[type="date"]::-webkit-calendar-picker-indicator {
@@ -945,6 +1002,21 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   line-height: 1.55;
   max-width: 520px;
   margin-inline: auto;
+}
+
+.vpn-help-links {
+  margin-top: 8px;
+  line-height: 1.55;
+}
+.vpn-help-links div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 6px;
+}
+.vpn-help-links a {
+  color: var(--color-primary-light);
+  font-weight: 700;
 }
 
 .headset-lookup-subtitle {
@@ -1212,6 +1284,48 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .modal-close { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: var(--text-secondary); font-size: 22px; cursor: pointer; border-radius: var(--radius-sm); transition: background-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast); }
 .modal-close:hover { background: var(--bg-card-hover); color: var(--text-primary); }
 .modal-body { padding: var(--space-lg); overflow-y: auto; flex: 1; }
+.modal-body .text-muted,
+.cmodal .text-muted,
+.cmodal-body,
+.ti-subtitle,
+.ti-body {
+  color: var(--text-primary);
+}
+.coaching-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.coaching-card-header h3 {
+  margin: 0;
+}
+.phonetics-modal {
+  width: min(760px, 94vw);
+}
+.phonetics-image {
+  width: 100%;
+  max-height: 58vh;
+  object-fit: contain;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+}
+.phonetics-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.phonetics-copy-status {
+  margin-top: 10px;
+  color: var(--text-primary);
+}
+.btn.copied {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: #ffffff;
+}
 .headset-lookup-update-note {
   margin: 0 0 var(--space-md);
   color: var(--text-tertiary);

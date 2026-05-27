@@ -2,12 +2,25 @@ import React, { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 
+function adminHistoryControlsEnabled() {
+  try {
+    return Boolean(window.electronAPI?.getRuntimeFlags?.().adminDiagnosticsEnabled);
+  } catch (_) {
+    return false;
+  }
+}
+
+function detailDate(record) {
+  return record?.timestamp || record?.completed_at || record?.created_at || record?.displayDate || '';
+}
+
 export default function HistoryPage({ onNavigate, navigationState }) {
   const modal = useModal();
   const [stats, setStats] = useState({});
   const [history, setHistory] = useState([]);
   const [search, setSearch] = useState('');
   const [detail, setDetail] = useState(null);
+  const [showAdminHistoryControls] = useState(() => adminHistoryControlsEnabled());
 
   const load = useCallback(async () => {
     try {
@@ -119,13 +132,18 @@ export default function HistoryPage({ onNavigate, navigationState }) {
     <div data-testid="history-page">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <h1>Session History</h1>
-        <button className="btn btn-danger btn-sm" onClick={async () => {
-          if (history.length === 0) { await modal.warning('Notice', 'No history to clear.'); return; }
-          const c = await modal.confirmDanger('Clear History', `This will permanently delete ${history.length} session records. This cannot be undone.`);
-          if (!c) return;
-          if (!await modal.confirm('Confirm', 'This cannot be undone. Are you absolutely sure?')) return;
-          await api.clearHistory(); await modal.alert('Cleared', 'Session history has been cleared.'); load();
-        }} data-testid="history-clear">Clear All History</button>
+        {showAdminHistoryControls && (
+          <button className="btn btn-danger btn-sm" onClick={async () => {
+            if (history.length === 0) { await modal.warning('Notice', 'No history to clear.'); return; }
+            const c = await modal.confirmDanger('Clear History', `This will permanently delete ${history.length} session records. This cannot be undone.`);
+            if (!c) return;
+            if (!await modal.confirm('Confirm', 'This cannot be undone. Are you absolutely sure?')) return;
+            await api.clearHistory(); await modal.alert('Cleared', 'Session history has been cleared.'); load();
+          }} data-testid="history-clear">Clear All History</button>
+        )}
+      </div>
+      <div className="text-sm text-muted" style={{ marginTop: -12, marginBottom: 18 }}>
+        Local History shows recent sessions from this app/user. Shared Google Sheet lookup remains available for older or cross-tester candidate records.
       </div>
 
       <div className="stats-row" style={{ marginBottom: 24 }}>
@@ -173,7 +191,15 @@ export default function HistoryPage({ onNavigate, navigationState }) {
               <button className="modal-close" onClick={() => setDetail(null)}>&times;</button>
             </div>
             <div className="modal-body" style={{ lineHeight: 1.7 }}>
-              <div className="text-muted text-sm" style={{ marginBottom: 16 }}>{detail.timestamp || ''}</div>
+              <div className="text-muted text-sm" style={{ marginBottom: 16 }}>{detailDate(detail)}</div>
+              <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+                <div className="text-sm"><strong>Candidate:</strong> {detail.candidate || detail.candidate_name || 'Unknown'}</div>
+                <div className="text-sm"><strong>Tester:</strong> {detail.tester_name || 'N/A'}</div>
+                <div className="text-sm"><strong>Status:</strong> {detail.status || detail.final_status || 'Unknown'}</div>
+                <div className="text-sm"><strong>Date:</strong> {detailDate(detail) || 'Unknown'}</div>
+                <div className="text-sm"><strong>Final Attempt:</strong> {detail.final_attempt ? 'Yes' : 'No'}</div>
+                {detail.headset_brand && <div className="text-sm"><strong>Headset:</strong> {detail.headset_brand}</div>}
+              </div>
               <strong>Tester:</strong> {detail.tester_name || 'N/A'}<br />
               {detail.auto_fail_reason && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{detail.auto_fail_reason}</span><br /></>}
               {detail.headset_brand && <><strong>Headset:</strong> {detail.headset_brand}<br /></>}
@@ -206,6 +232,18 @@ export default function HistoryPage({ onNavigate, navigationState }) {
               {detail.newbie_shift_data && (
                 <><br /><strong>Newbie Shift:</strong> {detail.newbie_shift_data.newbie_date} at {detail.newbie_shift_data.newbie_time} {detail.newbie_shift_data.newbie_tz}</>
               )}
+              <div style={{ marginTop: 16 }}>
+                <div className="text-sm font-bold">Coaching Summary</div>
+                <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{detail.coaching_summary || 'None recorded'}</div>
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <div className="text-sm font-bold">Fail Summary</div>
+                <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{detail.fail_summary || 'N/A'}</div>
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <div className="text-sm font-bold">Notes</div>
+                <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{detail.notes || detail.review_notes || 'None recorded'}</div>
+              </div>
             </div>
             <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
               <button className="btn btn-muted" onClick={() => setDetail(null)}>Close</button>

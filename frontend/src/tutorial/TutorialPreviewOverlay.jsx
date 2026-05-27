@@ -136,7 +136,7 @@ export default function TutorialPreviewOverlay({
       page: 'basics',
       target: '[data-testid="basics-candidate"]',
       fallbackTarget: '[data-testid="basics-page"]',
-      content: 'Basics collects candidate details and required pre-checks before scoring starts. Use this page to confirm final attempt status, VPN/browser readiness, and the required setup items.',
+      content: 'Basics collects candidate details and required pre-checks before scoring starts. Shared candidate lookup waits for a stronger name entry, then you confirm the correct candidate before any final-attempt or withdrawn blocking applies.',
       placement: 'bottom',
     },
     {
@@ -144,7 +144,7 @@ export default function TutorialPreviewOverlay({
       page: 'basics',
       target: '[data-testid="basics-headset-lookup"]',
       fallbackTarget: '[data-testid="basics-page"]',
-      content: 'The headset section is where you record the candidate headset and use Lookup Approved Headsets to confirm the model. Headset failures route through the app’s fail handling.',
+      content: 'The headset section is where you record the candidate headset. Start typing to use approved-headset autocomplete, or open Lookup Approved Headsets to confirm the model.',
       placement: 'right',
     },
     {
@@ -206,7 +206,7 @@ export default function TutorialPreviewOverlay({
       id: 'history-page',
       page: 'history',
       target: '[data-testid="history-page"]',
-      content: 'History stores completed sessions for later lookup. From a saved record, you can review the summaries again or run historical Fill Form without changing the active session.',
+      content: 'History stores recent sessions tested on this local app/user. Older and cross-tester candidate records remain available through shared Google Sheet lookup and read-only review.',
       placement: 'center',
     },
     {

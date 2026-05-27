@@ -6,6 +6,112 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 const HEADSET_HELPER_TEXT = '*If the brand/model is not listed, confirm it is USB and has a noise-cancelling microphone. Unsure? Post in Discord Tester Room.';
 
+function normalizeName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function isStrongCandidateLookupQuery(value) {
+  const normalized = normalizeName(value);
+  const parts = normalized.split(' ').filter(Boolean);
+  return parts.length >= 2 && normalized.length >= 5 && (parts[1].length >= 1 || normalized.length >= 7);
+}
+
+function getCandidateDate(record) {
+  return record?.completed_at || record?.created_at || record?.displayDate || '';
+}
+
+function candidateHasFinalAttemptUsed(record) {
+  return String(record?.status || '').trim().toUpperCase() === 'FAIL-FINAL ATTEMPT';
+}
+
+function sheetTruthy(value) {
+  if (typeof value === 'boolean') return value;
+  if (value === null || value === undefined) return false;
+  return ['true', '1', 'yes', 'y', 'on', 'checked'].includes(String(value).trim().toLowerCase());
+}
+
+function candidateIsWithdrawn(record) {
+  return sheetTruthy(record?.withdrawn) || String(record?.status || '').trim().toUpperCase() === 'WITHDREW FROM CERTIFICATION';
+}
+
+function candidateIsNcns(record) {
+  return String(record?.status || record?.final_status || '').trim().toUpperCase() === 'NC/NS'
+    || String(record?.auto_fail_reason || '').trim().toUpperCase().startsWith('NC');
+}
+
+function selectedHeadsetLabel(group, model) {
+  return `${group.brand || ''} ${model || ''}`.trim();
+}
+
+function normalizeLookupValue(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function isMissingHeadsetValue(value) {
+  const normalized = normalizeLookupValue(value);
+  return !normalized || normalized === 'n/a' || normalized === 'na' || normalized === 'none' || normalized === 'unknown';
+}
+
+function booleanOrCurrent(value, current) {
+  if (value === undefined || value === null || value === '') return current;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', 'yes', 'y', '1'].includes(normalized)) return true;
+  if (['false', 'no', 'n', '0'].includes(normalized)) return false;
+  return current;
+}
+
+function findMostRecentHeadset(matches, candidateName) {
+  const normalized = normalizeName(candidateName).toLowerCase();
+  const match = (matches || []).find((record) => (
+    normalizeName(record?.candidate_name).toLowerCase() === normalized &&
+    !isMissingHeadsetValue(record?.headset_brand)
+  ));
+  return String(match?.headset_brand || '').trim();
+}
+
+function hasUsableBasicsInfo(record) {
+  if (!record || isMissingHeadsetValue(record.headset_brand)) return false;
+  const required = [
+    record.headset_usb,
+    record.noise_cancel,
+    record.vpn_on,
+    record.chrome_default,
+    record.extensions_disabled,
+    record.popups_allowed,
+  ];
+  if (required.some((value) => booleanOrCurrent(value, null) === null)) return false;
+  if (booleanOrCurrent(record.vpn_on, null) === true && booleanOrCurrent(record.vpn_off, null) === null) return false;
+  return true;
+}
+
+function sortedCandidateRecords(records, candidateName) {
+  const normalized = normalizeName(candidateName).toLowerCase();
+  return (records || [])
+    .filter((record) => normalizeName(record?.candidate_name || record?.candidate).toLowerCase() === normalized)
+    .sort((a, b) => String(getCandidateDate(b) || '').localeCompare(String(getCandidateDate(a) || '')));
+}
+
+function findUsableBasicsRecord(records, candidateName, excludeSessionId = '') {
+  return sortedCandidateRecords(records, candidateName).find((record) => (
+    String(record?.session_id || record?.history_id || '') !== String(excludeSessionId || '') &&
+    !candidateIsNcns(record) &&
+    hasUsableBasicsInfo(record)
+  )) || null;
+}
+
+function headsetIsApproved(value, approvedHeadsets) {
+  const normalized = normalizeLookupValue(value);
+  if (!normalized) return true;
+  return (approvedHeadsets || []).some((group) => {
+    const brand = String(group?.brand || '').trim();
+    return (group?.models || []).some((model) => {
+      const modelText = String(model || '').trim();
+      return normalizeLookupValue(`${brand} ${modelText}`) === normalized || normalizeLookupValue(modelText) === normalized;
+    });
+  });
+}
+
 function hasBasicsDraft(form) {
   return Boolean(
     String(form.candidate_name || '').trim() ||
@@ -31,7 +137,8 @@ export default function BasicsPage({ onNavigate }) {
   const [approvedHeadsets, setApprovedHeadsets] = useState([]);
   const [headsetLookupError, setHeadsetLookupError] = useState('');
   const [headsetLookupLoading, setHeadsetLookupLoading] = useState(true);
-  const [candidateLookup, setCandidateLookup] = useState({ loading: false, matches: [], error: '', finalAttempt: false, withdrawn: false, extraAttemptGranted: false });
+  const [candidateLookup, setCandidateLookup] = useState({ loading: false, skipped: false, matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false });
+  const [confirmedCandidateMatch, setConfirmedCandidateMatch] = useState(null);
   const [previousSessionOpen, setPreviousSessionOpen] = useState(false);
   const [finalAttemptNoticeShownFor, setFinalAttemptNoticeShownFor] = useState('');
   const [form, setForm] = useState({
@@ -111,29 +218,41 @@ export default function BasicsPage({ onNavigate }) {
 
   useEffect(() => {
     const candidateName = form.candidate_name.trim();
-    if (!hydratedRef.current || candidateName.length < 2) {
-      setCandidateLookup({ loading: false, matches: [], error: '', finalAttempt: false, withdrawn: false, extraAttemptGranted: false });
+    if (!hydratedRef.current) {
       return undefined;
     }
 
-    setCandidateLookup((current) => ({ ...current, loading: true, error: '' }));
+    if (confirmedCandidateMatch && normalizeName(confirmedCandidateMatch.candidate_name).toLowerCase() !== normalizeName(candidateName).toLowerCase()) {
+      setConfirmedCandidateMatch(null);
+    }
+
+    if (!isStrongCandidateLookupQuery(candidateName)) {
+      setCandidateLookup({ loading: false, skipped: Boolean(candidateName), matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false });
+      return undefined;
+    }
+
+    setCandidateLookup((current) => ({ ...current, loading: true, skipped: false, error: '' }));
     const timer = window.setTimeout(async () => {
       try {
         const response = await api.lookupSharedCandidate(candidateName);
         setCandidateLookup({
           loading: false,
+          skipped: false,
           matches: Array.isArray(response?.matches) ? response.matches : [],
           error: response?.ok === false ? 'Shared candidate lookup unavailable. Using local session mode.' : '',
           finalAttempt: Boolean(response?.finalAttempt),
+          finalAttemptUsed: Boolean(response?.finalAttemptUsed),
           withdrawn: Boolean(response?.withdrawn),
           extraAttemptGranted: Boolean(response?.extraAttemptGranted),
         });
       } catch (error) {
         setCandidateLookup({
           loading: false,
+          skipped: false,
           matches: [],
           error: 'Shared candidate lookup unavailable. Using local session mode.',
           finalAttempt: false,
+          finalAttemptUsed: false,
           withdrawn: false,
           extraAttemptGranted: false,
         });
@@ -141,11 +260,11 @@ export default function BasicsPage({ onNavigate }) {
     }, 650);
 
     return () => window.clearTimeout(timer);
-  }, [form.candidate_name]);
+  }, [confirmedCandidateMatch, form.candidate_name]);
 
   useEffect(() => {
-    const candidateName = form.candidate_name.trim().toLowerCase();
-    if (!candidateLookup.finalAttempt || !candidateName || finalAttemptNoticeShownFor === candidateName) {
+    const candidateName = normalizeName(form.candidate_name).toLowerCase();
+    if (!confirmedCandidateMatch || !candidateLookup.finalAttempt || !candidateName || finalAttemptNoticeShownFor === candidateName) {
       return;
     }
     setForm((current) => ({ ...current, final_attempt: true }));
@@ -154,24 +273,164 @@ export default function BasicsPage({ onNavigate }) {
       'Final Attempt Detected',
       'Shared records show two prior qualifying failures for this candidate. Final Attempt has been set to Yes.'
     );
-  }, [candidateLookup.finalAttempt, finalAttemptNoticeShownFor, form.candidate_name, modal]);
+  }, [candidateLookup.finalAttempt, confirmedCandidateMatch, finalAttemptNoticeShownFor, form.candidate_name, modal]);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
   const mostRecentPreviousSession = candidateLookup.matches[0] || null;
 
-  const loadBasicsFromPreviousSession = async () => {
-    if (!mostRecentPreviousSession) return;
+  const discardWithoutConfirmation = async () => {
+    await api.discardSession();
+    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+    onNavigate('home');
+  };
+
+  const handleCandidateBlockOrOverride = async (match) => {
+    if (form.candidate_override_used) {
+      return { allowed: true, override: true };
+    }
+    const candidateName = match?.candidate_name || form.candidate_name.trim() || 'This candidate';
+    const extraAttemptGranted = sheetTruthy(candidateLookup.extraAttemptGranted) || sheetTruthy(match?.extra_attempt_granted);
+    if (candidateIsWithdrawn(match) && !extraAttemptGranted) {
+      await modal.showModal({
+        type: 'warning',
+        title: 'Candidate Withdrawn',
+        body: `<b>${candidateName}</b> is marked withdrawn from certification. Testing cannot continue unless an admin restores the candidate or grants an extra attempt in SAM. This session will be discarded.`,
+        graphic: 'warning',
+        buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
+      });
+      await discardWithoutConfirmation();
+      return { allowed: false };
+    }
+
+    if ((candidateLookup.finalAttemptUsed || candidateHasFinalAttemptUsed(match)) && !extraAttemptGranted) {
+      const choice = await modal.showModal({
+        type: 'warning',
+        title: 'Final Attempt Already Used',
+        body: `${candidateName} has already used their last attempt and is no longer able to continue. Please have the candidate email certification@acddirect.com if there are any issues. You can also post in the Discord Tester Room for further assistance. This session will be discarded.`,
+        graphic: 'warning',
+        buttons: [
+          { label: 'OK', cls: 'btn-primary', value: 'discard' },
+          { label: 'Override', cls: 'btn-danger', value: 'override' },
+        ],
+      });
+      if (choice !== 'override') {
+        await discardWithoutConfirmation();
+        return { allowed: false };
+      }
+      const confirmed = await modal.showModal({
+        type: 'confirm',
+        title: 'Confirm Override',
+        body: `Are you sure that you want to continue testing ${candidateName} with an additional attempt?`,
+        graphic: 'warning',
+        buttons: [
+          { label: 'Yes', cls: 'btn-danger', value: true },
+          { label: 'No', cls: 'btn-muted', value: false },
+        ],
+      });
+      if (!confirmed) return { allowed: false };
+      await modal.warning(
+        'Override Logged',
+        'Override should only be used if there is an error or with permission from the Admin. If you have not yet done so, please notify Admin in the Discord Tester Room that an override was used for this candidate. This session will be logged as an override.'
+      );
+      return { allowed: true, override: true };
+    }
+
+    return { allowed: true, override: false };
+  };
+
+  const logUnknownHeadsetIfNeeded = async (sessionData) => {
+    const headsetModel = String(sessionData?.headset_brand || '').trim();
+    if (!headsetModel || headsetIsApproved(headsetModel, approvedHeadsets)) return;
+    try {
+      await api.logHeadsetReview({
+        headset_model: headsetModel,
+        candidate_name: sessionData?.candidate_name || '',
+        tester_name: sessionData?.tester_name || '',
+      });
+    } catch (_error) {
+      // Headset review logging is non-blocking; certification workflow continues.
+    }
+  };
+
+  const buildBasicsRecoveredForm = (source, candidateName, finalAttempt, blockResult) => ({
+    ...form,
+    candidate_name: candidateName || form.candidate_name,
+    tester_name: form.tester_name || settings.tester_name || source?.tester_name || '',
+    final_attempt: finalAttempt,
+    headset_usb: booleanOrCurrent(source?.headset_usb, form.headset_usb),
+    noise_cancel: booleanOrCurrent(source?.noise_cancel, form.noise_cancel),
+    headset_brand: isMissingHeadsetValue(source?.headset_brand)
+      ? (findMostRecentHeadset(candidateLookup.matches, candidateName) || form.headset_brand)
+      : String(source?.headset_brand || '').trim(),
+    vpn_on: booleanOrCurrent(source?.vpn_on, form.vpn_on),
+    vpn_off: booleanOrCurrent(source?.vpn_off, form.vpn_off),
+    chrome_default: booleanOrCurrent(source?.chrome_default, form.chrome_default),
+    extensions_disabled: booleanOrCurrent(source?.extensions_disabled, form.extensions_disabled),
+    popups_allowed: booleanOrCurrent(source?.popups_allowed, form.popups_allowed),
+    candidate_override_used: Boolean(blockResult.override),
+    candidate_override_reason: blockResult.override ? 'Tester override after shared final-attempt block.' : '',
+  });
+
+  const startConfirmedCandidate = async (match) => {
+    if (!match) return;
+    const candidateName = match.candidate_name || form.candidate_name.trim();
     const confirmed = await modal.confirm(
-      'Load Basics',
-      'Load matching Basics fields from the most recent previous session? You can still edit the fields before continuing.'
+      'Correct Candidate?',
+      `Use shared records for <b>${candidateName || 'this candidate'}</b> and start testing?`
     );
     if (!confirmed) return;
-    setForm((current) => ({
-      ...current,
-      candidate_name: mostRecentPreviousSession.candidate_name || current.candidate_name,
-      tester_name: current.tester_name || settings.tester_name || '',
-      final_attempt: candidateLookup.finalAttempt || Boolean(mostRecentPreviousSession.final_attempt) || current.final_attempt,
-    }));
+
+    const blockResult = await handleCandidateBlockOrOverride(match);
+    if (!blockResult.allowed) return;
+
+    const finalAttempt = sheetTruthy(candidateLookup.finalAttempt) || sheetTruthy(match.final_attempt) || sheetTruthy(form.final_attempt);
+    let basicsSource = match;
+    if (candidateIsNcns(match) || !hasUsableBasicsInfo(match)) {
+      let history = [];
+      try {
+        history = await api.getHistory();
+      } catch (_error) {
+        history = [];
+      }
+      basicsSource = findUsableBasicsRecord(
+        [...history, ...candidateLookup.matches],
+        candidateName,
+        match.session_id || match.history_id || ''
+      );
+      if (!basicsSource) {
+        const linkedForm = {
+          ...form,
+          candidate_name: candidateName || form.candidate_name,
+          tester_name: form.tester_name || settings.tester_name || match.tester_name || '',
+          final_attempt: finalAttempt,
+          candidate_override_used: Boolean(blockResult.override),
+          candidate_override_reason: blockResult.override ? 'Tester override after shared final-attempt block.' : '',
+        };
+        setConfirmedCandidateMatch(match);
+        setForm(linkedForm);
+        await api.updateSession({ ...linkedForm, supervisor_only: supervisorOnlyMode, status: 'In Progress' }).catch(() => {});
+        await modal.warning(
+          'Basics Required',
+          'No previous Basics information exists for this candidate. Please complete the Basics screen before continuing.'
+        );
+        return;
+      }
+    }
+
+    const nextForm = buildBasicsRecoveredForm(basicsSource, candidateName, finalAttempt, blockResult);
+    setConfirmedCandidateMatch(match);
+    setForm(nextForm);
+    if (finalAttempt && finalAttemptNoticeShownFor !== normalizeName(nextForm.candidate_name).toLowerCase()) {
+      setFinalAttemptNoticeShownFor(normalizeName(nextForm.candidate_name).toLowerCase());
+      await modal.warning(
+        'Final Attempt Detected',
+        'Shared records indicate this candidate is on a final attempt. Final Attempt has been set to Yes.'
+      );
+    }
+    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+    await logUnknownHeadsetIfNeeded(nextForm);
+    await api.startSession({ ...nextForm, supervisor_only: supervisorOnlyMode, time_for_sup: supervisorOnlyMode ? true : null });
+    onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
   };
 
   const filteredHeadsets = useMemo(() => {
@@ -193,9 +452,7 @@ export default function BasicsPage({ onNavigate }) {
   const handleDiscardSession = async () => {
     const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');
     if (!confirmed) return;
-    await api.discardSession();
-    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    onNavigate('home');
+    await discardWithoutConfirmation();
   };
 
   const autoFail = async (reason) => {
@@ -212,16 +469,21 @@ export default function BasicsPage({ onNavigate }) {
     if (!confirmed) return;
     const data = { ...form, supervisor_only: supervisorOnlyMode, auto_fail_reason: reason, final_status: 'Fail' };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+    await logUnknownHeadsetIfNeeded(data);
     await api.startSession(data);
     onNavigate('review');
   };
 
   const handleContinue = async () => {
     const d = form;
+    let candidateBlockResult = { allowed: true, override: false };
     if (!d.candidate_name.trim()) { await modal.warning('Missing Info', 'Candidate Name is required.'); return; }
-    if (candidateLookup.withdrawn) {
-      await modal.warning('Candidate Withdrawn', 'Shared records show this candidate withdrew from certification. They cannot be resumed or started again unless an admin reverses the withdrawal in SAM.');
-      return;
+    if (confirmedCandidateMatch) {
+      candidateBlockResult = await handleCandidateBlockOrOverride(confirmedCandidateMatch);
+      if (!candidateBlockResult.allowed) return;
+      if (candidateBlockResult.override) {
+        set('candidate_override_used', true);
+      }
     }
     if (d.headset_usb === null || d.noise_cancel === null || !d.headset_brand.trim()) { await modal.warning('Missing Info', 'All Headset fields are required.'); return; }
     if (d.vpn_on === null) { await modal.warning('Missing Info', 'VPN question must be answered.'); return; }
@@ -243,8 +505,10 @@ export default function BasicsPage({ onNavigate }) {
         ],
       });
       if (yes) {
+        const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' });
+        await logUnknownHeadsetIfNeeded(failData);
+        await api.startSession(failData);
         onNavigate('review');
       }
       return;
@@ -252,8 +516,10 @@ export default function BasicsPage({ onNavigate }) {
     if (d.vpn_on && d.vpn_off === false) {
       const yes = await modal.confirm('VPN Issue', 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?');
       if (yes) {
+        const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' });
+        await logUnknownHeadsetIfNeeded(failData);
+        await api.startSession(failData);
         onNavigate('review');
       }
       return;
@@ -261,8 +527,10 @@ export default function BasicsPage({ onNavigate }) {
     if (d.chrome_default === false) {
       const fixed = await modal.confirm('Browser Issue', 'The browser must be set as default so that DTE login functions properly.<br><br>Were they able to fix it?');
       if (!fixed) {
+        const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' });
+        await logUnknownHeadsetIfNeeded(failData);
+        await api.startSession(failData);
         onNavigate('review');
         return;
       }
@@ -270,8 +538,10 @@ export default function BasicsPage({ onNavigate }) {
     if (d.extensions_disabled === false) {
       const fixed = await modal.confirm('Browser Issue', 'Browser extensions must be disabled so they do not interfere with the script.<br><br>Were they able to fix it?');
       if (!fixed) {
+        const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' });
+        await logUnknownHeadsetIfNeeded(failData);
+        await api.startSession(failData);
         onNavigate('review');
         return;
       }
@@ -279,14 +549,24 @@ export default function BasicsPage({ onNavigate }) {
     if (d.popups_allowed === false) {
       const fixed = await modal.confirm('Browser Issue', 'Necessary pop-ups must be allowed so the script can pop correctly.<br><br>Were they able to fix it?');
       if (!fixed) {
+        const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' });
+        await logUnknownHeadsetIfNeeded(failData);
+        await api.startSession(failData);
         onNavigate('review');
         return;
       }
     }
+    const startData = {
+      ...d,
+      candidate_override_used: Boolean(d.candidate_override_used || candidateBlockResult.override),
+      candidate_override_reason: d.candidate_override_reason || (candidateBlockResult.override ? 'Tester override after shared final-attempt block.' : ''),
+      supervisor_only: supervisorOnlyMode,
+      time_for_sup: supervisorOnlyMode ? true : null,
+    };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    await api.startSession({ ...d, supervisor_only: supervisorOnlyMode, time_for_sup: supervisorOnlyMode ? true : null });
+    await logUnknownHeadsetIfNeeded(startData);
+    await api.startSession(startData);
     onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
   };
 
@@ -319,6 +599,11 @@ export default function BasicsPage({ onNavigate }) {
         {candidateLookup.loading && (
           <div className="text-xs text-muted" style={{ marginTop: 10 }}>Checking shared candidate records...</div>
         )}
+        {candidateLookup.skipped && (
+          <div className="text-xs text-muted" style={{ marginTop: 10 }}>
+            Shared lookup starts after a stronger candidate name is entered, such as first name plus part of last name.
+          </div>
+        )}
         {candidateLookup.error && (
           <div className="text-xs" style={{ marginTop: 10, color: 'var(--color-warning)' }}>{candidateLookup.error}</div>
         )}
@@ -328,20 +613,25 @@ export default function BasicsPage({ onNavigate }) {
               <div>
                 <div style={{ fontWeight: 800 }}>Previous session found for this candidate.</div>
                 <div className="text-xs text-muted">
-                  Most recent: {mostRecentPreviousSession?.status || 'Unknown'} by {mostRecentPreviousSession?.tester_name || 'Unknown tester'}
+                  Candidate: <b>{mostRecentPreviousSession?.candidate_name || form.candidate_name}</b> - Tester: {mostRecentPreviousSession?.tester_name || 'Unknown tester'} - Status: {mostRecentPreviousSession?.status || 'Unknown'} - Date: {getCandidateDate(mostRecentPreviousSession)}
+                </div>
+                <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                  Attempt: {mostRecentPreviousSession?.attempt_number || mostRecentPreviousSession?.attempt_count || 'Unknown'}
+                  {candidateLookup.finalAttempt ? ' - final attempt now' : ''}
+                  {candidateLookup.finalAttemptUsed || candidateHasFinalAttemptUsed(mostRecentPreviousSession) ? ' - final attempt already used' : ''}
                   {candidateLookup.extraAttemptGranted ? ' - extra attempt granted' : ''}
                   {candidateLookup.withdrawn ? ' - withdrew from certification' : ''}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 <button type="button" className="btn btn-muted btn-sm" onClick={() => setPreviousSessionOpen(true)}>Review Previous Session</button>
-                <button type="button" className="btn btn-primary btn-sm" onClick={loadBasicsFromPreviousSession}>Load Basics</button>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => startConfirmedCandidate(mostRecentPreviousSession)}>Correct Candidate</button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCandidateLookup((current) => ({ ...current, matches: [] }))}>Ignore</button>
               </div>
             </div>
           </div>
         )}
-        {candidateLookup.finalAttempt && (
+        {confirmedCandidateMatch && candidateLookup.finalAttempt && (
           <div className="banner banner-fail" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
             Shared records indicate this is the candidate&apos;s final attempt.
           </div>
@@ -351,7 +641,7 @@ export default function BasicsPage({ onNavigate }) {
             Shared records show an additional attempt was granted.
           </div>
         )}
-        {candidateLookup.withdrawn && (
+        {confirmedCandidateMatch && candidateLookup.withdrawn && (
           <div className="banner banner-fail" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
             This candidate withdrew from certification and cannot be resumed or started unless reversed by an admin.
           </div>
@@ -370,7 +660,12 @@ export default function BasicsPage({ onNavigate }) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <label className="text-sm font-bold" style={{ minWidth: 160 }}>Brand / Model</label>
-            <input type="text" value={form.headset_brand} onChange={e => set('headset_brand', e.target.value)} placeholder="e.g. Logitech H390" style={{ maxWidth: 280 }} data-testid="basics-brand" />
+            <input type="text" value={form.headset_brand} onChange={e => set('headset_brand', e.target.value)} placeholder="e.g. Logitech H390" style={{ maxWidth: 280 }} list="approved-headset-options" data-testid="basics-brand" />
+            <datalist id="approved-headset-options">
+              {approvedHeadsets.flatMap((group) => (group.models || []).map((model) => selectedHeadsetLabel(group, model))).slice(0, 160).map((label) => (
+                <option key={label} value={label} />
+              ))}
+            </datalist>
           </div>
           <div style={{ marginTop: 4 }}>
             <div className="basics-headset-actions">
@@ -400,6 +695,14 @@ export default function BasicsPage({ onNavigate }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, opacity: form.vpn_on ? 1 : 0.3, pointerEvents: form.vpn_on ? 'auto' : 'none' }}>
               <label className="text-sm font-bold" style={{ minWidth: 110 }}>Can turn off?</label>
               <RadioGroup name="b-vpnoff" value={form.vpn_off} onChange={v => set('vpn_off', v)} />
+            </div>
+            <div className="text-xs text-muted vpn-help-links">
+              If checking for VPN or proxy is necessary, more than one check is recommended because some databases do not update as often as others. You can have the candidate navigate to one or more of the following websites:
+              <div>
+                <a href="https://www.ip2location.com/" target="_blank" rel="noreferrer">ip2location.com</a>
+                <a href="https://ip.teoh.io/vpn-detection" target="_blank" rel="noreferrer">ip.teoh.io/vpn-detection</a>
+                <a href="https://nodedata.io/vpn-detection-test" target="_blank" rel="noreferrer">nodedata.io/vpn-detection-test</a>
+              </div>
             </div>
           </div>
         </div>
@@ -563,7 +866,12 @@ function PreviousSessionModal({ matches, onClose }) {
                 </button>
                 {isOpen && (
                   <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+                    <div className="text-sm"><b>Candidate:</b> {session.candidate_name || 'Unknown'}</div>
+                    <div className="text-sm"><b>Tester:</b> {session.tester_name || 'Unknown tester'}</div>
+                    <div className="text-sm"><b>Status:</b> {session.status || 'Unknown'}</div>
+                    <div className="text-sm"><b>Date:</b> {getCandidateDate(session)}</div>
                     <div className="text-sm"><b>Completed:</b> {session.completed_at || session.created_at || 'Unknown'}</div>
+                    <div className="text-sm"><b>Attempt:</b> {session.attempt_number || session.attempt_count || 'Unknown'}</div>
                     <div className="text-sm"><b>Final attempt:</b> {session.final_attempt ? 'Yes' : 'No'}</div>
                     <div className="text-sm"><b>Pending supervisor transfer:</b> {session.needs_sup_transfer ? 'Yes' : 'No'}</div>
                     <div className="text-sm"><b>Calls:</b> {[session.call_1_result, session.call_2_result, session.call_3_result].filter(Boolean).join(', ') || 'None recorded'}</div>
@@ -575,6 +883,10 @@ function PreviousSessionModal({ matches, onClose }) {
                     <div>
                       <div className="text-sm font-bold">Reason for Fail Summary</div>
                       <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{session.fail_summary || 'N/A'}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold">Notes</div>
+                      <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{session.notes || session.review_notes || 'None recorded'}</div>
                     </div>
                   </div>
                 )}

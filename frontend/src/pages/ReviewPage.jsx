@@ -55,10 +55,22 @@ function computeFinalStatus(session) {
 
 function normalizeReviewSession(session) {
   if (!session) return null;
+  const withResult = (existing, result) => existing || (result ? { result } : existing);
   return {
     ...session,
     candidate_name: session.candidate_name || session.candidate || '',
+    tester_name: session.tester_name || '',
+    call_1: withResult(session.call_1, session.call_1_result),
+    call_2: withResult(session.call_2, session.call_2_result),
+    call_3: withResult(session.call_3, session.call_3_result),
+    sup_transfer_1: withResult(session.sup_transfer_1, session.sup_transfer_1_result),
+    sup_transfer_2: withResult(session.sup_transfer_2, session.sup_transfer_2_result),
+    review_notes: session.review_notes || session.notes || '',
   };
+}
+
+function reviewSessionDate(session) {
+  return session?.timestamp || session?.completed_at || session?.created_at || session?.displayDate || '';
 }
 
 function getHistoricalCoachingSummary(session) {
@@ -205,7 +217,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
   const copyText = async (text, btnId) => {
     await navigator.clipboard.writeText(text);
     const btn = document.getElementById(btnId);
-    if (btn) { const orig = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = orig; }, 1500); }
+    if (btn) { const orig = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = orig; }, 3000); }
   };
 
   const handleRegen = async (type) => {
@@ -367,6 +379,18 @@ export default function ReviewPage({ onNavigate, navigationState }) {
           <div className="candidate-header review-candidate-header">
             <span className="candidate-header-label">Candidate:</span> {s.candidate_name}
           </div><br />
+          <strong>Tester:</strong> {s.tester_name || 'N/A'}<br />
+          <strong>Date:</strong> {reviewSessionDate(s) || 'N/A'}<br />
+          <strong>Status:</strong> {s.status || s.final_status || finalStatus}<br />
+          <strong>Final Attempt:</strong> {s.final_attempt ? 'Yes' : 'No'}<br />
+          <strong>Headset USB:</strong> {s.headset_usb === true ? 'Yes' : s.headset_usb === false ? 'No' : 'N/A'}<br />
+          <strong>Noise Cancelling Mic:</strong> {s.noise_cancel === true ? 'Yes' : s.noise_cancel === false ? 'No' : 'N/A'}<br />
+          <strong>Headset:</strong> {s.headset_brand || 'N/A'}<br />
+          <strong>VPN:</strong> {s.vpn_on === true ? 'Yes' : s.vpn_on === false ? 'No' : 'N/A'}<br />
+          {s.vpn_on === true && <><strong>VPN Can Turn Off:</strong> {s.vpn_off === true ? 'Yes' : s.vpn_off === false ? 'No' : 'N/A'}<br /></>}
+          <strong>Default Browser:</strong> {s.chrome_default === true ? 'Yes' : s.chrome_default === false ? 'No' : 'N/A'}<br />
+          <strong>Extensions Off:</strong> {s.extensions_disabled === true ? 'Yes' : s.extensions_disabled === false ? 'No' : 'N/A'}<br />
+          <strong>Pop-ups Allowed:</strong> {s.popups_allowed === true ? 'Yes' : s.popups_allowed === false ? 'No' : 'N/A'}<br />
           <strong>Skills:</strong> {supOnly ? 'Supervisor Transfer ONLY' : 'Mock Calls + Supervisor Transfer'}<br />
           {autoFail && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{autoFail}</span><br /></>}
           {!supOnly && (<>
@@ -440,6 +464,11 @@ export default function ReviewPage({ onNavigate, navigationState }) {
             </button>
           )}
         </div>
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <h3>Notes</h3>
+        <textarea className="review-textarea" rows={4} value={s.review_notes || s.notes || ''} readOnly data-testid="review-notes" />
       </div>
 
       <div className="footer-bar sticky-action-footer" data-testid="review-footer">

@@ -15,10 +15,19 @@ const TABS = [
   { key: 'coaching', label: 'Coaching' },
   { key: 'failreasons', label: 'Fail Reasons' },
   { key: 'discord', label: 'Discord' },
+  { key: 'admin', label: 'Admin' },
 ];
 
 const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC'];
 const APP_VERSION_FALLBACK = '1.0.1';
+
+function adminDiagnosticsEnabled() {
+  try {
+    return Boolean(window.electronAPI?.getRuntimeFlags?.().adminDiagnosticsEnabled);
+  } catch (_error) {
+    return false;
+  }
+}
 
 function resolveScreenshotUrl(imageUrl) {
   const value = String(imageUrl || '').trim();
@@ -68,6 +77,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
   const [s, setS] = useState({});
   const [defaults, setDefaults] = useState({});
   const [loading, setLoading] = useState(true);
+  const [showAdminDiagnostics] = useState(() => adminDiagnosticsEnabled());
   const [checkingForUpdates, setCheckingForUpdates] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [sectionFeedback, setSectionFeedback] = useState({});
@@ -116,6 +126,12 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
   useEffect(() => () => {
     Object.values(feedbackTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
   }, []);
+
+  useEffect(() => {
+    if (tab === 'admin' && !showAdminDiagnostics) {
+      setTab('general');
+    }
+  }, [showAdminDiagnostics, tab]);
 
   const set = useCallback((key, val) => setS(prev => ({ ...prev, [key]: val })), []);
 
@@ -259,6 +275,8 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
 
   if (loading) return <div className="page-loading">Loading settings...</div>;
 
+  const visibleTabs = showAdminDiagnostics ? TABS : TABS.filter(t => t.key !== 'admin');
+
   return (
     <div data-testid="settings-page">
       <div className="page-header-row">
@@ -273,7 +291,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
         <h1 style={{ marginBottom: 0 }}>Settings</h1>
       </div>
       <div className="tabs-header" style={{ overflowX: 'auto' }} data-tour="settings-tabs">
-        {TABS.map(t => (
+        {visibleTabs.map(t => (
           <button key={t.key} className={`tab-btn ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)} data-testid={`settings-tab-${t.key}`}>{t.label}</button>
         ))}
       </div>
@@ -295,6 +313,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
       {tab === 'discord' && <DiscordTab s={s} set={set} feedback={sectionFeedback.discord} onFeedback={markSectionFeedback} onResetSection={handleResetSection} />}
       {tab === 'payment' && <PaymentTab s={s} set={set} />}
       {tab === 'gemini' && <GeminiTab s={s} set={set} />}
+      {tab === 'admin' && showAdminDiagnostics && <AdminTab />}
       {tab === 'calendar' && <CalendarTab s={s} set={set} />}
 
       <div className="settings-update-panel" data-testid="settings-update-panel">
@@ -385,7 +404,7 @@ function GeneralTab({ s, set }) {
         </select>
       </SettingsRow>
       <p className="text-muted text-sm" style={{ marginTop: 12, lineHeight: 1.7 }}>
-        Ticker Speed is the only notification ticker setting exposed to normal users. The notification sheet URL is managed through admin configuration.
+        Ticker Speed is the only notification ticker setting exposed to normal users. SAM notification rows are managed by admins in the master Google Sheet sam-notifications tab.
       </p>
       <h3 style={{ margin: '24px 0 16px' }}>Theme</h3>
       <button className="btn btn-ghost btn-sm" onClick={() => {
@@ -1063,9 +1082,10 @@ function GeminiTab({ s, set }) {
     setTestStatus(null);
     try {
       const result = await api.testGeminiConnection();
+      const detail = result?.detail && !result?.ok ? `: ${result.detail}` : '';
       setTestStatus({
         ok: Boolean(result?.ok),
-        message: result?.message || (result?.ok ? 'Gemini connection successful' : 'Unable to connect to Gemini'),
+        message: `${result?.message || (result?.ok ? 'Gemini connection successful' : 'Unable to connect to Gemini')}${detail}`,
       });
     } catch (error) {
       const backendMessage = error?.response?.data?.message || error?.response?.data?.error;
@@ -1139,6 +1159,104 @@ function GeminiTab({ s, set }) {
         <p className="text-sm" style={{ marginTop: 12, color: 'var(--color-warning)' }}>
           Gemini is enabled, but no API key is saved. The app will fall back to generic summaries until a valid key is entered.
         </p>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* ADMIN TAB                                                       */
+/* ═══════════════════════════════════════════════════════════════ */
+function AdminTab() {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const handleRunDiagnostics = async () => {
+    if (running) return;
+    setRunning(true);
+    setResult(null);
+    try {
+      const data = await api.runGoogleSheetDiagnostics();
+      setResult(data);
+    } catch (error) {
+      const data = error?.response?.data;
+      setResult(data || {
+        ok: false,
+        failedOperation: 'request_google_sheet_diagnostics',
+        errorType: error?.name || 'RequestError',
+        errorMessage: error?.message || 'Unable to run Google Sheet diagnostics.',
+        spreadsheetId: '',
+        serviceAccountEmail: '',
+        appAdminAuth: {
+          ok: false,
+          errorMessage: data?.errorMessage || data?.error || error?.message || '',
+        },
+        googleSheetsPermission: {
+          checked: false,
+          ok: false,
+          errorMessage: 'Google Sheets diagnostics did not run because the request failed.',
+        },
+      });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const failedOperation = result?.failedOperation || '';
+  const appAuth = result?.appAdminAuth || {};
+  const sheetAuth = result?.googleSheetsPermission || {};
+  const summary = result
+    ? (result.ok ? 'Google Sheets diagnostics passed' : (result.errorMessage || result.error || 'Google Sheets diagnostics failed'))
+    : '';
+
+  return (
+    <div className="card" data-testid="settings-admin">
+      <div className="settings-admin-header">
+        <div>
+          <h3>Google Sheet Diagnostics</h3>
+          <p className="text-muted text-sm">Run a local permission check against the master MTS Google Sheet.</p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={handleRunDiagnostics}
+          disabled={running}
+          data-testid="settings-run-google-sheet-diagnostics"
+        >
+          {running && <span className="btn-spinner" aria-hidden="true" />}
+          {running ? 'Running...' : 'Run Google Sheet Diagnostics'}
+        </button>
+      </div>
+
+      {result && (
+        <div className="settings-diagnostics-result" data-testid="settings-google-sheet-diagnostics-result">
+          <div className={`gemini-status-badge ${result.ok ? 'gemini-status-success' : 'gemini-status-error'}`}>
+            {result.ok ? '✓ ' : ''}{summary}
+          </div>
+          <div className="settings-diagnostics-grid">
+            <div>
+              <span>App Admin Auth</span>
+              <strong>{appAuth.ok ? (appAuth.usedLocalDevelopmentFallback ? 'Local dev fallback' : 'Authenticated') : 'Failed'}</strong>
+            </div>
+            <div>
+              <span>Google Sheets</span>
+              <strong>{sheetAuth.checked ? (sheetAuth.ok ? 'Passed' : 'Failed') : 'Not run'}</strong>
+            </div>
+            <div>
+              <span>Failed Operation</span>
+              <strong>{failedOperation || 'None'}</strong>
+            </div>
+            <div>
+              <span>Spreadsheet ID</span>
+              <strong>{result.spreadsheetId || result.activeSpreadsheetId || 'Unknown'}</strong>
+            </div>
+            <div className="full">
+              <span>Service Account</span>
+              <strong>{result.serviceAccountEmail || result.activeServiceAccountEmail || 'Unknown'}</strong>
+            </div>
+          </div>
+          <pre className="settings-diagnostics-json">{JSON.stringify(result, null, 2)}</pre>
+        </div>
       )}
     </div>
   );

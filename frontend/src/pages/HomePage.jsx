@@ -104,6 +104,8 @@ function buildSharedPendingSession(entry, testerName) {
     last_saved: null,
     tech_issues_log: [],
     coaching_summary: priorSummary,
+    fail_summary: entry.completed_status || '',
+    review_notes: entry.notes || '',
   };
 }
 
