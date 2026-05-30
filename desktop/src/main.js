@@ -63,6 +63,8 @@ let backendReadyRetryCount = 0;
 let backendLastError = '';
 let backendRetryTimer = null;
 let backendRetryAttemptCount = 0;
+let backendStdoutLogStream = null;
+let backendStderrLogStream = null;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
@@ -108,6 +110,10 @@ function getBackendPath(subpath = '') {
 
 function getSqliteDbPath() {
   return path.join(app.getPath('userData'), 'mock_testing_suite.sqlite3');
+}
+
+function getBackendLogDir() {
+  return path.join(app.getPath('userData'), 'logs');
 }
 
 function getSharedAppDataPath(subpath = '') {
@@ -307,6 +313,38 @@ function appendBackendLog(line) {
   }
 }
 
+function closeBackendLogStreams() {
+  for (const stream of [backendStdoutLogStream, backendStderrLogStream]) {
+    if (stream) {
+      try {
+        stream.end();
+      } catch (_error) {
+        // Ignore logging cleanup failures during shutdown.
+      }
+    }
+  }
+  backendStdoutLogStream = null;
+  backendStderrLogStream = null;
+}
+
+function initializePackagedBackendLogStreams() {
+  closeBackendLogStreams();
+  try {
+    const logDir = getBackendLogDir();
+    fs.mkdirSync(logDir, { recursive: true });
+    backendStdoutLogStream = fs.createWriteStream(path.join(logDir, 'backend-standalone.out.log'), { flags: 'a' });
+    backendStderrLogStream = fs.createWriteStream(path.join(logDir, 'backend-standalone.err.log'), { flags: 'a' });
+    const header = `\n[${new Date().toISOString()}] ${APP_DISPLAY_NAME} launching backend on port ${BACKEND_PORT}\n`;
+    backendStdoutLogStream.write(header);
+    backendStderrLogStream.write(header);
+    console.log(`[BACKEND] Packaged backend logs: ${logDir}`);
+    return logDir;
+  } catch (error) {
+    console.warn('[BACKEND] Unable to create packaged backend log files:', error.message);
+    return '';
+  }
+}
+
 function getBackendFailureMessage(reason) {
   const details = [];
 
@@ -472,8 +510,20 @@ function startBackend() {
     const backendRuntimeConfigPath = path.join(backendConfigDir, 'runtime_config.json');
     const backendDefaultsDir = path.join(process.resourcesPath, 'backend', 'defaults');
     const googleServiceAccountPath = path.join(backendConfigDir, 'google-service-account.json');
+    const packagedBackendLogDir = initializePackagedBackendLogStreams();
     requireRuntimePath(backendPath, 'Bundled backend executable');
-    requireRuntimePath(driverDir, 'Bundled browser drivers directory');
+    // Bundled drivers are optional. If absent, create the directory and a README
+    // explaining runtime Selenium Manager / webdriver-manager resolution.
+    if (!fs.existsSync(driverDir)) {
+      console.warn('[BACKEND] Bundled browser drivers directory is missing; continuing without bundled drivers.');
+      try {
+        fs.mkdirSync(driverDir, { recursive: true });
+        const readme = 'This directory may contain optional browser driver binaries (chromedriver.exe, msedgedriver.exe) for offline use.\nIf no drivers are bundled, the application will attempt to resolve drivers at runtime using Selenium Manager or webdriver-manager.\nDo NOT commit driver binaries into source control.';
+        fs.writeFileSync(path.join(driverDir, 'README.txt'), readme, { encoding: 'utf8', flag: 'w' });
+      } catch (err) {
+        console.warn('[BACKEND] Failed to create drivers README:', err.message);
+      }
+    }
     requireRuntimePath(backendRuntimeConfigPath, 'Bundled backend runtime config');
     requireRuntimePath(backendDefaultsDir, 'Bundled backend defaults directory');
 
@@ -495,6 +545,9 @@ function startBackend() {
           ...process.env,
           BACKEND_PORT: String(BACKEND_PORT),
           SQLITE_DB_PATH: getSqliteDbPath(),
+          APP_DATA_DIR: app.getPath('userData'),
+          BACKEND_LOG_DIR: packagedBackendLogDir || getBackendLogDir(),
+          BACKEND_RUNTIME_CONFIG_FILE: backendRuntimeConfigPath,
           BROWSER_DRIVER_DIR: driverDir,
           APP_VERSION,
           APP_RESOURCES_PATH: process.resourcesPath,
@@ -523,8 +576,16 @@ function startBackend() {
     backendStartedByThisApp = true;
     writeBackendOwner(backendProcess.pid);
 
-    backendProcess.stdout.on('data', (data) => appendBackendLog(data.toString().trim()));
-    backendProcess.stderr.on('data', (data) => appendBackendLog(data.toString().trim()));
+    backendProcess.stdout.on('data', (data) => {
+      const text = data.toString();
+      appendBackendLog(text.trim());
+      if (backendStdoutLogStream) backendStdoutLogStream.write(text);
+    });
+    backendProcess.stderr.on('data', (data) => {
+      const text = data.toString();
+      appendBackendLog(text.trim());
+      if (backendStderrLogStream) backendStderrLogStream.write(text);
+    });
     backendProcess.on('error', (err) => {
       backendLaunchError = err;
       backendStartedByThisApp = false;
@@ -547,6 +608,7 @@ function startBackend() {
       if (!app.isQuitting && code !== 0 && code !== null && mainWindow) {
         dialog.showErrorBox('Backend Error', getBackendFailureMessage(`The backend executable stopped unexpectedly (exit code ${code}).`));
       }
+      closeBackendLogStreams();
     });
     return;
   }
@@ -655,24 +717,119 @@ function stopBackend() {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTcpPortListening(port) {
+  try {
+    const result = spawnSync('netstat', ['-ano'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+
+    if (result.status !== 0 || !result.stdout) {
+      return false;
+    }
+
+    const lines = result.stdout.split(/\r?\n/);
+    const portSuffix = `:${port}`;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+/);
+      if (parts.length < 4) continue;
+
+      const localAddress = parts[1] || '';
+      const state = (parts[3] || '').toUpperCase();
+      if (state !== 'LISTENING') continue;
+      if (
+        localAddress === `127.0.0.1${portSuffix}` ||
+        localAddress === `0.0.0.0${portSuffix}` ||
+        localAddress === `::1${portSuffix}` ||
+        localAddress.endsWith(portSuffix)
+      ) {
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn('[BACKEND] Failed to check port listen state:', err && err.message ? err.message : err);
+  }
+
+  return false;
+}
+
 function probeBackend() {
   return new Promise((resolve) => {
     const req = http.get({
       hostname: '127.0.0.1',
       port: BACKEND_PORT,
-      path: '/api/runtime/verify-token',
-      headers: { 'X-MTS-Admin-Token': getSharedAdminToken() },
+      path: '/api/health',
+      timeout: BACKEND_READY_REQUEST_TIMEOUT_MS,
     }, (res) => {
       res.resume();
       resolve(res.statusCode === 200);
     });
-    req.setTimeout(BACKEND_READY_REQUEST_TIMEOUT_MS, () => {
+
+    req.on('timeout', () => {
       req.destroy();
       resolve(false);
     });
+
     req.on('error', () => resolve(false));
     req.end();
   });
+}
+
+function killStaleOwnedBackend() {
+  const owner = readJsonFile(getBackendOwnerPath()) || {};
+  const ownerPid = Number(owner.pid || 0);
+  const backendExePath = path.join(process.resourcesPath, 'backend', 'backend.exe');
+
+  const killPid = (pid) => {
+    try {
+      execFileSync('taskkill.exe', ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      clearBackendOwnerForPid(pid);
+      console.log(`[BACKEND] Killed stale backend process pid ${pid}`);
+      return true;
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      console.warn(`[BACKEND] Failed to kill stale backend process pid ${pid}: ${message}`);
+      return false;
+    }
+  };
+
+  if (ownerPid > 0 && killPid(ownerPid)) {
+    return true;
+  }
+
+  try {
+    const lookup = execFileSync('wmic', ['process', 'where', "name='backend.exe'", 'get', 'ProcessId,CommandLine', '/FORMAT:LIST'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    const entries = lookup.split(/\r?\n\r?\n/);
+    for (const entry of entries) {
+      const pidLine = entry.split(/\r?\n/).find((line) => line.trim().startsWith('ProcessId='));
+      const cmdLine = entry.split(/\r?\n/).find((line) => line.trim().startsWith('CommandLine='));
+      if (!pidLine || !cmdLine) continue;
+      const pid = Number((pidLine.split('=')[1] || '').trim() || 0);
+      const command = (cmdLine.split('=')[1] || '').trim() || '';
+      if (pid > 0 && command.includes(backendExePath)) {
+        if (killPid(pid)) {
+          return true;
+        }
+      }
+    }
+  } catch (_err) {
+    // WMIC may not be available or may fail; ignore and continue.
+  }
+
+  return false;
 }
 
 function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
@@ -705,8 +862,7 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
       const req = http.get({
         hostname: '127.0.0.1',
         port: BACKEND_PORT,
-        path: '/api/runtime/verify-token',
-        headers: { 'X-MTS-Admin-Token': getSharedAdminToken() },
+        path: '/api/health',
       }, (res) => {
         if (res.statusCode === 200) {
           backendReadyRetryCount = Math.max(0, retries - remaining);
@@ -724,6 +880,38 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
     };
     attempt(retries);
   });
+}
+
+function ensureBackendAvailable() {
+  setBackendConnectionStatus('checking');
+
+  return (async () => {
+    if (isTcpPortListening(BACKEND_PORT)) {
+      console.log(`[BACKEND] Port ${BACKEND_PORT} is already listening`);
+      if (await probeBackend()) {
+        usingExternalBackend = true;
+        backendStartedByThisApp = false;
+        backendReadyRetryCount = 0;
+        backendRetryAttemptCount = 0;
+        setBackendConnectionStatus('connected');
+        console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
+        return;
+      }
+
+      console.warn(`[BACKEND] Port ${BACKEND_PORT} is listening but /api/health failed. Killing stale owned backend if present.`);
+      killStaleOwnedBackend();
+      await sleep(1000);
+      if (isTcpPortListening(BACKEND_PORT)) {
+        throw new Error(`Port ${BACKEND_PORT} is still in use after stopping stale backend. Please stop the conflicting process and retry.`);
+      }
+    }
+
+    usingExternalBackend = false;
+    startBackend();
+    await waitForBackend();
+    backendRetryAttemptCount = 0;
+    console.log('[APP] Backend is ready');
+  })();
 }
 
 // ═══════════════════════════════════════════════════════════════

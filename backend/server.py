@@ -39,6 +39,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logger.info("[STARTUP] backend process start")
 
 # ══════════════════════════════════════════════════════════════════
 # CONSTANTS / DEFAULTS
@@ -46,8 +47,25 @@ logger = logging.getLogger(__name__)
 DEFAULT_APP_VERSION = "1.0.1"
 DEFAULT_NOTIFICATION_SHEET_URL = "https://docs.google.com/spreadsheets/d/1OkDE9SxnNA0WEHa-TeiZ3b2j5AZ9qiJi1Hv4Lmn8YSE/edit?gid=0#gid=0"
 ADMIN_TOKEN_HEADER = "X-MTS-Admin-Token"
+# Paths or path prefixes that do NOT require the packaged admin token.
+# Entries are matched as prefixes (so "/api/settings" will exempt "/api/settings/*").
 AUTH_EXEMPT_PATHS = {
-    "/api/",
+    # Lightweight public startup checks
+    "/api/health",
+    # Public settings and defaults used by frontend during startup
+    "/api/settings",
+    "/api/settings/defaults",
+    # Help content
+    "/api/help/content",
+    # Session/lookup endpoints used on startup
+    "/api/session/current",
+    "/api/shared/candidates/lookup",
+    "/api/shared/pending-sup-transfers",
+    # Normal user session history
+    "/api/history",
+    # SAM setup steps that must be callable during initial configuration
+    "/api/sam/setup/status",
+    "/api/sam/setup/complete",
 }
 
 
@@ -115,6 +133,49 @@ def _resolve_sqlite_path():
         return Path(app_data_dir).expanduser() / DEFAULT_SQLITE_FILENAME
 
     return ROOT_DIR / "data" / DEFAULT_SQLITE_FILENAME
+
+
+def _is_packaged_runtime():
+    return bool(getattr(sys, "frozen", False)) or bool((os.getenv("APP_RESOURCES_PATH") or "").strip())
+
+
+def _packaged_runtime_mode():
+    return "packaged" if _is_packaged_runtime() else "dev"
+
+
+def _packaged_log_dir():
+    configured = (os.getenv("BACKEND_LOG_DIR") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    sqlite_path = _resolve_sqlite_path()
+    if sqlite_path:
+        return sqlite_path.expanduser().resolve().parent / "logs"
+    return ROOT_DIR / "logs"
+
+
+def _configure_packaged_file_logging():
+    if not _is_packaged_runtime():
+        return ""
+    try:
+        log_dir = _packaged_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "backend-packaged.log"
+        existing_paths = {
+            str(getattr(handler, "baseFilename", "") or "")
+            for handler in logging.getLogger().handlers
+        }
+        if str(log_path) not in existing_paths:
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+            logging.getLogger().addHandler(file_handler)
+        return str(log_path)
+    except Exception as exc:
+        logger.warning("[STARTUP] Unable to configure packaged backend file logging: %s", exc)
+        return ""
+
+
+PACKAGED_BACKEND_LOG_PATH = _configure_packaged_file_logging()
 
 
 class SQLiteCursor:
@@ -444,6 +505,9 @@ LOCAL_DEFAULT_FILE_ALIASES = {
 
 def _runtime_config_candidates():
     candidates = []
+    configured_runtime = (os.getenv("BACKEND_RUNTIME_CONFIG_FILE") or "").strip()
+    if configured_runtime:
+        candidates.append(Path(configured_runtime).expanduser())
     resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
     if resources_root:
         candidates.append(Path(resources_root) / "backend" / "config" / "runtime_config.json")
@@ -479,6 +543,18 @@ _ticker_fetch_status = {
 # content came from. Values: source in {google, local, builtin}; served_from
 # is computed lazily at request time (sqlite vs memory).
 _content_source_status = {}
+_google_sheet_auth_status = {
+    "ok": False,
+    "status": "not_attempted",
+    "path": "",
+    "client_email": "",
+    "private_key_id": "",
+    "last_tab": "",
+    "last_error": "",
+    "timestamp": "",
+}
+_google_sheet_content_errors = []
+_startup_runtime_diagnostics = {}
 
 
 def _content_count(value):
@@ -734,9 +810,60 @@ def _early_service_account_file():
     return None
 
 
+def _read_service_account_public_info(path):
+    info = {
+        "exists": False,
+        "path": str(path or ""),
+        "client_email": "",
+        "private_key_id": "",
+        "error": "",
+    }
+    if not path:
+        return info
+    try:
+        resolved = Path(path).expanduser()
+        info["path"] = str(resolved)
+        info["exists"] = resolved.is_file()
+        if not info["exists"]:
+            return info
+        with resolved.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        info["client_email"] = str(data.get("client_email") or "")
+        info["private_key_id"] = str(data.get("private_key_id") or "")
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
+
+
+def _record_google_sheet_auth_status(status, *, ok=False, path=None, tab_name="", error=""):
+    public_info = _read_service_account_public_info(path) if path else {}
+    _google_sheet_auth_status.update({
+        "ok": bool(ok),
+        "status": str(status or ""),
+        "path": str(path or public_info.get("path") or ""),
+        "client_email": public_info.get("client_email") or _google_sheet_auth_status.get("client_email") or "",
+        "private_key_id": public_info.get("private_key_id") or _google_sheet_auth_status.get("private_key_id") or "",
+        "last_tab": str(tab_name or ""),
+        "last_error": str(error or public_info.get("error") or ""),
+        "timestamp": _status_timestamp(),
+    })
+
+
+def _record_google_sheet_content_error(content_key, tab_name, error):
+    _google_sheet_content_errors.append({
+        "content_key": str(content_key or ""),
+        "tab": str(tab_name or ""),
+        "error": str(error or ""),
+        "timestamp": _status_timestamp(),
+    })
+    if len(_google_sheet_content_errors) > 50:
+        del _google_sheet_content_errors[:-50]
+
+
 def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
     creds_path = _early_service_account_file()
     if not creds_path:
+        _record_google_sheet_auth_status("missing_credentials", ok=False, tab_name=tab_name, error="No service account credentials found.")
         logger.info("[CONTENT] Authenticated Google Sheet read unavailable for '%s': no service account credentials", tab_name)
         return ""
     try:
@@ -757,8 +884,10 @@ def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
         for row in values:
             writer.writerow(row)
         logger.info("[CONTENT] Loaded Google Sheet tab '%s' through service account", tab_name)
+        _record_google_sheet_auth_status("authenticated_read_ok", ok=True, path=creds_path, tab_name=tab_name)
         return output.getvalue()
     except Exception as exc:
+        _record_google_sheet_auth_status("authenticated_read_failed", ok=False, path=creds_path, tab_name=tab_name, error=exc)
         logger.info("[CONTENT] Authenticated Google Sheet read failed for '%s'; trying public CSV export: %s", tab_name, exc)
         return ""
 
@@ -1638,6 +1767,7 @@ def _load_google_sheet_content(runtime_config, local_content=None):
                     )
             except Exception as exc:
                 last_error = exc
+                _record_google_sheet_content_error(content_key, candidate_tab, exc)
                 logger.warning("[SAM] Falling back to CSV for %s after Google Sheets failure on tab '%s': %s", content_key, candidate_tab, exc)
                 logger.warning(
                     "[CONTENT] Failed to load Google Sheet tab '%s'; using local defaults for %s and continuing other tabs: %s",
@@ -1716,83 +1846,185 @@ def _load_help_faq_google_doc_overrides(runtime_config):
 
 
 def _load_external_content():
-    runtime_config = _load_backend_runtime_config()
-    remote_pipeline_failures = []
     try:
         local_content = _load_local_defaults_content()
+        logger.info("[CONTENT] local defaults loaded")
     except Exception as exc:
         logger.warning("[CONTENT] Local defaults load failed; continuing with built-in defaults: %s", exc)
         local_content = {}
-    try:
-        sheet_content = _load_google_sheet_content(runtime_config, local_content)
-    except Exception as exc:
-        logger.warning("[CONTENT] Google Sheet content pipeline failed without disabling other content sources: %s", exc)
-        remote_pipeline_failures.append(f"sheets: {exc}")
-        sheet_content = {}
-    try:
-        doc_content = _load_help_faq_google_doc_overrides(runtime_config)
-    except Exception as exc:
-        logger.warning("[CONTENT] Google Doc content pipeline failed without disabling other content sources: %s", exc)
-        remote_pipeline_failures.append(f"docs: {exc}")
-        doc_content = {}
-
-    if sheet_content.get("discord_screenshots") and local_content.get("discord_screenshots"):
-        existing = {
-            (
-                str(item.get("title") or "").strip().lower(),
-                str(item.get("image_url") or "").strip().lower(),
-            )
-            for item in sheet_content.get("discord_screenshots") or []
-        }
-        additions = [
-            item for item in local_content.get("discord_screenshots") or []
-            if (
-                str(item.get("title") or "").strip().lower(),
-                str(item.get("image_url") or "").strip().lower(),
-            ) not in existing
-        ]
-        if additions:
-            sheet_content["discord_screenshots"] = [*sheet_content["discord_screenshots"], *additions]
-            logger.info(
-                "[CONTENT] Added %d packaged screenshot default(s) not present in Google Sheet screenshots tab",
-                len(additions),
-            )
 
     merged = {}
     for key, value in (local_content or {}).items():
         merged[key] = value
         _set_content_source(key, "local", value, ok=True, detail="admin-content-package csv-tabs, then backend/defaults")
+        _content_source_status[key]["background_status"] = "loading"
+        _content_source_status[key]["background_loading"] = True
 
-    for key, value in (sheet_content or {}).items():
-        merged[key] = value
-        detail = "google_sheet_override" if key in {"gemini_coaching_prompt", "gemini_fail_prompt"} else "google_sheet"
-        _set_content_source(key, "google", value, ok=True, detail=detail)
+    # Ensure other tracked keys are populated with background_status=loading
+    for key in TRACKED_CONTENT_KEYS:
+        if key not in _content_source_status:
+            _content_source_status[key] = {
+                "source": "builtin",
+                "count": 0,
+                "ok": True,
+                "detail": "builtin",
+                "background_status": "loading",
+                "background_loading": True,
+            }
 
-    for key, value in (doc_content or {}).items():
-        merged[key] = value
-        _set_content_source(key, "google", value, ok=True, detail="google_doc")
-
-    remote_keys = sorted(set(sheet_content.keys()) | set(doc_content.keys()))
-    if remote_keys:
-        logger.info("[CONTENT] Loaded remote admin overrides for: %s", ", ".join(remote_keys))
-    if remote_pipeline_failures:
-        logger.warning(
-            "[CONTENT] Remote content pipeline had isolated failure(s), but did not short-circuit other loaders: %s",
-            "; ".join(remote_pipeline_failures),
-        )
-        logger.warning("[SAM] Fallback mode is active: %s", "; ".join(remote_pipeline_failures))
-    else:
-        logger.info("[CONTENT] Remote content pipeline completed without short-circuiting other loaders.")
-    for key in ("shows", "donors_new", "donors_existing", "donors_increase"):
-        status = _content_source_status.get(key) or {}
-        logger.info(
-            "[SAM] Active %s source: %s%s (%d item(s))",
-            key,
-            status.get("source") or "builtin",
-            f" via {status.get('detail')}" if status.get("detail") else "",
-            status.get("count") or _content_count(merged.get(key)),
-        )
     return merged
+
+
+async def _background_remote_content_task():
+    global CALL_TYPES, SUP_REASONS, SHOWS, NEW_DONORS, EXISTING_MEMBERS, INCREASE_SUSTAINING
+    global DISCORD_TEMPLATES, DISCORD_SCREENSHOTS, CALL_COACHING, CALL_FAILS, SUP_COACHING, SUP_FAILS
+    global HELP_DOC_MARKDOWN, FAQ_DOC_MARKDOWN, ADMIN_SETUP_MARKDOWN
+    global EXTERNAL_CONTENT
+
+    try:
+        logger.info("[CONTENT] background Google content refresh started")
+        runtime_config = _load_backend_runtime_config()
+        remote_pipeline_failures = []
+        try:
+            local_content = _load_local_defaults_content()
+        except Exception as exc:
+            logger.warning("[CONTENT] Local defaults load failed in background task: %s", exc)
+            local_content = {}
+
+        try:
+            sheet_content = _load_google_sheet_content(runtime_config, local_content)
+        except Exception as exc:
+            logger.warning("[CONTENT] Google Sheet content pipeline failed: %s", exc)
+            remote_pipeline_failures.append(f"sheets: {exc}")
+            sheet_content = {}
+
+        try:
+            doc_content = _load_help_faq_google_doc_overrides(runtime_config)
+        except Exception as exc:
+            logger.warning("[CONTENT] Google Doc content pipeline failed: %s", exc)
+            remote_pipeline_failures.append(f"docs: {exc}")
+            doc_content = {}
+
+        if sheet_content.get("discord_screenshots") and local_content.get("discord_screenshots"):
+            existing = {
+                (
+                    str(item.get("title") or "").strip().lower(),
+                    str(item.get("image_url") or "").strip().lower(),
+                )
+                for item in sheet_content.get("discord_screenshots") or []
+            }
+            additions = [
+                item for item in local_content.get("discord_screenshots") or []
+                if (
+                    str(item.get("title") or "").strip().lower(),
+                    str(item.get("image_url") or "").strip().lower(),
+                ) not in existing
+            ]
+            if additions:
+                sheet_content["discord_screenshots"] = [*sheet_content["discord_screenshots"], *additions]
+                logger.info(
+                    "[CONTENT] Added %d packaged screenshot default(s) not present in Google Sheet",
+                    len(additions),
+                )
+
+        # Merge sheet content
+        for key, value in (sheet_content or {}).items():
+            EXTERNAL_CONTENT[key] = value
+            detail = "google_sheet_override" if key in {"gemini_coaching_prompt", "gemini_fail_prompt"} else "google_sheet"
+            _content_source_status[key] = {
+                "source": "google",
+                "count": _content_count(value),
+                "ok": True,
+                "detail": detail,
+                "background_status": "completed",
+                "background_loading": False,
+            }
+
+        # Merge doc content
+        for key, value in (doc_content or {}).items():
+            EXTERNAL_CONTENT[key] = value
+            _content_source_status[key] = {
+                "source": "google",
+                "count": _content_count(value),
+                "ok": True,
+                "detail": "google_doc",
+                "background_status": "completed",
+                "background_loading": False,
+            }
+
+        # Update in-memory defaults
+        if isinstance(EXTERNAL_CONTENT.get("call_types"), list) and EXTERNAL_CONTENT["call_types"]:
+            CALL_TYPES = EXTERNAL_CONTENT["call_types"]
+        if isinstance(EXTERNAL_CONTENT.get("sup_reasons"), list) and EXTERNAL_CONTENT["sup_reasons"]:
+            SUP_REASONS = EXTERNAL_CONTENT["sup_reasons"]
+        if isinstance(EXTERNAL_CONTENT.get("shows"), list) and EXTERNAL_CONTENT["shows"]:
+            SHOWS = EXTERNAL_CONTENT["shows"]
+        if isinstance(EXTERNAL_CONTENT.get("donors_new"), list) and EXTERNAL_CONTENT["donors_new"]:
+            NEW_DONORS = EXTERNAL_CONTENT["donors_new"]
+        if isinstance(EXTERNAL_CONTENT.get("donors_existing"), list) and EXTERNAL_CONTENT["donors_existing"]:
+            EXISTING_MEMBERS = EXTERNAL_CONTENT["donors_existing"]
+        if isinstance(EXTERNAL_CONTENT.get("donors_increase"), list) and EXTERNAL_CONTENT["donors_increase"]:
+            INCREASE_SUSTAINING = EXTERNAL_CONTENT["donors_increase"]
+        if isinstance(EXTERNAL_CONTENT.get("discord_templates"), list) and EXTERNAL_CONTENT["discord_templates"]:
+            DISCORD_TEMPLATES = EXTERNAL_CONTENT["discord_templates"]
+        if isinstance(EXTERNAL_CONTENT.get("discord_screenshots"), list) and EXTERNAL_CONTENT["discord_screenshots"]:
+            DISCORD_SCREENSHOTS = EXTERNAL_CONTENT["discord_screenshots"]
+        if isinstance(EXTERNAL_CONTENT.get("call_coaching"), list) and EXTERNAL_CONTENT["call_coaching"]:
+            CALL_COACHING = EXTERNAL_CONTENT["call_coaching"]
+        if isinstance(EXTERNAL_CONTENT.get("call_fails"), list) and EXTERNAL_CONTENT["call_fails"]:
+            CALL_FAILS = EXTERNAL_CONTENT["call_fails"]
+        if isinstance(EXTERNAL_CONTENT.get("sup_coaching"), list) and EXTERNAL_CONTENT["sup_coaching"]:
+            SUP_COACHING = EXTERNAL_CONTENT["sup_coaching"]
+        if isinstance(EXTERNAL_CONTENT.get("sup_fails"), list) and EXTERNAL_CONTENT["sup_fails"]:
+            SUP_FAILS = EXTERNAL_CONTENT["sup_fails"]
+
+        if EXTERNAL_CONTENT.get("help_markdown"):
+            global HELP_DOC_MARKDOWN
+            HELP_DOC_MARKDOWN = EXTERNAL_CONTENT["help_markdown"].strip()
+        if EXTERNAL_CONTENT.get("faq_markdown"):
+            global FAQ_DOC_MARKDOWN
+            FAQ_DOC_MARKDOWN = EXTERNAL_CONTENT["faq_markdown"].strip()
+        if EXTERNAL_CONTENT.get("admin_setup_markdown"):
+            global ADMIN_SETUP_MARKDOWN
+            ADMIN_SETUP_MARKDOWN = EXTERNAL_CONTENT["admin_setup_markdown"].strip()
+
+        # Update remaining keys to finished state
+        for key in TRACKED_CONTENT_KEYS:
+            if _content_source_status.get(key) and _content_source_status[key].get("background_loading"):
+                _content_source_status[key]["background_status"] = "completed"
+                _content_source_status[key]["background_loading"] = False
+
+        logger.info("[CONTENT] background Google content refresh finished")
+
+    except Exception as e:
+        logger.exception("[CONTENT] Error during background Google content refresh: %s", e)
+        # Update keys to failed state if something crashed
+        for key in TRACKED_CONTENT_KEYS:
+            if _content_source_status.get(key) and _content_source_status[key].get("background_loading"):
+                _content_source_status[key]["background_status"] = "failed"
+                _content_source_status[key]["background_loading"] = False
+
+    # Perform shared sheet verification in thread pool executor
+    try:
+        logger.info("[STARTUP] shared sheet verification started")
+        import asyncio
+        loop = asyncio.get_running_loop()
+        shared_sheet_status = await loop.run_in_executor(None, _verify_master_shared_sheets)
+        
+        if shared_sheet_status.get("ok"):
+            logger.info(
+                "[STARTUP] Master shared sheet setup verified. spreadsheet=%s service_account=%s",
+                _mask_config_value(shared_sheet_status.get("spreadsheetId")),
+                shared_sheet_status.get("serviceAccountEmail") or "unknown",
+            )
+        else:
+            logger.error(
+                "[STARTUP] Master shared sheet setup failed. error=%s",
+                shared_sheet_status.get("error"),
+            )
+        logger.info("[STARTUP] shared sheet verification finished")
+    except Exception as e:
+        logger.exception("[STARTUP] Error during background shared sheet verification: %s", e)
 
 
 @lru_cache(maxsize=1)
@@ -2323,6 +2555,119 @@ def _log_content_source_summary():
 
 
 _log_content_source_summary()
+
+
+def _content_source_summary_payload():
+    return {
+        key: {
+            "source": info.get("source") or "builtin",
+            "count": int(info.get("count") or 0),
+            "ok": bool(info.get("ok", True)),
+            "detail": info.get("detail") or "",
+        }
+        for key, info in sorted(_content_source_status.items())
+    }
+
+
+def _runtime_diagnostics_payload():
+    runtime_config = _load_backend_runtime_config()
+    creds_path = _early_service_account_file()
+    credential_info = _read_service_account_public_info(creds_path)
+    notification_config = {}
+    try:
+        notification_config = _get_admin_notification_sheet_config()
+    except Exception as exc:
+        notification_config = {"source": "error", "error": str(exc)}
+    master_spreadsheet_id = _resolve_content_sheet_id(runtime_config or {})
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    payload = {
+        "mode": _packaged_runtime_mode(),
+        "isPackaged": _is_packaged_runtime(),
+        "sysExecutable": sys.executable,
+        "cwd": os.getcwd(),
+        "backendRoot": str(ROOT_DIR),
+        "appResourcesPath": resources_root,
+        "packagedLogPath": PACKAGED_BACKEND_LOG_PATH,
+        "runtimeConfig": {
+            "candidates": [str(path) for path in _runtime_config_candidates()],
+            "path": _runtime_config_status.get("path") or "",
+            "exists": bool(_runtime_config_status.get("found")),
+            "error": _runtime_config_status.get("error") or "",
+        },
+        "googleServiceAccount": {
+            "candidates": [
+                str(path)
+                for path in [
+                    Path((os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE") or "").strip()).expanduser()
+                    if (os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE") or "").strip() else None,
+                    Path(resources_root) / "backend" / "config" / "google-service-account.json" if resources_root else None,
+                    Path(sys.executable).resolve().parent / "config" / "google-service-account.json" if getattr(sys, "frozen", False) else None,
+                    ROOT_DIR / "config" / "google-service-account.json",
+                ]
+                if path
+            ],
+            "path": credential_info.get("path") or "",
+            "exists": bool(credential_info.get("exists")),
+            "client_email": credential_info.get("client_email") or "",
+            "private_key_id": credential_info.get("private_key_id") or "",
+            "error": credential_info.get("error") or "",
+        },
+        "spreadsheetId": master_spreadsheet_id,
+        "spreadsheetIdMasked": _mask_config_value(master_spreadsheet_id),
+        "notificationConfig": {
+            "source": notification_config.get("source") or "",
+            "configured": bool(notification_config.get("configured")),
+            "sheetId": notification_config.get("sheet_id") or "",
+            "sheetIdMasked": _mask_config_value(notification_config.get("sheet_id")),
+            "gid": notification_config.get("gid") or "",
+            "error": notification_config.get("error") or "",
+        },
+        "contentSourceSummary": _content_source_summary_payload(),
+        "lastGoogleSheetAuthStatus": dict(_google_sheet_auth_status),
+        "lastGoogleSheetContentLoadErrors": list(_google_sheet_content_errors),
+    }
+    return payload
+
+
+def _log_startup_runtime_diagnostics():
+    global _startup_runtime_diagnostics
+    diagnostics = _runtime_diagnostics_payload()
+    _startup_runtime_diagnostics = diagnostics
+    credential = diagnostics.get("googleServiceAccount") or {}
+    runtime_config = diagnostics.get("runtimeConfig") or {}
+    notification = diagnostics.get("notificationConfig") or {}
+    content_summary = diagnostics.get("contentSourceSummary") or {}
+    compact_sources = ", ".join(
+        f"{key}={value.get('source')}({value.get('count')})"
+        for key, value in sorted(content_summary.items())
+    )
+    logger.info(
+        "[RUNTIME] mode=%s sys.executable=%s cwd=%s backend_root=%s resources=%s packaged_log=%s",
+        diagnostics.get("mode"),
+        diagnostics.get("sysExecutable"),
+        diagnostics.get("cwd"),
+        diagnostics.get("backendRoot"),
+        diagnostics.get("appResourcesPath"),
+        diagnostics.get("packagedLogPath"),
+    )
+    logger.info(
+        "[RUNTIME] runtime_config exists=%s path=%s spreadsheet=%s notification_source=%s notification_sheet=%s",
+        runtime_config.get("exists"),
+        runtime_config.get("path"),
+        diagnostics.get("spreadsheetIdMasked"),
+        notification.get("source"),
+        notification.get("sheetIdMasked"),
+    )
+    logger.info(
+        "[RUNTIME] google_service_account exists=%s path=%s client_email=%s private_key_id=%s",
+        credential.get("exists"),
+        credential.get("path"),
+        credential.get("client_email") or "unknown",
+        credential.get("private_key_id") or "unknown",
+    )
+    logger.info("[RUNTIME] content_source_summary=%s", compact_sources)
+    return diagnostics
+
 
 DEFAULT_SETTINGS = {
     "setup_complete": False,
@@ -3121,6 +3466,7 @@ def _get_shared_tracking_sheet_service():
 
     creds_path = _resolve_notification_service_account_file()
     service_account_email = _get_service_account_email()
+    _record_google_sheet_auth_status("shared_service_resolved", ok=bool(creds_path), path=creds_path, error="" if creds_path else "No service account credentials found.")
     logger.info(
         "[SHARED] Master MTS content/candidate sheet config spreadsheet_id=%s service_account=%s credentials_path=%s",
         sheet_id or "",
@@ -3146,8 +3492,10 @@ def _get_shared_tracking_sheet_service():
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = service_account.Credentials.from_service_account_file(str(creds_path), scopes=scopes)
         service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        _record_google_sheet_auth_status("shared_service_ok", ok=True, path=creds_path)
         return {"ok": True, "service": service, "sheet_id": sheet_id, "serviceAccountEmail": service_account_email}
     except Exception as exc:
+        _record_google_sheet_auth_status("shared_service_failed", ok=False, path=creds_path, error=exc)
         return {"ok": False, "error": f"Unable to initialize Google Sheets credentials for shared tracking: {exc}", "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
 
 
@@ -5831,6 +6179,8 @@ async def import_sqlite_seed_if_requested():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await import_sqlite_seed_if_requested()
+    logger.info("[STARTUP] SQLite ready")
+    _log_startup_runtime_diagnostics()
 
     # Ensure default settings exist
     existing = await db.settings.find_one({"_id": "app_settings"})
@@ -5888,22 +6238,13 @@ async def lifespan(app: FastAPI):
                     (_content_source_status.get(key) or {}).get("count") or 0,
                 )
                 logger.info("[SAM] Active %s source: defaults after cache invalidation", key)
-    shared_sheet_status = _verify_master_shared_sheets()
-    if shared_sheet_status.get("ok"):
-        logger.info(
-            "[STARTUP] Master shared sheet setup verified. spreadsheet=%s service_account=%s notification_sheet=%s",
-            _mask_config_value(shared_sheet_status.get("spreadsheetId")),
-            shared_sheet_status.get("serviceAccountEmail") or "unknown",
-            _mask_config_value((shared_sheet_status.get("notificationSheet") or {}).get("spreadsheetId")),
-        )
-    else:
-        logger.error(
-            "[STARTUP] Master shared sheet setup failed. error=%s service_account=%s manual_setup=%s",
-            shared_sheet_status.get("error"),
-            shared_sheet_status.get("serviceAccountEmail") or (shared_sheet_status.get("setup") or {}).get("serviceAccountEmail") or "unknown",
-            shared_sheet_status.get("setup"),
-        )
+    
+    # Schedule background remote content refresh and sheet verification
+    import asyncio
+    asyncio.create_task(_background_remote_content_task())
+
     logger.info(f"[STARTUP] Mock Testing Suite v{APP_VERSION}")
+    logger.info("[STARTUP] server health ready")
     yield
     _gemini_executor.shutdown(wait=False, cancel_futures=True)
     db.close()
@@ -5918,7 +6259,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_origins=os.environ.get(
         "CORS_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,file://",
+        "http://localhost:3000,http://127.0.0.1:3000,file://,null",
     ).split(","),
     allow_methods=["*"],
     allow_headers=["*"],
@@ -5927,14 +6268,48 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_packaged_app_token(request: Request, call_next):
+    # Only enforce admin token when configured and request is an API call
+    try:
+        path = (request.url.path or "")
+    except Exception:
+        path = ""
+
+    def _requires_admin_auth(p: str) -> bool:
+        p_clean = p.rstrip("/")
+        # paths starting with /api/admin/
+        if p_clean == "/api/admin" or p_clean.startswith("/api/admin/"):
+            return True
+        # paths starting with /api/shared/admin/
+        if p_clean == "/api/shared/admin" or p_clean.startswith("/api/shared/admin/"):
+            return True
+        # /api/sam/setup/reset
+        if p_clean == "/api/sam/setup/reset" or p_clean.startswith("/api/sam/setup/reset/"):
+            return True
+        # explicit admin verification/diagnostic routes
+        if p_clean == "/api/runtime/verify-token" or p_clean.startswith("/api/runtime/verify-token/"):
+            return True
+        if p_clean == "/api/driver-diagnostics" or p_clean.startswith("/api/driver-diagnostics/"):
+            return True
+        return False
+
     if (
         _admin_token_configured()
-        and request.url.path.startswith("/api")
-        and request.url.path not in AUTH_EXEMPT_PATHS
+        and path.startswith("/api")
+        and _requires_admin_auth(path)
         and request.method.upper() not in {"OPTIONS"}
     ):
-        _require_admin_token(request)
+        logger.warning("[AUTH] Admin token required for packaged request: %s %s", request.method.upper(), path)
+        try:
+            _require_admin_token(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     return await call_next(request)
+
+
+# Lightweight health endpoint used by Electron to verify backend readiness.
+@api_router.get("/health")
+async def health_check():
+    return {"ok": True, "status": "ready", "version": APP_VERSION}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -6040,6 +6415,7 @@ async def get_defaults():
         "tech_issues": TECH_ISSUES,
         "auto_fail_reasons": AUTO_FAIL_REASONS,
         "_content_sources": _content_source_status,
+        "approved_headsets": _headset_cache.get("groups") or EXTERNAL_CONTENT.get("approved_headsets") or [],
     }
 
 
@@ -7949,6 +8325,16 @@ async def get_config_status():
     }
 
 
+@api_router.get("/admin/runtime-diagnostics")
+async def get_admin_runtime_diagnostics(request: Request):
+    try:
+        _require_admin_token(request)
+    except HTTPException:
+        if not _can_use_local_diagnostic_auth_fallback(request):
+            raise
+    return _runtime_diagnostics_payload()
+
+
 @api_router.get("/notifications/manage")
 async def get_notifications_manage(request: Request):
     _require_admin_token(request)
@@ -8024,6 +8410,67 @@ async def _fetch_approved_headsets():
         _headset_cache["last_fetch"] = now
         return sheet_groups, ""
     return _headset_cache["groups"] or [], "Unable to load the approved headset list right now."
+
+
+def _resolve_screenshot_path(filename: str) -> Path:
+    # Strip any leading slashes or directories from filename to get just the base name
+    base_filename = os.path.basename(filename)
+    
+    candidates = []
+    
+    # 1. APP_RESOURCES_PATH env var
+    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
+    if resources_root:
+        candidates.append(Path(resources_root) / "frontend" / base_filename)
+        candidates.append(Path(resources_root) / "assets" / base_filename)
+        candidates.append(Path(resources_root) / "backend" / "defaults" / base_filename)
+        
+    # 2. Packaged frozen runtime
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        # sibling to backend: resources/frontend
+        candidates.append(exe_dir.parent / "frontend" / base_filename)
+        candidates.append(exe_dir.parent / "assets" / base_filename)
+        candidates.append(exe_dir / "defaults" / base_filename)
+        # in case packaged directly next to exe
+        candidates.append(exe_dir / "frontend" / base_filename)
+        candidates.append(exe_dir / "assets" / base_filename)
+        
+    # 3. Development mode fallback
+    candidates.append(ROOT_DIR.parent / "frontend" / "public" / base_filename)
+    candidates.append(ROOT_DIR.parent / "desktop" / "assets" / base_filename)
+    candidates.append(ROOT_DIR / "defaults" / base_filename)
+    candidates.append(ROOT_DIR / "defaults" / "screenshots" / base_filename)
+    
+    # Check all candidates and return the first one that exists
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+            
+    # If not found, return the first one as a fallback path
+    return candidates[0]
+
+
+@api_router.get("/screenshot-assets/{filename}")
+async def get_screenshot_asset(filename: str):
+    logger.info("[SCREENSHOT] Request received for filename: %s", filename)
+    resolved_path = _resolve_screenshot_path(filename)
+    exists = resolved_path.exists() and resolved_path.is_file()
+    
+    logger.info(
+        "[SCREENSHOT] Lookup details - Requested: %s | Resolved path: %s | Exists: %s",
+        filename,
+        str(resolved_path),
+        exists
+    )
+    
+    if not exists:
+        logger.error("[SCREENSHOT] File not found: %s (tried: %s)", filename, str(resolved_path))
+        raise HTTPException(status_code=404, detail=f"Screenshot file '{filename}' not found.")
+        
+    logger.info("[SCREENSHOT] Returning 200 FileResponse for: %s", str(resolved_path))
+    from fastapi.responses import FileResponse
+    return FileResponse(resolved_path, media_type="image/png")
 
 
 @api_router.get("/headsets")
@@ -8154,10 +8601,25 @@ async def root():
     return {"message": f"Mock Testing Suite API v{APP_VERSION}"}
 
 
+@api_router.get("/health")
+async def health():
+    return {"ok": True, "version": APP_VERSION}
+
+
 @api_router.get("/runtime/verify-token")
 async def verify_runtime_token(request: Request):
     _require_admin_token(request)
     return {"ok": True, "version": APP_VERSION}
+
+
+@api_router.get("/driver-diagnostics")
+async def driver_diagnostics_route():
+    try:
+        from services.form_filler import driver_diagnostics as _diag
+        return {"ok": True, "diagnostics": _diag()}
+    except Exception as exc:
+        logger.exception("Driver diagnostics failed: %s", exc)
+        return {"ok": False, "message": str(exc)}
 
 
 app.include_router(api_router)

@@ -144,6 +144,11 @@ export default function BasicsPage({ onNavigate }) {
   const [confirmedCandidateMatch, setConfirmedCandidateMatch] = useState(null);
   const [previousSessionOpen, setPreviousSessionOpen] = useState(false);
   const [finalAttemptNoticeShownFor, setFinalAttemptNoticeShownFor] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const dropdownRef = useRef(null);
+  const containerRef = useRef(null);
+  const itemRefs = useRef([]);
   const [copiedVpnUrl, setCopiedVpnUrl] = useState('');
   const [form, setForm] = useState({
     candidate_name: '', tester_name: '', final_attempt: false,
@@ -280,6 +285,107 @@ export default function BasicsPage({ onNavigate }) {
   }, [candidateLookup.finalAttempt, confirmedCandidateMatch, finalAttemptNoticeShownFor, form.candidate_name, modal]);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const allApprovedHeadsetOptions = useMemo(() => {
+    return approvedHeadsets.flatMap((group) =>
+      (group.models || []).map((model) => selectedHeadsetLabel(group, model))
+    );
+  }, [approvedHeadsets]);
+
+  const filteredDropdownOptions = useMemo(() => {
+    const typed = String(form.headset_brand || '').trim().toLowerCase();
+    if (!typed) {
+      return allApprovedHeadsetOptions;
+    }
+    return allApprovedHeadsetOptions.filter(option =>
+      option.toLowerCase().includes(typed)
+    );
+  }, [allApprovedHeadsetOptions, form.headset_brand]);
+
+  // Reset highlighted item when filtered options change
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [filteredDropdownOptions]);
+
+  // Click outside to close dropdown
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, []);
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    set('headset_brand', val);
+    setDropdownOpen(true);
+    setHighlightedIndex(-1);
+  };
+
+  const handleInputFocus = () => {
+    setDropdownOpen(true);
+    setHighlightedIndex(-1);
+  };
+
+  const handleArrowClick = (e) => {
+    e.stopPropagation();
+    setDropdownOpen((prev) => !prev);
+    setHighlightedIndex(-1);
+  };
+
+  const handleSelectOption = (value) => {
+    set('headset_brand', value);
+    setDropdownOpen(false);
+  };
+
+  const scrollIntoView = (index) => {
+    const el = itemRefs.current[index];
+    if (el) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (!dropdownOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        setDropdownOpen(true);
+        setHighlightedIndex(0);
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedIndex((prev) => {
+        const next = prev + 1 >= filteredDropdownOptions.length ? 0 : prev + 1;
+        scrollIntoView(next);
+        return next;
+      });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedIndex((prev) => {
+        const next = prev - 1 < 0 ? filteredDropdownOptions.length - 1 : prev - 1;
+        scrollIntoView(next);
+        return next;
+      });
+    } else if (e.key === 'Enter') {
+      if (highlightedIndex >= 0 && highlightedIndex < filteredDropdownOptions.length) {
+        e.preventDefault();
+        const selectedValue = filteredDropdownOptions[highlightedIndex];
+        handleSelectOption(selectedValue);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setDropdownOpen(false);
+    }
+  };
+
   const mostRecentPreviousSession = candidateLookup.matches[0] || null;
 
   const copyVpnUrl = async (url) => {
@@ -676,12 +782,71 @@ export default function BasicsPage({ onNavigate }) {
             </div>
             <div className="basics-headset-brand-row">
               <label className="text-sm font-bold" style={{ minWidth: 160 }}>Brand / Model</label>
-              <input type="text" value={form.headset_brand} onChange={e => set('headset_brand', e.target.value)} placeholder="e.g. Logitech H390" list="approved-headset-options" data-testid="basics-brand" />
-              <datalist id="approved-headset-options">
-                {approvedHeadsets.flatMap((group) => (group.models || []).map((model) => selectedHeadsetLabel(group, model))).slice(0, 160).map((label) => (
-                  <option key={label} value={label} />
-                ))}
-              </datalist>
+              <div ref={containerRef} className="headset-autocomplete-container" style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
+                <input
+                  type="text"
+                  value={form.headset_brand}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKeyDown}
+                  onFocus={handleInputFocus}
+                  placeholder="e.g. Logitech H390"
+                  data-testid="basics-brand"
+                  autoComplete="off"
+                  style={{ width: '100%', paddingRight: '32px' }}
+                />
+                <button
+                  type="button"
+                  className="headset-dropdown-arrow-btn"
+                  onClick={handleArrowClick}
+                  onMouseDown={e => e.preventDefault()}
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--text-secondary, #888)'
+                  }}
+                  aria-label="Toggle Headset List"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+                {dropdownOpen && (
+                  <ul
+                    ref={dropdownRef}
+                    className="dropdown-menu headset-dropdown-menu"
+                  >
+                    {filteredDropdownOptions.length === 0 ? (
+                      <li className="headset-dropdown-empty-item">
+                        No matching approved headsets
+                      </li>
+                    ) : (
+                      filteredDropdownOptions.map((label, index) => {
+                        const isHighlighted = index === highlightedIndex;
+                        return (
+                          <li
+                            key={label}
+                            ref={el => { itemRefs.current[index] = el; }}
+                            onClick={() => handleSelectOption(label)}
+                            onMouseDown={e => e.preventDefault()}
+                            className={`headset-dropdown-item ${isHighlighted ? 'highlighted' : ''}`}
+                          >
+                            {label}
+                          </li>
+                        );
+                      })
+                    )}
+                  </ul>
+                )}
+              </div>
             </div>
             <div className="basics-headset-note">
               {HEADSET_HELPER_TEXT}

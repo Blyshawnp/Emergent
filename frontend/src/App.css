@@ -1010,6 +1010,63 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   max-width: 280px;
 }
 
+.headset-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 9999;
+  margin: 4px 0 0 0;
+  padding: 4px 0;
+  list-style: none;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background-color: var(--bg-card);
+  box-shadow: var(--shadow-md);
+}
+
+.headset-dropdown-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  line-height: 1.25;
+  color: var(--text-primary);
+  background-color: transparent;
+  text-align: left;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.headset-dropdown-item:hover,
+.headset-dropdown-item.highlighted {
+  background-color: var(--color-primary);
+  color: white;
+}
+
+.headset-dropdown-empty-item {
+  padding: 8px 12px;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+/* Custom scrollbar for headset dropdown */
+.headset-dropdown-menu::-webkit-scrollbar {
+  width: 8px;
+}
+.headset-dropdown-menu::-webkit-scrollbar-track {
+  background: var(--bg-card);
+}
+.headset-dropdown-menu::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+.headset-dropdown-menu::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
 .basics-headset-note {
   width: min(280px, 100%);
   margin: 2px 0 0 176px;
@@ -1170,6 +1227,27 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   max-height: 320px;
   overflow-y: auto;
   padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) var(--bg-input);
+}
+
+.headset-lookup-results-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.headset-lookup-results-scroll::-webkit-scrollbar-track {
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+}
+
+.headset-lookup-results-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--bg-input);
+}
+
+[data-theme="dark"] .headset-lookup-results-scroll::-webkit-scrollbar-thumb {
+  background: #64748b;
 }
 
 .headset-lookup-results {

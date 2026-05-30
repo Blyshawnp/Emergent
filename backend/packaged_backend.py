@@ -18,7 +18,7 @@ def main():
     port = int(os.getenv("BACKEND_PORT", "8600") or "8600")
 
     try:
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", log_config=None, access_log=False)
     except Exception as exc:
         logger.error("Backend server failed to start: %s", exc)
         print(f"Backend server failed to start: {exc}", file=sys.stderr)

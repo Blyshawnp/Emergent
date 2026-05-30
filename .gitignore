@@ -36,6 +36,10 @@ Thumbs.db
 *.zip
 *.blockmap
 
+# Local browser driver executables used for packaged backend builds
+backend/drivers/*.exe
+!backend/drivers/README.txt
+
 # Frontend build (optional if you rebuild each time)
 frontend/build/
 

@@ -9,14 +9,24 @@ from PyInstaller.building.datastruct import Tree
 hiddenimports = []
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += collect_submodules("selenium")
+hiddenimports += collect_submodules("webdriver_manager")
 
 
 tree_data = Tree("defaults", prefix="defaults")
+drivers_tree = Tree("drivers", prefix="drivers")
 optional_config_files = [
     ("config/runtime_config.json", "config"),
 ]
 datas = [(src, dest) for src, dest in optional_config_files if os.path.exists(src)]
 datas += [(src, dest) for dest, src, _ in tree_data]
+datas += [(src, dest) for dest, src, _ in drivers_tree]
+import selenium
+selenium_dir = os.path.dirname(selenium.__file__)
+selenium_manager_bin = os.path.join(selenium_dir, "webdriver", "common", "windows", "selenium-manager.exe")
+if os.path.exists(selenium_manager_bin):
+    datas.append((selenium_manager_bin, "selenium/webdriver/common/windows"))
+
+
 
 a = Analysis(
     ["packaged_backend.py"],

@@ -124,15 +124,50 @@ function getTickerItemClass(notification) {
   return 'ticker-item ticker-item-info';
 }
 
+function getBackendUrl() {
+  const electronUrl = (() => {
+    try {
+      return (window.electronAPI?.getBackendUrl?.() || '').trim();
+    } catch (_error) {
+      return '';
+    }
+  })();
+  if (electronUrl) {
+    return electronUrl.replace(/\/+$/, '');
+  }
+
+  const configuredUrl = (process.env.REACT_APP_BACKEND_URL || '').trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/+$/, '');
+  }
+
+  try {
+    if (String(window.location?.hash || '').includes('notification-manager')) {
+      return 'http://127.0.0.1:8601';
+    }
+  } catch (_error) {
+    // Fall through to the main app backend port.
+  }
+
+  return 'http://127.0.0.1:8600';
+}
+
 function resolveScreenshotUrl(imageUrl) {
   const value = String(imageUrl || '').trim();
   if (!value) return '';
   if (/^(https?:|data:|blob:)/i.test(value)) return value;
-  return value.replace(/^\/+/, '');
+  const backend = getBackendUrl();
+  const cleanPath = value.replace(/^\/+/, '');
+  if (/\.(png|jpe?g|gif|webp)$/i.test(cleanPath)) {
+    const parts = cleanPath.split('/');
+    const filename = parts[parts.length - 1];
+    return `${backend}/api/screenshot-assets/${filename}`;
+  }
+  return `${backend}/${cleanPath}`;
 }
 
-function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, onReplayTutorial, onSetupCompleted }) {
-  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, onReplayTutorial, onSetupCompleted };
+function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses }) {
+  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses };
   switch (page) {
     case 'setup': return <SetupPage {...props} />;
     case 'home': return <HomePage {...props} />;
@@ -318,7 +353,19 @@ function ElectronEventBridge({ navigate, setUpdateState }) {
 function AppShell() {
   const [page, setPage] = useState('home');
   const [pageState, setPageState] = useState(null);
-  const [settings, setSettings] = useState(null);
+  const [settings, setSettings] = useState({});
+  const [defaults, setDefaults] = useState({ approved_headsets: [], discord_templates: [], discord_screenshots: [] });
+  const [history, setHistory] = useState([]);
+  const [historyStats, setHistoryStats] = useState({});
+  const [currentSession, setCurrentSession] = useState(null);
+  const [startupStatuses, setStartupStatuses] = useState({
+    backend: 'pending',
+    settings: 'pending',
+    defaults: 'pending',
+    session: 'pending',
+    history: 'pending',
+    stats: 'pending',
+  });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.sessionStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
   const [tutorialRun, setTutorialRun] = useState(false);
   const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
@@ -403,10 +450,15 @@ function AppShell() {
 
     showInstalledPopup();
 
-    return () => {
-      active = false;
-    };
   }, [modal, refreshUpdateState, updateState]);
+
+  useEffect(() => {
+    console.log("app component mounted");
+  }, []);
+
+  useEffect(() => {
+    console.log("ticker mounted");
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -415,32 +467,125 @@ function AppShell() {
     const loadInitialSettings = async (attempt = 0) => {
       try {
         if (attempt === 0) {
-          setLoadingStatus('Connecting to backend...');
-          setLoadingProgress(42);
+          setLoadingStatus('Starting backend...');
+          setLoadingProgress(20);
         } else {
-          setLoadingStatus(attempt >= 5 ? 'Finalizing backend connection...' : 'Connecting to backend...');
-          setLoadingProgress(Math.min(84, 42 + attempt * 4));
+          setLoadingStatus('Starting backend...');
+          setLoadingProgress(Math.min(50, 20 + attempt * 4));
         }
 
-        const s = await api.getSettings();
+        console.log("backend health check started");
+        await api.getHealth();
+        console.log("backend health ready");
+
         if (cancelled) return;
-        setLoadingStatus('Loading settings...');
-        setLoadingProgress(88);
-        setSettings(s);
-        setSoundsEnabled(s.enable_sounds !== false);
-        setLoadingStatus('Preparing workspace...');
-        setLoadingProgress(98);
-        if (!s.setup_complete) setPage('setup');
+
+        setStartupStatuses(prev => ({ ...prev, backend: 'ready' }));
         setLoading(false);
+
+        // Fetch settings first to render Home page shell instantly
+        console.log("settings request started");
+        setStartupStatuses(prev => ({ ...prev, settings: 'pending' }));
+        api.getSettings(5000).then(s => {
+          if (!cancelled) {
+            setSettings(s || {});
+            setSoundsEnabled(s?.enable_sounds !== false);
+            setStartupStatuses(prev => ({ ...prev, settings: 'loaded' }));
+            console.log("settings request finished");
+
+            if (s?.setup_complete === false) {
+              setPage('setup');
+            } else {
+              setPage('home');
+            }
+          }
+        }).catch(err => {
+          console.log("settings request failed: " + err.message);
+          if (!cancelled) {
+            setSettings({});
+            setStartupStatuses(prev => ({ ...prev, settings: 'fallback' }));
+            setPage('home');
+          }
+        });
+
+        // 1. Load Defaults asynchronously in background
+        console.log("defaults request started");
+        setStartupStatuses(prev => ({ ...prev, defaults: 'pending' }));
+        api.getDefaults(8000).then(defs => {
+          if (!cancelled) {
+            setDefaults(defs || { approved_headsets: [], discord_templates: [], discord_screenshots: [] });
+            setStartupStatuses(prev => ({ ...prev, defaults: 'loaded' }));
+            console.log("defaults request finished");
+            console.log("Discord final template count: " + (defs?.discord_templates?.length || 0));
+            console.log("Discord final screenshot count: " + (defs?.discord_screenshots?.length || 0));
+          }
+        }).catch(err => {
+          console.log("defaults request failed: " + err.message);
+          if (!cancelled) {
+            setDefaults({ approved_headsets: [], discord_templates: [], discord_screenshots: [] });
+            setStartupStatuses(prev => ({ ...prev, defaults: 'fallback' }));
+          }
+        });
+
+        // 2. Load Current Session asynchronously in background
+        setStartupStatuses(prev => ({ ...prev, session: 'pending' }));
+        api.getCurrentSession(5000).then(session => {
+          if (!cancelled) {
+            setCurrentSession(session);
+            setStartupStatuses(prev => ({ ...prev, session: 'loaded' }));
+          }
+        }).catch(err => {
+          if (!cancelled) {
+            setCurrentSession(null);
+            setStartupStatuses(prev => ({ ...prev, session: 'fallback' }));
+          }
+        });
+
+        // 3. Load History asynchronously in background
+        console.log("history request started");
+        setStartupStatuses(prev => ({ ...prev, history: 'pending' }));
+        api.getHistory(5000).then(hist => {
+          if (!cancelled) {
+            setHistory(hist || []);
+            setStartupStatuses(prev => ({ ...prev, history: 'loaded' }));
+            console.log("history request finished");
+          }
+        }).catch(err => {
+          console.log("history request failed: " + err.message);
+          if (!cancelled) {
+            setHistory([]);
+            setStartupStatuses(prev => ({ ...prev, history: 'fallback' }));
+          }
+        });
+
+        // 4. Load History Stats asynchronously in background
+        console.log("stats request started");
+        setStartupStatuses(prev => ({ ...prev, stats: 'pending' }));
+        api.getHistoryStats(5000).then(stats => {
+          if (!cancelled) {
+            setHistoryStats(stats || {});
+            setStartupStatuses(prev => ({ ...prev, stats: 'loaded' }));
+            console.log("stats request finished");
+          }
+        }).catch(err => {
+          console.log("stats request failed: " + err.message);
+          if (!cancelled) {
+            setHistoryStats({});
+            setStartupStatuses(prev => ({ ...prev, stats: 'fallback' }));
+          }
+        });
+
       } catch (_err) {
         if (cancelled) return;
         if (attempt < INITIAL_SETTINGS_MAX_RETRIES) {
-          setLoadingStatus('Connecting to backend...');
+          setLoadingStatus('Starting backend...');
           retryTimeout = window.setTimeout(() => {
             loadInitialSettings(attempt + 1);
           }, INITIAL_SETTINGS_RETRY_DELAY_MS);
           return;
         }
+        console.log("backend health request failed: " + _err.message);
+        setStartupStatuses(prev => ({ ...prev, backend: 'failed' }));
         setLoadingStatus('Backend connection timed out');
         setLoadingProgress(100);
         setLoading(false);
@@ -881,8 +1026,13 @@ function AppShell() {
                   refreshUpdateState={refreshUpdateState}
                   appVersion={appVersion}
                   settings={settings}
+                  defaults={defaults}
+                  history={history}
+                  historyStats={historyStats}
+                  currentSession={currentSession}
                   onReplayTutorial={startFullTutorial}
                   onSetupCompleted={handleSetupCompleted}
+                  startupStatuses={startupStatuses}
                 />
               )}
             </div>
@@ -894,24 +1044,56 @@ function AppShell() {
           </main>
         </div>
 
-        {discordOpen && <DiscordModal settings={settings} onClose={() => setDiscordOpen(false)} />}
+        {discordOpen && <DiscordModal settings={settings} defaults={defaults} onClose={() => setDiscordOpen(false)} />}
         <ElectronEventBridge navigate={navigate} setUpdateState={setUpdateState} />
       </div>
      </>  
   );
 }
 
-function DiscordModal({ settings, onClose }) {
-  const templates = settings?.discord_templates || [];
-  const screenshots = settings?.discord_screenshots || [];
+function DiscordModal({ settings, defaults, onClose }) {
+  const templatesSrc = (!settings?.discord_override && defaults?.discord_templates?.length > 0)
+    ? defaults.discord_templates
+    : (settings?.discord_templates || []);
+
+  const screenshotsSrc = (!settings?.discord_override && defaults?.discord_screenshots?.length > 0)
+    ? defaults.discord_screenshots
+    : (settings?.discord_screenshots || []);
+
+  const templates = templatesSrc.map(t => {
+    if (!t) return null;
+    if (Array.isArray(t)) {
+      return { title: String(t[0] || ''), message: String(t[1] || '') };
+    }
+    if (typeof t === 'object') {
+      const title = t.title || t.name || '';
+      const message = t.message || t.text || t.content || '';
+      return { title: String(title), message: String(message) };
+    }
+    return null;
+  }).filter(Boolean);
+
+  const screenshots = screenshotsSrc.map(s => {
+    if (!s) return null;
+    if (typeof s === 'object') {
+      const title = s.title || s.name || 'Screenshot';
+      const imageUrl = s.image_url || s.imageUrl || s.url || s.src || '';
+      return { title: String(title), imageUrl: String(imageUrl) };
+    }
+    return null;
+  }).filter(Boolean);
+
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('templates');
-  const filteredTemplates = templates.filter(([trigger, msg]) =>
-    trigger.toLowerCase().includes(search.toLowerCase()) || msg.toLowerCase().includes(search.toLowerCase())
+
+  const filteredTemplates = templates.filter(({ title, message }) =>
+    title.toLowerCase().includes(search.toLowerCase()) || message.toLowerCase().includes(search.toLowerCase())
   );
+
   const filteredScreenshots = screenshots.filter(s =>
     s.title.toLowerCase().includes(search.toLowerCase())
   );
+
   return (
     <div className="modal-overlay open" onClick={e => { if (e.target.classList.contains('modal-overlay')) onClose(); }} data-testid="discord-modal">
       <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 700, maxHeight: '85vh' }}>
@@ -930,14 +1112,14 @@ function DiscordModal({ settings, onClose }) {
           {tab === 'templates' ? (
             filteredTemplates.length === 0 ? (
               <p className="text-muted" style={{ padding: 20 }}>No templates match your search.</p>
-            ) : filteredTemplates.map(([title, message], i) => (
+            ) : filteredTemplates.map(({ title, message }, i) => (
               <DiscordRow key={i} title={title} message={message} />
             ))
           ) : (
             filteredScreenshots.length === 0 ? (
               <p className="text-muted" style={{ padding: 20 }}>No screenshots match your search.</p>
             ) : filteredScreenshots.map((ss, i) => (
-              <DiscordScreenshotRow key={i} title={ss.title} imageUrl={ss.image_url} />
+              <DiscordScreenshotRow key={i} title={ss.title} imageUrl={ss.imageUrl} />
             ))
           )}
         </div>
@@ -970,6 +1152,14 @@ function DiscordScreenshotRow({ title, imageUrl }) {
     setPreviewError(false);
   }, [resolvedImageUrl]);
 
+  useEffect(() => {
+    console.log("[SCREENSHOT PREVIEW] Render Details:", {
+      title,
+      rawImageUrl: imageUrl,
+      resolvedImageUrl
+    });
+  }, [title, imageUrl, resolvedImageUrl]);
+
   const handleCopy = async () => {
     if (!resolvedImageUrl) return;
     try {
@@ -1000,7 +1190,13 @@ function DiscordScreenshotRow({ title, imageUrl }) {
         <img
           src={resolvedImageUrl}
           alt={title}
-          onError={() => setPreviewError(true)}
+          onLoad={() => {
+            console.log(`[SCREENSHOT PREVIEW] Load SUCCESS for: "${title}" | Resolved: ${resolvedImageUrl}`);
+          }}
+          onError={() => {
+            console.error(`[SCREENSHOT PREVIEW] Load FAILURE for: "${title}" | Resolved: ${resolvedImageUrl}`);
+            setPreviewError(true);
+          }}
           style={{ width: '100%', maxHeight: 300, objectFit: 'contain', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}
         />
       ) : (

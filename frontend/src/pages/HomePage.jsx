@@ -131,12 +131,11 @@ function buildSharedPendingSession(entry, testerName, basicsSource = null) {
   }, basicsSource);
 }
 
-export default function HomePage({ onNavigate }) {
+export default function HomePage({ onNavigate, settings: initialSettings, history: initialHistory, historyStats: initialStats, startupStatuses }) {
   const modal = useModal();
-  const [settings, setSettings] = useState({});
-  const [stats, setStats] = useState({});
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState(initialSettings || {});
+  const [stats, setStats] = useState(initialStats || {});
+  const [history, setHistory] = useState(initialHistory || []);
   const [resumeEntry, setResumeEntry] = useState(null);
   const [sharedPendingEntries, setSharedPendingEntries] = useState([]);
   const [sharedPendingEntry, setSharedPendingEntry] = useState(null);
@@ -152,31 +151,35 @@ export default function HomePage({ onNavigate }) {
   );
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [s, st, h] = await Promise.all([api.getSettings(), api.getHistoryStats(), api.getHistory()]);
-        if (!cancelled) { setSettings(s); setStats(st); setHistory(h || []); }
-      } catch (_err) {
-        // Home page data load failed
-      }
-      if (!cancelled) setLoading(false);
-    })();
-    return () => { cancelled = true; };
+    console.log("HomePage first rendered");
   }, []);
 
   useEffect(() => {
-    if (loading) return;
+    console.log("history component mounted");
+  }, []);
+
+  useEffect(() => {
+    if (initialSettings) setSettings(initialSettings);
+  }, [initialSettings]);
+
+  useEffect(() => {
+    if (initialHistory) setHistory(initialHistory);
+  }, [initialHistory]);
+
+  useEffect(() => {
+    if (initialStats) setStats(initialStats);
+  }, [initialStats]);
+
+  useEffect(() => {
     const testerNameForWelcome = settings.tester_name || settings.display_name || '';
     if (!testerNameForWelcome) return;
     if (window.sessionStorage.getItem('mts-welcome-sound-played') === '1') return;
     playSound('welcome', testerNameForWelcome);
     window.sessionStorage.setItem('mts-welcome-sound-played', '1');
-  }, [loading, settings]);
-
-  if (loading) return <div className="page-loading">Loading...</div>;
+  }, [settings]);
 
   const name = settings.display_name || settings.tester_name || 'Tester';
+  console.log("greeting computed: Welcome, " + name + "!");
   const recent = (history || []).slice(0, 5);
   const badgeClass = (s) => ({ Pass: 'badge-pass', 'RESUMED-PASS': 'badge-pass', Fail: 'badge-fail', 'FAIL-Final Attempt': 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
 
@@ -309,7 +312,11 @@ export default function HomePage({ onNavigate }) {
       <div className="home-section" style={{ flex: 1, minHeight: 0 }}>
         <h3>Recent Sessions</h3>
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          {recent.length === 0 ? (
+          {startupStatuses?.history === 'pending' ? (
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No recent sessions loaded yet</div>
+          ) : startupStatuses?.history === 'fallback' || startupStatuses?.history === 'error' ? (
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Recent sessions could not be loaded.</div>
+          ) : recent.length === 0 ? (
             <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No sessions yet. Start testing to see history here.</div>
           ) : recent.map((s, i) => (
             <div

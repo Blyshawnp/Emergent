@@ -63,6 +63,8 @@ let backendReadyRetryCount = 0;
 let backendLastError = '';
 let backendRetryTimer = null;
 let backendRetryAttemptCount = 0;
+let backendStdoutLogStream = null;
+let backendStderrLogStream = null;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
@@ -108,6 +110,10 @@ function getBackendPath(subpath = '') {
 
 function getSqliteDbPath() {
   return path.join(app.getPath('userData'), 'mock_testing_suite.sqlite3');
+}
+
+function getBackendLogDir() {
+  return path.join(app.getPath('userData'), 'logs');
 }
 
 function getSharedAppDataPath(subpath = '') {
@@ -307,6 +313,38 @@ function appendBackendLog(line) {
   }
 }
 
+function closeBackendLogStreams() {
+  for (const stream of [backendStdoutLogStream, backendStderrLogStream]) {
+    if (stream) {
+      try {
+        stream.end();
+      } catch (_error) {
+        // Ignore logging cleanup failures during shutdown.
+      }
+    }
+  }
+  backendStdoutLogStream = null;
+  backendStderrLogStream = null;
+}
+
+function initializePackagedBackendLogStreams() {
+  closeBackendLogStreams();
+  try {
+    const logDir = getBackendLogDir();
+    fs.mkdirSync(logDir, { recursive: true });
+    backendStdoutLogStream = fs.createWriteStream(path.join(logDir, 'backend-standalone.out.log'), { flags: 'a' });
+    backendStderrLogStream = fs.createWriteStream(path.join(logDir, 'backend-standalone.err.log'), { flags: 'a' });
+    const header = `\n[${new Date().toISOString()}] ${APP_DISPLAY_NAME} launching backend on port ${BACKEND_PORT}\n`;
+    backendStdoutLogStream.write(header);
+    backendStderrLogStream.write(header);
+    console.log(`[BACKEND] Packaged backend logs: ${logDir}`);
+    return logDir;
+  } catch (error) {
+    console.warn('[BACKEND] Unable to create packaged backend log files:', error.message);
+    return '';
+  }
+}
+
 function getBackendFailureMessage(reason) {
   const details = [];
 
@@ -441,7 +479,7 @@ function getBackendState() {
     startedByNotificationApp: Boolean(isNotificationManagerMode && backendStartedByThisApp),
     startedByThisApp: Boolean(backendStartedByThisApp),
     usingExternalBackend: Boolean(usingExternalBackend),
-    retryCount: backendReadyRetryCount,
+    retryCount: isNotificationManagerMode ? backendRetryAttemptCount : backendReadyRetryCount,
     pid: backendProcess?.pid || 0,
     command: backendCommandLabel,
     lastError: backendLastError,
@@ -472,8 +510,20 @@ function startBackend() {
     const backendRuntimeConfigPath = path.join(backendConfigDir, 'runtime_config.json');
     const backendDefaultsDir = path.join(process.resourcesPath, 'backend', 'defaults');
     const googleServiceAccountPath = path.join(backendConfigDir, 'google-service-account.json');
+    const packagedBackendLogDir = initializePackagedBackendLogStreams();
     requireRuntimePath(backendPath, 'Bundled backend executable');
-    requireRuntimePath(driverDir, 'Bundled browser drivers directory');
+    // Bundled drivers are optional. If absent, create the directory and a README
+    // explaining runtime Selenium Manager / webdriver-manager resolution.
+    if (!fs.existsSync(driverDir)) {
+      console.warn('[BACKEND] Bundled browser drivers directory is missing; continuing without bundled drivers.');
+      try {
+        fs.mkdirSync(driverDir, { recursive: true });
+        const readme = 'This directory may contain optional browser driver binaries (chromedriver.exe, msedgedriver.exe) for offline use.\nIf no drivers are bundled, the application will attempt to resolve drivers at runtime using Selenium Manager or webdriver-manager.\nDo NOT commit driver binaries into source control.';
+        fs.writeFileSync(path.join(driverDir, 'README.txt'), readme, { encoding: 'utf8', flag: 'w' });
+      } catch (err) {
+        console.warn('[BACKEND] Failed to create drivers README:', err.message);
+      }
+    }
     requireRuntimePath(backendRuntimeConfigPath, 'Bundled backend runtime config');
     requireRuntimePath(backendDefaultsDir, 'Bundled backend defaults directory');
 
@@ -495,6 +545,9 @@ function startBackend() {
           ...process.env,
           BACKEND_PORT: String(BACKEND_PORT),
           SQLITE_DB_PATH: getSqliteDbPath(),
+          APP_DATA_DIR: app.getPath('userData'),
+          BACKEND_LOG_DIR: packagedBackendLogDir || getBackendLogDir(),
+          BACKEND_RUNTIME_CONFIG_FILE: backendRuntimeConfigPath,
           BROWSER_DRIVER_DIR: driverDir,
           APP_VERSION,
           APP_RESOURCES_PATH: process.resourcesPath,
@@ -523,8 +576,16 @@ function startBackend() {
     backendStartedByThisApp = true;
     writeBackendOwner(backendProcess.pid);
 
-    backendProcess.stdout.on('data', (data) => appendBackendLog(data.toString().trim()));
-    backendProcess.stderr.on('data', (data) => appendBackendLog(data.toString().trim()));
+    backendProcess.stdout.on('data', (data) => {
+      const text = data.toString();
+      appendBackendLog(text.trim());
+      if (backendStdoutLogStream) backendStdoutLogStream.write(text);
+    });
+    backendProcess.stderr.on('data', (data) => {
+      const text = data.toString();
+      appendBackendLog(text.trim());
+      if (backendStderrLogStream) backendStderrLogStream.write(text);
+    });
     backendProcess.on('error', (err) => {
       backendLaunchError = err;
       backendStartedByThisApp = false;
@@ -547,6 +608,7 @@ function startBackend() {
       if (!app.isQuitting && code !== 0 && code !== null && mainWindow) {
         dialog.showErrorBox('Backend Error', getBackendFailureMessage(`The backend executable stopped unexpectedly (exit code ${code}).`));
       }
+      closeBackendLogStreams();
     });
     return;
   }
@@ -627,10 +689,7 @@ function startBackend() {
 }
 
 function stopBackend() {
-  if (backendRetryTimer) {
-    clearTimeout(backendRetryTimer);
-    backendRetryTimer = null;
-  }
+  clearNotificationBackendRetryTimer();
 
   if (backendProcess) {
     if (isOtherAppActive()) {
@@ -659,21 +718,59 @@ function stopBackend() {
 }
 
 function probeBackend() {
+  // Returns an object: { healthy: boolean, listening: boolean }
   return new Promise((resolve) => {
+    const net = require('net');
+    let listening = false;
+    const socket = new net.Socket();
+    socket.setTimeout(400);
+    socket.once('connect', () => {
+      listening = true;
+      socket.destroy();
+    });
+    socket.once('timeout', () => socket.destroy());
+    socket.once('error', () => {});
+    socket.once('close', () => {
+      // Now probe the health endpoint (non-auth) with a short timeout
+      const req = http.get({ hostname: '127.0.0.1', port: BACKEND_PORT, path: '/api/health', timeout: BACKEND_READY_REQUEST_TIMEOUT_MS }, (res) => {
+        res.resume();
+        resolve({ healthy: res.statusCode === 200, listening });
+      });
+      req.setTimeout(BACKEND_READY_REQUEST_TIMEOUT_MS, () => {
+        req.destroy();
+        resolve({ healthy: false, listening });
+      });
+      req.on('error', () => resolve({ healthy: false, listening }));
+      req.end();
+    });
+    socket.connect(BACKEND_PORT, '127.0.0.1');
+  });
+}
+
+function verifyBackendAuth() {
+  return new Promise((resolve, reject) => {
     const req = http.get({
       hostname: '127.0.0.1',
       port: BACKEND_PORT,
       path: '/api/runtime/verify-token',
-      headers: { 'X-MTS-Admin-Token': getSharedAdminToken() },
+      headers: { [ADMIN_TOKEN_HEADER]: getSharedAdminToken() },
+      timeout: BACKEND_READY_REQUEST_TIMEOUT_MS,
     }, (res) => {
       res.resume();
-      resolve(res.statusCode === 200);
+      if (res.statusCode === 200) {
+        resolve(true);
+      } else {
+        const err = new Error(`Backend auth verification failed with status ${res.statusCode}`);
+        err.statusCode = res.statusCode;
+        reject(err);
+      }
     });
+
+    req.on('error', reject);
     req.setTimeout(BACKEND_READY_REQUEST_TIMEOUT_MS, () => {
       req.destroy();
-      resolve(false);
+      reject(new Error('Backend auth verification timed out'));
     });
-    req.on('error', () => resolve(false));
     req.end();
   });
 }
@@ -709,7 +806,7 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
         hostname: '127.0.0.1',
         port: BACKEND_PORT,
         path: '/api/runtime/verify-token',
-        headers: { 'X-MTS-Admin-Token': getSharedAdminToken() },
+        headers: { [ADMIN_TOKEN_HEADER]: getSharedAdminToken() },
       }, (res) => {
         if (res.statusCode === 200) {
           backendReadyRetryCount = Math.max(0, retries - remaining);
@@ -844,14 +941,41 @@ function createMainWindow() {
 
 async function ensureBackendAvailable() {
   setBackendConnectionStatus('checking');
-  if (await probeBackend()) {
-    usingExternalBackend = true;
-    backendStartedByThisApp = false;
-    backendReadyRetryCount = 0;
-    backendRetryAttemptCount = 0;
-    setBackendConnectionStatus('connected');
-    console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
-    return;
+  const status = await probeBackend();
+  if (status.healthy) {
+    try {
+      await verifyBackendAuth();
+      usingExternalBackend = true;
+      backendStartedByThisApp = false;
+      backendReadyRetryCount = 0;
+      backendRetryAttemptCount = 0;
+      setBackendConnectionStatus('connected');
+      console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
+      return;
+    } catch (err) {
+      console.warn('[BACKEND] Existing backend auth verification failed:', err?.message || err);
+      if (status.listening) {
+        console.warn('[BACKEND] Marking existing backend as stale due to failed auth verification.');
+      }
+    }
+  }
+
+  // If the port is listening but /api/health failed or auth verification failed, try to clear a stale owned backend.
+  if (status.listening) {
+    console.warn('[BACKEND] Port appears to be in use but backend health/auth check failed. Attempting to clear stale backend owner.');
+    const owner = readJsonFile(getBackendOwnerPath());
+    const pid = Number(owner?.pid || 0);
+    if (pid > 0) {
+      try {
+        console.log(`[BACKEND] Attempting to kill stale backend pid ${pid}`);
+        killChildProcessTree({ pid }, 'stale backend process');
+        clearBackendOwnerForPid(pid);
+      } catch (err) {
+        console.warn('[BACKEND] Failed to kill stale backend process:', err?.message || err);
+      }
+    }
+    // wait briefly for socket to free
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   usingExternalBackend = false;
@@ -1440,7 +1564,7 @@ app.whenReady().then(async () => {
     if (isNotificationManagerMode) {
       console.warn('[BACKEND] Sam will keep retrying backend startup:', err.message);
       setBackendConnectionStatus('retrying', err.message);
-      scheduleNotificationBackendRetry();
+      scheduleNotificationBackendRetry(err.message);
     } else {
       stopBackend();
       dialog.showErrorBox('Startup Error', err.message);

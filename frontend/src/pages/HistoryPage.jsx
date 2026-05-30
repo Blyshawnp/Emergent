@@ -34,6 +34,10 @@ export default function HistoryPage({ onNavigate, navigationState }) {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
+    console.log("history component mounted");
+  }, []);
+
+  useEffect(() => {
     if (navigationState?.selectedHistoryRecord) {
       setDetail(navigationState.selectedHistoryRecord);
     }

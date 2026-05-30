@@ -109,6 +109,20 @@ if errorlevel 1 (
 popd
 
 echo.
+echo Copying current runtime config into main desktop package...
+set "MTS_RUNTIME_CONFIG_DIR=%ROOT%\desktop\dist\win-unpacked\resources\backend\config"
+if not exist "%MTS_RUNTIME_CONFIG_DIR%" mkdir "%MTS_RUNTIME_CONFIG_DIR%"
+copy /y "%ROOT%\backend\config\runtime_config.json" "%MTS_RUNTIME_CONFIG_DIR%\runtime_config.json" >nul
+if errorlevel 1 goto :fail
+copy /y "%ROOT%\backend\config\google-service-account.json" "%MTS_RUNTIME_CONFIG_DIR%\google-service-account.json" >nul
+if errorlevel 1 goto :fail
+python -c "import json,sys; s=json.load(open(sys.argv[1],encoding='utf-8')); d=json.load(open(sys.argv[2],encoding='utf-8')); sid=str(s.get('private_key_id') or ''); did=str(d.get('private_key_id') or ''); sys.exit(0 if sid and sid==did else 2)" "%ROOT%\backend\config\google-service-account.json" "%MTS_RUNTIME_CONFIG_DIR%\google-service-account.json"
+if errorlevel 1 (
+  echo Runtime service-account private_key_id verification failed.
+  goto :fail
+)
+
+echo.
 echo Clean main app rebuild complete.
 echo.
 echo Output files:

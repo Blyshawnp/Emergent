@@ -29,11 +29,46 @@ function adminDiagnosticsEnabled() {
   }
 }
 
+function getBackendUrl() {
+  const electronUrl = (() => {
+    try {
+      return (window.electronAPI?.getBackendUrl?.() || '').trim();
+    } catch (_error) {
+      return '';
+    }
+  })();
+  if (electronUrl) {
+    return electronUrl.replace(/\/+$/, '');
+  }
+
+  const configuredUrl = (process.env.REACT_APP_BACKEND_URL || '').trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/+$/, '');
+  }
+
+  try {
+    if (String(window.location?.hash || '').includes('notification-manager')) {
+      return 'http://127.0.0.1:8601';
+    }
+  } catch (_error) {
+    // Fall through to the main app backend port.
+  }
+
+  return 'http://127.0.0.1:8600';
+}
+
 function resolveScreenshotUrl(imageUrl) {
   const value = String(imageUrl || '').trim();
   if (!value) return '';
   if (/^(https?:|data:|blob:)/i.test(value)) return value;
-  return value.replace(/^\/+/, '');
+  const backend = getBackendUrl();
+  const cleanPath = value.replace(/^\/+/, '');
+  if (/\.(png|jpe?g|gif|webp)$/i.test(cleanPath)) {
+    const parts = cleanPath.split('/');
+    const filename = parts[parts.length - 1];
+    return `${backend}/api/screenshot-assets/${filename}`;
+  }
+  return `${backend}/${cleanPath}`;
 }
 
 function readFileAsDataUrl(file) {
@@ -379,7 +414,7 @@ function GeneralTab({ s, set }) {
       <SettingsRow label="Cert Spreadsheet URL"><input type="text" value={s.cert_sheet_url || ''} onChange={e => set('cert_sheet_url', e.target.value)} style={{ maxWidth: 500 }} data-testid="settings-cert-sheet-url" /></SettingsRow>
       <SettingsRow label="Form Fill Browser">
         <select value={s.form_fill_browser || 'auto'} onChange={e => set('form_fill_browser', e.target.value)} style={{ maxWidth: 220 }} data-testid="settings-form-browser">
-          <option value="auto">Auto-detect fallback</option>
+          <option value="auto">System Default</option>
           <option value="chrome">Chrome</option>
           <option value="edge">Edge</option>
         </select>

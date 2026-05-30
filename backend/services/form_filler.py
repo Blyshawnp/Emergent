@@ -1,6 +1,7 @@
 import html
 import logging
 import os
+import shutil
 import sys
 from typing import Iterable
 
@@ -77,13 +78,131 @@ def _resolve_driver_path(filename: str):
     return "", checked_paths
 
 
+def driver_diagnostics():
+    """Return diagnostics about available driver resolution strategies.
+
+    Returns a dict with:
+      - driver_directories: list of directories checked
+      - bundled: dict of driver filename -> path or empty string
+      - selenium_manager: bool (selenium import available)
+      - webdriver_manager: bool (webdriver-manager import available)
+      - preferred_browser_order: list
+    """
+    dirs = _resolve_driver_directories()
+    bundled = {}
+    for name in ("chromedriver.exe", "msedgedriver.exe"):
+        path, checked = _resolve_driver_path(name)
+        bundled[name] = path or ""
+
+    try:
+        import selenium as _selenium  # type: ignore
+        selenium_ok = True
+    except Exception:
+        selenium_ok = False
+
+    try:
+        import webdriver_manager  # type: ignore
+        wm_ok = True
+    except Exception:
+        wm_ok = False
+
+    return {
+        "driver_directories": dirs,
+        "bundled": bundled,
+        "selenium_manager": selenium_ok,
+        "webdriver_manager": wm_ok,
+        "preferred_browser_order": _resolve_browser_order("auto"),
+    }
+
+
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _browser_installed(browser: str) -> bool:
+    if not _is_windows():
+        return False
+
+    helpers = {
+        "edge": ["msedge.exe", "Microsoft\\Edge\\Application\\msedge.exe"],
+        "chrome": ["chrome.exe", "Google\\Chrome\\Application\\chrome.exe"],
+    }
+    names = helpers.get(browser, [])
+    for name in names:
+        if shutil.which(name):
+            return True
+
+    candidates = []
+    program_files = [
+        os.environ.get("PROGRAMFILES", ""),
+        os.environ.get("PROGRAMFILES(X86)", ""),
+        os.environ.get("LOCALAPPDATA", ""),
+    ]
+    for root in program_files:
+        if not root:
+            continue
+        for name in names:
+            candidates.append(os.path.join(root, name))
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return True
+
+    return False
+
+
+def _detect_windows_default_browser() -> str:
+    """Detect the Windows default browser for http/https protocols.
+    Returns 'chrome', 'edge', or '' if detection fails or is another browser.
+    """
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+        for proto in ("https", "http"):
+            try:
+                path = f"Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\{proto}\\UserChoice"
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+                    prog_id, _ = winreg.QueryValueEx(key, "ProgId")
+                    prog_id = str(prog_id).lower()
+                    if "chrome" in prog_id:
+                        return "chrome"
+                    if "edge" in prog_id or "msedge" in prog_id:
+                        return "edge"
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning("Failed to detect Windows default browser via registry: %s", e)
+    return ""
+
+
 def _resolve_browser_order(preferred_browser: str):
-    browser = _normalize_key(preferred_browser or "auto")
+    browser = _normalize_key(preferred_browser or "system default")
     if browser == "chrome":
         return ["chrome", "edge"]
     if browser == "edge":
         return ["edge", "chrome"]
+
+    # If setting is System Default or missing, detect the Windows default browser
+    detected = _detect_windows_default_browser()
+    if detected == "chrome":
+        return ["chrome", "edge"]
+    if detected == "edge":
+        return ["edge", "chrome"]
+
+    # Fallback order: preferably Chrome then Edge if Chrome is installed, otherwise Edge then Chrome.
+    if _browser_installed("chrome"):
+        return ["chrome", "edge"]
+    if _browser_installed("edge"):
+        return ["edge", "chrome"]
+
     return ["chrome", "edge"]
+
+
+def _create_service(service_class, driver_path: str = None):
+    if driver_path:
+        return service_class(executable_path=driver_path)
+    return service_class()
 
 
 def _create_driver(preferred_browser: str = "auto"):
@@ -96,44 +215,122 @@ def _create_driver(preferred_browser: str = "auto"):
         "chrome": {
             "display": "Chrome",
             "filename": "chromedriver.exe",
-            "factory": lambda driver_path: webdriver.Chrome(
-                service=ChromeService(executable_path=driver_path),
-                options=_build_chromium_options(webdriver.ChromeOptions()),
-            ),
+            "service_class": ChromeService,
+            "options_class": webdriver.ChromeOptions,
         },
         "edge": {
             "display": "Edge",
             "filename": "msedgedriver.exe",
-            "factory": lambda driver_path: webdriver.Edge(
-                service=EdgeService(executable_path=driver_path),
-                options=_build_chromium_options(webdriver.EdgeOptions()),
-            ),
+            "service_class": EdgeService,
+            "options_class": webdriver.EdgeOptions,
         },
     }
 
+    def _launch_with_config(browser_config, driver_path=None):
+        options = _build_chromium_options(browser_config["options_class"]())
+        service = _create_service(browser_config["service_class"], driver_path)
+        if browser_config["display"] == "Chrome":
+            return webdriver.Chrome(service=service, options=options)
+        return webdriver.Edge(service=service, options=options)
+
+    def _try_local_driver(browser_key, browser_config):
+        driver_path, checked_paths = _resolve_driver_path(browser_config["filename"])
+        if not driver_path:
+            return None, f"missing {browser_config['filename']} (checked: {', '.join(checked_paths) or 'no driver directories found'})", "bundled"
+
+        logger.info("Attempting to launch %s using bundled driver %s", browser_config["display"], driver_path)
+        try:
+            return _launch_with_config(browser_config, driver_path), None, "bundled"
+        except Exception as exc:
+            logger.warning("Bundled driver attempt failed for %s: %s", browser_config["display"], exc)
+            return None, str(exc), "bundled"
+
+    def _try_selenium_manager(browser_key, browser_config):
+        logger.info("Attempting Selenium Manager for %s", browser_config["display"])
+        try:
+            return _launch_with_config(browser_config), None, "selenium-manager"
+        except Exception as exc:
+            logger.warning("Selenium Manager attempt failed for %s: %s", browser_config["display"], exc)
+            return None, str(exc), "selenium-manager"
+
+    def _try_webdriver_manager(browser_key, browser_config):
+        if browser_key == "chrome":
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager
+            except ImportError:
+                logger.warning("webdriver-manager not installed for Chrome fallback")
+                return None, "webdriver-manager not installed", "webdriver-manager"
+            manager = ChromeDriverManager()
+        else:
+            try:
+                from webdriver_manager.microsoft import EdgeChromiumDriverManager
+            except ImportError:
+                logger.warning("webdriver-manager not installed for Edge fallback")
+                return None, "webdriver-manager not installed", "webdriver-manager"
+            manager = EdgeChromiumDriverManager()
+
+        try:
+            driver_path = manager.install()
+            logger.info("webdriver-manager resolved %s driver at %s", browser_config["display"], driver_path)
+            return _launch_with_config(browser_config, driver_path), None, "webdriver-manager"
+        except Exception as exc:
+            logger.warning("webdriver-manager attempt failed for %s: %s", browser_config["display"], exc)
+            return None, str(exc), "webdriver-manager"
+
+    detected_default = _detect_windows_default_browser()
+    logger.info("preferred browser setting: %s", preferred_browser or "system default")
+    logger.info("detected Windows default browser: %s", detected_default or "unknown")
+
     browser_order = _resolve_browser_order(preferred_browser)
     logger.info(
-        "Starting browser automation with preference '%s'. Driver directories: %s",
-        preferred_browser or "auto",
+        "Starting browser automation with order %s. Driver directories: %s",
+        browser_order,
         ", ".join(_resolve_driver_directories()) or "none found",
     )
 
-    for browser_key in browser_order:
+    for i, browser_key in enumerate(browser_order):
         config = drivers[browser_key]
-        driver_path, checked_paths = _resolve_driver_path(config["filename"])
-        if not driver_path:
-            errors.append(f"{config['display']}: missing {config['filename']} (checked: {', '.join(checked_paths) or 'no driver directories found'})")
-            continue
+        attempts = []
+        is_fallback = i > 0
+        attempt_type = "fallback browser attempt" if is_fallback else "selected browser attempt"
+        logger.info("%s: %s", attempt_type, config["display"])
 
-        logger.info("Attempting to launch %s using %s", config["display"], driver_path)
-        try:
-            driver = config["factory"](driver_path)
-            return driver, config["display"]
-        except Exception as exc:
-            logger.exception("Failed to launch %s browser automation", config["display"])
-            errors.append(f"{config['display']}: {exc}")
+        # 1. Bundled driver
+        strategy_label = f"bundled {browser_key} driver"
+        logger.info("Attempting: %s", strategy_label)
+        driver, error, strategy = _try_local_driver(browser_key, config)
+        if driver:
+            logger.info("Selected driver strategy: %s", strategy_label)
+            return driver, config["display"], strategy_label
+        attempts.append(f"bundled: {error}")
 
-    raise RuntimeError("Could not launch a supported browser for form automation. " + " | ".join(errors))
+        # 2. Selenium Manager
+        strategy_label = f"selenium manager {browser_key}"
+        logger.info("Attempting: %s", strategy_label)
+        driver, error, strategy = _try_selenium_manager(browser_key, config)
+        if driver:
+            logger.info("Selected driver strategy: %s", strategy_label)
+            return driver, config["display"], strategy_label
+        attempts.append(f"selenium-manager: {error}")
+
+        # 3. Webdriver-manager
+        strategy_label = f"webdriver-manager {browser_key}"
+        logger.info("Attempting: %s", strategy_label)
+        driver, error, strategy = _try_webdriver_manager(browser_key, config)
+        if driver:
+            logger.info("Selected driver strategy: %s", strategy_label)
+            return driver, config["display"], strategy_label
+        attempts.append(f"webdriver-manager: {error}")
+
+        errors.append(f"{config['display']} failed -> {', '.join(attempts)}")
+
+    logger.info("Selected driver strategy: failed")
+    logger.error("All browser driver strategies failed: %s", " | ".join(errors))
+    raise RuntimeError(
+        "Browser driver could not be started. Make sure Microsoft Edge or Google Chrome is installed. "
+        "If this is the first time using form fill, internet access may be required so Selenium can download the correct driver. "
+        "If this continues, contact admin."
+    )
 
 
 def _wait_for_form(driver):
@@ -286,6 +483,7 @@ def fill_form(form_url: str, data: dict, preferred_browser: str = "auto") -> dic
         return {
             "ok": False,
             "message": "Selenium is not installed for the backend Python environment. Run: pip install -r backend/requirements.txt",
+            "driver_strategy": "none",
         }
 
     driver = None
@@ -294,7 +492,7 @@ def fill_form(form_url: str, data: dict, preferred_browser: str = "auto") -> dic
 
     try:
         logger.info("Starting Microsoft Forms automation")
-        driver, browser_name = _create_driver(preferred_browser)
+        driver, browser_name, driver_strategy = _create_driver(preferred_browser)
         driver.set_page_load_timeout(60)
         driver.get(form_url)
         wait = _wait_for_form(driver)
@@ -318,13 +516,35 @@ def fill_form(form_url: str, data: dict, preferred_browser: str = "auto") -> dic
         return {
             "ok": True,
             "message": f"The Cert Form was opened and populated in {browser_name}. Review it and click Submit when ready.",
+            "driver_strategy": driver_strategy,
         }
     except WebDriverException as exc:
         logger.exception("Browser automation failed to start")
-        return {"ok": False, "message": f"Browser automation failed to start: {exc}"}
+        friendly_msg = (
+            "Browser driver could not be started. Make sure Microsoft Edge or Google Chrome is installed. "
+            "If this is the first time using form fill, internet access may be required so Selenium can download the correct driver. "
+            "If this continues, contact admin."
+        )
+        return {
+            "ok": False,
+            "message": friendly_msg,
+            "driver_strategy": "failed",
+        }
     except Exception as exc:
         logger.exception("Microsoft Forms automation failed")
-        return {"ok": False, "message": str(exc)}
+        message = str(exc)
+        if "Browser driver could not be started" in message:
+            friendly_msg = (
+                "Browser driver could not be started. Make sure Microsoft Edge or Google Chrome is installed. "
+                "If this is the first time using form fill, internet access may be required so Selenium can download the correct driver. "
+                "If this continues, contact admin."
+            )
+            return {
+                "ok": False,
+                "message": friendly_msg,
+                "driver_strategy": "failed",
+            }
+        return {"ok": False, "message": message}
     finally:
         if driver is not None and not completed:
             try:
