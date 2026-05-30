@@ -309,6 +309,7 @@ Section 'CLEAN REBUILD ALL'
 Write-Log "Mode: $Mode"
 Write-Log "Root: $rootDir"
 Write-Log "Log:  $logFile"
+Write-Log "Run dev-tools\clean-app-main-junk.bat if you want to remove temporary debug files."
 
 Section 'VERIFYING TOOLCHAIN'
 foreach ($command in @('node', 'npm', 'yarn', 'powershell', 'python', 'robocopy')) {
