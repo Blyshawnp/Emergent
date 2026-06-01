@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import '@/App.css';
 import api from './api';
 import { ModalProvider, useModal } from './components/ModalProvider';
@@ -47,6 +47,34 @@ const TUTORIAL_AFTER_SETUP_KEY = 'mts-start-tutorial-after-setup';
 const DISMISSED_NOTIFICATION_POPUPS_KEY = 'mts-dismissed-notification-popups';
 const DISMISSED_NOTIFICATION_BANNERS_KEY = 'mts-dismissed-notification-banners';
 const TICKER_REFRESH_INTERVAL_MS = 30000;
+const STARTUP_RECOVERY_RETRY_MS = 7000;
+
+function emptyDefaults() {
+  return { approved_headsets: [], discord_templates: [], discord_screenshots: [] };
+}
+
+function summarizePayload(data) {
+  if (Array.isArray(data)) {
+    return { type: 'array', length: data.length };
+  }
+  if (!data || typeof data !== 'object') {
+    return { type: typeof data };
+  }
+  return Object.fromEntries(
+    Object.entries(data)
+      .filter(([key]) => !/token|secret|password|key/i.test(key))
+      .slice(0, 10)
+      .map(([key, value]) => [
+        key,
+        Array.isArray(value) ? `array(${value.length})` : typeof value,
+      ])
+  );
+}
+
+function logTimedRequest(name, event, startedAt, detail = {}) {
+  const duration = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
+  console.log(`[STARTUP] ${name} ${event} (${duration}ms)`, detail);
+}
 
 const NAV_ITEMS = [
   { key: 'home', label: 'Home', icon: Home },
@@ -463,6 +491,49 @@ function AppShell() {
   useEffect(() => {
     let cancelled = false;
     let retryTimeout = null;
+    const recoveryTimeouts = [];
+
+    const scheduleRecoveryRetry = (name, requestFn, onSuccess, onFallback, statusKey, delay = STARTUP_RECOVERY_RETRY_MS) => {
+      console.log(`[STARTUP] ${name} retry scheduled in ${delay}ms`);
+      const timeoutId = window.setTimeout(async () => {
+        if (cancelled) return;
+        const retryStartedAt = Date.now();
+        console.log(`[STARTUP] ${name} retry started`);
+        try {
+          const data = await requestFn();
+          if (cancelled) return;
+          onSuccess(data, true);
+          setStartupStatuses(prev => ({ ...prev, [statusKey]: 'loaded' }));
+          logTimedRequest(name, 'retry succeeded', retryStartedAt, { shape: summarizePayload(data), fallbackUsed: false });
+        } catch (err) {
+          if (cancelled) return;
+          onFallback?.(true);
+          setStartupStatuses(prev => ({ ...prev, [statusKey]: 'fallback' }));
+          logTimedRequest(name, 'retry failed', retryStartedAt, { error: err?.message || String(err), fallbackUsed: true });
+        }
+      }, delay);
+      recoveryTimeouts.push(timeoutId);
+    };
+
+    const runStartupRequest = (name, statusKey, requestFn, onSuccess, onFallback) => {
+      const startedAt = Date.now();
+      console.log(`[STARTUP] ${name} started`);
+      setStartupStatuses(prev => ({ ...prev, [statusKey]: 'pending' }));
+      requestFn().then(data => {
+        if (!cancelled) {
+          onSuccess(data, false);
+          setStartupStatuses(prev => ({ ...prev, [statusKey]: 'loaded' }));
+          logTimedRequest(name, 'succeeded', startedAt, { shape: summarizePayload(data), fallbackUsed: false });
+        }
+      }).catch(err => {
+        if (!cancelled) {
+          onFallback?.(false);
+          setStartupStatuses(prev => ({ ...prev, [statusKey]: 'fallback' }));
+          logTimedRequest(name, 'failed', startedAt, { error: err?.message || String(err), fallbackUsed: true });
+          scheduleRecoveryRetry(name, requestFn, onSuccess, onFallback, statusKey);
+        }
+      });
+    };
 
     const loadInitialSettings = async (attempt = 0) => {
       try {
@@ -483,49 +554,36 @@ function AppShell() {
         setStartupStatuses(prev => ({ ...prev, backend: 'ready' }));
         setLoading(false);
 
-        // Fetch settings first to render Home page shell instantly
-        console.log("settings request started");
-        setStartupStatuses(prev => ({ ...prev, settings: 'pending' }));
-        api.getSettings(5000).then(s => {
-          if (!cancelled) {
+        runStartupRequest(
+          'settings',
+          'settings',
+          () => api.getSettings(5000),
+          (s) => {
             setSettings(s || {});
             setSoundsEnabled(s?.enable_sounds !== false);
-            setStartupStatuses(prev => ({ ...prev, settings: 'loaded' }));
-            console.log("settings request finished");
-
             if (s?.setup_complete === false) {
               setPage('setup');
             } else {
               setPage('home');
             }
-          }
-        }).catch(err => {
-          console.log("settings request failed: " + err.message);
-          if (!cancelled) {
+          },
+          () => {
             setSettings({});
-            setStartupStatuses(prev => ({ ...prev, settings: 'fallback' }));
             setPage('home');
           }
-        });
+        );
 
-        // 1. Load Defaults asynchronously in background
-        console.log("defaults request started");
-        setStartupStatuses(prev => ({ ...prev, defaults: 'pending' }));
-        api.getDefaults(8000).then(defs => {
-          if (!cancelled) {
-            setDefaults(defs || { approved_headsets: [], discord_templates: [], discord_screenshots: [] });
-            setStartupStatuses(prev => ({ ...prev, defaults: 'loaded' }));
-            console.log("defaults request finished");
+        runStartupRequest(
+          'defaults',
+          'defaults',
+          () => api.getDefaults(8000),
+          (defs) => {
+            setDefaults(defs || emptyDefaults());
             console.log("Discord final template count: " + (defs?.discord_templates?.length || 0));
             console.log("Discord final screenshot count: " + (defs?.discord_screenshots?.length || 0));
-          }
-        }).catch(err => {
-          console.log("defaults request failed: " + err.message);
-          if (!cancelled) {
-            setDefaults({ approved_headsets: [], discord_templates: [], discord_screenshots: [] });
-            setStartupStatuses(prev => ({ ...prev, defaults: 'fallback' }));
-          }
-        });
+          },
+          () => setDefaults(emptyDefaults())
+        );
 
         // 2. Load Current Session asynchronously in background
         setStartupStatuses(prev => ({ ...prev, session: 'pending' }));
@@ -541,39 +599,25 @@ function AppShell() {
           }
         });
 
-        // 3. Load History asynchronously in background
-        console.log("history request started");
-        setStartupStatuses(prev => ({ ...prev, history: 'pending' }));
-        api.getHistory(5000).then(hist => {
-          if (!cancelled) {
+        runStartupRequest(
+          'history',
+          'history',
+          () => api.getHistory(5000),
+          (hist) => {
             setHistory(hist || []);
-            setStartupStatuses(prev => ({ ...prev, history: 'loaded' }));
-            console.log("history request finished");
-          }
-        }).catch(err => {
-          console.log("history request failed: " + err.message);
-          if (!cancelled) {
-            setHistory([]);
-            setStartupStatuses(prev => ({ ...prev, history: 'fallback' }));
-          }
-        });
+          },
+          () => setHistory([])
+        );
 
-        // 4. Load History Stats asynchronously in background
-        console.log("stats request started");
-        setStartupStatuses(prev => ({ ...prev, stats: 'pending' }));
-        api.getHistoryStats(5000).then(stats => {
-          if (!cancelled) {
+        runStartupRequest(
+          'historyStats',
+          'stats',
+          () => api.getHistoryStats(5000),
+          (stats) => {
             setHistoryStats(stats || {});
-            setStartupStatuses(prev => ({ ...prev, stats: 'loaded' }));
-            console.log("stats request finished");
-          }
-        }).catch(err => {
-          console.log("stats request failed: " + err.message);
-          if (!cancelled) {
-            setHistoryStats({});
-            setStartupStatuses(prev => ({ ...prev, stats: 'fallback' }));
-          }
-        });
+          },
+          () => setHistoryStats({})
+        );
 
       } catch (_err) {
         if (cancelled) return;
@@ -599,6 +643,7 @@ function AppShell() {
       if (retryTimeout) {
         window.clearTimeout(retryTimeout);
       }
+      recoveryTimeouts.forEach(timeoutId => window.clearTimeout(timeoutId));
     };
   }, []);
 
@@ -624,11 +669,18 @@ function AppShell() {
     }
 
     const fetchTicker = async () => {
+      const startedAt = Date.now();
+      console.log('[STARTUP] ticker started');
       try {
         const data = await api.getTicker();
         setTickerMessages(Array.isArray(data.messages) ? data.messages : []);
+        logTimedRequest('ticker', 'succeeded', startedAt, {
+          shape: summarizePayload(data),
+          fallbackUsed: Boolean(data?.fallback),
+          source: data?.source || 'unknown',
+        });
       } catch (_err) {
-        // Non-critical
+        logTimedRequest('ticker', 'failed', startedAt, { error: _err?.message || String(_err), fallbackUsed: true });
       }
     };
     fetchTicker();
@@ -1052,12 +1104,69 @@ function AppShell() {
 }
 
 function DiscordModal({ settings, defaults, onClose }) {
-  const templatesSrc = (!settings?.discord_override && defaults?.discord_templates?.length > 0)
-    ? defaults.discord_templates
-    : (settings?.discord_templates || []);
+  const [modalDefaults, setModalDefaults] = useState(defaults || emptyDefaults());
+  const [defaultsLoadStatus, setDefaultsLoadStatus] = useState('idle');
+  const defaultsFetchStartedRef = useRef(false);
 
-  const screenshotsSrc = (!settings?.discord_override && defaults?.discord_screenshots?.length > 0)
-    ? defaults.discord_screenshots
+  useEffect(() => {
+    setModalDefaults(defaults || emptyDefaults());
+  }, [defaults]);
+
+  const activeDefaults = modalDefaults || emptyDefaults();
+  const hasDefaultDiscordData = Boolean(
+    activeDefaults?.discord_templates?.length || activeDefaults?.discord_screenshots?.length
+  );
+  const hasSettingsDiscordData = Boolean(
+    settings?.discord_templates?.length || settings?.discord_screenshots?.length
+  );
+  const hasSettingsTemplateData = Boolean(settings?.discord_templates?.length);
+  const discordTemplateSource = activeDefaults?._content_sources?.discord_templates?.source || '';
+
+  useEffect(() => {
+    if (hasDefaultDiscordData || defaultsFetchStartedRef.current) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    defaultsFetchStartedRef.current = true;
+    const startedAt = Date.now();
+    setDefaultsLoadStatus('loading');
+    console.log('[STARTUP] discordDefaults started');
+
+    api.getDefaults(8000).then((defs) => {
+      if (cancelled) return;
+      setModalDefaults(defs || emptyDefaults());
+      setDefaultsLoadStatus('loaded');
+      logTimedRequest('discordDefaults', 'succeeded', startedAt, { shape: summarizePayload(defs), fallbackUsed: false });
+    }).catch((err) => {
+      if (cancelled) return;
+      setDefaultsLoadStatus('failed');
+      logTimedRequest('discordDefaults', 'failed', startedAt, { error: err?.message || String(err), fallbackUsed: true });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasDefaultDiscordData]);
+
+  const usingSettingsOverride = Boolean(settings?.discord_override && settings?.discord_templates?.length);
+  const templatesSrc = useMemo(() => (
+    usingSettingsOverride
+      ? settings.discord_templates
+      : activeDefaults?.discord_templates?.length > 0
+        ? activeDefaults.discord_templates
+        : (settings?.discord_templates || [])
+  ), [activeDefaults?.discord_templates, settings?.discord_templates, usingSettingsOverride]);
+  const templatesUsedSource = usingSettingsOverride
+    ? 'settings_override'
+    : activeDefaults?.discord_templates?.length > 0
+      ? 'defaults'
+      : hasSettingsTemplateData
+        ? 'settings_fallback'
+        : 'empty';
+
+  const screenshotsSrc = (!settings?.discord_override && activeDefaults?.discord_screenshots?.length > 0)
+    ? activeDefaults.discord_screenshots
     : (settings?.discord_screenshots || []);
 
   const templates = templatesSrc.map(t => {
@@ -1066,12 +1175,23 @@ function DiscordModal({ settings, defaults, onClose }) {
       return { title: String(t[0] || ''), message: String(t[1] || '') };
     }
     if (typeof t === 'object') {
-      const title = t.title || t.name || '';
-      const message = t.message || t.text || t.content || '';
+      const title = t.title || t.Title || t.name || t.Name || t.label || t.Label || '';
+      const message = t.message || t.Message || t.text || t.Text || t.content || t.Content || t.body || t.Body || '';
       return { title: String(title), message: String(message) };
     }
     return null;
   }).filter(Boolean);
+
+  useEffect(() => {
+    console.log('[DISCORD DEFAULTS] templates', {
+      rawCount: Array.isArray(templatesSrc) ? templatesSrc.length : 0,
+      normalizedCount: templates.length,
+      defaultsRawCount: activeDefaults?.discord_templates?.length || 0,
+      settingsRawCount: settings?.discord_templates?.length || 0,
+      backendSource: discordTemplateSource || 'unknown',
+      frontendUsedSource: templatesUsedSource,
+    });
+  }, [activeDefaults?.discord_templates?.length, discordTemplateSource, settings?.discord_templates?.length, templates.length, templatesSrc, templatesUsedSource]);
 
   const screenshots = screenshotsSrc.map(s => {
     if (!s) return null;
@@ -1111,13 +1231,25 @@ function DiscordModal({ settings, defaults, onClose }) {
         <div className="modal-body" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
           {tab === 'templates' ? (
             filteredTemplates.length === 0 ? (
-              <p className="text-muted" style={{ padding: 20 }}>No templates match your search.</p>
+              <p className="text-muted" style={{ padding: 20 }}>
+                {defaultsLoadStatus === 'loading'
+                  ? 'Loading templates...'
+                  : defaultsLoadStatus === 'failed'
+                    ? 'Discord templates could not be loaded.'
+                    : 'No templates match your search.'}
+              </p>
             ) : filteredTemplates.map(({ title, message }, i) => (
               <DiscordRow key={i} title={title} message={message} />
             ))
           ) : (
             filteredScreenshots.length === 0 ? (
-              <p className="text-muted" style={{ padding: 20 }}>No screenshots match your search.</p>
+              <p className="text-muted" style={{ padding: 20 }}>
+                {defaultsLoadStatus === 'loading'
+                  ? 'Loading screenshots...'
+                  : defaultsLoadStatus === 'failed'
+                    ? 'Discord screenshots could not be loaded.'
+                    : 'No screenshots match your search.'}
+              </p>
             ) : filteredScreenshots.map((ss, i) => (
               <DiscordScreenshotRow key={i} title={ss.title} imageUrl={ss.imageUrl} />
             ))

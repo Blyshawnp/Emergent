@@ -454,8 +454,7 @@ const SECTION_NAV_ITEMS = [
   { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
 ];
 
-function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm }) {
-  const [search, setSearch] = useState('');
+function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange }) {
   const [expanded, setExpanded] = useState({});
   const [selectedTargets, setSelectedTargets] = useState({});
   const rows = data?.views?.[view] || [];
@@ -598,8 +597,8 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
         <input
           id="sam-candidate-search"
           type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          value={search || ''}
+          onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Type a candidate name..."
         />
       </div>
@@ -1059,6 +1058,8 @@ export default function NotificationManagerApp() {
   const [updateModal, setUpdateModal] = useState(null);
   const [activeSection, setActiveSection] = useState('notifications');
   const [candidateView, setCandidateView] = useState('pending');
+  const [candidateSearch, setCandidateSearch] = useState('');
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [candidateTracking, setCandidateTracking] = useState({ ok: true, views: {}, candidates: [], pending: [], error: '' });
   const [candidateTrackingLoading, setCandidateTrackingLoading] = useState(false);
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
@@ -1080,6 +1081,11 @@ export default function NotificationManagerApp() {
     confirmResolverRef.current = null;
     setConfirmModal(null);
     if (resolver) resolver(value);
+  }, []);
+  const handleViewInTracking = useCallback((candidate) => {
+    setActiveSection('candidates');
+    setCandidateView('allActive');
+    setCandidateSearch(candidate.candidate_name || '');
   }, []);
   const closeEditor = useCallback(() => {
     setEditorOpen(false);
@@ -1982,6 +1988,8 @@ export default function NotificationManagerApp() {
                 <div className="nm-toolbar-label">Actions</div>
                 <div className="nm-actions">
                   <button type="button" className="nm-btn nm-btn-primary" onClick={handleAdd} data-sam-tour="add-notification">Add Notification</button>
+                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => { setActiveSection('candidates'); setCandidateView('allActive'); setCandidateSearch(''); }} data-sam-tour="candidate-tracking-btn">Candidate Tracking</button>
+                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setSearchModalOpen(true)} data-sam-tour="candidate-search-btn">Candidate Search</button>
                   <button type="button" className="nm-btn nm-btn-secondary" onClick={() => openEditor(selectedIndex)} disabled={!selectedItem}>Edit Selected</button>
                   <button type="button" className="nm-btn nm-btn-secondary" onClick={handleDuplicate} disabled={!selectedItem}>Duplicate Selected</button>
                   <button type="button" className="nm-btn nm-btn-secondary" onClick={loadSheetItems} disabled={sheetState.isLoading || sheetState.isSaving}>Refresh from Sheet</button>
@@ -2185,6 +2193,8 @@ export default function NotificationManagerApp() {
             onRefresh={() => loadCandidateTracking()}
             onAction={runCandidateAction}
             onConfirm={requestConfirm}
+            search={candidateSearch}
+            onSearchChange={setCandidateSearch}
           />
         ) : null}
       </div>
@@ -2222,6 +2232,12 @@ export default function NotificationManagerApp() {
           onClose={closeTutorial}
         />
       ) : null}
+      <CandidateSearchModal
+        open={searchModalOpen}
+        data={candidateTracking}
+        onClose={() => setSearchModalOpen(false)}
+        onViewInTracking={handleViewInTracking}
+      />
       <UpdateModal
         updateInfo={updateModal}
         onInstall={handleInstallUpdate}
@@ -2237,6 +2253,73 @@ export default function NotificationManagerApp() {
         onConfirm={() => resolveConfirm(true)}
         onCancel={() => resolveConfirm(false)}
       />
+    </div>
+  );
+}
+
+function CandidateSearchModal({ open, data, onClose, onViewInTracking }) {
+  const [search, setSearch] = useState('');
+  if (!open) return null;
+
+  const candidates = data?.candidates || [];
+  const searchText = search.trim().toLowerCase();
+  const visible = searchText
+    ? candidates.filter(c => String(c.candidate_name || '').toLowerCase().includes(searchText))
+    : [];
+
+  return (
+    <div className="modal-overlay open" onClick={e => { if (e.target.classList.contains('modal-overlay')) onClose(); }}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 600, maxHeight: '80vh' }}>
+        <div className="modal-header">
+          <h2>Candidate Search</h2>
+          <button className="modal-close" onClick={onClose}>&times;</button>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="nm-search-row" style={{ margin: 0 }}>
+            <label htmlFor="modal-candidate-search">Search by candidate name</label>
+            <input
+              id="modal-candidate-search"
+              type="search"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Type a candidate name..."
+              autoFocus
+              style={{ width: '100%', padding: '8px 12px', fontSize: 14, borderRadius: 4, border: '1px solid var(--border-subtle)' }}
+            />
+          </div>
+          <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
+            {searchText === '' ? (
+              <p className="text-muted" style={{ textAlign: 'center', padding: '24px 0' }}>Type a name above to search all candidates.</p>
+            ) : visible.length === 0 ? (
+              <p className="text-muted" style={{ textAlign: 'center', padding: '24px 0' }}>No candidates found matching "{search}".</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {visible.map((c, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderRadius: 4, backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-subtle)' }}>
+                    <div>
+                      <strong style={{ display: 'block', fontSize: 14 }}>{c.candidate_name || 'Unknown'}</strong>
+                      <span className="nm-meta" style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                        Status: {c.status || c.latest_status || 'Active'} | Tester: {c.original_tester_name || c.tester_name || 'N/A'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="nm-btn nm-btn-primary nm-btn-sm"
+                      onClick={() => {
+                        onViewInTracking(c);
+                        onClose();
+                      }}
+                      style={{ padding: '4px 10px', fontSize: 12 }}
+                    >
+                      View in Tracking
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
@@ -140,6 +140,8 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   const [sharedPendingEntries, setSharedPendingEntries] = useState([]);
   const [sharedPendingEntry, setSharedPendingEntry] = useState(null);
   const [sharedPendingError, setSharedPendingError] = useState('');
+  const settingsRecoveryAttemptedRef = useRef(false);
+  const historyRecoveryAttemptedRef = useRef(false);
 
   const testerName = settings.tester_name || '';
   const testerNames = [settings.tester_name, settings.display_name].filter(Boolean);
@@ -169,6 +171,64 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   useEffect(() => {
     if (initialStats) setStats(initialStats);
   }, [initialStats]);
+
+  useEffect(() => {
+    const missingName = !(settings.display_name || settings.tester_name);
+    const shouldRecover = missingName && ['fallback', 'error'].includes(startupStatuses?.settings);
+    if (!shouldRecover || settingsRecoveryAttemptedRef.current) {
+      return undefined;
+    }
+
+    settingsRecoveryAttemptedRef.current = true;
+    const timeoutId = window.setTimeout(async () => {
+      const startedAt = Date.now();
+      console.log('[HOME] settings recovery started');
+      try {
+        const nextSettings = await api.getSettings(5000);
+        setSettings(nextSettings || {});
+        console.log('[HOME] settings recovery succeeded', { durationMs: Date.now() - startedAt });
+      } catch (error) {
+        console.log('[HOME] settings recovery failed', { durationMs: Date.now() - startedAt, error: error?.message || String(error) });
+      }
+    }, 3000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [settings.display_name, settings.tester_name, startupStatuses?.settings]);
+
+  useEffect(() => {
+    const shouldRecover = history.length === 0 && ['fallback', 'error'].includes(startupStatuses?.history);
+    if (!shouldRecover || historyRecoveryAttemptedRef.current) {
+      return undefined;
+    }
+
+    historyRecoveryAttemptedRef.current = true;
+    const timeoutId = window.setTimeout(async () => {
+      const startedAt = Date.now();
+      console.log('[HOME] history recovery started');
+      try {
+        const [historyResult, statsResult] = await Promise.allSettled([
+          api.getHistory(8000),
+          api.getHistoryStats(8000),
+        ]);
+        if (historyResult.status === 'fulfilled') {
+          setHistory(Array.isArray(historyResult.value) ? historyResult.value : []);
+        }
+        if (statsResult.status === 'fulfilled') {
+          setStats(statsResult.value || {});
+        }
+        console.log('[HOME] history recovery finished', {
+          durationMs: Date.now() - startedAt,
+          historyOk: historyResult.status === 'fulfilled',
+          statsOk: statsResult.status === 'fulfilled',
+          historyCount: historyResult.status === 'fulfilled' && Array.isArray(historyResult.value) ? historyResult.value.length : 0,
+        });
+      } catch (error) {
+        console.log('[HOME] history recovery failed', { durationMs: Date.now() - startedAt, error: error?.message || String(error) });
+      }
+    }, 3000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [history.length, startupStatuses?.history]);
 
   useEffect(() => {
     const testerNameForWelcome = settings.tester_name || settings.display_name || '';
@@ -312,13 +372,7 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
       <div className="home-section" style={{ flex: 1, minHeight: 0 }}>
         <h3>Recent Sessions</h3>
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          {startupStatuses?.history === 'pending' ? (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No recent sessions loaded yet</div>
-          ) : startupStatuses?.history === 'fallback' || startupStatuses?.history === 'error' ? (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Recent sessions could not be loaded.</div>
-          ) : recent.length === 0 ? (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No sessions yet. Start testing to see history here.</div>
-          ) : recent.map((s, i) => (
+          {recent.length > 0 ? recent.map((s, i) => (
             <div
               key={i}
               className="recent-row"
@@ -339,7 +393,13 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
               <span className="recent-name">{s.candidate || 'Unknown'}</span>
               <span className={`badge ${badgeClass(s.status)}`}>{s.status || '?'}</span>
             </div>
-          ))}
+          )) : startupStatuses?.history === 'pending' ? (
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No recent sessions loaded yet</div>
+          ) : startupStatuses?.history === 'fallback' || startupStatuses?.history === 'error' ? (
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Recent sessions could not be loaded.</div>
+          ) : (
+            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No sessions yet. Start testing to see history here.</div>
+          )}
         </div>
       </div>
 

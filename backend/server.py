@@ -540,7 +540,8 @@ _ticker_fetch_status = {
 
 # Per-section source tracking. Populated by content loaders during startup so
 # /api/config-status and the startup log can show admins where each piece of
-# content came from. Values: source in {google, local, builtin}; served_from
+# content came from. Values: source in {google, local_csv, local_json,
+# emergency_hardcoded}; served_from
 # is computed lazily at request time (sqlite vs memory).
 _content_source_status = {}
 _google_sheet_auth_status = {
@@ -1018,6 +1019,7 @@ DISCORD_POST_HEADER_ALIASES = {
     "title",
     "trigger",
     "name",
+    "label",
 }
 
 DISCORD_POST_MESSAGE_ALIASES = {
@@ -1026,6 +1028,7 @@ DISCORD_POST_MESSAGE_ALIASES = {
     "template",
     "body",
     "text",
+    "content",
 }
 
 SCREENSHOT_TITLE_HEADER_ALIASES = {
@@ -1856,7 +1859,7 @@ def _load_external_content():
     merged = {}
     for key, value in (local_content or {}).items():
         merged[key] = value
-        _set_content_source(key, "local", value, ok=True, detail="admin-content-package csv-tabs, then backend/defaults")
+        _set_content_source(key, "local_csv", value, ok=True, detail="admin-content-package csv-tabs, then backend/defaults")
         _content_source_status[key]["background_status"] = "loading"
         _content_source_status[key]["background_loading"] = True
 
@@ -1867,7 +1870,7 @@ def _load_external_content():
                 "source": "builtin",
                 "count": 0,
                 "ok": True,
-                "detail": "builtin",
+                "detail": "emergency hardcoded fallback",
                 "background_status": "loading",
                 "background_loading": True,
             }
@@ -1882,6 +1885,8 @@ async def _background_remote_content_task():
     global EXTERNAL_CONTENT
 
     try:
+        import asyncio
+
         logger.info("[CONTENT] background Google content refresh started")
         runtime_config = _load_backend_runtime_config()
         remote_pipeline_failures = []
@@ -1892,14 +1897,14 @@ async def _background_remote_content_task():
             local_content = {}
 
         try:
-            sheet_content = _load_google_sheet_content(runtime_config, local_content)
+            sheet_content = await asyncio.to_thread(_load_google_sheet_content, runtime_config, local_content)
         except Exception as exc:
             logger.warning("[CONTENT] Google Sheet content pipeline failed: %s", exc)
             remote_pipeline_failures.append(f"sheets: {exc}")
             sheet_content = {}
 
         try:
-            doc_content = _load_help_faq_google_doc_overrides(runtime_config)
+            doc_content = await asyncio.to_thread(_load_help_faq_google_doc_overrides, runtime_config)
         except Exception as exc:
             logger.warning("[CONTENT] Google Doc content pipeline failed: %s", exc)
             remote_pipeline_failures.append(f"docs: {exc}")
@@ -2007,7 +2012,6 @@ async def _background_remote_content_task():
     # Perform shared sheet verification in thread pool executor
     try:
         logger.info("[STARTUP] shared sheet verification started")
-        import asyncio
         loop = asyncio.get_running_loop()
         shared_sheet_status = await loop.run_in_executor(None, _verify_master_shared_sheets)
         
@@ -2097,21 +2101,7 @@ INCREASE_SUSTAINING = [
 ]
 
 DISCORD_TEMPLATES = [
-    ["Pass", "**:tada: Congratulations! You passed your test calls! :tada:**\n- 24-48hrs to go live. Watch your inbox.\n- Log out of Call Corp and Simple Script.\n- Complete TLMS courses.\n- Remove extra mock shifts from Gateway.\n**Welcome to ACDD!**"],
-    ["Fail", "Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours."],
-    ["Fail Final", "Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck."],
-    ["Incomplete", "Our time is up. We'll schedule another session for Supervisor Transfers.\nPlease give me a moment."],
-    ["Ncns", "Candidate was a No Call / No Show for mock testing."],
-    ["Sup Intro", "I'll help you complete the Supervisor Transfer test call. I'll provide instructions step by step. OK?"],
-    ["Sup Instructions", "When you need to transfer:\n1) Ask in chat first\n2) Give CCM time to check\n3) When CCM says ok - let caller know you are transferring"],
-    ["Sup Transfer", "1. Click Transfer in CC\n2. Select Queue > ACD Direct Supervisor\n3. Tell caller to hold, click Blind Transfer"],
-    ["Sup Dte", "Change DTE to Ready (green)."],
-    ["Sup Status", "I show Ready. Calling now."],
-    ["Sup Transfer Now", "You may transfer the call now."],
-    ["Sup Stars", "WXYZ Supervisor Test Call Being Queued"],
-    ["Sup Disposition", "Click cancel (red phone), disposition as Test/Training.\nThen disposition in Call Corp."],
-    ["Sup Retry", "Transfer was not successful. Review steps and let me know when ready."],
-    ["Ran Out Of Time", "We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion."],
+    ["Discord unavailable", "Discord post templates are unavailable. Check Google Sheet access or packaged local defaults."],
 ]
 
 DEFAULT_PAYMENT = {
@@ -2537,7 +2527,12 @@ def _record_builtin_sources():
         "admin_setup_markdown": ADMIN_SETUP_MARKDOWN,
     }
     for key in TRACKED_CONTENT_KEYS:
-        if key not in _content_source_status:
+        if key == "discord_templates":
+            current = _content_source_status.get(key) or {}
+            if not current or ((current.get("source") or "builtin") == "builtin" and not int(current.get("count") or 0)):
+                logger.warning("[DISCORD DEFAULTS] Using emergency hardcoded fallback because Google and local defaults were empty.")
+                _set_content_source(key, "emergency_hardcoded", builtin_values.get(key, []), ok=True, detail="Google and local defaults were empty")
+        elif key not in _content_source_status:
             _set_content_source(key, "builtin", builtin_values.get(key, []), ok=True)
 
 
@@ -2803,8 +2798,28 @@ def _sanitize_discord_template_setting(value, source_label):
             title = str(item[0] or "").strip()
             message = str(item[1] or "")
         elif isinstance(item, dict):
-            title = str(item.get("title") or item.get("Title") or item.get("trigger") or item.get("Trigger") or "").strip()
-            message = str(item.get("message") or item.get("Message") or "")
+            title = str(
+                item.get("title")
+                or item.get("Title")
+                or item.get("trigger")
+                or item.get("Trigger")
+                or item.get("name")
+                or item.get("Name")
+                or item.get("label")
+                or item.get("Label")
+                or ""
+            ).strip()
+            message = str(
+                item.get("message")
+                or item.get("Message")
+                or item.get("text")
+                or item.get("Text")
+                or item.get("content")
+                or item.get("Content")
+                or item.get("body")
+                or item.get("Body")
+                or ""
+            )
         else:
             continue
         if title:
@@ -6398,6 +6413,12 @@ async def reset_settings_section(payload: dict, request: Request):
 
 @api_router.get("/settings/defaults")
 async def get_defaults():
+    discord_source = _content_source_status.get("discord_templates") or {}
+    logger.info(
+        "[DISCORD DEFAULTS] Serving templates source=%s count=%s",
+        discord_source.get("source") or "unknown",
+        discord_source.get("count") or 0,
+    )
     return {
         "call_types": CALL_TYPES,
         "sup_reasons": SUP_REASONS,
@@ -6796,6 +6817,7 @@ async def delete_history_session(history_id: str, request: Request):
 # TICKER / NOTIFICATIONS (fetches from admin-configured Google Sheet, falls back to cache/defaults)
 # ══════════════════════════════════════════════════════════════════
 NOTIFICATION_CACHE_TTL_SECONDS = 25
+NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS = 4
 
 _ticker_cache = {"messages": None, "last_fetch": 0, "using_fallback": False}
 _headset_cache = {"groups": None, "last_fetch": 0}
@@ -8081,6 +8103,7 @@ def _parse_notification_csv(csv_text):
 
 
 async def _fetch_notifications_from_sheet():
+    import asyncio
     import time
 
     now = time.time()
@@ -8097,7 +8120,24 @@ async def _fetch_notifications_from_sheet():
         )
         return _notification_cache["groups"]
 
-    authenticated = _load_notification_items_from_google_sheets_api()
+    authenticated = {"ok": False, "items": [], "error": "Notification fetch was not attempted."}
+    try:
+        authenticated = await asyncio.wait_for(
+            asyncio.to_thread(_load_notification_items_from_google_sheets_api),
+            timeout=NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        reason = f"authenticated notification fetch timed out after {NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS}s"
+        logger.warning("[NOTIFICATIONS] Source=TIMEOUT %s. Using cached/default notifications.", reason)
+        _set_ticker_fetch_status("timeout", reason, 0)
+        if _notification_cache["groups"] is not None:
+            logger.info("[NOTIFICATIONS] Source=CACHE returning cached notifications after timeout.")
+            return _notification_cache["groups"]
+        return _notification_defaults
+    except Exception as exc:
+        logger.warning("[NOTIFICATIONS] Authenticated notification fetch failed before fallback: %s", exc)
+        authenticated = {"ok": False, "items": [], "error": str(exc)}
+
     if authenticated.get("ok") and authenticated.get("source") == "master":
         groups = _group_notification_manager_items(authenticated.get("items", []))
         _notification_cache["groups"] = groups
@@ -8164,7 +8204,7 @@ async def _fetch_notifications_from_sheet():
         else:
             logger.warning("[NOTIFICATIONS] %s", authenticated.get("error") or "Authenticated Google Sheets read failed.")
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS) as client:
             resp = await client.get(sheet_url, follow_redirects=True)
             if resp.status_code == 200:
                 content_type = (resp.headers.get("content-type") or "").lower()

@@ -447,7 +447,7 @@ body.notification-manager-body.nm-dialog-open {
 .nm-table-wrap {
   max-height: 72vh;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   border-radius: 18px;
 }
 
@@ -561,6 +561,7 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-candidate-table {
   table-layout: auto;
+  min-width: 1100px;
 }
 
 .nm-candidate-table th,
