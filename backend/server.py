@@ -4101,8 +4101,24 @@ def _shared_admin_candidate_action(payload):
     session_id = str((payload or {}).get("session_id") or (payload or {}).get("latest_session_id") or "").strip()
     pending_id = str((payload or {}).get("pending_id") or "").strip()
     reason = str((payload or {}).get("reason") or "").strip()
-    if action not in {"withdraw", "restore_withdrawal", "grant_extra_attempt", "cancel_pending", "delete_candidate_history"}:
+    actor = str((payload or {}).get("actor") or (payload or {}).get("changed_by") or "SAM").strip() or "SAM"
+    supported_actions = {
+        "withdraw",
+        "restore_withdrawal",
+        "restore_active",
+        "grant_extra_attempt",
+        "cancel_pending",
+        "delete_candidate_history",
+        "mark_passed",
+        "mark_failed",
+        "mark_incomplete",
+        "move_pending_sup_transfer",
+        "remove_pending_sup_transfer",
+    }
+    if action not in supported_actions:
         return {"ok": False, "error": "Unsupported candidate tracking action."}
+    if action == "restore_active":
+        action = "restore_withdrawal"
     if not candidate_name and not session_id and not pending_id:
         targets = (payload or {}).get("targets") or []
         if action != "delete_candidate_history" or not isinstance(targets, list) or not targets:
@@ -4122,6 +4138,54 @@ def _shared_admin_candidate_action(payload):
         retention_until = _add_business_days(datetime.now(timezone.utc), 10).date().isoformat()
         updated_candidates = 0
         updated_pending = 0
+        pending_append_row = None
+
+        def manual_note(previous_status, new_status, note_text=""):
+            note = (
+                f"Manual SAM correction by {actor} at {now_iso}. "
+                f"Previous status: {previous_status or 'unknown'}. New status: {new_status or 'unknown'}."
+            )
+            if note_text:
+                note = f"{note} Reason: {note_text}"
+            return note
+
+        def append_note(existing, note):
+            return "\n\n".join(part for part in [existing or "", note] if str(part or "").strip())
+
+        def fail_status_for_row(row):
+            return "FAIL-Final Attempt" if _shared_truthy(row.get("final_attempt")) else "Fail"
+
+        def build_pending_row_from_candidate(row, next_pending_id):
+            first, last_initial = _split_candidate_name(row.get("candidate_name"))
+            return {
+                "pending_id": next_pending_id,
+                "candidate_name": row.get("candidate_name") or "",
+                "candidate_first_name": row.get("candidate_first_name") or first,
+                "candidate_last_initial": row.get("candidate_last_initial") or last_initial,
+                "original_tester_name": row.get("tester_name") or "",
+                "original_session_id": row.get("session_id") or session_id or "",
+                "created_at": now_iso,
+                "status": "pending",
+                "final_attempt": _shared_bool(_shared_truthy(row.get("final_attempt"))),
+                "mock_call_summary": row.get("mock_call_summary") or "",
+                "call_1_result": row.get("call_1_result") or "",
+                "call_2_result": row.get("call_2_result") or "",
+                "call_3_result": row.get("call_3_result") or "",
+                "needed_reason": "Manual SAM correction: supervisor transfer still required.",
+                "completed_by": "",
+                "completed_at": "",
+                "completed_status": "",
+                "notes": manual_note(row.get("status"), "pending", reason),
+                "headset_usb": row.get("headset_usb") or "",
+                "noise_cancel": row.get("noise_cancel") or "",
+                "headset_brand": row.get("headset_brand") or "",
+                "vpn_on": row.get("vpn_on") or "",
+                "vpn_off": row.get("vpn_off") or "",
+                "chrome_default": row.get("chrome_default") or "",
+                "extensions_disabled": row.get("extensions_disabled") or "",
+                "popups_allowed": row.get("popups_allowed") or "",
+                "skills": row.get("skills") or "",
+            }
 
         if action == "delete_candidate_history":
             raw_targets = (payload or {}).get("targets")
@@ -4245,6 +4309,36 @@ def _shared_admin_candidate_action(payload):
                 if str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION":
                     row["status"] = "INCOMPLETE"
                 row["review_notes"] = "\n\n".join(part for part in [row.get("review_notes") or "", f"Extra attempt granted. {reason}".strip()] if part)
+            elif action in {"mark_passed", "mark_failed", "mark_incomplete", "move_pending_sup_transfer", "remove_pending_sup_transfer"}:
+                previous_status = row.get("status") or ""
+                if action == "mark_passed":
+                    row["status"] = "Pass"
+                    row["mock_calls_completed"] = "TRUE"
+                    row["sup_transfers_completed"] = "TRUE"
+                    row["needs_sup_transfer"] = "FALSE"
+                    row["pending_sup_transfer_id"] = ""
+                elif action == "mark_failed":
+                    row["status"] = fail_status_for_row(row)
+                    row["needs_sup_transfer"] = "FALSE"
+                    row["pending_sup_transfer_id"] = ""
+                elif action == "mark_incomplete":
+                    row["status"] = "INCOMPLETE"
+                    row["needs_sup_transfer"] = "FALSE"
+                    row["pending_sup_transfer_id"] = ""
+                elif action == "move_pending_sup_transfer":
+                    next_pending_id = pending_id or row.get("pending_sup_transfer_id") or f"pending-{row.get('session_id') or session_id or uuid.uuid4()}"
+                    row["status"] = "INCOMPLETE"
+                    row["needs_sup_transfer"] = "TRUE"
+                    row["pending_sup_transfer_id"] = next_pending_id
+                    if pending_append_row is None:
+                        pending_append_row = build_pending_row_from_candidate(row, next_pending_id)
+                elif action == "remove_pending_sup_transfer":
+                    row["status"] = "INCOMPLETE"
+                    row["needs_sup_transfer"] = "FALSE"
+                    row["pending_sup_transfer_id"] = ""
+                row["withdrawn"] = "FALSE"
+                row["withdrawn_at"] = ""
+                row["review_notes"] = append_note(row.get("review_notes"), manual_note(previous_status, row.get("status"), reason))
             _shared_update_existing_row(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS, row["_row_number"], _shared_row_values(row, SHARED_CANDIDATE_SESSION_HEADERS))
             updated_candidates += 1
 
@@ -4275,7 +4369,48 @@ def _shared_admin_candidate_action(payload):
                 row["completed_at"] = now_iso
                 row["completed_status"] = "cancelled"
                 row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", "Admin cancelled pending supervisor transfer."] if part)
+            elif action == "mark_passed":
+                previous_status = row.get("status") or ""
+                row["status"] = "completed"
+                row["completed_by"] = actor
+                row["completed_at"] = now_iso
+                row["completed_status"] = "PASS"
+                row["notes"] = append_note(row.get("notes"), manual_note(previous_status, "PASS", reason))
+            elif action == "mark_failed":
+                previous_status = row.get("status") or ""
+                row["status"] = "completed"
+                row["completed_by"] = actor
+                row["completed_at"] = now_iso
+                row["completed_status"] = "FAIL"
+                row["notes"] = append_note(row.get("notes"), manual_note(previous_status, "FAIL", reason))
+            elif action in {"mark_incomplete", "remove_pending_sup_transfer"}:
+                previous_status = row.get("status") or ""
+                row["status"] = "cancelled"
+                row["completed_by"] = actor
+                row["completed_at"] = now_iso
+                row["completed_status"] = "INCOMPLETE"
+                row["notes"] = append_note(row.get("notes"), manual_note(previous_status, "INCOMPLETE", reason))
+            elif action == "move_pending_sup_transfer":
+                previous_status = row.get("status") or ""
+                row["status"] = "pending"
+                row["completed_by"] = ""
+                row["completed_at"] = ""
+                row["completed_status"] = ""
+                row["notes"] = append_note(row.get("notes"), manual_note(previous_status, "pending", reason))
             _shared_update_existing_row(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS, row["_row_number"], _shared_row_values(row, SHARED_PENDING_SUP_TRANSFER_HEADERS))
+            updated_pending += 1
+
+        if action == "move_pending_sup_transfer" and updated_pending == 0 and pending_append_row:
+            next_pending_id = pending_append_row.get("pending_id")
+            _shared_update_or_append_row(
+                sheets_api,
+                sheet_id,
+                SHARED_PENDING_SUP_TRANSFERS_TAB,
+                SHARED_PENDING_SUP_TRANSFER_HEADERS,
+                "pending_id",
+                next_pending_id,
+                _shared_row_values(pending_append_row, SHARED_PENDING_SUP_TRANSFER_HEADERS),
+            )
             updated_pending += 1
 
         if updated_candidates == 0 and updated_pending == 0:

@@ -327,6 +327,10 @@ function StatusModal({ message, kind = 'info', onClose }) {
 }
 
 function ConfirmModal({ state, onConfirm, onCancel }) {
+  const [note, setNote] = useState('');
+  useEffect(() => {
+    setNote(state?.initialNote || '');
+  }, [state]);
   if (!state?.message) return null;
   return (
     <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
@@ -339,9 +343,25 @@ function ConfirmModal({ state, onConfirm, onCancel }) {
           </div>
           <button type="button" className="nm-modal-close" onClick={onCancel} aria-label="Cancel">×</button>
         </div>
+        {state.collectNote ? (
+          <div className="nm-confirm-note">
+            <label htmlFor="nm-confirm-note-input">{state.noteLabel || 'Optional note'}</label>
+            <textarea
+              id="nm-confirm-note-input"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder={state.notePlaceholder || 'Add a reason for the audit trail...'}
+              rows={3}
+            />
+          </div>
+        ) : null}
         <div className="nm-help-actions">
           <button type="button" className="nm-btn nm-btn-secondary" onClick={onCancel}>{state.cancelLabel || 'Cancel'}</button>
-          <button type="button" className={`nm-btn ${state.kind === 'danger' ? 'nm-btn-danger' : 'nm-btn-primary'}`} onClick={onConfirm}>
+          <button
+            type="button"
+            className={`nm-btn ${state.kind === 'danger' ? 'nm-btn-danger' : 'nm-btn-primary'}`}
+            onClick={() => onConfirm(state.collectNote ? { confirmed: true, note } : true)}
+          >
             {state.confirmLabel || 'OK'}
           </button>
         </div>
@@ -454,7 +474,7 @@ const SECTION_NAV_ITEMS = [
   { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
 ];
 
-function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange }) {
+function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor }) {
   const [expanded, setExpanded] = useState({});
   const [selectedTargets, setSelectedTargets] = useState({});
   const rows = data?.views?.[view] || [];
@@ -510,6 +530,29 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     const confirmed = await onConfirm(`Cancel pending supervisor transfer for ${row.candidate_name || 'this candidate'}?`, { kind: 'danger', confirmLabel: 'Cancel Transfer' });
     if (!confirmed) return;
     await onAction({ action: 'cancel_pending', candidate_name: row.candidate_name, pending_id: row.pending_id, session_id: row.original_session_id });
+  };
+
+  const handleManualCorrection = async (row, action, targetLabel, options = {}) => {
+    const response = await onConfirm(
+      `${targetLabel} for ${row.candidate_name || 'this candidate'}?`,
+      {
+        confirmLabel: options.confirmLabel || targetLabel,
+        kind: options.kind || 'info',
+        collectNote: true,
+        noteLabel: 'Optional correction note',
+        notePlaceholder: 'Example: Supervisor transfer completed outside app.',
+      },
+    );
+    if (!response) return;
+    const reason = typeof response === 'object' ? response.note || '' : '';
+    await onAction({
+      action,
+      candidate_name: row.candidate_name,
+      session_id: row.session_id || row.latest_session_id || row.original_session_id,
+      pending_id: row.pending_id,
+      reason,
+      actor,
+    });
   };
 
   const handleDeleteTargets = async (targets, label) => {
@@ -632,6 +675,10 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
               const notes = row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded';
               const attempts = Array.isArray(row.attempts) ? row.attempts : [];
               const isExpanded = Boolean(expanded[rowKey]);
+              const statusUpper = String(row.status || row.latest_status || '').toUpperCase();
+              const isPendingTransfer = view === 'pending' || Boolean(row.pending_id);
+              const isIncomplete = view === 'incomplete' || statusUpper === 'INCOMPLETE';
+              const isWithdrawn = sheetTruthy(row.withdrawn) || statusUpper === 'WITHDREW FROM CERTIFICATION';
               return (
                 <React.Fragment key={rowKey}>
                   <tr>
@@ -660,9 +707,21 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                     </td>
                     <td>
                       <div className="nm-row-actions">
+                        {(isIncomplete || isPendingTransfer || isWithdrawn) ? (
+                          <>
+                            <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_passed', 'Mark Passed')}>Mark Passed</button>
+                            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_failed', 'Mark Failed')}>Mark Failed</button>
+                          </>
+                        ) : null}
+                        {isIncomplete && !isPendingTransfer ? (
+                          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'move_pending_sup_transfer', 'Move to Pending Sup Transfer')}>Move to Pending Sup</button>
+                        ) : null}
+                        {isPendingTransfer ? (
+                          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete')}>Mark Incomplete</button>
+                        ) : null}
                         {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
                         <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
-                        {sheetTruthy(row.withdrawn) || String(row.status || row.latest_status || '').toUpperCase() === 'WITHDREW FROM CERTIFICATION' ? (
+                        {isWithdrawn ? (
                           <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
                         ) : (
                           <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
@@ -1074,6 +1133,10 @@ export default function NotificationManagerApp() {
       kind: options.kind || 'info',
       confirmLabel: options.confirmLabel || 'OK',
       cancelLabel: options.cancelLabel || 'Cancel',
+      collectNote: Boolean(options.collectNote),
+      noteLabel: options.noteLabel || '',
+      notePlaceholder: options.notePlaceholder || '',
+      initialNote: options.initialNote || '',
     });
   }), []);
   const resolveConfirm = useCallback((value) => {
@@ -1226,6 +1289,11 @@ export default function NotificationManagerApp() {
         restore_withdrawal: 'Candidate restored in the shared Google Sheet. MTS should allow lookup again after refresh.',
         cancel_pending: 'Pending supervisor transfer cancelled in the shared Google Sheet.',
         delete_candidate_history: 'Candidate history deleted from the shared Google Sheet. It will no longer appear in SAM or MTS lookup/autocomplete after refresh.',
+        mark_passed: 'Candidate manually marked as passed in the shared Google Sheet.',
+        mark_failed: 'Candidate manually marked as failed in the shared Google Sheet.',
+        mark_incomplete: 'Candidate manually marked as incomplete in the shared Google Sheet.',
+        move_pending_sup_transfer: 'Candidate moved to Pending Sup Transfers in the shared Google Sheet.',
+        remove_pending_sup_transfer: 'Candidate removed from Pending Sup Transfers and marked incomplete in the shared Google Sheet.',
       };
       setSheetState((current) => ({
         ...current,
@@ -2195,6 +2263,7 @@ export default function NotificationManagerApp() {
             onConfirm={requestConfirm}
             search={candidateSearch}
             onSearchChange={setCandidateSearch}
+            actor={samSetupStatus.userName || samSetupStatus.userRole || 'SAM'}
           />
         ) : null}
       </div>
@@ -2250,7 +2319,7 @@ export default function NotificationManagerApp() {
       />
       <ConfirmModal
         state={confirmModal}
-        onConfirm={() => resolveConfirm(true)}
+        onConfirm={(value) => resolveConfirm(value)}
         onCancel={() => resolveConfirm(false)}
       />
     </div>

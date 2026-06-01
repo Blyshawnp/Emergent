@@ -449,6 +449,7 @@ body.notification-manager-body.nm-dialog-open {
   overflow-y: auto;
   overflow-x: auto;
   border-radius: 18px;
+  width: 100%;
 }
 
 .nm-view-tabs {
@@ -557,11 +558,18 @@ body.notification-manager-body.nm-dialog-open {
   border: 1px solid var(--nm-border);
   border-radius: 24px;
   box-shadow: var(--nm-shadow);
+  overflow: visible;
+}
+
+.nm-candidate-panel .nm-table-wrap {
+  border-radius: 14px;
+  overflow-x: auto;
+  overflow-y: auto;
 }
 
 .nm-candidate-table {
   table-layout: auto;
-  min-width: 1100px;
+  min-width: 1450px;
 }
 
 .nm-candidate-table th,
@@ -577,16 +585,18 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-candidate-table .nm-actions-column,
 .nm-candidate-table td:last-child {
-  min-width: 310px;
+  width: 560px !important;
+  min-width: 560px;
 }
 
 .nm-notes-cell {
-  max-width: 360px;
-  white-space: normal;
+  width: 260px !important;
+  max-width: 260px;
+  white-space: nowrap;
 }
 
 .nm-notes-preview {
-  max-width: 340px;
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -655,7 +665,7 @@ body.notification-manager-body.nm-dialog-open {
   flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-start !important;
-  width: fit-content;
+  width: max-content;
   gap: 8px;
   margin-left: 0 !important;
   margin: 0;
@@ -664,9 +674,12 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-btn-table {
   min-height: 34px;
+  min-width: 86px;
   padding: 7px 8px;
   font-size: 12px;
   border-radius: 10px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .nm-table th {
@@ -700,6 +713,10 @@ body.notification-manager-body.nm-dialog-open {
   justify-content: center;
   border: 1px solid var(--nm-border);
   text-align: center;
+}
+
+.nm-candidate-table .nm-btn-table {
+  padding: 7px 10px;
 }
 
 .nm-table .nm-btn-primary {
@@ -1192,6 +1209,30 @@ body.notification-manager-body.nm-dialog-open {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+}
+
+.nm-confirm-note {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.nm-confirm-note label {
+  color: #cfe4fb;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.nm-confirm-note textarea {
+  width: 100%;
+  min-height: 86px;
+  resize: vertical;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(3, 10, 20, 0.58);
+  color: var(--nm-text);
+  font: inherit;
 }
 
 .nm-help-header h2 {
