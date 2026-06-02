@@ -6,9 +6,9 @@ $rootDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $desktopDir = Join-Path $rootDir 'desktop'
 $required = @(
   (Join-Path $desktopDir 'dist\win-unpacked'),
-  (Join-Path $desktopDir 'dist\Mock Testing Suite Setup 1.0.1.exe'),
+  (Join-Path $desktopDir 'dist\mock-testing-suite-setup-1.0.1.exe'),
   (Join-Path $desktopDir 'dist-notification-manager\win-unpacked'),
-  (Join-Path $desktopDir 'dist-notification-manager\Sam Setup 1.0.1.exe')
+  (Join-Path $desktopDir 'dist-notification-manager\sam-setup-1.0.1.exe')
 )
 
 Write-Host 'REFRESH PRODUCTION-READY ONLY FROM EXISTING DESKTOP BUILDS'

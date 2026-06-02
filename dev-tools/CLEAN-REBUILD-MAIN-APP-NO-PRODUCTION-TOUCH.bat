@@ -17,7 +17,7 @@ echo This rebuilds the main app build outputs only:
 echo.
 echo   backend\dist\backend.exe
 echo   frontend\build
-echo   desktop\dist\Mock Testing Suite Setup 1.0.1.exe
+echo   desktop\dist\mock-testing-suite-setup-1.0.1.exe
 echo.
 echo It will NOT copy anything into production-ready.
 echo It will NOT delete anything inside production-ready.
@@ -128,7 +128,7 @@ echo.
 echo Output files:
 echo   %ROOT%\backend\dist\backend.exe
 echo   %ROOT%\frontend\build
-echo   %ROOT%\desktop\dist\Mock Testing Suite Setup 1.0.1.exe
+echo   %ROOT%\desktop\dist\mock-testing-suite-setup-1.0.1.exe
 echo.
 echo production-ready was not changed.
 popd
