@@ -642,14 +642,62 @@ body.notification-manager-body.nm-dialog-open {
   background: rgba(2, 6, 23, 0.34);
 }
 
+.nm-update-modal {
+  width: min(900px, calc(100vw - 48px));
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.nm-update-modal .nm-help-header {
+  flex-shrink: 0;
+}
+
 .nm-update-details {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  gap: 8px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+  overflow: hidden;
   color: #dbeafe;
   line-height: 1.6;
 }
 
-.nm-update-details pre,
+.nm-update-meta {
+  display: grid;
+  gap: 6px;
+}
+
+.nm-update-status {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background: rgba(8, 32, 54, 0.54);
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.nm-update-notes {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 10px;
+  scrollbar-gutter: stable;
+}
+
+.nm-update-notes-title {
+  margin-bottom: 8px;
+  color: #e0f2fe;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nm-update-notes pre,
 .nm-status-card pre {
   margin: 8px 0 0;
   padding: 12px;
@@ -1294,6 +1342,9 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-help-actions {
   justify-content: flex-end;
+  flex-shrink: 0;
+  padding-top: 14px;
+  border-top: 1px solid rgba(125, 211, 252, 0.14);
 }
 
 .nm-tour-layer {

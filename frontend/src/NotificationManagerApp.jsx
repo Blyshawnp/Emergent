@@ -270,34 +270,63 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
 }
 
 function formatUpdateNotes(notes) {
-  const list = Array.isArray(notes) ? notes.filter(Boolean) : [];
+  const cleanNote = (value) => String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n\n')
+    .replace(/<\s*\/h[1-6]\s*>/gi, '\n\n')
+    .replace(/<\s*li[^>]*>/gi, '- ')
+    .replace(/<\s*\/li\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && line !== '-' && line !== '*');
+  const list = (Array.isArray(notes) ? notes : [notes]).flatMap(cleanNote).filter(Boolean);
   if (!list.length) return 'No release notes were published.';
   return list.map((note) => `- ${note}`).join('\n');
 }
 
-function UpdateModal({ updateInfo, onInstall, onLater }) {
+function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, onLater }) {
   if (!updateInfo) return null;
   const required = Boolean(updateInfo.required);
+  const statusMessage = updaterStatus?.message || '';
+  const canManualDownload = Boolean(updateInfo.manualDownloadAvailable || updaterStatus?.state === 'manual-available' || updaterStatus?.state === 'error');
   return (
-    <div className="nm-modal-backdrop">
+    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (!required && event.target === event.currentTarget) onLater(); }}>
       <section className="nm-help-modal nm-update-modal" role="dialog" aria-modal="true">
         <div className="nm-help-header">
           <div>
             <div className="nm-overline">{required ? 'UPDATE REQUIRED' : 'UPDATE AVAILABLE'}</div>
-            <h2>{required ? 'Update Required' : 'Update Available'}</h2>
-            <p>{updateInfo.releaseTitle || 'A new SAM update is available.'}</p>
+            <h2>{required ? 'Smart Alert Manager Update Required' : 'Smart Alert Manager Update Available'}</h2>
+            <p>{updateInfo.releaseTitle || 'A new Smart Alert Manager update is available.'}</p>
           </div>
         </div>
         <div className="nm-update-details">
-          <div><strong>Current:</strong> v{updateInfo.currentVersion || '1.0.1'}</div>
-          <div><strong>New:</strong> v{updateInfo.latestVersion}</div>
-          {updateInfo.requiredVersion ? <div><strong>Required:</strong> v{updateInfo.requiredVersion}</div> : null}
-          {updateInfo.releaseDate ? <div><strong>Released:</strong> {updateInfo.releaseDate}</div> : null}
-          <pre>{formatUpdateNotes(updateInfo.notes)}</pre>
+          <div className="nm-update-meta">
+            <div><strong>Current:</strong> v{updateInfo.currentVersion || '1.0.1'}</div>
+            <div><strong>New:</strong> v{updateInfo.latestVersion}</div>
+            {updateInfo.requiredVersion ? <div><strong>Required:</strong> v{updateInfo.requiredVersion}</div> : null}
+            {updateInfo.releaseDate ? <div><strong>Released:</strong> {updateInfo.releaseDate}</div> : null}
+          </div>
+          {statusMessage ? <div className="nm-update-status">{statusMessage}</div> : null}
+          <div className="nm-update-notes">
+            <div className="nm-update-notes-title">Release Notes</div>
+            <pre>{formatUpdateNotes(updateInfo.notes)}</pre>
+          </div>
         </div>
         <div className="nm-help-actions">
-          {!required ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onLater}>Later</button> : null}
-          <button type="button" className="nm-btn nm-btn-primary" onClick={onInstall}>Update Now</button>
+          {!required ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onLater}>Cancel</button> : null}
+          {canManualDownload ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onManualDownload}>Manual Download</button> : null}
+          <button type="button" className="nm-btn nm-btn-primary" onClick={onInstall}>
+            {updaterStatus?.state === 'downloaded' || updateInfo.downloaded ? 'Install and Restart' : 'Download Update'}
+          </button>
         </div>
       </section>
     </div>
@@ -1075,6 +1104,7 @@ export default function NotificationManagerApp() {
   const fileInputRef = useRef(null);
   const backendStartupRetryRef = useRef({ attempt: 0, timer: null });
   const retryBackendStartupRef = useRef(null);
+  const startupUpdateCheckRef = useRef(false);
   const [items, setItems] = useState(() => {
     try {
       const stored = localStorage.getItem(NOTIFICATION_MANAGER_STORAGE_KEY);
@@ -1115,6 +1145,7 @@ export default function NotificationManagerApp() {
   const [tutorialStep, setTutorialStep] = useState(null);
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
+  const [updaterStatus, setUpdaterStatus] = useState(null);
   const [activeSection, setActiveSection] = useState('notifications');
   const [candidateView, setCandidateView] = useState('pending');
   const [candidateSearch, setCandidateSearch] = useState('');
@@ -1209,12 +1240,45 @@ export default function NotificationManagerApp() {
 
   const handleInstallUpdate = useCallback(async () => {
     try {
+      if (updaterStatus?.state === 'downloaded' || updateModal?.downloaded) {
+        const installResult = await window.electronAPI?.updaterQuitAndInstall?.();
+        if (!installResult?.ok) {
+          setUpdateModal((current) => ({
+            ...(current || updateModal || {}),
+            downloaded: true,
+            manualDownloadAvailable: Boolean(installResult?.manualDownloadAvailable),
+            manualUrl: installResult?.manualUrl,
+            manualError: installResult?.error,
+          }));
+          setSheetState((current) => ({
+            ...current,
+            statusKind: installResult?.manualDownloadAvailable ? 'warning' : 'error',
+            statusMessage: installResult?.error || 'Unable to install and restart.',
+          }));
+        }
+        return;
+      }
       const result = await window.electronAPI?.installPendingUpdate?.();
       if (!result?.ok) {
+        if (result?.manualDownloadAvailable) {
+          setUpdateModal((current) => ({
+            ...(current || updateModal || {}),
+            manualDownloadAvailable: true,
+            manualUrl: result.manualUrl,
+            manualError: result.error,
+          }));
+        }
         setSheetState((current) => ({
           ...current,
-          statusKind: 'error',
-          statusMessage: result?.error || 'Unable to launch the update installer.',
+          statusKind: result?.manualDownloadAvailable ? 'warning' : 'error',
+          statusMessage: result?.error || 'Unable to download and install the update.',
+        }));
+        return;
+      }
+      if (result?.action === 'downloaded') {
+        setUpdateModal((current) => ({
+          ...(current || updateModal || {}),
+          downloaded: true,
         }));
         return;
       }
@@ -1225,31 +1289,75 @@ export default function NotificationManagerApp() {
       setSheetState((current) => ({
         ...current,
         statusKind: 'error',
-        statusMessage: error instanceof Error ? error.message : 'Unable to launch the update installer.',
+        statusMessage: error instanceof Error ? error.message : 'Unable to download and install the update.',
       }));
     }
-  }, [updateModal]);
+  }, [updateModal, updaterStatus]);
 
-  const handleCheckForUpdates = useCallback(async () => {
+  const handleManualDownloadUpdate = useCallback(async () => {
+    try {
+      const result = await window.electronAPI?.updaterManualDownload?.();
+      if (!result?.ok) {
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'error',
+          statusMessage: result?.error || 'Manual update link is invalid or unavailable.',
+        }));
+      }
+    } catch (error) {
+      setSheetState((current) => ({
+        ...current,
+        statusKind: 'error',
+        statusMessage: error instanceof Error ? error.message : 'Manual update link is invalid or unavailable.',
+      }));
+    }
+  }, []);
+
+  const handleCheckForUpdates = useCallback(async ({ silent = false } = {}) => {
     try {
       if (!window.electronAPI?.checkForUpdates) {
-        setSheetState((current) => ({ ...current, statusKind: 'warning', statusMessage: 'Update checks are available only in the desktop app.' }));
+        if (!silent) {
+          setSheetState((current) => ({ ...current, statusKind: 'warning', statusMessage: 'Update checks are available only in the desktop app.' }));
+        }
         return;
       }
       const result = await window.electronAPI.checkForUpdates();
       if (!result?.ok) {
-        setSheetState((current) => ({ ...current, statusKind: 'warning', statusMessage: result?.error || 'Unable to check for updates right now.' }));
+        if (!silent) {
+          setSheetState((current) => ({ ...current, statusKind: 'warning', statusMessage: result?.error || 'Unable to check for updates right now.' }));
+        }
         return;
       }
       if (result.updateAvailable) {
         setUpdateModal(result.updateInfo);
         return;
       }
-      setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: `SAM version ${appVersion} is up to date.` }));
+      if (!silent) {
+        setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: `SAM version ${appVersion} is up to date.` }));
+      }
     } catch (error) {
-      setSheetState((current) => ({ ...current, statusKind: 'warning', statusMessage: error instanceof Error ? error.message : 'Unable to check for updates right now.' }));
+      if (!silent) {
+        setSheetState((current) => ({ ...current, statusKind: 'warning', statusMessage: error instanceof Error ? error.message : 'Unable to check for updates right now.' }));
+      }
     }
   }, [appVersion]);
+
+  const runStartupUpdateCheck = useCallback(async () => {
+    if (startupUpdateCheckRef.current) {
+      return;
+    }
+    startupUpdateCheckRef.current = true;
+
+    try {
+      const state = await window.electronAPI?.getUpdateState?.();
+      if (state?.pendingUpdate) {
+        setUpdateModal(state.pendingUpdate);
+        return;
+      }
+    } catch (_error) {}
+
+    await handleCheckForUpdates({ silent: true });
+  }, [handleCheckForUpdates]);
 
   const loadCandidateTracking = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setCandidateTrackingLoading(true);
@@ -1443,6 +1551,15 @@ export default function NotificationManagerApp() {
           setUpdateModal(payload);
           return;
         }
+        if (type === 'update:status') {
+          setUpdaterStatus(payload || null);
+          setSheetState((current) => ({
+            ...current,
+            statusKind: payload?.state === 'error' ? 'warning' : 'info',
+            statusMessage: payload?.message || current.statusMessage,
+          }));
+          return;
+        }
         if (type === 'menu:replay-tutorial') {
           replayTutorial();
           return;
@@ -1464,6 +1581,13 @@ export default function NotificationManagerApp() {
       }
     });
   }, [handleCheckForUpdates]);
+
+  useEffect(() => {
+    if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) {
+      return;
+    }
+    void runStartupUpdateCheck();
+  }, [runStartupUpdateCheck, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
 
   const selectedItem = items[selectedIndex] || items[0];
   const editorValidation = useMemo(() => {
@@ -2309,7 +2433,9 @@ export default function NotificationManagerApp() {
       />
       <UpdateModal
         updateInfo={updateModal}
+        updaterStatus={updaterStatus}
         onInstall={handleInstallUpdate}
+        onManualDownload={handleManualDownloadUpdate}
         onLater={() => setUpdateModal(null)}
       />
       <StatusModal

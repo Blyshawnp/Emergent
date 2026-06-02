@@ -1581,16 +1581,21 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 /* Custom Modal */
 .cmodal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 3000; opacity: 0; pointer-events: none; transition: opacity 200ms ease; }
 .cmodal-overlay.open { opacity: 1; pointer-events: all; }
-.cmodal { background: var(--bg-modal); border: 1px solid var(--border-default); border-radius: var(--radius-lg); width: 560px; max-width: 92vw; padding: 30px var(--space-xl) var(--space-xl); box-shadow: var(--shadow-lg); text-align: center; transform: translateY(10px) scale(0.98); animation: cmodalIn 180ms ease-out forwards; }
+.cmodal { background: var(--bg-modal); border: 1px solid var(--border-default); border-radius: var(--radius-lg); width: 560px; max-width: min(900px, calc(100vw - 48px)); max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; padding: 30px var(--space-xl) var(--space-xl); box-shadow: var(--shadow-lg); text-align: center; transform: translateY(10px) scale(0.98); animation: cmodalIn 180ms ease-out forwards; }
 .cmodal-icon { width: 88px; height: 88px; margin: 0 auto 18px; display: flex; align-items: center; justify-content: center; font-size: 36px; color: var(--color-primary); }
-.cmodal-graphic { display: block; width: 88px; height: 88px; margin: 0 auto 18px; object-fit: contain; }
+.cmodal-graphic { display: block; width: 88px; height: 88px; margin: 0 auto 18px; object-fit: contain; flex-shrink: 0; }
 .cmodal-graphic[src$="sam-banner.png"] { width: min(320px, 82vw); height: auto; max-height: 180px; }
 .cmodal-graphic-logo { width: 248px; height: 148px; margin-bottom: 20px; }
-.cmodal-title { font-size: var(--font-size-lg); font-weight: 800; margin-bottom: 10px; text-align: center; }
-.cmodal-body { font-size: var(--font-size-sm); color: var(--text-secondary); line-height: 1.65; margin: 0 auto var(--space-lg); max-width: 460px; text-align: center; }
-.cmodal-body ul { display: inline-block; text-align: left; }
-.cmodal-btns { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; padding-top: 2px; }
+.cmodal-title { font-size: var(--font-size-lg); font-weight: 800; margin-bottom: 10px; text-align: center; flex-shrink: 0; }
+.cmodal-body { font-size: var(--font-size-sm); color: var(--text-secondary); line-height: 1.65; margin: 0 auto var(--space-lg); max-width: 640px; width: 100%; min-height: 0; overflow-y: auto; padding-right: 10px; text-align: center; scrollbar-gutter: stable; }
+.cmodal-body ul { display: inline-block; margin: 8px 0 0 18px; text-align: left; }
+.cmodal-btns { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; flex-shrink: 0; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
 .cmodal-btns .btn { min-width: 116px; }
+.update-modal-content { text-align: left; }
+.update-notes { margin-top: 12px; }
+.update-notes ul { display: block; max-height: min(34vh, 280px); overflow-y: auto; padding-right: 10px; scrollbar-gutter: stable; }
+.update-notes li { margin-bottom: 6px; }
+.update-error-note { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-md); background: rgba(220, 38, 38, 0.14); border: 1px solid rgba(220, 38, 38, 0.35); color: var(--text-primary); }
 
 @media (max-width: 640px) {
   .cmodal { width: 92vw; }

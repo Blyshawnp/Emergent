@@ -5,6 +5,15 @@
   "directories": {
     "output": "dist-notification-manager"
   },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "Blyshawnp",
+      "repo": "sam-releases",
+      "private": false,
+      "publishAutoUpdate": true
+    }
+  ],
   "extraMetadata": {
     "name": "mock-testing-suite-notification-manager",
     "description": "Sam - Smart Alert Manager",

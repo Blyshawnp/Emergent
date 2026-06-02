@@ -12,11 +12,18 @@ const http = require('http');
 const { pathToFileURL } = require('url');
 const Store = require('electron-store');
 let desktopPackage = {};
+let electronAutoUpdater = null;
 
 try {
   desktopPackage = require('../package.json');
 } catch (err) {
   console.warn('[APP] Could not load desktop package metadata:', err.message);
+}
+
+try {
+  electronAutoUpdater = require('electron-updater').autoUpdater;
+} catch (err) {
+  console.warn('[GITHUB UPDATE] electron-updater is not available:', err.message);
 }
 
 const APP_ID = 'com.acddirect.mocktestingsuite';
@@ -28,6 +35,8 @@ const DEFAULT_APP_VERSION = '1.0.1';
 const APP_DISPLAY_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing Suite';
 const APP_RUNTIME_ID = isNotificationManagerMode ? NOTIFICATION_MANAGER_APP_ID : APP_ID;
 const APP_STORAGE_DIR_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing Suite';
+const GITHUB_UPDATE_OWNER = 'Blyshawnp';
+const GITHUB_UPDATE_REPO = isNotificationManagerMode ? 'sam-releases' : 'mts-releases';
 const BACKEND_STARTUP_RETRY_DELAY_MS = 500;
 const BACKEND_STARTUP_RETRIES = isDev ? 40 : 120;
 const BACKEND_READY_REQUEST_TIMEOUT_MS = 1500;
@@ -65,23 +74,30 @@ let backendRetryTimer = null;
 let backendRetryAttemptCount = 0;
 let backendStdoutLogStream = null;
 let backendStderrLogStream = null;
+let githubUpdaterConfigured = false;
+let githubUpdateCheckInFlight = false;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
 const STORE_LAST_ACKNOWLEDGED_VERSION_KEY = 'updater.lastAcknowledgedInstalledVersion';
+const STORE_UPDATER_STATUS_KEY = 'updater.status';
 const HEARTBEAT_STALE_MS = 8000;
 
+function normalizeVersionString(value) {
+  return String(value || '').trim().replace(/^v(?=\d)/i, '');
+}
+
 function isVersionString(value) {
-  return /^\d+(?:\.\d+)*$/.test(String(value || '').trim());
+  return /^\d+(?:\.\d+)*$/.test(normalizeVersionString(value));
 }
 
 function resolveAppVersion() {
-  const packageVersion = String(desktopPackage.version || '').trim();
+  const packageVersion = normalizeVersionString(desktopPackage.version);
   if (isVersionString(packageVersion)) {
     return packageVersion;
   }
 
-  const electronVersion = String(app.getVersion?.() || '').trim();
+  const electronVersion = normalizeVersionString(app.getVersion?.());
   if (isVersionString(electronVersion)) {
     return electronVersion;
   }
@@ -1374,26 +1390,17 @@ ipcMain.handle('updates:getState', () => {
   return getUpdateState();
 });
 
-ipcMain.handle('updates:installPending', async () => {
-  const pending = getPendingUpdate();
-  if (!pending) {
-    return { ok: false, error: 'No pending update is available.' };
-  }
+ipcMain.handle('updates:installPending', async () => installPendingUpdate());
 
-  if (!pending.downloadUrl) {
-    return {
-      ok: false,
-      error: 'An update was detected, but the published update sheet does not include a download URL yet.',
-    };
-  }
+ipcMain.handle('updater:check', async () => checkForUpdates({ promptUser: true }));
 
-  if (!isSafeExternalUrl(pending.downloadUrl, ['https:'])) {
-    return { ok: false, error: 'The update download URL is not a safe HTTPS link.' };
-  }
+ipcMain.handle('updater:download', async () => installPendingUpdate());
 
-  await shell.openExternal(pending.downloadUrl);
-  return { ok: true };
-});
+ipcMain.handle('updater:quit-and-install', async () => quitAndInstallDownloadedUpdate());
+
+ipcMain.handle('updater:get-status', () => getUpdateState());
+
+ipcMain.handle('updater:manual-download', async () => openManualUpdateDownload());
 
 ipcMain.handle('updates:ackInstalled', () => {
   store.set(STORE_LAST_ACKNOWLEDGED_VERSION_KEY, APP_VERSION);
@@ -1423,7 +1430,7 @@ ipcMain.handle('assets:getUrl', (_event, filename) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// AUTO-UPDATE CHECK (from master Google Sheet via backend)
+// AUTO-UPDATE CHECK (GitHub Releases primary, Google Sheet fallback)
 // ═══════════════════════════════════════════════════════════════
 function isValidVersionString(value) {
   return isVersionString(value);
@@ -1435,6 +1442,242 @@ function sendAppEvent(type, payload = null) {
   }
 
   mainWindow.webContents.send('app:event', type, payload);
+}
+
+function getGithubReleaseTag(version) {
+  return `v${version}`;
+}
+
+function getGithubReleasePageUrl(version = APP_VERSION) {
+  return `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/tag/${encodeURIComponent(getGithubReleaseTag(normalizeVersionString(version) || APP_VERSION))}`;
+}
+
+function getUpdateSheetTabName() {
+  return isNotificationManagerMode ? 'update-SAM' : 'update-MTS';
+}
+
+function getExpectedUpdateRepoName() {
+  return isNotificationManagerMode ? 'sam-releases' : 'mts-releases';
+}
+
+function isValidManualUpdateUrl(url) {
+  const rawUrl = String(url || '').trim();
+  try {
+    const parsed = new URL(rawUrl);
+    const expectedPrefix = `/Blyshawnp/${getExpectedUpdateRepoName()}/`;
+    return parsed.protocol === 'https:'
+      && parsed.hostname.toLowerCase() === 'github.com'
+      && parsed.pathname.startsWith(expectedPrefix);
+  } catch (_err) {
+    return false;
+  }
+}
+
+function resolveManualUpdateUrl(candidateUrl, version = APP_VERSION) {
+  const rawUrl = String(candidateUrl || '').trim();
+  if (isValidManualUpdateUrl(rawUrl)) {
+    return rawUrl;
+  }
+  return getGithubReleasePageUrl(version);
+}
+
+function logUpdateDecision(label, detail = {}) {
+  const safeDetail = {
+    appMode: isNotificationManagerMode ? 'SAM' : 'MTS',
+    appName: APP_DISPLAY_NAME,
+    packageVersion: APP_VERSION,
+    updateTab: getUpdateSheetTabName(),
+    electronUpdaterAvailable: Boolean(electronAutoUpdater),
+    ...detail,
+  };
+  console.log(`[UPDATE DIAGNOSTIC] ${label}`, safeDetail);
+}
+
+function setUpdaterStatus(status) {
+  const nextStatus = {
+    state: status?.state || 'idle',
+    message: status?.message || '',
+    percent: Number(status?.percent || 0),
+    source: status?.source || '',
+    updatedAt: new Date().toISOString(),
+  };
+  store.set(STORE_UPDATER_STATUS_KEY, nextStatus);
+  sendAppEvent('update:status', nextStatus);
+  sendAppEvent('update:state-changed', getUpdateState());
+  return nextStatus;
+}
+
+function normalizeGithubReleaseNotes(releaseNotes) {
+  const cleanNote = (value) => String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n\n')
+    .replace(/<\s*\/h[1-6]\s*>/gi, '\n\n')
+    .replace(/<\s*li[^>]*>/gi, '- ')
+    .replace(/<\s*\/li\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && line !== '-' && line !== '*');
+
+  if (!releaseNotes) return [];
+  if (typeof releaseNotes === 'string') {
+    return cleanNote(releaseNotes);
+  }
+  if (Array.isArray(releaseNotes)) {
+    return releaseNotes.flatMap((entry) => {
+        if (typeof entry === 'string') return entry.trim();
+        if (entry && typeof entry === 'object') {
+          return cleanNote(entry.note || entry.notes || entry.content || '');
+        }
+        return [];
+      })
+      .flatMap((entry) => Array.isArray(entry) ? entry : cleanNote(entry))
+      .filter((line) => line && line !== '-' && line !== '*');
+  }
+  return [];
+}
+
+function configureGithubAutoUpdater() {
+  if (!electronAutoUpdater || githubUpdaterConfigured) {
+    return Boolean(electronAutoUpdater);
+  }
+
+  electronAutoUpdater.autoDownload = false;
+  electronAutoUpdater.autoInstallOnAppQuit = false;
+  electronAutoUpdater.allowPrerelease = false;
+  electronAutoUpdater.logger = {
+    info: (...args) => console.log('[GITHUB UPDATE]', ...args),
+    warn: (...args) => console.warn('[GITHUB UPDATE]', ...args),
+    error: (...args) => console.error('[GITHUB UPDATE]', ...args),
+    debug: (...args) => console.log('[GITHUB UPDATE]', ...args),
+  };
+
+  githubUpdaterConfigured = true;
+  electronAutoUpdater.on('download-progress', (progress = {}) => {
+    const percent = Number(progress.percent || 0);
+    console.log(`[GITHUB UPDATE] Downloading ${APP_DISPLAY_NAME} update: ${percent.toFixed(1)}%.`);
+    setUpdaterStatus({
+      state: 'downloading',
+      message: `Downloading update (${percent.toFixed(0)}%).`,
+      percent,
+      source: 'github-releases',
+    });
+  });
+  electronAutoUpdater.on('update-downloaded', () => {
+    console.log(`[GITHUB UPDATE] ${APP_DISPLAY_NAME} update downloaded.`);
+    setUpdaterStatus({
+      state: 'downloaded',
+      message: 'Update downloaded. Installing now.',
+      percent: 100,
+      source: 'github-releases',
+    });
+    sendAppEvent('update:downloaded', getUpdateState());
+  });
+
+  console.log(`[GITHUB UPDATE] Configured ${APP_DISPLAY_NAME} for ${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}.`);
+  return true;
+}
+
+function buildGithubUpdateInfo(info) {
+  const latestVersion = normalizeVersionString(info?.version);
+  return {
+    latestVersion,
+    requiredVersion: '',
+    required: false,
+    currentVersion: APP_VERSION,
+    releaseDate: info?.releaseDate || '',
+    releaseTitle: info?.releaseName || `${APP_DISPLAY_NAME} ${latestVersion}`,
+    notes: normalizeGithubReleaseNotes(info?.releaseNotes),
+    downloadUrl: latestVersion ? getGithubReleasePageUrl(latestVersion) : `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest`,
+    source: 'github-releases',
+  };
+}
+
+async function checkGithubReleaseForUpdates({ promptUser = true } = {}) {
+  if (!app.isPackaged) {
+    console.log('[GITHUB UPDATE] Skipping GitHub Releases update check in development mode.');
+    return { ok: true, updateAvailable: false, skipped: true, source: 'github-releases' };
+  }
+  if (!configureGithubAutoUpdater()) {
+    return { ok: false, updateAvailable: false, skipped: true, error: 'electron-updater is not installed.' };
+  }
+  if (githubUpdateCheckInFlight) {
+    return { ok: false, updateAvailable: false, error: 'A GitHub Releases update check is already running.' };
+  }
+
+  githubUpdateCheckInFlight = true;
+  setUpdaterStatus({
+    state: 'checking',
+    message: 'Checking GitHub Releases for updates.',
+    source: 'github-releases',
+  });
+  console.log(`[GITHUB UPDATE] Checking ${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO} for ${APP_DISPLAY_NAME} updates.`);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      electronAutoUpdater.removeListener('update-available', onUpdateAvailable);
+      electronAutoUpdater.removeListener('update-not-available', onUpdateNotAvailable);
+      electronAutoUpdater.removeListener('error', onError);
+      githubUpdateCheckInFlight = false;
+    };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+    const onUpdateAvailable = (info) => {
+      const updateInfo = buildGithubUpdateInfo(info);
+      console.log(`[GITHUB UPDATE] Update available for ${APP_DISPLAY_NAME}: ${APP_VERSION} -> ${updateInfo.latestVersion}.`);
+      setUpdaterStatus({
+        state: 'available',
+        message: `Update ${updateInfo.latestVersion} is available.`,
+        source: 'github-releases',
+      });
+      setPendingUpdate(updateInfo);
+      if (promptUser) {
+        sendAppEvent('update:available', updateInfo);
+      }
+      finish({ ok: true, updateAvailable: true, updateInfo });
+    };
+    const onUpdateNotAvailable = () => {
+      console.log(`[GITHUB UPDATE] No GitHub Releases update available for ${APP_DISPLAY_NAME}.`);
+      setUpdaterStatus({
+        state: 'idle',
+        message: 'No GitHub Releases update available.',
+        source: 'github-releases',
+      });
+      finish({ ok: true, updateAvailable: false, currentVersion: APP_VERSION, source: 'github-releases' });
+    };
+    const onError = (err) => {
+      const message = err?.message || String(err || 'Unknown GitHub Releases update error.');
+      console.warn('[GITHUB UPDATE] Check failed:', message);
+      setUpdaterStatus({
+        state: 'error',
+        message,
+        source: 'github-releases',
+      });
+      finish({ ok: false, updateAvailable: false, error: message, source: 'github-releases' });
+    };
+    const timeout = setTimeout(() => {
+      finish({ ok: false, updateAvailable: false, error: 'GitHub Releases update check timed out.', source: 'github-releases' });
+    }, 15000);
+
+    electronAutoUpdater.once('update-available', onUpdateAvailable);
+    electronAutoUpdater.once('update-not-available', onUpdateNotAvailable);
+    electronAutoUpdater.once('error', onError);
+    electronAutoUpdater.checkForUpdates().catch(onError);
+  });
 }
 
 function fetchUpdateMetadataFromBackend() {
@@ -1486,6 +1729,151 @@ function clearPendingUpdate() {
   sendAppEvent('update:state-changed', getUpdateState());
 }
 
+function prepareManualUpdateFallback(pending, reason = '') {
+  const manualUrl = resolveManualUpdateUrl(pending?.downloadUrl, pending?.latestVersion || APP_VERSION);
+  const valid = isValidManualUpdateUrl(manualUrl);
+  logUpdateDecision('manual fallback prepared', {
+    automaticUpdaterAttempted: true,
+    manualFallbackTriggered: true,
+    manualFallbackReason: reason || 'Automatic update path unavailable.',
+    rawUrlFromSheet: pending?.downloadUrl || '',
+    selectedFallbackManualUrl: manualUrl,
+    fallbackUrlPassedValidation: valid,
+  });
+  if (!valid) {
+    setUpdaterStatus({
+      state: 'error',
+      message: `Manual update link is invalid or unavailable. Please check ${getUpdateSheetTabName()}.`,
+      source: pending?.source || '',
+    });
+    return {
+      ok: false,
+      error: `Manual update link is invalid or unavailable. Please check ${getUpdateSheetTabName()}.`,
+      manualDownloadAvailable: false,
+    };
+  }
+
+  setUpdaterStatus({
+    state: 'manual-available',
+    message: reason || 'Automatic update failed. Manual download is available.',
+    source: pending.source || '',
+  });
+  return {
+    ok: false,
+    error: reason || 'Automatic update failed. Use Manual Download if you want to open the release page.',
+    manualDownloadAvailable: true,
+    manualUrl,
+  };
+}
+
+async function openManualUpdateDownload() {
+  const pending = getPendingUpdate();
+  if (!pending) {
+    return { ok: false, error: 'No pending update is available.' };
+  }
+
+  const manualUrl = resolveManualUpdateUrl(pending.downloadUrl, pending.latestVersion || APP_VERSION);
+  const valid = isValidManualUpdateUrl(manualUrl);
+  logUpdateDecision('manual download requested', {
+    manualFallbackTriggered: true,
+    manualFallbackReason: 'User clicked Manual Download.',
+    rawUrlFromSheet: pending.downloadUrl || '',
+    selectedFallbackManualUrl: manualUrl,
+    fallbackUrlPassedValidation: valid,
+  });
+  if (!valid || !isSafeExternalUrl(manualUrl, ['https:'])) {
+    return {
+      ok: false,
+      error: `Manual update link is invalid or unavailable. Please check ${getUpdateSheetTabName()}.`,
+    };
+  }
+
+  await shell.openExternal(manualUrl);
+  return { ok: true, action: 'manual-download-opened', manualUrl };
+}
+
+async function downloadGithubUpdate(pending) {
+  if (!app.isPackaged) {
+    return prepareManualUpdateFallback(pending, 'electron-updater is available only in the packaged desktop app.');
+  }
+  if (!configureGithubAutoUpdater()) {
+    return prepareManualUpdateFallback(pending, 'electron-updater is not installed or could not be loaded.');
+  }
+
+  console.log(`[GITHUB UPDATE] Downloading ${APP_DISPLAY_NAME} update ${pending.latestVersion || ''}.`);
+  setUpdaterStatus({
+    state: 'downloading',
+    message: 'Downloading update.',
+    source: 'github-releases',
+  });
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      electronAutoUpdater.removeListener('update-downloaded', onDownloaded);
+      electronAutoUpdater.removeListener('error', onError);
+    };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+    const onDownloaded = () => {
+      finish({ ok: true, action: 'downloaded' });
+    };
+    const onError = (err) => {
+      const message = err?.message || String(err || 'Unknown update download error.');
+      console.warn('[GITHUB UPDATE] Download/install failed:', message);
+      finish(prepareManualUpdateFallback(pending, `Automatic update failed: ${message}`));
+    };
+    const timeout = setTimeout(() => {
+      finish(prepareManualUpdateFallback(pending, 'Automatic update download timed out.'));
+    }, 10 * 60 * 1000);
+
+    electronAutoUpdater.once('update-downloaded', onDownloaded);
+    electronAutoUpdater.once('error', onError);
+    electronAutoUpdater.downloadUpdate().catch(onError);
+  });
+}
+
+async function installPendingUpdate() {
+  const pending = getPendingUpdate();
+  if (!pending) {
+    return { ok: false, error: 'No pending update is available.' };
+  }
+
+  if (pending.source === 'github-releases') {
+    return downloadGithubUpdate(pending);
+  }
+
+  return prepareManualUpdateFallback(pending, 'This update came from the Google Sheet manual fallback.');
+}
+
+async function quitAndInstallDownloadedUpdate() {
+  const pending = getPendingUpdate();
+  if (!pending) {
+    return { ok: false, error: 'No pending update is available.' };
+  }
+  if (!configureGithubAutoUpdater()) {
+    return prepareManualUpdateFallback(pending, 'electron-updater is not installed or could not be loaded.');
+  }
+  try {
+    console.log('[GITHUB UPDATE] User requested Install and Restart.');
+    setUpdaterStatus({
+      state: 'installing',
+      message: 'Installing update and restarting.',
+      percent: 100,
+      source: 'github-releases',
+    });
+    electronAutoUpdater.quitAndInstall(false, true);
+    return { ok: true, action: 'quit-and-install' };
+  } catch (err) {
+    return prepareManualUpdateFallback(pending, `Downloaded update could not be installed automatically: ${err.message}`);
+  }
+}
+
 function getInstalledUpdateNotice() {
   const installed = store.get(STORE_LAST_INSTALLED_UPDATE_KEY) || null;
   const acknowledgedVersion = store.get(STORE_LAST_ACKNOWLEDGED_VERSION_KEY) || '';
@@ -1500,6 +1888,7 @@ function getUpdateState() {
     currentVersion: APP_VERSION,
     pendingUpdate: getPendingUpdate(),
     installedUpdate: getInstalledUpdateNotice(),
+    updaterStatus: store.get(STORE_UPDATER_STATUS_KEY) || { state: 'idle', message: '', percent: 0 },
   };
 }
 
@@ -1513,7 +1902,7 @@ function reconcileStoredUpdateState() {
   }
 }
 
-async function checkForUpdates({ promptUser = true } = {}) {
+async function checkForSheetUpdates({ promptUser = true } = {}) {
   try {
     const data = await fetchUpdateMetadataFromBackend();
     if (!data?.ok) {
@@ -1522,12 +1911,26 @@ async function checkForUpdates({ promptUser = true } = {}) {
         error: data?.error || 'The update sheet could not be read.',
       };
     }
-    const latestVersion = data.latestVersion || '';
-    const requiredVersion = data.requiredVersion || '';
+    const rawLatestVersion = data.latestVersion || '';
+    const rawRequiredVersion = data.requiredVersion || '';
+    const rawDownloadUrl = data.downloadUrl || '';
+    const latestVersion = normalizeVersionString(rawLatestVersion);
+    const requiredVersion = normalizeVersionString(rawRequiredVersion);
     const downloadUrl = data.downloadUrl || '';
     const releaseDate = data.releaseDate || '';
     const releaseTitle = data.releaseTitle || '';
     const notes = Array.isArray(data.notes) ? data.notes : [];
+    const selectedFallbackManualUrl = resolveManualUpdateUrl(rawDownloadUrl, latestVersion || APP_VERSION);
+    logUpdateDecision('sheet update metadata read', {
+      updateTab: data.tab || getUpdateSheetTabName(),
+      rawVersionFromSheet: rawLatestVersion,
+      normalizedVersion: latestVersion,
+      rawUrlFromSheet: rawDownloadUrl,
+      selectedFallbackManualUrl,
+      fallbackUrlPassedValidation: isValidManualUpdateUrl(selectedFallbackManualUrl),
+      automaticUpdaterAttempted: false,
+      manualFallbackTriggered: false,
+    });
     if (!latestVersion) {
       console.log('[UPDATE] No update metadata version published in master sheet.');
       clearPendingUpdate();
@@ -1571,7 +1974,7 @@ async function checkForUpdates({ promptUser = true } = {}) {
         releaseDate,
         releaseTitle,
         notes,
-        downloadUrl,
+        downloadUrl: selectedFallbackManualUrl,
         source: data.source || 'master-google-sheet',
       };
 
@@ -1594,6 +1997,19 @@ async function checkForUpdates({ promptUser = true } = {}) {
       error: err.message,
     };
   }
+}
+
+async function checkForUpdates({ promptUser = true } = {}) {
+  const githubResult = await checkGithubReleaseForUpdates({ promptUser });
+  if (githubResult?.updateAvailable) {
+    return githubResult;
+  }
+  if (githubResult?.ok && !githubResult?.skipped) {
+    console.log('[UPDATE] GitHub Releases has no newer installer. Checking Google Sheet fallback.');
+  } else if (githubResult?.error) {
+    console.log(`[UPDATE] GitHub Releases update check unavailable; checking Google Sheet fallback. Reason: ${githubResult.error}`);
+  }
+  return checkForSheetUpdates({ promptUser });
 }
 
 // ═══════════════════════════════════════════════════════════════

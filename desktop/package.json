@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "electron-store": "^8.1.0",
+    "electron-updater": "^6.8.3",
     "react-joyride": "^3.0.2"
   },
   "devDependencies": {
@@ -30,6 +31,15 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Blyshawnp",
+        "repo": "mts-releases",
+        "private": false,
+        "publishAutoUpdate": true
+      }
+    ],
     "files": [
       "src/**/*",
       "assets/**/*",

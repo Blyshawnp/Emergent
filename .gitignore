@@ -3,6 +3,7 @@ node_modules/
 dist/
 desktop/dist-notification-manager/
 desktop/dist-regression-mts/
+LOCAL-ONLY-UPDATER-TEST-v1.0.0-DO-NOT-DISTRIBUTE/
 build/
 out/
 release/

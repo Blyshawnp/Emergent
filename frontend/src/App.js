@@ -231,22 +231,45 @@ function StartupLoadingScreen({ status, progress }) {
 }
 
 function formatUpdateBody(updateInfo, includeDeferredNote = false, notesAsBullets = true) {
-  const notes = updateInfo.notes || [];
+  const cleanNote = (value) => String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n\n')
+    .replace(/<\s*\/h[1-6]\s*>/gi, '\n\n')
+    .replace(/<\s*li[^>]*>/gi, '- ')
+    .replace(/<\s*\/li\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && line !== '-' && line !== '*');
+  const notes = (Array.isArray(updateInfo.notes) ? updateInfo.notes : [updateInfo.notes])
+    .flatMap(cleanNote)
+    .filter(Boolean);
   const notesContent = notesAsBullets
     ? notes.map((note) => `<li>${note}</li>`).join('')
     : notes.map((note) => `<div>${note}</div>`).join('');
 
   const detailLines = [
+    '<div class="update-modal-content">',
     updateInfo.releaseTitle ? `<strong>${updateInfo.releaseTitle}</strong>` : '',
     updateInfo.releaseDate ? `<div class="text-muted">Released ${updateInfo.releaseDate}</div>` : '',
     `<div style="margin-top:12px;"><strong>Current:</strong> v${updateInfo.currentVersion}</div>`,
     `<div><strong>New:</strong> v${updateInfo.latestVersion}</div>`,
     updateInfo.requiredVersion ? `<div><strong>Required:</strong> v${updateInfo.requiredVersion}</div>` : '',
+    updateInfo.manualError ? `<div class="update-error-note">${updateInfo.manualError}</div>` : '',
     notesContent
-      ? `<div style="margin-top:12px;"><strong>Notes:</strong>${notesAsBullets ? `<ul style="margin:8px 0 0 18px;">${notesContent}</ul>` : `<div style="margin-top:8px;">${notesContent}</div>`}</div>`
+      ? `<div class="update-notes"><strong>Release Notes:</strong>${notesAsBullets ? `<ul>${notesContent}</ul>` : `<div>${notesContent}</div>`}</div>`
       : '',
     updateInfo.downloadUrl ? '' : '<div style="margin-top:12px;"><strong>Installer link:</strong> Not published in the update sheet yet.</div>',
     includeDeferredNote ? '<div style="margin-top:12px;">This update can be installed later from Settings by clicking <strong>Install Update</strong>.</div>' : '',
+    '</div>',
   ].filter(Boolean);
 
   return detailLines.join('');
@@ -257,23 +280,59 @@ function ElectronEventBridge({ navigate, setUpdateState }) {
 
   const showUpdateModal = useCallback(async (updateInfo) => {
     const required = Boolean(updateInfo?.required);
-    const confirmed = await modal.showModal({
+    const buttons = [
+      updateInfo?.downloaded
+        ? { label: 'Install and Restart', cls: 'btn-success', value: 'install' }
+        : { label: 'Download Update', cls: 'btn-success', value: 'download' },
+      ...(updateInfo?.manualDownloadAvailable ? [{ label: 'Manual Download', cls: 'btn-primary', value: 'manual' }] : []),
+      { label: required ? 'Close' : 'Cancel', cls: 'btn-muted', value: 'cancel' },
+    ];
+    const choice = await modal.showModal({
       type: 'confirm',
       title: `${required ? 'Update Required' : 'Update Available'} — Version ${updateInfo.latestVersion}`,
       body: formatUpdateBody(updateInfo),
       graphic: 'update',
-      buttons: required
-        ? [{ label: 'Update Now', cls: 'btn-success', value: true }]
-        : [
-          { label: 'Update Now', cls: 'btn-success', value: true },
-          { label: 'Later', cls: 'btn-muted', value: false },
-        ],
+      buttons,
     });
 
-    if (confirmed) {
+    if (choice === 'download') {
       const result = await window.electronAPI?.installPendingUpdate?.();
       if (!result?.ok) {
-        await modal.error('Update Failed', result?.error || 'Unable to launch the update download.');
+        await showUpdateModal({
+          ...updateInfo,
+          manualDownloadAvailable: Boolean(result?.manualDownloadAvailable),
+          manualUrl: result?.manualUrl || updateInfo.manualUrl,
+          manualError: result?.error || 'Automatic update failed.',
+        });
+        return;
+      }
+      if (result?.action === 'downloaded') {
+        await showUpdateModal({
+          ...updateInfo,
+          downloaded: true,
+        });
+      }
+      return;
+    }
+
+    if (choice === 'install') {
+      const result = await window.electronAPI?.updaterQuitAndInstall?.();
+      if (!result?.ok) {
+        await showUpdateModal({
+          ...updateInfo,
+          downloaded: true,
+          manualDownloadAvailable: Boolean(result?.manualDownloadAvailable),
+          manualUrl: result?.manualUrl || updateInfo.manualUrl,
+          manualError: result?.error || 'Automatic install failed.',
+        });
+      }
+      return;
+    }
+
+    if (choice === 'manual') {
+      const result = await window.electronAPI?.updaterManualDownload?.();
+      if (!result?.ok) {
+        await modal.error('Manual Download Failed', result?.error || 'Manual update link is invalid or unavailable.');
         if (required) {
           await showUpdateModal(updateInfo);
         }
@@ -345,6 +404,11 @@ function ElectronEventBridge({ navigate, setUpdateState }) {
 
       if (type === 'update:state-changed') {
         setUpdateState(payload || { pendingUpdate: null, installedUpdate: null });
+        return;
+      }
+
+      if (type === 'update:status') {
+        setUpdateState((current) => ({ ...(current || {}), updaterStatus: payload }));
         return;
       }
 

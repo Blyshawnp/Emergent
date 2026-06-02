@@ -265,6 +265,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
   }, [markSectionFeedback, modal]);
 
   const pendingUpdate = updateState?.pendingUpdate || null;
+  const updaterStatus = updateState?.updaterStatus || null;
 
   const handleCheckForUpdates = useCallback(async () => {
     if (!window.electronAPI?.checkForUpdates) {
@@ -303,8 +304,45 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
     }
 
     const result = await window.electronAPI.installPendingUpdate();
+    if (result?.ok && result?.action === 'downloaded') {
+      const choice = await modal.showModal({
+        type: 'confirm',
+        title: 'Update Downloaded',
+        body: 'The update has downloaded successfully. Install it and restart now?',
+        graphic: 'update',
+        buttons: [
+          { label: 'Install and Restart', cls: 'btn-success', value: 'install' },
+          { label: 'Later', cls: 'btn-muted', value: 'later' },
+        ],
+      });
+      if (choice === 'install') {
+        const installResult = await window.electronAPI?.updaterQuitAndInstall?.();
+        if (!installResult?.ok) {
+          await modal.error('Install Failed', installResult?.error || 'Unable to install and restart.');
+        }
+      }
+      return;
+    }
     if (!result?.ok) {
-      await modal.error('Update Failed', result?.error || 'Unable to launch the update download.');
+      const buttons = result?.manualDownloadAvailable
+        ? [
+          { label: 'Manual Download', cls: 'btn-primary', value: 'manual' },
+          { label: 'Close', cls: 'btn-muted', value: 'close' },
+        ]
+        : [{ label: 'OK', cls: 'btn-danger', value: 'close' }];
+      const choice = await modal.showModal({
+        type: 'error',
+        title: 'Update Failed',
+        body: result?.error || 'Unable to download and install the update.',
+        graphic: 'update',
+        buttons,
+      });
+      if (choice === 'manual') {
+        const manualResult = await window.electronAPI?.updaterManualDownload?.();
+        if (!manualResult?.ok) {
+          await modal.error('Manual Download Failed', manualResult?.error || 'Manual update link is invalid or unavailable.');
+        }
+      }
     }
   }, [modal]);
 
@@ -357,9 +395,13 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
             {pendingUpdate ? `Mock Testing Suite v${pendingUpdate.latestVersion} is ready` : 'Check for updates'}
           </div>
           <div className="settings-update-subtitle">
-            {pendingUpdate
+            {updaterStatus?.message
+              ? updaterStatus.message
+              : pendingUpdate
               ? (pendingUpdate.downloadUrl
-                ? 'Install the deferred update when you are ready.'
+                ? (pendingUpdate.source === 'github-releases'
+                  ? 'Download and install this update from GitHub Releases.'
+                  : 'Open the manual fallback release link when you are ready.')
                 : 'Update detected. The installer link has not been published yet.')
               : `Current version: v${appVersion || updateState?.currentVersion || APP_VERSION_FALLBACK}`}
           </div>
@@ -379,7 +421,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
             onClick={handleCheckForUpdates}
             disabled={checkingForUpdates}
             data-testid="settings-check-updates"
-            title="Check the master Google Sheet update-MTS tab for a newer installer"
+            title="Check GitHub Releases first, then the Google Sheet fallback"
           >
             {checkingForUpdates ? 'Checking…' : 'Check for Updates'}
           </button>
