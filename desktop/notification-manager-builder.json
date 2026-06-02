@@ -1,7 +1,7 @@
 {
   "appId": "com.acddirect.mocktestingsuite.notificationmanager",
   "productName": "Sam",
-  "copyright": "Copyright © 2026 ACD Direct / Shawn P. Bly",
+  "copyright": "Copyright © 2026 Shawn P. Bly",
   "directories": {
     "output": "dist-notification-manager"
   },
@@ -77,7 +77,7 @@
       }
     ],
     "icon": "assets/notification-taskbar.ico",
-    "publisherName": "ACD Direct"
+    "publisherName": "Shawn P. Bly"
   },
   "nsis": {
     "oneClick": false,

@@ -211,7 +211,7 @@ The Google Sheet update tabs remain a fallback/manual release path. The app chec
    - GitHub release tags use a `v` prefix (e.g., `v1.0.1`).
 3. **Release Metadata Integrity**: Packaged release assets must match the generated `latest.yml` metadata (file names, sizes, and SHA-512 hashes) exactly for `electron-updater` to successfully locate and process updates.
 4. **Code Signing and Signature Verification**: 
-   - By default, `electron-updater` enforces signature verification on Windows when a `publisherName` is specified in the application configuration (`Shawn P. Bly` for MTS and `ACD Direct` for SAM).
+   - By default, `electron-updater` enforces signature verification on Windows when a `publisherName` is specified in the application configuration (`Shawn P. Bly` for both MTS and SAM).
    - If the downloaded update installer is unsigned, the automatic update process will fail with a signature verification error (e.g., "New version is not signed by the application owner").
 5. **Local Unsigned Testing**: 
    - To test the updater flow locally or internally without a paid code-signing certificate, verification can be bypassed by setting any of the following environment variables to `true`:
@@ -221,4 +221,3 @@ The Google Sheet update tabs remain a fallback/manual release path. The app chec
    - Bypassing verification will output a warning log: `[GITHUB UPDATE] WARNING: Unsigned update verification is disabled for local/internal testing only. Do not use this for public distribution.`
 6. **Public Distribution**: For public or production distribution, all installers must eventually be digitally signed with a valid, trusted code-signing certificate. Bypassing signature verification is strictly forbidden in production.
 7. **App ID Warning**: Never change the configured `appId` (`com.acddirect.mocktestingsuite` or `com.acddirect.mocktestingsuite.notificationmanager`) once a version has been distributed. Changing the App ID will break shortcut resolution, create duplicate side-by-side installations, and disrupt automated updates.
-

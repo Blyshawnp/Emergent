@@ -1,7 +1,7 @@
 {
   "name": "mock-testing-suite",
   "version": "1.0.1",
-  "description": "Mock Testing Suite — ACD Direct Certification Testing Tool",
+  "description": "Mock Testing Suite - Certification Testing Tool",
   "main": "src/main.js",
   "author": "Shawn P. Bly",
   "license": "PROPRIETARY",

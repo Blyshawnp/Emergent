@@ -1,7 +1,7 @@
 {
   "name": "mock-testing-suite",
   "version": "1.0.1",
-  "description": "Mock Testing Suite — ACD Direct Certification Testing Tool",
+  "description": "Mock Testing Suite - Certification Testing Tool",
   "main": "src/main.js",
   "author": "Shawn P. Bly",
   "license": "PROPRIETARY",
@@ -24,7 +24,7 @@
   "build": {
     "appId": "com.acddirect.mocktestingsuite",
     "productName": "Mock Testing Suite",
-    "copyright": "Copyright © 2026 ACD Direct / Shawn P. Bly",
+    "copyright": "Copyright © 2026 Shawn P. Bly",
     "directories": {
       "output": "dist"
     },
@@ -77,7 +77,7 @@
         }
       ],
       "icon": "assets/newMTS.ico",
-      "publisherName": "ACD Direct"
+      "publisherName": "Shawn P. Bly"
     },
     "nsis": {
       "oneClick": false,
