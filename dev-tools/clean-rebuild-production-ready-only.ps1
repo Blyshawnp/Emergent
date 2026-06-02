@@ -6,12 +6,11 @@ $backendDir = Join-Path $rootDir 'backend'
 $desktopDir = Join-Path $rootDir 'desktop'
 $prodDir = Join-Path $rootDir 'production-ready'
 $mtsProdDir = Join-Path $prodDir 'Mock Testing Suite 1.0.1'
-$samProdDir = Join-Path $prodDir 'ADMIN ONLY - MTS Notification Manager 1.0.1'
+$samProdDir = Join-Path $prodDir 'ADMIN ONLY - SAM 1.0.1'
 $mtsDist = Join-Path $desktopDir 'dist'
 $samDist = Join-Path $desktopDir 'dist-notification-manager'
 $mtsInstaller = 'Mock Testing Suite Setup 1.0.1.exe'
 $samInstaller = 'Sam Setup 1.0.1.exe'
-$samLegacyInstaller = 'MTS Notification Manager Setup 1.0.1.exe'
 
 $logDir = Join-Path $rootDir 'dev-tools\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -233,8 +232,6 @@ Verify-OptionalPath (Join-Path $samProdDir 'notification-manager-win-unpacked\\r
 Verify-OptionalPath (Join-Path $samProdDir 'notification-manager-win-unpacked\\resources\\backend\\drivers\\msedgedriver.exe') 'SAM production-ready backend msedgedriver.exe'
 Copy-FileChecked (Join-Path $samDist $samInstaller) (Join-Path $samProdDir $samInstaller)
 Copy-FileChecked (Join-Path $samDist "$samInstaller.blockmap") (Join-Path $samProdDir "$samInstaller.blockmap")
-Copy-FileChecked (Join-Path $samDist $samInstaller) (Join-Path $samProdDir $samLegacyInstaller)
-Copy-FileChecked (Join-Path $samDist "$samInstaller.blockmap") (Join-Path $samProdDir "$samLegacyInstaller.blockmap")
 Write-HashFile (Join-Path $samProdDir $samInstaller) (Join-Path $samProdDir 'NOTIFICATION-MANAGER-HASH.txt') $samInstaller
 
 Section 'VERIFYING OUTPUT HASHES'
