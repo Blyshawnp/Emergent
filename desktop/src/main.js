@@ -1560,13 +1560,28 @@ function configureGithubAutoUpdater() {
     debug: (...args) => console.log('[GITHUB UPDATE]', ...args),
   };
 
+  const allowUnsigned = (
+    process.env.MTS_ALLOW_UNSIGNED_UPDATES_FOR_TESTING === 'true' ||
+    process.env.SAM_ALLOW_UNSIGNED_UPDATES_FOR_TESTING === 'true' ||
+    process.env.ALLOW_UNSIGNED_UPDATES_FOR_TESTING === 'true'
+  );
+
+  if (allowUnsigned) {
+    electronAutoUpdater.verifyUpdateCodeSignature = false;
+    console.warn('[GITHUB UPDATE] WARNING: Unsigned update verification is disabled for local/internal testing only. Do not use this for public distribution.');
+  } else {
+    electronAutoUpdater.verifyUpdateCodeSignature = true;
+    console.log('[GITHUB UPDATE] Code signature verification is enabled (default behavior).');
+  }
+
   githubUpdaterConfigured = true;
+
   electronAutoUpdater.on('download-progress', (progress = {}) => {
     const percent = Number(progress.percent || 0);
     console.log(`[GITHUB UPDATE] Downloading ${APP_DISPLAY_NAME} update: ${percent.toFixed(1)}%.`);
     setUpdaterStatus({
       state: 'downloading',
-      message: `Downloading update (${percent.toFixed(0)}%).`,
+      message: `Downloading update... ${percent.toFixed(0)}%`,
       percent,
       source: 'github-releases',
     });
@@ -1575,7 +1590,7 @@ function configureGithubAutoUpdater() {
     console.log(`[GITHUB UPDATE] ${APP_DISPLAY_NAME} update downloaded.`);
     setUpdaterStatus({
       state: 'downloaded',
-      message: 'Update downloaded. Installing now.',
+      message: 'Download complete.',
       percent: 100,
       source: 'github-releases',
     });
@@ -1616,7 +1631,7 @@ async function checkGithubReleaseForUpdates({ promptUser = true } = {}) {
   githubUpdateCheckInFlight = true;
   setUpdaterStatus({
     state: 'checking',
-    message: 'Checking GitHub Releases for updates.',
+    message: 'Checking for updates...',
     source: 'github-releases',
   });
   console.log(`[GITHUB UPDATE] Checking ${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO} for ${APP_DISPLAY_NAME} updates.`);
@@ -1641,7 +1656,7 @@ async function checkGithubReleaseForUpdates({ promptUser = true } = {}) {
       console.log(`[GITHUB UPDATE] Update available for ${APP_DISPLAY_NAME}: ${APP_VERSION} -> ${updateInfo.latestVersion}.`);
       setUpdaterStatus({
         state: 'available',
-        message: `Update ${updateInfo.latestVersion} is available.`,
+        message: 'Update available.',
         source: 'github-releases',
       });
       setPendingUpdate(updateInfo);
@@ -1803,7 +1818,7 @@ async function downloadGithubUpdate(pending) {
   console.log(`[GITHUB UPDATE] Downloading ${APP_DISPLAY_NAME} update ${pending.latestVersion || ''}.`);
   setUpdaterStatus({
     state: 'downloading',
-    message: 'Downloading update.',
+    message: 'Preparing download...',
     source: 'github-releases',
   });
 
@@ -1863,7 +1878,7 @@ async function quitAndInstallDownloadedUpdate() {
     console.log('[GITHUB UPDATE] User requested Install and Restart.');
     setUpdaterStatus({
       state: 'installing',
-      message: 'Installing update and restarting.',
+      message: 'Restarting to install...',
       percent: 100,
       source: 'github-releases',
     });

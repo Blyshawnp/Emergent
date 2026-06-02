@@ -106,7 +106,7 @@ function ScreenshotPreview({ title, imageUrl }) {
   );
 }
 
-export default function SettingsPage({ onNavigate, updateState, refreshUpdateState, appVersion }) {
+export default function SettingsPage({ onNavigate, updateState, refreshUpdateState, appVersion, setMtsUpdateModal }) {
   const modal = useModal();
   const [tab, setTab] = useState('general');
   const [s, setS] = useState({});
@@ -297,54 +297,11 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
     }
   }, [appVersion, modal, refreshUpdateState, updateState]);
 
-  const handleInstallPendingUpdate = useCallback(async () => {
-    if (!window.electronAPI?.installPendingUpdate) {
-      await modal.error('Update Failed', 'Update installs are only available in the desktop app.');
-      return;
+  const handleInstallPendingUpdate = useCallback(() => {
+    if (setMtsUpdateModal && pendingUpdate) {
+      setMtsUpdateModal(pendingUpdate);
     }
-
-    const result = await window.electronAPI.installPendingUpdate();
-    if (result?.ok && result?.action === 'downloaded') {
-      const choice = await modal.showModal({
-        type: 'confirm',
-        title: 'Update Downloaded',
-        body: 'The update has downloaded successfully. Install it and restart now?',
-        graphic: 'update',
-        buttons: [
-          { label: 'Install and Restart', cls: 'btn-success', value: 'install' },
-          { label: 'Later', cls: 'btn-muted', value: 'later' },
-        ],
-      });
-      if (choice === 'install') {
-        const installResult = await window.electronAPI?.updaterQuitAndInstall?.();
-        if (!installResult?.ok) {
-          await modal.error('Install Failed', installResult?.error || 'Unable to install and restart.');
-        }
-      }
-      return;
-    }
-    if (!result?.ok) {
-      const buttons = result?.manualDownloadAvailable
-        ? [
-          { label: 'Manual Download', cls: 'btn-primary', value: 'manual' },
-          { label: 'Close', cls: 'btn-muted', value: 'close' },
-        ]
-        : [{ label: 'OK', cls: 'btn-danger', value: 'close' }];
-      const choice = await modal.showModal({
-        type: 'error',
-        title: 'Update Failed',
-        body: result?.error || 'Unable to download and install the update.',
-        graphic: 'update',
-        buttons,
-      });
-      if (choice === 'manual') {
-        const manualResult = await window.electronAPI?.updaterManualDownload?.();
-        if (!manualResult?.ok) {
-          await modal.error('Manual Download Failed', manualResult?.error || 'Manual update link is invalid or unavailable.');
-        }
-      }
-    }
-  }, [modal]);
+  }, [pendingUpdate, setMtsUpdateModal]);
 
   if (loading) return <div className="page-loading">Loading settings...</div>;
 

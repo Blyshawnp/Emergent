@@ -296,10 +296,51 @@ function formatUpdateNotes(notes) {
 function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, onLater }) {
   if (!updateInfo) return null;
   const required = Boolean(updateInfo.required);
-  const statusMessage = updaterStatus?.message || '';
-  const canManualDownload = Boolean(updateInfo.manualDownloadAvailable || updaterStatus?.state === 'manual-available' || updaterStatus?.state === 'error');
+  
+  const state = updaterStatus?.state || 'idle';
+  const isDownloading = state === 'downloading';
+  const isDownloaded = state === 'downloaded' || Boolean(updateInfo.downloaded);
+  const isInstalling = state === 'installing';
+  const isError = state === 'error' || state === 'manual-available';
+  const canManualDownload = Boolean(updateInfo.manualDownloadAvailable || state === 'manual-available' || state === 'error');
+
+  let buttonText = 'Download Update';
+  let buttonDisabled = false;
+
+  if (isDownloading) {
+    const percentStr = updaterStatus?.percent ? ` (${updaterStatus.percent.toFixed(0)}%)` : '';
+    buttonText = `Downloading...${percentStr}`;
+    buttonDisabled = true;
+  } else if (isDownloaded) {
+    buttonText = 'Install and Restart';
+    buttonDisabled = false;
+  } else if (isInstalling) {
+    buttonText = 'Installing...';
+    buttonDisabled = true;
+  }
+
+  let statusMessage = updaterStatus?.message || '';
+  if (isDownloading) {
+    const percentVal = updaterStatus?.percent || 0;
+    statusMessage = `Downloading update... ${percentVal.toFixed(0)}%`;
+  } else if (isDownloaded) {
+    statusMessage = 'Download complete. Ready to install and restart.';
+  } else if (isInstalling) {
+    statusMessage = 'Installing update and restarting...';
+  } else if (isError) {
+    const rawError = updaterStatus?.message || '';
+    let shortError = rawError;
+    if (rawError.includes('{') || rawError.includes('Error:')) {
+      shortError = rawError.split('\n')[0].replace(/^Error:\s*/, '');
+    }
+    if (shortError.length > 120) {
+      shortError = shortError.substring(0, 117) + '...';
+    }
+    statusMessage = `Update failed: ${shortError}`;
+  }
+
   return (
-    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (!required && event.target === event.currentTarget) onLater(); }}>
+    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (!required && !isInstalling && event.target === event.currentTarget) onLater(); }}>
       <section className="nm-help-modal nm-update-modal" role="dialog" aria-modal="true">
         <div className="nm-help-header">
           <div>
@@ -315,17 +356,29 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
             {updateInfo.requiredVersion ? <div><strong>Required:</strong> v{updateInfo.requiredVersion}</div> : null}
             {updateInfo.releaseDate ? <div><strong>Released:</strong> {updateInfo.releaseDate}</div> : null}
           </div>
-          {statusMessage ? <div className="nm-update-status">{statusMessage}</div> : null}
+          {statusMessage ? (
+            <div className="nm-update-status" style={{
+              color: isError ? '#e06c75' : '#98c379',
+              fontWeight: 'bold',
+              margin: '8px 0',
+              padding: '8px',
+              borderRadius: '4px',
+              background: isError ? 'rgba(224, 108, 117, 0.1)' : 'rgba(152, 195, 121, 0.1)',
+              border: `1px solid ${isError ? 'rgba(224, 108, 117, 0.2)' : 'rgba(152, 195, 121, 0.2)'}`
+            }}>
+              {statusMessage}
+            </div>
+          ) : null}
           <div className="nm-update-notes">
             <div className="nm-update-notes-title">Release Notes</div>
-            <pre>{formatUpdateNotes(updateInfo.notes)}</pre>
+            <pre style={{ maxHeight: '180px', overflowY: 'auto' }}>{formatUpdateNotes(updateInfo.notes)}</pre>
           </div>
         </div>
         <div className="nm-help-actions">
-          {!required ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onLater}>Cancel</button> : null}
+          {!required ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onLater} disabled={isInstalling}>Cancel</button> : null}
           {canManualDownload ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onManualDownload}>Manual Download</button> : null}
-          <button type="button" className="nm-btn nm-btn-primary" onClick={onInstall}>
-            {updaterStatus?.state === 'downloaded' || updateInfo.downloaded ? 'Install and Restart' : 'Download Update'}
+          <button type="button" className="nm-btn nm-btn-primary" onClick={onInstall} disabled={buttonDisabled}>
+            {buttonText}
           </button>
         </div>
       </section>
@@ -1281,9 +1334,6 @@ export default function NotificationManagerApp() {
           downloaded: true,
         }));
         return;
-      }
-      if (!updateModal?.required) {
-        setUpdateModal(null);
       }
     } catch (error) {
       setSheetState((current) => ({

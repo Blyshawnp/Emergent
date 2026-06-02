@@ -35,6 +35,7 @@ import {
   Table2,
 } from 'lucide-react';
 import mtsLogo from './assets/images/MTSLogonew.png';
+import updateGraphic from './assets/images/update.png';
 import TutorialPreviewOverlay from "./tutorial/TutorialPreviewOverlay";
 
 const LOGO_SRC = mtsLogo;
@@ -194,8 +195,8 @@ function resolveScreenshotUrl(imageUrl) {
   return `${backend}/${cleanPath}`;
 }
 
-function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses }) {
-  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses };
+function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal }) {
+  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal };
   switch (page) {
     case 'setup': return <SetupPage {...props} />;
     case 'home': return <HomePage {...props} />;
@@ -275,84 +276,12 @@ function formatUpdateBody(updateInfo, includeDeferredNote = false, notesAsBullet
   return detailLines.join('');
 }
 
-function ElectronEventBridge({ navigate, setUpdateState }) {
+function ElectronEventBridge({ navigate, setUpdateState, setMtsUpdateModal }) {
   const modal = useModal();
 
   const showUpdateModal = useCallback(async (updateInfo) => {
-    const required = Boolean(updateInfo?.required);
-    const buttons = [
-      updateInfo?.downloaded
-        ? { label: 'Install and Restart', cls: 'btn-success', value: 'install' }
-        : { label: 'Download Update', cls: 'btn-success', value: 'download' },
-      ...(updateInfo?.manualDownloadAvailable ? [{ label: 'Manual Download', cls: 'btn-primary', value: 'manual' }] : []),
-      { label: required ? 'Close' : 'Cancel', cls: 'btn-muted', value: 'cancel' },
-    ];
-    const choice = await modal.showModal({
-      type: 'confirm',
-      title: `${required ? 'Update Required' : 'Update Available'} — Version ${updateInfo.latestVersion}`,
-      body: formatUpdateBody(updateInfo),
-      graphic: 'update',
-      buttons,
-    });
-
-    if (choice === 'download') {
-      const result = await window.electronAPI?.installPendingUpdate?.();
-      if (!result?.ok) {
-        await showUpdateModal({
-          ...updateInfo,
-          manualDownloadAvailable: Boolean(result?.manualDownloadAvailable),
-          manualUrl: result?.manualUrl || updateInfo.manualUrl,
-          manualError: result?.error || 'Automatic update failed.',
-        });
-        return;
-      }
-      if (result?.action === 'downloaded') {
-        await showUpdateModal({
-          ...updateInfo,
-          downloaded: true,
-        });
-      }
-      return;
-    }
-
-    if (choice === 'install') {
-      const result = await window.electronAPI?.updaterQuitAndInstall?.();
-      if (!result?.ok) {
-        await showUpdateModal({
-          ...updateInfo,
-          downloaded: true,
-          manualDownloadAvailable: Boolean(result?.manualDownloadAvailable),
-          manualUrl: result?.manualUrl || updateInfo.manualUrl,
-          manualError: result?.error || 'Automatic install failed.',
-        });
-      }
-      return;
-    }
-
-    if (choice === 'manual') {
-      const result = await window.electronAPI?.updaterManualDownload?.();
-      if (!result?.ok) {
-        await modal.error('Manual Download Failed', result?.error || 'Manual update link is invalid or unavailable.');
-        if (required) {
-          await showUpdateModal(updateInfo);
-        }
-      }
-      return;
-    }
-
-    if (required) {
-      await showUpdateModal(updateInfo);
-      return;
-    }
-
-    await modal.showModal({
-      type: 'alert',
-      title: 'Update Deferred',
-      body: formatUpdateBody(updateInfo, true),
-      graphic: 'update',
-      buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
-    });
-  }, [modal]);
+    setMtsUpdateModal(updateInfo);
+  }, [setMtsUpdateModal]);
 
   useEffect(() => {
     if (!window.electronAPI?.onAppEvent) {
@@ -442,6 +371,146 @@ function ElectronEventBridge({ navigate, setUpdateState }) {
   return null;
 }
 
+function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
+  if (!updateInfo) return null;
+  const required = Boolean(updateInfo.required);
+  
+  const state = updaterStatus?.state || 'idle';
+  const isDownloading = state === 'downloading';
+  const isDownloaded = state === 'downloaded' || Boolean(updateInfo.downloaded);
+  const isInstalling = state === 'installing';
+  const isError = state === 'error' || state === 'manual-available';
+  const canManualDownload = Boolean(updateInfo.manualDownloadAvailable || state === 'manual-available' || state === 'error');
+
+  let buttonText = 'Download Update';
+  let buttonDisabled = false;
+
+  if (isDownloading) {
+    const percentStr = updaterStatus?.percent ? ` (${updaterStatus.percent.toFixed(0)}%)` : '';
+    buttonText = `Downloading...${percentStr}`;
+    buttonDisabled = true;
+  } else if (isDownloaded) {
+    buttonText = 'Install and Restart';
+    buttonDisabled = false;
+  } else if (isInstalling) {
+    buttonText = 'Installing...';
+    buttonDisabled = true;
+  }
+
+  let statusMessage = updaterStatus?.message || '';
+  if (isDownloading) {
+    const percentVal = updaterStatus?.percent || 0;
+    statusMessage = `Downloading update... ${percentVal.toFixed(0)}%`;
+  } else if (isDownloaded) {
+    statusMessage = 'Download complete. Ready to install and restart.';
+  } else if (isInstalling) {
+    statusMessage = 'Installing update and restarting...';
+  } else if (isError) {
+    const rawError = updaterStatus?.message || '';
+    let shortError = rawError;
+    if (rawError.includes('{') || rawError.includes('Error:')) {
+      shortError = rawError.split('\n')[0].replace(/^Error:\s*/, '');
+    }
+    if (shortError.length > 120) {
+      shortError = shortError.substring(0, 117) + '...';
+    }
+    statusMessage = `Update failed: ${shortError}`;
+  }
+
+  const handleAction = async () => {
+    if (isDownloaded) {
+      const result = await window.electronAPI?.updaterQuitAndInstall?.();
+      if (!result?.ok) {
+        // Handled via state change
+      }
+    } else {
+      const result = await window.electronAPI?.installPendingUpdate?.();
+      if (!result?.ok) {
+        // Handled via state change
+      }
+    }
+  };
+
+  const handleManual = async () => {
+    await window.electronAPI?.updaterManualDownload?.();
+  };
+
+  const cleanNote = (value) => String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+
+  const notes = (Array.isArray(updateInfo.notes) ? updateInfo.notes : [updateInfo.notes])
+    .flatMap(cleanNote)
+    .filter(Boolean);
+
+  return (
+    <div className="cmodal-overlay open" onClick={(e) => { if (!required && !isInstalling && e.target === e.currentTarget) onClose(); }}>
+      <div className="cmodal" style={{ maxWidth: '600px', width: '90%' }}>
+        <img className="cmodal-graphic" src={updateGraphic} alt="" style={{ height: '60px', objectFit: 'contain' }} />
+        <div className="cmodal-title" style={{ fontSize: '1.4rem', marginBottom: '8px' }}>
+          {required ? 'Update Required' : 'Update Available'} — Version {updateInfo.latestVersion}
+        </div>
+        <div className="cmodal-body" style={{ width: '100%', textAlign: 'left', fontSize: '0.95rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px', padding: '10px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+            <div><strong>Current:</strong> v{updateInfo.currentVersion}</div>
+            <div><strong>New:</strong> v{updateInfo.latestVersion}</div>
+            {updateInfo.releaseDate && <div style={{ gridColumn: 'span 2' }}><strong>Released:</strong> {updateInfo.releaseDate}</div>}
+          </div>
+
+          {statusMessage && (
+            <div style={{
+              padding: '10px',
+              borderRadius: '4px',
+              marginBottom: '12px',
+              fontWeight: 'bold',
+              background: isError ? 'rgba(224, 108, 117, 0.1)' : 'rgba(152, 195, 121, 0.1)',
+              color: isError ? '#e06c75' : '#98c379',
+              border: `1px solid ${isError ? 'rgba(224, 108, 117, 0.2)' : 'rgba(152, 195, 121, 0.2)'}`
+            }}>
+              {statusMessage}
+            </div>
+          )}
+
+          {notes.length > 0 && (
+            <div style={{ marginBottom: '12px' }}>
+              <strong>Release Notes:</strong>
+              <div style={{
+                maxHeight: '180px',
+                overflowY: 'auto',
+                padding: '10px',
+                background: 'rgba(0, 0, 0, 0.2)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '4px',
+                marginTop: '6px',
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'monospace',
+                fontSize: '0.85rem'
+              }}>
+                {notes.join('\n')}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="cmodal-btns" style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', width: '100%', marginTop: '16px' }}>
+          {!required && (
+            <button className="btn btn-muted" onClick={onClose} disabled={isInstalling}>
+              Cancel
+            </button>
+          )}
+          {canManualDownload && (
+            <button className="btn btn-primary" onClick={handleManual}>
+              Manual Download
+            </button>
+          )}
+          <button className="btn btn-success" onClick={handleAction} disabled={buttonDisabled}>
+            {buttonText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppShell() {
   const [page, setPage] = useState('home');
   const [pageState, setPageState] = useState(null);
@@ -463,6 +532,7 @@ function AppShell() {
   const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
   const [appVersion, setAppVersion] = useState(() => window.electronAPI?.getVersion?.() || APP_VERSION_FALLBACK);
   const [updateState, setUpdateState] = useState({ currentVersion: APP_VERSION_FALLBACK, pendingUpdate: null, installedUpdate: null });
+  const [mtsUpdateModal, setMtsUpdateModal] = useState(null);
   const [tickerMessages, setTickerMessages] = useState([]);
   const [notificationGroups, setNotificationGroups] = useState(DEFAULT_NOTIFICATION_GROUPS);
   const [dismissedBannerIds, setDismissedBannerIds] = useState(() => readStoredIds(DISMISSED_NOTIFICATION_BANNERS_KEY));
@@ -1149,6 +1219,7 @@ function AppShell() {
                   onReplayTutorial={startFullTutorial}
                   onSetupCompleted={handleSetupCompleted}
                   startupStatuses={startupStatuses}
+                  setMtsUpdateModal={setMtsUpdateModal}
                 />
               )}
             </div>
@@ -1161,7 +1232,14 @@ function AppShell() {
         </div>
 
         {discordOpen && <DiscordModal settings={settings} defaults={defaults} onClose={() => setDiscordOpen(false)} />}
-        <ElectronEventBridge navigate={navigate} setUpdateState={setUpdateState} />
+        <ElectronEventBridge navigate={navigate} setUpdateState={setUpdateState} setMtsUpdateModal={setMtsUpdateModal} />
+        {mtsUpdateModal && (
+          <MtsUpdateModal
+            updateInfo={mtsUpdateModal}
+            updaterStatus={updateState?.updaterStatus}
+            onClose={() => setMtsUpdateModal(null)}
+          />
+        )}
       </div>
      </>  
   );
