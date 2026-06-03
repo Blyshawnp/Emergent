@@ -37,6 +37,7 @@ const APP_RUNTIME_ID = isNotificationManagerMode ? NOTIFICATION_MANAGER_APP_ID :
 const APP_STORAGE_DIR_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing Suite';
 const GITHUB_UPDATE_OWNER = 'Blyshawnp';
 const GITHUB_UPDATE_REPO = isNotificationManagerMode ? 'sam-releases' : 'mts-releases';
+const ENABLE_SIGNED_AUTO_UPDATES = String(process.env.ENABLE_SIGNED_AUTO_UPDATES || '').trim().toLowerCase() === 'true';
 const BACKEND_STARTUP_RETRY_DELAY_MS = 500;
 const BACKEND_STARTUP_RETRIES = isDev ? 40 : 120;
 const BACKEND_READY_REQUEST_TIMEOUT_MS = 1500;
@@ -76,6 +77,7 @@ let backendStdoutLogStream = null;
 let backendStderrLogStream = null;
 let githubUpdaterConfigured = false;
 let githubUpdateCheckInFlight = false;
+let manualUpdateOpenInFlight = false;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
@@ -1465,9 +1467,11 @@ function isValidManualUpdateUrl(url) {
   try {
     const parsed = new URL(rawUrl);
     const expectedPrefix = `/Blyshawnp/${getExpectedUpdateRepoName()}/`;
+    const expectedReleasePrefix = `${expectedPrefix}releases/tag/`;
+    const expectedLatestPath = `${expectedPrefix}releases/latest`;
     return parsed.protocol === 'https:'
       && parsed.hostname.toLowerCase() === 'github.com'
-      && parsed.pathname.startsWith(expectedPrefix);
+      && (parsed.pathname.startsWith(expectedReleasePrefix) || parsed.pathname === expectedLatestPath);
   } catch (_err) {
     return false;
   }
@@ -1476,6 +1480,9 @@ function isValidManualUpdateUrl(url) {
 function resolveManualUpdateUrl(candidateUrl, version = APP_VERSION) {
   const rawUrl = String(candidateUrl || '').trim();
   if (isValidManualUpdateUrl(rawUrl)) {
+    return rawUrl;
+  }
+  if (rawUrl) {
     return rawUrl;
   }
   return getGithubReleasePageUrl(version);
@@ -1549,6 +1556,10 @@ function setUpdaterStatus(status) {
   return nextStatus;
 }
 
+function getManualUpdateModeMessage() {
+  return 'Automatic in-app installation is not enabled yet because the Windows installer is not code-signed. Click Download Update to open the release page, then download and run the installer.';
+}
+
 function normalizeGithubReleaseNotes(releaseNotes) {
   const cleanNote = (value) => String(value || '')
     .replace(/\r\n/g, '\n')
@@ -1602,13 +1613,15 @@ function configureGithubAutoUpdater() {
     debug: (...args) => console.log('[GITHUB UPDATE]', ...args),
   };
 
-  const allowUnsigned = (
+  const allowUnsigned = ENABLE_SIGNED_AUTO_UPDATES && (
     process.env.MTS_ALLOW_UNSIGNED_UPDATES_FOR_TESTING === 'true' ||
     process.env.SAM_ALLOW_UNSIGNED_UPDATES_FOR_TESTING === 'true' ||
     process.env.ALLOW_UNSIGNED_UPDATES_FOR_TESTING === 'true'
   );
 
-  if (allowUnsigned) {
+  if (!ENABLE_SIGNED_AUTO_UPDATES) {
+    console.log('[GITHUB UPDATE] Automatic updater install is disabled because code signing is not configured. Using manual update mode.');
+  } else if (allowUnsigned) {
     electronAutoUpdater.verifyUpdateCodeSignature = false;
     console.warn('[GITHUB UPDATE] WARNING: Unsigned update verification is disabled for local/internal testing only. Do not use this for public distribution.');
   } else {
@@ -1655,6 +1668,9 @@ function buildGithubUpdateInfo(info) {
     notes: normalizeGithubReleaseNotes(info?.releaseNotes),
     downloadUrl: latestVersion ? getGithubReleasePageUrl(latestVersion) : `https://github.com/${GITHUB_UPDATE_OWNER}/${GITHUB_UPDATE_REPO}/releases/latest`,
     source: 'github-releases',
+    manualMode: !ENABLE_SIGNED_AUTO_UPDATES,
+    signedAutoUpdatesEnabled: ENABLE_SIGNED_AUTO_UPDATES,
+    manualModeMessage: getManualUpdateModeMessage(),
   };
 }
 
@@ -1698,7 +1714,8 @@ async function checkGithubReleaseForUpdates({ promptUser = true } = {}) {
       console.log(`[GITHUB UPDATE] Update available for ${APP_DISPLAY_NAME}: ${APP_VERSION} -> ${updateInfo.latestVersion}.`);
       setUpdaterStatus({
         state: 'available',
-        message: 'Update available.',
+        message: ENABLE_SIGNED_AUTO_UPDATES ? 'Update available.' : getManualUpdateModeMessage(),
+        percent: 0,
         source: 'github-releases',
       });
       setPendingUpdate(updateInfo);
@@ -1807,14 +1824,15 @@ function prepareManualUpdateFallback(pending, reason = '', detail = {}) {
     fallbackUrlPassedValidation: valid,
   });
   if (!valid) {
+    const invalidMessage = `Manual update link is invalid. Please check ${getUpdateSheetTabName()}.`;
     setUpdaterStatus({
       state: 'error',
-      message: `Manual update link is invalid or unavailable. Please check ${getUpdateSheetTabName()}.`,
+      message: invalidMessage,
       source: pending?.source || '',
     });
     return {
       ok: false,
-      error: `Manual update link is invalid or unavailable. Please check ${getUpdateSheetTabName()}.`,
+      error: invalidMessage,
       manualDownloadAvailable: false,
     };
   }
@@ -1840,6 +1858,9 @@ async function openManualUpdateDownload() {
   if (!pending) {
     return { ok: false, error: 'No pending update is available.' };
   }
+  if (manualUpdateOpenInFlight) {
+    return { ok: false, error: 'The update page is already opening.' };
+  }
 
   const manualUrl = resolveManualUpdateUrl(pending.downloadUrl, pending.latestVersion || APP_VERSION);
   const valid = isValidManualUpdateUrl(manualUrl);
@@ -1851,17 +1872,33 @@ async function openManualUpdateDownload() {
     fallbackUrlPassedValidation: valid,
   });
   if (!valid || !isSafeExternalUrl(manualUrl, ['https:'])) {
+    const invalidMessage = `Manual update link is invalid. Please check ${getUpdateSheetTabName()}.`;
     return {
       ok: false,
-      error: `Manual update link is invalid or unavailable. Please check ${getUpdateSheetTabName()}.`,
+      error: invalidMessage,
     };
   }
 
-  await shell.openExternal(manualUrl);
-  return { ok: true, action: 'manual-download-opened', manualUrl };
+  manualUpdateOpenInFlight = true;
+  try {
+    await shell.openExternal(manualUrl);
+    setUpdaterStatus({
+      state: 'manual-opened',
+      message: 'The update page opened in your browser. Download and run the installer to update.',
+      percent: 0,
+      source: pending.source || '',
+    });
+    return { ok: true, action: 'manual-download-opened', manualUrl };
+  } finally {
+    manualUpdateOpenInFlight = false;
+  }
 }
 
 async function downloadGithubUpdate(pending) {
+  if (!ENABLE_SIGNED_AUTO_UPDATES) {
+    console.log('[GITHUB UPDATE] Automatic updater install is disabled because code signing is not configured. Using manual update mode.');
+    return prepareManualUpdateFallback(pending, getManualUpdateModeMessage(), { code: 'manual_update_mode' });
+  }
   if (!app.isPackaged) {
     return prepareManualUpdateFallback(pending, 'electron-updater is available only in the packaged desktop app.');
   }
@@ -1912,6 +1949,10 @@ async function installPendingUpdate() {
   if (!pending) {
     return { ok: false, error: 'No pending update is available.' };
   }
+  if (!ENABLE_SIGNED_AUTO_UPDATES) {
+    console.log('[GITHUB UPDATE] Automatic updater install is disabled because code signing is not configured. Using manual update mode.');
+    return prepareManualUpdateFallback(pending, getManualUpdateModeMessage(), { code: 'manual_update_mode' });
+  }
 
   if (pending.source === 'github-releases') {
     return downloadGithubUpdate(pending);
@@ -1924,6 +1965,10 @@ async function quitAndInstallDownloadedUpdate() {
   const pending = getPendingUpdate();
   if (!pending) {
     return { ok: false, error: 'No pending update is available.' };
+  }
+  if (!ENABLE_SIGNED_AUTO_UPDATES) {
+    console.log('[GITHUB UPDATE] Automatic updater install is disabled because code signing is not configured. Using manual update mode.');
+    return prepareManualUpdateFallback(pending, getManualUpdateModeMessage(), { code: 'manual_update_mode' });
   }
   if (!configureGithubAutoUpdater()) {
     return prepareManualUpdateFallback(pending, 'electron-updater is not installed or could not be loaded.');
@@ -1958,6 +2003,8 @@ function getUpdateState() {
     pendingUpdate: getPendingUpdate(),
     installedUpdate: getInstalledUpdateNotice(),
     updaterStatus: store.get(STORE_UPDATER_STATUS_KEY) || { state: 'idle', message: '', percent: 0 },
+    manualUpdateMode: !ENABLE_SIGNED_AUTO_UPDATES,
+    signedAutoUpdatesEnabled: ENABLE_SIGNED_AUTO_UPDATES,
   };
 }
 
@@ -2045,9 +2092,18 @@ async function checkForSheetUpdates({ promptUser = true } = {}) {
         notes,
         downloadUrl: selectedFallbackManualUrl,
         source: data.source || 'master-google-sheet',
+        manualMode: !ENABLE_SIGNED_AUTO_UPDATES,
+        signedAutoUpdatesEnabled: ENABLE_SIGNED_AUTO_UPDATES,
+        manualModeMessage: getManualUpdateModeMessage(),
       };
 
       setPendingUpdate(updateInfo);
+      setUpdaterStatus({
+        state: 'available',
+        message: ENABLE_SIGNED_AUTO_UPDATES ? 'Update available.' : getManualUpdateModeMessage(),
+        percent: 0,
+        source: updateInfo.source,
+      });
 
       if (promptUser) {
         sendAppEvent('update:available', updateInfo);

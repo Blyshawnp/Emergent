@@ -266,6 +266,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
 
   const pendingUpdate = updateState?.pendingUpdate || null;
   const updaterStatus = updateState?.updaterStatus || null;
+  const manualUpdateMode = updateState?.signedAutoUpdatesEnabled !== true;
 
   const handleCheckForUpdates = useCallback(async () => {
     if (!window.electronAPI?.checkForUpdates) {
@@ -297,11 +298,22 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
     }
   }, [appVersion, modal, refreshUpdateState, updateState]);
 
-  const handleInstallPendingUpdate = useCallback(() => {
-    if (setMtsUpdateModal && pendingUpdate) {
+  const handlePendingUpdateAction = useCallback(async () => {
+    if (!pendingUpdate) return;
+    if (manualUpdateMode) {
+      const result = await window.electronAPI?.updaterManualDownload?.();
+      if (!result?.ok) {
+        await modal.error('Manual Update Link Invalid', result?.error || 'Manual update link is invalid. Please check update-MTS.');
+      } else {
+        await modal.alert('Update Page Opened', 'The update page opened in your browser. Download and run the installer to update.');
+      }
+      await refreshUpdateState?.();
+      return;
+    }
+    if (setMtsUpdateModal) {
       setMtsUpdateModal(pendingUpdate);
     }
-  }, [pendingUpdate, setMtsUpdateModal]);
+  }, [manualUpdateMode, modal, pendingUpdate, refreshUpdateState, setMtsUpdateModal]);
 
   if (loading) return <div className="page-loading">Loading settings...</div>;
 
@@ -352,7 +364,11 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
             {pendingUpdate ? `Mock Testing Suite v${pendingUpdate.latestVersion} is ready` : 'Check for updates'}
           </div>
           <div className="settings-update-subtitle">
-            {updaterStatus?.message
+            {manualUpdateMode
+              ? (pendingUpdate
+                ? 'Updates are currently installed manually. Use Download Update to open the GitHub release page.'
+                : `Current version: v${appVersion || updateState?.currentVersion || APP_VERSION_FALLBACK}`)
+              : updaterStatus?.message
               ? updaterStatus.message
               : pendingUpdate
               ? (pendingUpdate.downloadUrl
@@ -366,11 +382,11 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
         {pendingUpdate ? (
           <button
             className="btn btn-success btn-lg settings-update-btn"
-            onClick={handleInstallPendingUpdate}
+            onClick={handlePendingUpdateAction}
             data-testid="settings-update-now"
-            title={`Install Mock Testing Suite v${pendingUpdate.latestVersion}`}
+            title={manualUpdateMode ? `Download Mock Testing Suite v${pendingUpdate.latestVersion}` : `Install Mock Testing Suite v${pendingUpdate.latestVersion}`}
           >
-            {`Install Update — v${pendingUpdate.latestVersion}`}
+            {manualUpdateMode ? `Download Update — v${pendingUpdate.latestVersion}` : `Install Update — v${pendingUpdate.latestVersion}`}
           </button>
         ) : (
           <button

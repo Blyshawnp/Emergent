@@ -305,21 +305,30 @@ function UpdateTechnicalDetails({ details }) {
 }
 
 function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, onLater }) {
+  const [manualOpenStatus, setManualOpenStatus] = useState('');
+  const [manualOpening, setManualOpening] = useState(false);
   if (!updateInfo) return null;
   const required = Boolean(updateInfo.required);
+  const signedAutoUpdatesEnabled = Boolean(updateInfo.signedAutoUpdatesEnabled);
+  const manualMode = !signedAutoUpdatesEnabled;
+  const manualModeMessage = updateInfo.manualModeMessage || 'Automatic in-app installation is not enabled yet because the Windows installer is not code-signed. Click Download Update to open the release page, then download and run the installer.';
   
   const state = updaterStatus?.state || 'idle';
   const isChecking = state === 'checking';
-  const isDownloading = state === 'downloading';
-  const isDownloaded = state === 'downloaded' || Boolean(updateInfo.downloaded);
-  const isInstalling = state === 'installing';
+  const isDownloading = signedAutoUpdatesEnabled && state === 'downloading';
+  const isDownloaded = signedAutoUpdatesEnabled && (state === 'downloaded' || Boolean(updateInfo.downloaded));
+  const isInstalling = signedAutoUpdatesEnabled && state === 'installing';
   const isError = state === 'error' || state === 'manual-available';
-  const canManualDownload = Boolean(updateInfo.manualDownloadAvailable || state === 'manual-available' || state === 'error');
 
   let buttonText = 'Download Update';
-  let buttonDisabled = false;
+  let buttonDisabled = manualOpening || Boolean(manualOpenStatus);
+  let statusMessage = updaterStatus?.message || '';
 
-  if (isChecking) {
+  if (manualMode) {
+    statusMessage = manualOpenStatus || manualModeMessage;
+    buttonText = manualOpening ? 'Opening...' : 'Download Update';
+    buttonDisabled = manualOpening || Boolean(manualOpenStatus);
+  } else if (isChecking) {
     buttonText = 'Checking...';
     buttonDisabled = true;
   } else if (isDownloading) {
@@ -334,8 +343,9 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
     buttonDisabled = true;
   }
 
-  let statusMessage = updaterStatus?.message || '';
-  if (isChecking) {
+  if (manualMode) {
+    statusMessage = manualOpenStatus || manualModeMessage;
+  } else if (isChecking) {
     statusMessage = 'Checking for updates...';
   } else if (state === 'available') {
     statusMessage = 'Update available.';
@@ -349,15 +359,34 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
   } else if (isError) {
     statusMessage = updaterStatus?.message || 'Update failed. Manual Download is available.';
   }
-  const technicalDetails = updaterStatus?.details || updateInfo.details || updateInfo.manualError || '';
+  const technicalDetails = signedAutoUpdatesEnabled ? (updaterStatus?.details || updateInfo.details || updateInfo.manualError || '') : '';
+
+  const handleDownloadUpdate = async () => {
+    if (manualMode) {
+      if (manualOpening || manualOpenStatus) return;
+      setManualOpening(true);
+      try {
+        const result = await onManualDownload?.();
+        if (result?.ok) {
+          setManualOpenStatus('The update page opened in your browser. Download and run the installer to update.');
+        } else {
+          setManualOpenStatus(result?.error || 'Manual update link is invalid. Please check update-SAM.');
+        }
+      } finally {
+        setManualOpening(false);
+      }
+      return;
+    }
+    await onInstall?.();
+  };
 
   return (
-    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (!required && !isInstalling && event.target === event.currentTarget) onLater(); }}>
+    <div className="nm-modal-backdrop" onMouseDown={(event) => { if ((manualMode || !required) && !isInstalling && event.target === event.currentTarget) onLater(); }}>
       <section className="nm-help-modal nm-update-modal" role="dialog" aria-modal="true">
         <div className="nm-help-header">
           <div>
-            <div className="nm-overline">{required ? 'UPDATE REQUIRED' : 'UPDATE AVAILABLE'}</div>
-            <h2>{required ? 'Smart Alert Manager Update Required' : 'Smart Alert Manager Update Available'}</h2>
+            <div className="nm-overline">UPDATE AVAILABLE</div>
+            <h2>Smart Alert Manager Update Available</h2>
             <p>{updateInfo.releaseTitle || 'A new Smart Alert Manager update is available.'}</p>
           </div>
         </div>
@@ -388,10 +417,9 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
           </div>
         </div>
         <div className="nm-help-actions">
-          {!required ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onLater} disabled={isInstalling}>Cancel</button> : null}
-          {canManualDownload ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onManualDownload}>Manual Download</button> : null}
-          <button type="button" className="nm-btn nm-btn-primary" onClick={onInstall} disabled={buttonDisabled}>
-            {buttonText}
+          {(manualMode || !required) ? <button type="button" className="nm-btn nm-btn-secondary" onClick={onLater} disabled={isInstalling}>Close</button> : null}
+          <button type="button" className="nm-btn nm-btn-primary" onClick={handleDownloadUpdate} disabled={buttonDisabled}>
+            {manualOpening ? 'Opening...' : buttonText}
           </button>
         </div>
       </section>
@@ -1304,7 +1332,38 @@ export default function NotificationManagerApp() {
     return true;
   }, [clearBackendStartupRetryTimer]);
 
+  const handleManualDownloadUpdate = useCallback(async () => {
+    try {
+      const result = await window.electronAPI?.updaterManualDownload?.();
+      if (!result?.ok) {
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'error',
+          statusMessage: result?.error || 'Manual update link is invalid or unavailable.',
+        }));
+        return result;
+      }
+      setSheetState((current) => ({
+        ...current,
+        statusKind: 'info',
+        statusMessage: 'The update page opened in your browser. Download and run the installer to update.',
+      }));
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Manual update link is invalid or unavailable.';
+      setSheetState((current) => ({
+        ...current,
+        statusKind: 'error',
+        statusMessage: message,
+      }));
+      return { ok: false, error: message };
+    }
+  }, []);
+
   const handleInstallUpdate = useCallback(async () => {
+    if (updateModal?.signedAutoUpdatesEnabled !== true) {
+      return handleManualDownloadUpdate();
+    }
     try {
       if (updaterStatus?.state === 'downloaded' || updateModal?.downloaded) {
         const installResult = await window.electronAPI?.updaterQuitAndInstall?.();
@@ -1355,26 +1414,7 @@ export default function NotificationManagerApp() {
         statusMessage: error instanceof Error ? error.message : 'Unable to download and install the update.',
       }));
     }
-  }, [updateModal, updaterStatus]);
-
-  const handleManualDownloadUpdate = useCallback(async () => {
-    try {
-      const result = await window.electronAPI?.updaterManualDownload?.();
-      if (!result?.ok) {
-        setSheetState((current) => ({
-          ...current,
-          statusKind: 'error',
-          statusMessage: result?.error || 'Manual update link is invalid or unavailable.',
-        }));
-      }
-    } catch (error) {
-      setSheetState((current) => ({
-        ...current,
-        statusKind: 'error',
-        statusMessage: error instanceof Error ? error.message : 'Manual update link is invalid or unavailable.',
-      }));
-    }
-  }, []);
+  }, [handleManualDownloadUpdate, updateModal, updaterStatus]);
 
   const handleCheckForUpdates = useCallback(async ({ silent = false } = {}) => {
     try {

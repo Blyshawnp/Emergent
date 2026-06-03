@@ -269,7 +269,7 @@ function formatUpdateBody(updateInfo, includeDeferredNote = false, notesAsBullet
       ? `<div class="update-notes"><strong>Release Notes:</strong>${notesAsBullets ? `<ul>${notesContent}</ul>` : `<div>${notesContent}</div>`}</div>`
       : '',
     updateInfo.downloadUrl ? '' : '<div style="margin-top:12px;"><strong>Installer link:</strong> Not published in the update sheet yet.</div>',
-    includeDeferredNote ? '<div style="margin-top:12px;">This update can be installed later from Settings by clicking <strong>Install Update</strong>.</div>' : '',
+    includeDeferredNote ? '<div style="margin-top:12px;">This update can be opened later from Settings by clicking <strong>Download Update</strong>.</div>' : '',
     '</div>',
   ].filter(Boolean);
 
@@ -383,21 +383,30 @@ function UpdateTechnicalDetails({ details }) {
 }
 
 function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
+  const [manualOpenStatus, setManualOpenStatus] = useState('');
+  const [manualOpening, setManualOpening] = useState(false);
   if (!updateInfo) return null;
   const required = Boolean(updateInfo.required);
+  const signedAutoUpdatesEnabled = Boolean(updateInfo.signedAutoUpdatesEnabled);
+  const manualMode = !signedAutoUpdatesEnabled;
+  const manualModeMessage = updateInfo.manualModeMessage || 'Automatic in-app installation is not enabled yet because the Windows installer is not code-signed. Click Download Update to open the release page, then download and run the installer.';
   
   const state = updaterStatus?.state || 'idle';
   const isChecking = state === 'checking';
-  const isDownloading = state === 'downloading';
-  const isDownloaded = state === 'downloaded' || Boolean(updateInfo.downloaded);
-  const isInstalling = state === 'installing';
+  const isDownloading = signedAutoUpdatesEnabled && state === 'downloading';
+  const isDownloaded = signedAutoUpdatesEnabled && (state === 'downloaded' || Boolean(updateInfo.downloaded));
+  const isInstalling = signedAutoUpdatesEnabled && state === 'installing';
   const isError = state === 'error' || state === 'manual-available';
-  const canManualDownload = Boolean(updateInfo.manualDownloadAvailable || state === 'manual-available' || state === 'error');
 
   let buttonText = 'Download Update';
-  let buttonDisabled = false;
+  let buttonDisabled = manualOpening || Boolean(manualOpenStatus);
+  let statusMessage = updaterStatus?.message || '';
 
-  if (isChecking) {
+  if (manualMode) {
+    statusMessage = manualOpenStatus || manualModeMessage;
+    buttonText = manualOpening ? 'Opening...' : 'Download Update';
+    buttonDisabled = manualOpening || Boolean(manualOpenStatus);
+  } else if (isChecking) {
     buttonText = 'Checking...';
     buttonDisabled = true;
   } else if (isDownloading) {
@@ -412,8 +421,9 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
     buttonDisabled = true;
   }
 
-  let statusMessage = updaterStatus?.message || '';
-  if (isChecking) {
+  if (manualMode) {
+    statusMessage = manualOpenStatus || manualModeMessage;
+  } else if (isChecking) {
     statusMessage = 'Checking for updates...';
   } else if (state === 'available') {
     statusMessage = 'Update available.';
@@ -427,9 +437,13 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
   } else if (isError) {
     statusMessage = updaterStatus?.message || 'Update failed. Manual Download is available.';
   }
-  const technicalDetails = updaterStatus?.details || updateInfo.details || updateInfo.manualError || '';
+  const technicalDetails = signedAutoUpdatesEnabled ? (updaterStatus?.details || updateInfo.details || updateInfo.manualError || '') : '';
 
   const handleAction = async () => {
+    if (manualMode) {
+      await handleManual();
+      return;
+    }
     if (isDownloaded) {
       const result = await window.electronAPI?.updaterQuitAndInstall?.();
       if (!result?.ok) {
@@ -444,7 +458,18 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
   };
 
   const handleManual = async () => {
-    await window.electronAPI?.updaterManualDownload?.();
+    if (manualOpening || manualOpenStatus) return;
+    setManualOpening(true);
+    try {
+      const result = await window.electronAPI?.updaterManualDownload?.();
+      if (result?.ok) {
+        setManualOpenStatus('The update page opened in your browser. Download and run the installer to update.');
+      } else {
+        setManualOpenStatus(result?.error || 'Manual update link is invalid. Please check update-MTS.');
+      }
+    } finally {
+      setManualOpening(false);
+    }
   };
 
   const cleanNote = (value) => String(value || '')
@@ -456,11 +481,11 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
     .filter(Boolean);
 
   return (
-    <div className="cmodal-overlay open" onClick={(e) => { if (!required && !isInstalling && e.target === e.currentTarget) onClose(); }}>
+    <div className="cmodal-overlay open" onClick={(e) => { if ((manualMode || !required) && !isInstalling && e.target === e.currentTarget) onClose(); }}>
       <div className="cmodal" style={{ maxWidth: '600px', width: '90%' }}>
         <img className="cmodal-graphic" src={updateGraphic} alt="" style={{ height: '60px', objectFit: 'contain' }} />
         <div className="cmodal-title" style={{ fontSize: '1.4rem', marginBottom: '8px' }}>
-          {required ? 'Update Required' : 'Update Available'} — Version {updateInfo.latestVersion}
+          Update Available — {updateInfo.releaseTitle || `Version ${updateInfo.latestVersion}`}
         </div>
         <div className="cmodal-body" style={{ width: '100%', textAlign: 'left', fontSize: '0.95rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px', padding: '10px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
@@ -505,18 +530,13 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
           )}
         </div>
         <div className="cmodal-btns" style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', width: '100%', marginTop: '16px' }}>
-          {!required && (
+          {(manualMode || !required) && (
             <button className="btn btn-muted" onClick={onClose} disabled={isInstalling}>
-              Cancel
-            </button>
-          )}
-          {canManualDownload && (
-            <button className="btn btn-primary" onClick={handleManual}>
-              Manual Download
+              Close
             </button>
           )}
           <button className="btn btn-success" onClick={handleAction} disabled={buttonDisabled}>
-            {buttonText}
+            {manualOpening ? 'Opening...' : buttonText}
           </button>
         </div>
       </div>

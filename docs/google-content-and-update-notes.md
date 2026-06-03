@@ -187,6 +187,7 @@ MTS:
 - productName: `Mock Testing Suite`
 - installer: `Mock-Testing-Suite-Setup-1.0.1.exe`
 - release assets for `v1.0.1`: `latest.yml`, `Mock-Testing-Suite-Setup-1.0.1.exe`, `Mock-Testing-Suite-Setup-1.0.1.exe.blockmap`
+- manual release page: `https://github.com/Blyshawnp/mts-releases/releases/tag/v1.0.1`
 
 SAM:
 
@@ -194,6 +195,7 @@ SAM:
 - productName: `Sam`
 - installer: `Sam-Setup-1.0.1.exe`
 - release assets for `v1.0.1`: `latest.yml`, `Sam-Setup-1.0.1.exe`, `Sam-Setup-1.0.1.exe.blockmap`
+- manual release page: `https://github.com/Blyshawnp/sam-releases/releases/tag/v1.0.1`
 
 MTS and SAM remain separate apps because their appIds differ. Updating MTS should not overwrite SAM, and updating SAM should not overwrite MTS.
 
@@ -201,9 +203,9 @@ Do not change an appId after release unless the intent is to create a separate i
 
 Changing productName is safer than changing appId, but it still affects user-visible naming such as installer names, shortcuts, executable names, and install folders. Avoid casual renaming after release.
 
-The current update flow checks GitHub Releases first through `electron-updater`. MTS uses `Blyshawnp/mts-releases` and SAM uses `Blyshawnp/sam-releases`, so each app reads its own `latest.yml` file without sharing an update feed.
+The current update flow is manual because the Windows installers are not code-signed yet. The app may check GitHub Releases or the Google Sheet update tabs for availability, but normal users are sent to the GitHub release page to download and run the installer themselves. MTS uses `Blyshawnp/mts-releases` and SAM uses `Blyshawnp/sam-releases`, so each app keeps its own release feed and manual download page.
 
-The Google Sheet update tabs remain a fallback/manual release path. The app checks `update-MTS` or `update-SAM`, not a Google Doc, and opens the configured installer URL only when the GitHub/electron-updater path is unavailable or fails. The user then runs the NSIS installer, which should update over the matching installed app when appId/install identity remains stable.
+The Google Sheet update tabs remain a manual release notice path. The app checks `update-MTS` or `update-SAM`, not a Google Doc, and opens only a validated GitHub release page for the matching app. The user then downloads and runs the NSIS installer, which should update over the matching installed app when appId/install identity remains stable.
 
 ## Code Signing and Updater Testing Requirements
 
@@ -212,14 +214,7 @@ The Google Sheet update tabs remain a fallback/manual release path. The app chec
    - Application versions in `package.json` use standard semver notation (e.g., `1.0.1`).
    - GitHub release tags use a `v` prefix (e.g., `v1.0.1`).
 3. **Release Metadata Integrity**: Packaged release assets must match the generated `latest.yml` metadata (file names, sizes, and SHA-512 hashes) exactly for `electron-updater` to successfully locate and process updates. Upload `latest.yml`, the `.exe`, and the `.exe.blockmap` from the same build at the same time. Do not replace only one asset after upload; rebuilding changes the installer hash and requires replacing all three release assets together.
-4. **Code Signing and Signature Verification**: 
-   - By default, `electron-updater` enforces signature verification on Windows when a `publisherName` is specified in the application configuration (`Shawn P. Bly` for both MTS and SAM).
-   - If the downloaded update installer is unsigned, the automatic update process will fail with a signature verification error (e.g., "New version is not signed by the application owner").
-5. **Local Unsigned Testing**: 
-   - To test the updater flow locally or internally without a paid code-signing certificate, verification can be bypassed by setting any of the following environment variables to `true`:
-     - `MTS_ALLOW_UNSIGNED_UPDATES_FOR_TESTING=true`
-     - `SAM_ALLOW_UNSIGNED_UPDATES_FOR_TESTING=true`
-     - `ALLOW_UNSIGNED_UPDATES_FOR_TESTING=true`
-   - Bypassing verification will output a warning log: `[GITHUB UPDATE] WARNING: Unsigned update verification is disabled for local/internal testing only. Do not use this for public distribution.`
-6. **Public Distribution**: For public or production distribution, all installers must eventually be digitally signed with a valid, trusted code-signing certificate. Bypassing signature verification is strictly forbidden in production.
-7. **App ID Warning**: Never change the configured `appId` (`com.acddirect.mocktestingsuite` or `com.acddirect.mocktestingsuite.notificationmanager`) once a version has been distributed. Changing the App ID will break shortcut resolution, create duplicate side-by-side installations, and disrupt automated updates.
+4. **Current Manual Mode**: Automatic in-app installation is disabled by default until a Windows code-signing certificate exists. Users click **Download Update**, the app opens the matching GitHub release page, and the user downloads/runs the installer manually.
+5. **Code Signing and Signature Verification**: Automatic in-app install requires a valid Windows code-signing certificate. When signed automatic updates are enabled later with `ENABLE_SIGNED_AUTO_UPDATES=true`, `electron-updater` will enforce signature verification against the configured publisher (`Shawn P. Bly` for both MTS and SAM).
+6. **Publisher Metadata**: Publisher/company/author metadata should be `Shawn P. Bly`. Do not use `ACD Direct`, `ACDDirect`, or `ACD Direct, Inc.` as publisher metadata.
+7. **App ID Warning**: Never change the configured `appId` (`com.acddirect.mocktestingsuite` or `com.acddirect.mocktestingsuite.notificationmanager`) once a version has been distributed. The legacy `acddirect` string remains in the appIds only for install/update continuity. Changing the App ID will break shortcut resolution, create duplicate side-by-side installations, and disrupt automated updates.
