@@ -14,8 +14,8 @@ $mtsProdDir = Join-Path $prodDir 'Mock Testing Suite 1.0.1'
 $samProdDir = Join-Path $prodDir 'ADMIN ONLY - SAM 1.0.1'
 $mtsDist = Join-Path $desktopDir 'dist'
 $samDist = Join-Path $desktopDir 'dist-notification-manager'
-$mtsInstaller = 'mock-testing-suite-setup-1.0.1.exe'
-$samInstaller = 'sam-setup-1.0.1.exe'
+$mtsInstaller = 'Mock-Testing-Suite-Setup-1.0.1.exe'
+$samInstaller = 'Sam-Setup-1.0.1.exe'
 
 $logDir = Join-Path $rootDir 'dev-tools\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -374,6 +374,7 @@ if ($Mode -ne 'sam') {
   Verify-OptionalPath (Join-Path $mtsDist 'win-unpacked\resources\backend\drivers\msedgedriver.exe') 'MTS backend msedgedriver.exe'
   Verify-Path (Join-Path $mtsDist $mtsInstaller) 'MTS installer'
   Verify-Path (Join-Path $mtsDist "$mtsInstaller.blockmap") 'MTS installer blockmap'
+  Run-Command 'Validate MTS latest.yml' "powershell -ExecutionPolicy Bypass -File `"$rootDir\dev-tools\validate-latest-yml.ps1`" -DistDir `"$mtsDist`" -InstallerName `"$mtsInstaller`"" $rootDir
   Copy-RuntimeConfig (Join-Path $mtsDist 'win-unpacked\resources\backend\config') 'MTS desktop'
   Remove-AccidentalBackendFiles (Join-Path $mtsDist 'win-unpacked\resources\backend')
 }
@@ -386,6 +387,7 @@ if ($Mode -ne 'mts') {
   Verify-OptionalPath (Join-Path $samDist 'win-unpacked\resources\backend\drivers\msedgedriver.exe') 'SAM backend msedgedriver.exe'
   Verify-Path (Join-Path $samDist $samInstaller) 'SAM installer'
   Verify-Path (Join-Path $samDist "$samInstaller.blockmap") 'SAM installer blockmap'
+  Run-Command 'Validate SAM latest.yml' "powershell -ExecutionPolicy Bypass -File `"$rootDir\dev-tools\validate-latest-yml.ps1`" -DistDir `"$samDist`" -InstallerName `"$samInstaller`"" $rootDir
   Copy-RuntimeConfig (Join-Path $samDist 'win-unpacked\resources\backend\config') 'SAM desktop'
   Remove-AccidentalBackendFiles (Join-Path $samDist 'win-unpacked\resources\backend')
 }

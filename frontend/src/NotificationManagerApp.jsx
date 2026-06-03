@@ -293,11 +293,23 @@ function formatUpdateNotes(notes) {
   return list.map((note) => `- ${note}`).join('\n');
 }
 
+function UpdateTechnicalDetails({ details }) {
+  const text = String(details || '').trim();
+  if (!text) return null;
+  return (
+    <details className="nm-update-technical-details">
+      <summary>Technical details</summary>
+      <pre>{text}</pre>
+    </details>
+  );
+}
+
 function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, onLater }) {
   if (!updateInfo) return null;
   const required = Boolean(updateInfo.required);
   
   const state = updaterStatus?.state || 'idle';
+  const isChecking = state === 'checking';
   const isDownloading = state === 'downloading';
   const isDownloaded = state === 'downloaded' || Boolean(updateInfo.downloaded);
   const isInstalling = state === 'installing';
@@ -307,7 +319,10 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
   let buttonText = 'Download Update';
   let buttonDisabled = false;
 
-  if (isDownloading) {
+  if (isChecking) {
+    buttonText = 'Checking...';
+    buttonDisabled = true;
+  } else if (isDownloading) {
     const percentStr = updaterStatus?.percent ? ` (${updaterStatus.percent.toFixed(0)}%)` : '';
     buttonText = `Downloading...${percentStr}`;
     buttonDisabled = true;
@@ -320,7 +335,11 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
   }
 
   let statusMessage = updaterStatus?.message || '';
-  if (isDownloading) {
+  if (isChecking) {
+    statusMessage = 'Checking for updates...';
+  } else if (state === 'available') {
+    statusMessage = 'Update available.';
+  } else if (isDownloading) {
     const percentVal = updaterStatus?.percent || 0;
     statusMessage = `Downloading update... ${percentVal.toFixed(0)}%`;
   } else if (isDownloaded) {
@@ -328,16 +347,9 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
   } else if (isInstalling) {
     statusMessage = 'Installing update and restarting...';
   } else if (isError) {
-    const rawError = updaterStatus?.message || '';
-    let shortError = rawError;
-    if (rawError.includes('{') || rawError.includes('Error:')) {
-      shortError = rawError.split('\n')[0].replace(/^Error:\s*/, '');
-    }
-    if (shortError.length > 120) {
-      shortError = shortError.substring(0, 117) + '...';
-    }
-    statusMessage = `Update failed: ${shortError}`;
+    statusMessage = updaterStatus?.message || 'Update failed. Manual Download is available.';
   }
+  const technicalDetails = updaterStatus?.details || updateInfo.details || updateInfo.manualError || '';
 
   return (
     <div className="nm-modal-backdrop" onMouseDown={(event) => { if (!required && !isInstalling && event.target === event.currentTarget) onLater(); }}>
@@ -369,6 +381,7 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
               {statusMessage}
             </div>
           ) : null}
+          <UpdateTechnicalDetails details={technicalDetails} />
           <div className="nm-update-notes">
             <div className="nm-update-notes-title">Release Notes</div>
             <pre style={{ maxHeight: '180px', overflowY: 'auto' }}>{formatUpdateNotes(updateInfo.notes)}</pre>

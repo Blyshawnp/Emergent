@@ -195,8 +195,8 @@ function resolveScreenshotUrl(imageUrl) {
   return `${backend}/${cleanPath}`;
 }
 
-function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal }) {
-  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal };
+function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal, onHistoryRefresh }) {
+  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal, onHistoryRefresh };
   switch (page) {
     case 'setup': return <SetupPage {...props} />;
     case 'home': return <HomePage {...props} />;
@@ -371,11 +371,23 @@ function ElectronEventBridge({ navigate, setUpdateState, setMtsUpdateModal }) {
   return null;
 }
 
+function UpdateTechnicalDetails({ details }) {
+  const text = String(details || '').trim();
+  if (!text) return null;
+  return (
+    <details className="update-technical-details">
+      <summary>Technical details</summary>
+      <pre>{text}</pre>
+    </details>
+  );
+}
+
 function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
   if (!updateInfo) return null;
   const required = Boolean(updateInfo.required);
   
   const state = updaterStatus?.state || 'idle';
+  const isChecking = state === 'checking';
   const isDownloading = state === 'downloading';
   const isDownloaded = state === 'downloaded' || Boolean(updateInfo.downloaded);
   const isInstalling = state === 'installing';
@@ -385,7 +397,10 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
   let buttonText = 'Download Update';
   let buttonDisabled = false;
 
-  if (isDownloading) {
+  if (isChecking) {
+    buttonText = 'Checking...';
+    buttonDisabled = true;
+  } else if (isDownloading) {
     const percentStr = updaterStatus?.percent ? ` (${updaterStatus.percent.toFixed(0)}%)` : '';
     buttonText = `Downloading...${percentStr}`;
     buttonDisabled = true;
@@ -398,7 +413,11 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
   }
 
   let statusMessage = updaterStatus?.message || '';
-  if (isDownloading) {
+  if (isChecking) {
+    statusMessage = 'Checking for updates...';
+  } else if (state === 'available') {
+    statusMessage = 'Update available.';
+  } else if (isDownloading) {
     const percentVal = updaterStatus?.percent || 0;
     statusMessage = `Downloading update... ${percentVal.toFixed(0)}%`;
   } else if (isDownloaded) {
@@ -406,16 +425,9 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
   } else if (isInstalling) {
     statusMessage = 'Installing update and restarting...';
   } else if (isError) {
-    const rawError = updaterStatus?.message || '';
-    let shortError = rawError;
-    if (rawError.includes('{') || rawError.includes('Error:')) {
-      shortError = rawError.split('\n')[0].replace(/^Error:\s*/, '');
-    }
-    if (shortError.length > 120) {
-      shortError = shortError.substring(0, 117) + '...';
-    }
-    statusMessage = `Update failed: ${shortError}`;
+    statusMessage = updaterStatus?.message || 'Update failed. Manual Download is available.';
   }
+  const technicalDetails = updaterStatus?.details || updateInfo.details || updateInfo.manualError || '';
 
   const handleAction = async () => {
     if (isDownloaded) {
@@ -470,6 +482,7 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
               {statusMessage}
             </div>
           )}
+          <UpdateTechnicalDetails details={technicalDetails} />
 
           {notes.length > 0 && (
             <div style={{ marginBottom: '12px' }}>
@@ -575,6 +588,44 @@ function AppShell() {
         setAppVersion(nextState.currentVersion);
       }
     }
+  }, []);
+
+  const refreshHistoryData = useCallback(async (reason = 'manual') => {
+    const startedAt = Date.now();
+    const [historyResult, statsResult] = await Promise.allSettled([
+      api.getHistory(8000),
+      api.getHistoryStats(8000),
+    ]);
+    const nextHistory = historyResult.status === 'fulfilled' && Array.isArray(historyResult.value)
+      ? historyResult.value
+      : null;
+    const nextStats = statsResult.status === 'fulfilled'
+      ? (statsResult.value || {})
+      : null;
+
+    if (nextHistory) {
+      setHistory(nextHistory);
+    }
+    if (nextStats) {
+      setHistoryStats(nextStats);
+    }
+
+    console.log('[HISTORY REFRESH]', {
+      reason,
+      durationMs: Date.now() - startedAt,
+      historyOk: historyResult.status === 'fulfilled',
+      statsOk: statsResult.status === 'fulfilled',
+      historyCount: nextHistory ? nextHistory.length : 0,
+    });
+
+    if (historyResult.status === 'rejected' && statsResult.status === 'rejected') {
+      throw historyResult.reason || statsResult.reason;
+    }
+
+    return {
+      history: nextHistory || [],
+      stats: nextStats || {},
+    };
   }, []);
 
   useEffect(() => {
@@ -1220,6 +1271,7 @@ function AppShell() {
                   onSetupCompleted={handleSetupCompleted}
                   startupStatuses={startupStatuses}
                   setMtsUpdateModal={setMtsUpdateModal}
+                  onHistoryRefresh={refreshHistoryData}
                 />
               )}
             </div>

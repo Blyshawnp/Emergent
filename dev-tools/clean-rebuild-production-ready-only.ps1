@@ -9,8 +9,8 @@ $mtsProdDir = Join-Path $prodDir 'Mock Testing Suite 1.0.1'
 $samProdDir = Join-Path $prodDir 'ADMIN ONLY - SAM 1.0.1'
 $mtsDist = Join-Path $desktopDir 'dist'
 $samDist = Join-Path $desktopDir 'dist-notification-manager'
-$mtsInstaller = 'mock-testing-suite-setup-1.0.1.exe'
-$samInstaller = 'sam-setup-1.0.1.exe'
+$mtsInstaller = 'Mock-Testing-Suite-Setup-1.0.1.exe'
+$samInstaller = 'Sam-Setup-1.0.1.exe'
 
 $logDir = Join-Path $rootDir 'dev-tools\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null

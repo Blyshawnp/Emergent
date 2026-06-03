@@ -185,13 +185,15 @@ MTS:
 
 - appId: `com.acddirect.mocktestingsuite`
 - productName: `Mock Testing Suite`
-- installer: `Mock Testing Suite Setup 1.0.1.exe`
+- installer: `Mock-Testing-Suite-Setup-1.0.1.exe`
+- release assets for `v1.0.1`: `latest.yml`, `Mock-Testing-Suite-Setup-1.0.1.exe`, `Mock-Testing-Suite-Setup-1.0.1.exe.blockmap`
 
 SAM:
 
 - appId: `com.acddirect.mocktestingsuite.notificationmanager`
 - productName: `Sam`
-- installer: `Sam Setup 1.0.1.exe`
+- installer: `Sam-Setup-1.0.1.exe`
+- release assets for `v1.0.1`: `latest.yml`, `Sam-Setup-1.0.1.exe`, `Sam-Setup-1.0.1.exe.blockmap`
 
 MTS and SAM remain separate apps because their appIds differ. Updating MTS should not overwrite SAM, and updating SAM should not overwrite MTS.
 
@@ -209,7 +211,7 @@ The Google Sheet update tabs remain a fallback/manual release path. The app chec
 2. **Version Formats**: 
    - Application versions in `package.json` use standard semver notation (e.g., `1.0.1`).
    - GitHub release tags use a `v` prefix (e.g., `v1.0.1`).
-3. **Release Metadata Integrity**: Packaged release assets must match the generated `latest.yml` metadata (file names, sizes, and SHA-512 hashes) exactly for `electron-updater` to successfully locate and process updates.
+3. **Release Metadata Integrity**: Packaged release assets must match the generated `latest.yml` metadata (file names, sizes, and SHA-512 hashes) exactly for `electron-updater` to successfully locate and process updates. Upload `latest.yml`, the `.exe`, and the `.exe.blockmap` from the same build at the same time. Do not replace only one asset after upload; rebuilding changes the installer hash and requires replacing all three release assets together.
 4. **Code Signing and Signature Verification**: 
    - By default, `electron-updater` enforces signature verification on Windows when a `publisherName` is specified in the application configuration (`Shawn P. Bly` for both MTS and SAM).
    - If the downloaded update installer is unsigned, the automatic update process will fail with a signature verification error (e.g., "New version is not signed by the application owner").

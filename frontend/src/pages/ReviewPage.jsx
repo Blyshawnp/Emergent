@@ -86,6 +86,28 @@ function getHistoricalFailSummary(session) {
   return 'No saved fail summary is available for this historical record.';
 }
 
+function getFallbackCoachingSummary(session) {
+  return (session?.coaching_summary || '').trim()
+    || 'No coaching summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+}
+
+function getFallbackFailSummary(session) {
+  const saved = (session?.fail_summary || '').trim();
+  if (saved) return saved;
+  const finalStatus = session?.final_status || computeFinalStatus(session);
+  if (['Pass', 'RESUMED-PASS', 'Incomplete'].includes(finalStatus)) return 'N/A';
+  return 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+}
+
+function getSummaryFailureMessage(error, fallback = 'Unable to generate summaries.') {
+  const message = error?.response?.data?.detail || error?.message || String(error || fallback);
+  const lowered = message.toLowerCase();
+  if (lowered.includes('timeout') || lowered.includes('timed out') || lowered.includes('exceeded')) {
+    return 'Summary generation timed out. You can continue reviewing the session or retry summary generation.';
+  }
+  return message || fallback;
+}
+
 function getReviewBackTarget(session, isHistoricalReview) {
   if (isHistoricalReview) return { page: 'history' };
   if (!session) return { page: 'home' };
@@ -101,7 +123,7 @@ function getReviewBackTarget(session, isHistoricalReview) {
   return { page: 'basics' };
 }
 
-export default function ReviewPage({ onNavigate, navigationState }) {
+export default function ReviewPage({ onNavigate, navigationState, onHistoryRefresh }) {
   const modal = useModal();
   const modalRef = useRef(modal);
   const [session, setSession] = useState(null);
@@ -114,6 +136,8 @@ export default function ReviewPage({ onNavigate, navigationState }) {
   const [regenerating, setRegenerating] = useState('');
   const [hasFilledForm, setHasFilledForm] = useState(false);
   const [summaryDiagnostics, setSummaryDiagnostics] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryNotice, setSummaryNotice] = useState('');
   const reviewHydratedRef = useRef(false);
   const historyRecord = navigationState?.historyRecord || null;
   const reviewSessionPayload = navigationState?.reviewSession || navigationState?.session || null;
@@ -174,17 +198,34 @@ export default function ReviewPage({ onNavigate, navigationState }) {
           return;
         }
 
-        // Generate summaries
-        const summaries = await api.generateSummaries();
-        if (!cancelled) {
-          setCoaching(summaries.coaching || '');
-          setFail(summaries.fail || '');
-          setSummaryDiagnostics(summaries);
-          reviewHydratedRef.current = true;
-        }
+        setCoaching(getFallbackCoachingSummary(resolvedSession));
+        setFail(getFallbackFailSummary(resolvedSession));
+        setLoading(false);
+        setSummaryLoading(true);
+        setSummaryNotice('Generating summaries...');
+        reviewHydratedRef.current = true;
+
+        api.generateSummaries()
+          .then((summaries) => {
+            if (cancelled) return;
+            setCoaching(summaries.coaching || getFallbackCoachingSummary(resolvedSession));
+            setFail(summaries.fail || getFallbackFailSummary(resolvedSession));
+            setSummaryDiagnostics(summaries);
+            setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
+          })
+          .catch((error) => {
+            if (cancelled) return;
+            const message = getSummaryFailureMessage(error);
+            console.log('[REVIEW] summary generation failed', { message });
+            setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
+            setSummaryNotice(message);
+          })
+          .finally(() => {
+            if (!cancelled) setSummaryLoading(false);
+          });
       } catch (err) {
         if (!cancelled) {
-          await modalRef.current.error('Summary Generation Failed', err.message || 'Unable to generate summaries.');
+          console.log('[REVIEW] failed to load review screen', { error: err?.message || String(err) });
         }
       }
       if (!cancelled) setLoading(false);
@@ -237,6 +278,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     if (isHistoricalReview) return;
     if (regenerating) return;
     setRegenerating(type);
+    setSummaryNotice('');
     try {
       const r = await api.regenerateSummary(type);
       setSummaryDiagnostics(r);
@@ -249,11 +291,31 @@ export default function ReviewPage({ onNavigate, navigationState }) {
           if (type === 'coaching') setCoaching(r.text);
           else setFail(r.text);
         } else {
-          await modal.error('Regeneration Failed', r.error || 'Unknown error');
+          setSummaryNotice(getSummaryFailureMessage({ message: r.error || 'Unknown error' }));
         }
       }
-    } catch (e) { await modal.error('Error', e.message); }
+    } catch (e) { setSummaryNotice(getSummaryFailureMessage(e)); }
     finally { setRegenerating(''); }
+  };
+
+  const handleRetrySummaries = async () => {
+    if (isHistoricalReview || summaryLoading || regenerating) return;
+    setSummaryLoading(true);
+    setSummaryNotice('Generating summaries...');
+    try {
+      const r = await api.generateSummaries();
+      setSummaryDiagnostics(r);
+      setCoaching(r.coaching || getFallbackCoachingSummary(session));
+      setFail(r.fail || getFallbackFailSummary(session));
+      setSummaryNotice(r.gemini_error ? getSummaryFailureMessage({ message: r.gemini_error }) : '');
+    } catch (e) {
+      const message = getSummaryFailureMessage(e);
+      console.log('[REVIEW] retry summary generation failed', { message });
+      setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
+      setSummaryNotice(message);
+    } finally {
+      setSummaryLoading(false);
+    }
   };
 
   const runFillForm = async ({ showSuccess = true } = {}) => {
@@ -320,6 +382,11 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     try {
       const r = await api.finishSession(coaching, fail);
       if (r.ok) {
+        if (onHistoryRefresh) {
+          await onHistoryRefresh('review-finish').catch((error) => {
+            console.log('[REVIEW] history refresh after session completion failed', { error: error?.message || String(error) });
+          });
+        }
         await modal.showModal({
           type: 'alert',
           title: 'Session Saved',
@@ -366,6 +433,7 @@ export default function ReviewPage({ onNavigate, navigationState }) {
     if (summaryDiagnostics.used_fallback) return 'Using fallback summaries';
     return '';
   })();
+  const visibleSummaryStatus = summaryLoading ? 'Generating summaries...' : (summaryNotice || summaryStatus);
 
   return (
     <div className="page-with-sticky-actions" data-testid="review-page">
@@ -423,9 +491,20 @@ export default function ReviewPage({ onNavigate, navigationState }) {
       </div>
 
       <div style={{ marginTop: 32 }}>
-        {summaryStatus && (
+        {visibleSummaryStatus && (
           <div className="gemini-summary-status" data-testid="review-gemini-status">
-            {summaryStatus}
+            <span>{visibleSummaryStatus}</span>
+            {!isHistoricalReview && summaryNotice && !summaryLoading && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={handleRetrySummaries}
+                disabled={Boolean(regenerating)}
+                data-testid="review-retry-summary"
+              >
+                Retry Summary
+              </button>
+            )}
           </div>
         )}
         <div className="review-summary-heading">

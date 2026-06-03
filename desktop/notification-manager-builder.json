@@ -1,7 +1,7 @@
 {
   "appId": "com.acddirect.mocktestingsuite.notificationmanager",
   "productName": "Sam",
-  "artifactName": "sam-setup-${version}.${ext}",
+  "artifactName": "Sam-Setup-${version}.${ext}",
   "copyright": "Copyright © 2026 Shawn P. Bly",
   "directories": {
     "output": "dist-notification-manager"

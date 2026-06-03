@@ -1493,12 +1493,54 @@ function logUpdateDecision(label, detail = {}) {
   console.log(`[UPDATE DIAGNOSTIC] ${label}`, safeDetail);
 }
 
+function classifyUpdaterError(errorOrMessage) {
+  const raw = errorOrMessage?.stack || errorOrMessage?.message || String(errorOrMessage || '');
+  const lowered = raw.toLowerCase();
+
+  if (lowered.includes('sha512') && (lowered.includes('checksum') || lowered.includes('mismatch') || lowered.includes('hash'))) {
+    return {
+      code: 'checksum_mismatch',
+      message: 'The downloaded update did not match the expected checksum. This usually means latest.yml and the installer asset came from different builds. Re-upload latest.yml, the installer, and blockmap from the same build.',
+      details: raw,
+    };
+  }
+
+  if (
+    lowered.includes('not signed by the application owner')
+    || lowered.includes('not digitally signed')
+    || lowered.includes('signature')
+    || lowered.includes('publisher')
+  ) {
+    return {
+      code: 'unsigned_installer',
+      message: 'The update downloaded, but automatic installation was blocked because the installer is not digitally signed.',
+      details: raw,
+    };
+  }
+
+  if (lowered.includes('timeout') || lowered.includes('timed out')) {
+    return {
+      code: 'timeout',
+      message: 'Update failed because the update service timed out. Try again, or use Manual Download if the problem continues.',
+      details: raw,
+    };
+  }
+
+  return {
+    code: 'update_error',
+    message: raw ? `Update failed: ${raw.split('\n')[0].replace(/^Error:\s*/, '')}` : 'Update failed.',
+    details: raw,
+  };
+}
+
 function setUpdaterStatus(status) {
   const nextStatus = {
     state: status?.state || 'idle',
     message: status?.message || '',
     percent: Number(status?.percent || 0),
     source: status?.source || '',
+    code: status?.code || '',
+    details: status?.details || '',
     updatedAt: new Date().toISOString(),
   };
   store.set(STORE_UPDATER_STATUS_KEY, nextStatus);
@@ -1675,16 +1717,25 @@ async function checkGithubReleaseForUpdates({ promptUser = true } = {}) {
       finish({ ok: true, updateAvailable: false, currentVersion: APP_VERSION, source: 'github-releases' });
     };
     const onError = (err) => {
-      const message = err?.message || String(err || 'Unknown GitHub Releases update error.');
-      console.warn('[GITHUB UPDATE] Check failed:', message);
+      const classified = classifyUpdaterError(err || 'Unknown GitHub Releases update error.');
+      console.warn('[GITHUB UPDATE] Check failed:', classified.details || classified.message);
       setUpdaterStatus({
         state: 'error',
-        message,
+        message: classified.message,
+        code: classified.code,
+        details: classified.details,
         source: 'github-releases',
       });
-      finish({ ok: false, updateAvailable: false, error: message, source: 'github-releases' });
+      finish({ ok: false, updateAvailable: false, error: classified.message, details: classified.details, source: 'github-releases' });
     };
     const timeout = setTimeout(() => {
+      setUpdaterStatus({
+        state: 'error',
+        message: 'Update failed because the update service timed out. Try again, or use Manual Download if the problem continues.',
+        code: 'timeout',
+        details: 'GitHub Releases update check timed out.',
+        source: 'github-releases',
+      });
       finish({ ok: false, updateAvailable: false, error: 'GitHub Releases update check timed out.', source: 'github-releases' });
     }, 15000);
 
@@ -1744,7 +1795,7 @@ function clearPendingUpdate() {
   sendAppEvent('update:state-changed', getUpdateState());
 }
 
-function prepareManualUpdateFallback(pending, reason = '') {
+function prepareManualUpdateFallback(pending, reason = '', detail = {}) {
   const manualUrl = resolveManualUpdateUrl(pending?.downloadUrl, pending?.latestVersion || APP_VERSION);
   const valid = isValidManualUpdateUrl(manualUrl);
   logUpdateDecision('manual fallback prepared', {
@@ -1771,6 +1822,8 @@ function prepareManualUpdateFallback(pending, reason = '') {
   setUpdaterStatus({
     state: 'manual-available',
     message: reason || 'Automatic update failed. Manual download is available.',
+    code: detail.code || '',
+    details: detail.details || '',
     source: pending.source || '',
   });
   return {
@@ -1778,6 +1831,7 @@ function prepareManualUpdateFallback(pending, reason = '') {
     error: reason || 'Automatic update failed. Use Manual Download if you want to open the release page.',
     manualDownloadAvailable: true,
     manualUrl,
+    details: detail.details || '',
   };
 }
 
@@ -1839,9 +1893,9 @@ async function downloadGithubUpdate(pending) {
       finish({ ok: true, action: 'downloaded' });
     };
     const onError = (err) => {
-      const message = err?.message || String(err || 'Unknown update download error.');
-      console.warn('[GITHUB UPDATE] Download/install failed:', message);
-      finish(prepareManualUpdateFallback(pending, `Automatic update failed: ${message}`));
+      const classified = classifyUpdaterError(err || 'Unknown update download error.');
+      console.warn('[GITHUB UPDATE] Download/install failed:', classified.details || classified.message);
+      finish(prepareManualUpdateFallback(pending, classified.message, classified));
     };
     const timeout = setTimeout(() => {
       finish(prepareManualUpdateFallback(pending, 'Automatic update download timed out.'));

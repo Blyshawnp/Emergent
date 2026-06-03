@@ -27,7 +27,7 @@
   "build": {
     "appId": "com.acddirect.mocktestingsuite",
     "productName": "Mock Testing Suite",
-    "artifactName": "mock-testing-suite-setup-${version}.${ext}",
+    "artifactName": "Mock-Testing-Suite-Setup-${version}.${ext}",
     "copyright": "Copyright © 2026 Shawn P. Bly",
     "directories": {
       "output": "dist"

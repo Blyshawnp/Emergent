@@ -14,7 +14,7 @@ function detailDate(record) {
   return record?.timestamp || record?.completed_at || record?.created_at || record?.displayDate || '';
 }
 
-export default function HistoryPage({ onNavigate, navigationState }) {
+export default function HistoryPage({ onNavigate, navigationState, onHistoryRefresh }) {
   const modal = useModal();
   const [stats, setStats] = useState({});
   const [history, setHistory] = useState([]);
@@ -24,12 +24,17 @@ export default function HistoryPage({ onNavigate, navigationState }) {
 
   const load = useCallback(async () => {
     try {
-      const [st, h] = await Promise.all([api.getHistoryStats(), api.getHistory()]);
-      setStats(st); setHistory(h || []);
+      const result = onHistoryRefresh
+        ? await onHistoryRefresh('history-page')
+        : { stats: await api.getHistoryStats(), history: await api.getHistory() };
+      const nextHistory = Array.isArray(result?.history) ? result.history : [];
+      setStats(result?.stats || {});
+      setHistory(nextHistory);
+      console.log('[HISTORY PAGE] fresh history loaded', { count: nextHistory.length });
     } catch (_err) {
       // History data load failed — table remains empty
     }
-  }, []);
+  }, [onHistoryRefresh]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -142,7 +147,7 @@ export default function HistoryPage({ onNavigate, navigationState }) {
             const c = await modal.confirmDanger('Clear History', `This will permanently delete ${history.length} session records. This cannot be undone.`);
             if (!c) return;
             if (!await modal.confirm('Confirm', 'This cannot be undone. Are you absolutely sure?')) return;
-            await api.clearHistory(); await modal.alert('Cleared', 'Session history has been cleared.'); load();
+            await api.clearHistory(); await modal.alert('Cleared', 'Session history has been cleared.'); await load();
           }} data-testid="history-clear">Clear All History</button>
         )}
       </div>

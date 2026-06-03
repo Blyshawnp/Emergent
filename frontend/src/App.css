@@ -1596,6 +1596,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .update-notes ul { display: block; max-height: min(34vh, 280px); overflow-y: auto; padding-right: 10px; scrollbar-gutter: stable; }
 .update-notes li { margin-bottom: 6px; }
 .update-error-note { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-md); background: rgba(220, 38, 38, 0.14); border: 1px solid rgba(220, 38, 38, 0.35); color: var(--text-primary); }
+.update-technical-details { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--bg-card-hover); color: var(--text-secondary); }
+.update-technical-details summary { cursor: pointer; font-weight: 700; }
+.update-technical-details pre { margin: 10px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: var(--font-size-xs); }
 
 @media (max-width: 640px) {
   .cmodal { width: 92vw; }

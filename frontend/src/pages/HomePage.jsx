@@ -131,7 +131,7 @@ function buildSharedPendingSession(entry, testerName, basicsSource = null) {
   }, basicsSource);
 }
 
-export default function HomePage({ onNavigate, settings: initialSettings, history: initialHistory, historyStats: initialStats, startupStatuses }) {
+export default function HomePage({ onNavigate, settings: initialSettings, history: initialHistory, historyStats: initialStats, startupStatuses, onHistoryRefresh }) {
   const modal = useModal();
   const [settings, setSettings] = useState(initialSettings || {});
   const [stats, setStats] = useState(initialStats || {});
@@ -171,6 +171,29 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   useEffect(() => {
     if (initialStats) setStats(initialStats);
   }, [initialStats]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const result = onHistoryRefresh
+          ? await onHistoryRefresh('home-mount')
+          : {
+              history: await api.getHistory(8000),
+              stats: await api.getHistoryStats(8000),
+            };
+        if (cancelled) return;
+        const nextHistory = Array.isArray(result?.history) ? result.history : [];
+        setHistory(nextHistory);
+        setStats(result?.stats || {});
+        console.log('[HOME] fresh history loaded', { count: nextHistory.length });
+      } catch (error) {
+        console.log('[HOME] fresh history load failed', { error: error?.message || String(error) });
+      }
+    };
+    refresh();
+    return () => { cancelled = true; };
+  }, [onHistoryRefresh]);
 
   useEffect(() => {
     const missingName = !(settings.display_name || settings.tester_name);
