@@ -5,6 +5,9 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 
+const SUMMARY_PENDING_MESSAGE = 'Summary is still generating. You can continue reviewing or wait a moment.';
+const SUMMARY_TIMEOUT_MESSAGE = 'Summary generation timed out. You can continue reviewing the session or retry summary generation.';
+
 function computeFinalStatus(session) {
   if (!session) return 'Fail';
 
@@ -88,7 +91,7 @@ function getHistoricalFailSummary(session) {
 
 function getFallbackCoachingSummary(session) {
   return (session?.coaching_summary || '').trim()
-    || 'No coaching summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+    || SUMMARY_PENDING_MESSAGE;
 }
 
 function getFallbackFailSummary(session) {
@@ -96,16 +99,29 @@ function getFallbackFailSummary(session) {
   if (saved) return saved;
   const finalStatus = session?.final_status || computeFinalStatus(session);
   if (['Pass', 'RESUMED-PASS', 'Incomplete'].includes(finalStatus)) return 'N/A';
-  return 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+  return SUMMARY_PENDING_MESSAGE;
 }
 
 function getSummaryFailureMessage(error, fallback = 'Unable to generate summaries.') {
   const message = error?.response?.data?.detail || error?.message || String(error || fallback);
   const lowered = message.toLowerCase();
   if (lowered.includes('timeout') || lowered.includes('timed out') || lowered.includes('exceeded')) {
-    return 'Summary generation timed out. You can continue reviewing the session or retry summary generation.';
+    return SUMMARY_TIMEOUT_MESSAGE;
   }
   return message || fallback;
+}
+
+function isSummaryPlaceholder(value) {
+  const text = String(value || '').trim();
+  return !text
+    || text === SUMMARY_PENDING_MESSAGE
+    || text === SUMMARY_TIMEOUT_MESSAGE
+    || /^No coaching summary was generated before Review loaded/i.test(text)
+    || /^No fail summary was generated before Review loaded/i.test(text);
+}
+
+function getSafeSummaryForSubmit(value, fallback = 'N/A') {
+  return isSummaryPlaceholder(value) ? fallback : String(value || '').trim();
 }
 
 function getReviewBackTarget(session, isHistoricalReview) {
@@ -202,14 +218,18 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         setFail(getFallbackFailSummary(resolvedSession));
         setLoading(false);
         setSummaryLoading(true);
-        setSummaryNotice('Generating summaries...');
+        setSummaryNotice(SUMMARY_PENDING_MESSAGE);
         reviewHydratedRef.current = true;
 
         api.generateSummaries()
           .then((summaries) => {
             if (cancelled) return;
-            setCoaching(summaries.coaching || getFallbackCoachingSummary(resolvedSession));
-            setFail(summaries.fail || getFallbackFailSummary(resolvedSession));
+            setCoaching((current) => (
+              isSummaryPlaceholder(current) ? (summaries.coaching || getFallbackCoachingSummary(resolvedSession)) : current
+            ));
+            setFail((current) => (
+              isSummaryPlaceholder(current) ? (summaries.fail || getFallbackFailSummary(resolvedSession)) : current
+            ));
             setSummaryDiagnostics(summaries);
             setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
           })
@@ -219,6 +239,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             console.log('[REVIEW] summary generation failed', { message });
             setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
             setSummaryNotice(message);
+            if (message === SUMMARY_TIMEOUT_MESSAGE) {
+              setCoaching((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
+              setFail((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
+            }
           })
           .finally(() => {
             if (!cancelled) setSummaryLoading(false);
@@ -238,7 +262,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       return undefined;
     }
     const timer = window.setTimeout(() => {
-      api.updateSession({ coaching_summary: coaching, fail_summary: fail }).catch(() => {});
+      api.updateSession({
+        coaching_summary: getSafeSummaryForSubmit(coaching, ''),
+        fail_summary: getSafeSummaryForSubmit(fail, ''),
+      }).catch(() => {});
     }, 300);
     return () => window.clearTimeout(timer);
   }, [coaching, fail, isHistoricalReview, session?.candidate_name]);
@@ -301,7 +328,9 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const handleRetrySummaries = async () => {
     if (isHistoricalReview || summaryLoading || regenerating) return;
     setSummaryLoading(true);
-    setSummaryNotice('Generating summaries...');
+    setSummaryNotice(SUMMARY_PENDING_MESSAGE);
+    setCoaching((current) => (isSummaryPlaceholder(current) ? SUMMARY_PENDING_MESSAGE : current));
+    setFail((current) => (isSummaryPlaceholder(current) ? getFallbackFailSummary(session) : current));
     try {
       const r = await api.generateSummaries();
       setSummaryDiagnostics(r);
@@ -313,6 +342,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       console.log('[REVIEW] retry summary generation failed', { message });
       setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
       setSummaryNotice(message);
+      if (message === SUMMARY_TIMEOUT_MESSAGE) {
+        setCoaching((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
+        setFail((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
+      }
     } finally {
       setSummaryLoading(false);
     }
@@ -321,7 +354,9 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const runFillForm = async ({ showSuccess = true } = {}) => {
     setFilling(true);
     try {
-      const r = await api.fillForm(coaching, fail, isHistoricalReview ? session : null);
+      const coachingForForm = getSafeSummaryForSubmit(coaching, 'N/A');
+      const failForForm = getSafeSummaryForSubmit(fail, 'N/A');
+      const r = await api.fillForm(coachingForForm, failForForm, isHistoricalReview ? session : null);
       if (r.ok) {
         setHasFilledForm(true);
         if (showSuccess) {
@@ -380,7 +415,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     if (!confirmed) return;
     setFinishing(true);
     try {
-      const r = await api.finishSession(coaching, fail);
+      const r = await api.finishSession(
+        getSafeSummaryForSubmit(coaching, 'N/A'),
+        getSafeSummaryForSubmit(fail, 'N/A')
+      );
       if (r.ok) {
         if (onHistoryRefresh) {
           await onHistoryRefresh('review-finish').catch((error) => {
@@ -404,7 +442,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
 
   const handleBack = async () => {
     if (!isHistoricalReview && session?.candidate_name) {
-      await api.updateSession({ coaching_summary: coaching, fail_summary: fail }).catch(() => {});
+      await api.updateSession({
+        coaching_summary: getSafeSummaryForSubmit(coaching, ''),
+        fail_summary: getSafeSummaryForSubmit(fail, ''),
+      }).catch(() => {});
     }
     const target = getReviewBackTarget(session, isHistoricalReview);
     onNavigate(target.page, target.state);
@@ -433,7 +474,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     if (summaryDiagnostics.used_fallback) return 'Using fallback summaries';
     return '';
   })();
-  const visibleSummaryStatus = summaryLoading ? 'Generating summaries...' : (summaryNotice || summaryStatus);
+  const visibleSummaryStatus = summaryLoading ? SUMMARY_PENDING_MESSAGE : (summaryNotice || summaryStatus);
 
   return (
     <div className="page-with-sticky-actions" data-testid="review-page">

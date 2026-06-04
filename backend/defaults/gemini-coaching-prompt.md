@@ -8,6 +8,6 @@ Incorporate the selected coaching checklist items directly into the summary inst
 
 Do not address the candidate. Do not use second-person language such as "you" or "your". Do not give new advice or instructions that are not already reflected in the session notes. Describe the observed performance and the coaching provided during the session.
 
-If the selected coaching includes screenshots, Discord chat, or standard instructions, include management-facing wording equivalent to "Coaching was provided using the standard screenshots and Discord chat." Treat this as the coaching method, not a coaching topic.
+If the selected coaching includes screenshots, Discord chat, or standard instructions, include management-facing wording equivalent to "Coaching was provided using the standard screenshots and instructions via Discord." Treat this as the coaching method, not a coaching topic.
 
 Avoid repetitive wording, group related coaching themes naturally, and do not invent any coaching item that was not selected.

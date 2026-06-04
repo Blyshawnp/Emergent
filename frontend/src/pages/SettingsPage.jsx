@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import geminiSettingsGraphic from '../assets/images/Gemini.png';
+import { defaultPaymentOptions } from '../utils/paymentOptions';
+import { resolveScreenshotUrl } from '../utils/screenshotAssets';
 
 const TABS = [
   { key: 'general', label: 'General' },
@@ -27,48 +29,6 @@ function adminDiagnosticsEnabled() {
   } catch (_error) {
     return false;
   }
-}
-
-function getBackendUrl() {
-  const electronUrl = (() => {
-    try {
-      return (window.electronAPI?.getBackendUrl?.() || '').trim();
-    } catch (_error) {
-      return '';
-    }
-  })();
-  if (electronUrl) {
-    return electronUrl.replace(/\/+$/, '');
-  }
-
-  const configuredUrl = (process.env.REACT_APP_BACKEND_URL || '').trim();
-  if (configuredUrl) {
-    return configuredUrl.replace(/\/+$/, '');
-  }
-
-  try {
-    if (String(window.location?.hash || '').includes('notification-manager')) {
-      return 'http://127.0.0.1:8601';
-    }
-  } catch (_error) {
-    // Fall through to the main app backend port.
-  }
-
-  return 'http://127.0.0.1:8600';
-}
-
-function resolveScreenshotUrl(imageUrl) {
-  const value = String(imageUrl || '').trim();
-  if (!value) return '';
-  if (/^(https?:|data:|blob:)/i.test(value)) return value;
-  const backend = getBackendUrl();
-  const cleanPath = value.replace(/^\/+/, '');
-  if (/\.(png|jpe?g|gif|webp)$/i.test(cleanPath)) {
-    const parts = cleanPath.split('/');
-    const filename = parts[parts.length - 1];
-    return `${backend}/api/screenshot-assets/${filename}`;
-  }
-  return `${backend}/${cleanPath}`;
 }
 
 function readFileAsDataUrl(file) {
@@ -1103,17 +1063,77 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
 function PaymentTab({ s, set }) {
   const pay = s.payment || {};
   const setP = (key, val) => set('payment', { ...pay, [key]: val });
+  const cardDefaults = defaultPaymentOptions.card;
+  const eftDefaults = defaultPaymentOptions.eft;
   return (
     <div className="card" data-testid="settings-payment">
-      <h3 style={{ marginBottom: 16 }}>Credit Card</h3>
-      <SettingsRow label="Type"><input type="text" value={pay.cc_type || ''} onChange={e => setP('cc_type', e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
-      <SettingsRow label="Number"><input type="text" value={pay.cc_number || ''} onChange={e => setP('cc_number', e.target.value)} style={{ maxWidth: 250 }} /></SettingsRow>
-      <SettingsRow label="Exp"><input type="text" value={pay.cc_exp || ''} onChange={e => setP('cc_exp', e.target.value)} style={{ maxWidth: 120 }} /></SettingsRow>
-      <SettingsRow label="CVV"><input type="text" value={pay.cc_cvv || ''} onChange={e => setP('cc_cvv', e.target.value)} style={{ maxWidth: 100 }} /></SettingsRow>
-      <h3 style={{ margin: '24px 0 16px' }}>EFT</h3>
-      <SettingsRow label="Routing"><input type="text" value={pay.eft_routing || ''} onChange={e => setP('eft_routing', e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
-      <SettingsRow label="Account"><input type="text" value={pay.eft_account || ''} onChange={e => setP('eft_account', e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
+      <h3 style={{ marginBottom: 8 }}>Simulated Payment Options</h3>
+      <p className="text-muted text-sm" style={{ marginBottom: 16 }}>Training data only. These values are used on Calls and Supervisor Transfer screens.</p>
+      <PaymentCardFields
+        title="Default Card"
+        pay={pay}
+        setP={setP}
+        defaults={cardDefaults[0]}
+        keys={{ type: 'cc_type', number: 'cc_number', exp: 'cc_exp', cvv: 'cc_cvv' }}
+      />
+      <PaymentCardFields
+        title="Additional Card 1"
+        pay={pay}
+        setP={setP}
+        defaults={cardDefaults[1]}
+        keys={{ type: 'cc_additional_1_type', number: 'cc_additional_1_number', exp: 'cc_additional_1_exp', cvv: 'cc_additional_1_cvv' }}
+      />
+      <PaymentCardFields
+        title="Additional Card 2"
+        pay={pay}
+        setP={setP}
+        defaults={cardDefaults[2]}
+        keys={{ type: 'cc_additional_2_type', number: 'cc_additional_2_number', exp: 'cc_additional_2_exp', cvv: 'cc_additional_2_cvv' }}
+      />
+      <PaymentEftFields
+        title="Default EFT"
+        pay={pay}
+        setP={setP}
+        defaults={eftDefaults[0]}
+        keys={{ routing: 'eft_routing', account: 'eft_account' }}
+      />
+      <PaymentEftFields
+        title="Additional EFT 1"
+        pay={pay}
+        setP={setP}
+        defaults={eftDefaults[1]}
+        keys={{ routing: 'eft_additional_1_routing', account: 'eft_additional_1_account' }}
+      />
+      <PaymentEftFields
+        title="Additional EFT 2"
+        pay={pay}
+        setP={setP}
+        defaults={eftDefaults[2]}
+        keys={{ routing: 'eft_additional_2_routing', account: 'eft_additional_2_account' }}
+      />
     </div>
+  );
+}
+
+function PaymentCardFields({ title, pay, setP, defaults, keys }) {
+  return (
+    <section className="settings-payment-section">
+      <h4>{title}</h4>
+      <SettingsRow label="Type"><input type="text" value={pay[keys.type] || defaults.type} onChange={e => setP(keys.type, e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
+      <SettingsRow label="Number"><input type="text" value={pay[keys.number] || defaults.number} onChange={e => setP(keys.number, e.target.value)} style={{ maxWidth: 250 }} /></SettingsRow>
+      <SettingsRow label="Exp"><input type="text" value={pay[keys.exp] || defaults.exp} onChange={e => setP(keys.exp, e.target.value)} style={{ maxWidth: 120 }} /></SettingsRow>
+      <SettingsRow label="CVV"><input type="text" value={pay[keys.cvv] || defaults.cvv} onChange={e => setP(keys.cvv, e.target.value)} style={{ maxWidth: 100 }} /></SettingsRow>
+    </section>
+  );
+}
+
+function PaymentEftFields({ title, pay, setP, defaults, keys }) {
+  return (
+    <section className="settings-payment-section">
+      <h4>{title}</h4>
+      <SettingsRow label="Routing"><input type="text" value={pay[keys.routing] || defaults.routing} onChange={e => setP(keys.routing, e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
+      <SettingsRow label="Account"><input type="text" value={pay[keys.account] || defaults.account} onChange={e => setP(keys.account, e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
+    </section>
   );
 }
 

@@ -2109,8 +2109,20 @@ DEFAULT_PAYMENT = {
     "cc_number": "3782 822463 10005",
     "cc_exp": "07/2027",
     "cc_cvv": "1928",
+    "cc_additional_1_type": "American Express",
+    "cc_additional_1_number": "3714 496353 98431",
+    "cc_additional_1_exp": "08/28",
+    "cc_additional_1_cvv": "1827",
+    "cc_additional_2_type": "Discover",
+    "cc_additional_2_number": "6011 0009 9013 9424",
+    "cc_additional_2_exp": "06/28",
+    "cc_additional_2_cvv": "624",
     "eft_routing": "021000021",
     "eft_account": "1357902468",
+    "eft_additional_1_routing": "011401533",
+    "eft_additional_1_account": "032109876",
+    "eft_additional_2_routing": "091000019",
+    "eft_additional_2_account": "654345678",
 }
 
 TECH_ISSUES = [
@@ -2238,7 +2250,7 @@ HELP_CONTENT = {
                 "Tests the candidate's ability to transfer to a supervisor. Same coaching/fail flow as calls."
             ],
             "bullets": [
-                "Post \"WXYZ Supervisor Test Call Being Queued\" in Discord Stars channel",
+                "Post \"WXYZ: Supervisor Test Call Being Queued\" in Discord Stars channel",
                 "Call the WXYZ number: <b>1-828-630-7006</b>",
                 "Pass Transfer 1 → done (go to Review). Fail both → Newbie Shift.",
             ],
@@ -2842,6 +2854,17 @@ def _sanitize_screenshot_setting(value, source_label):
     return items
 
 
+def _sanitize_payment_setting(value, source_label):
+    if not isinstance(value, dict):
+        logger.warning("[SETTINGS] %s payment setting was not an object. Using defaults.", source_label)
+        return dict(DEFAULT_PAYMENT)
+    merged = dict(DEFAULT_PAYMENT)
+    for key in DEFAULT_PAYMENT:
+        if key in value:
+            merged[key] = str(value.get(key) or "").strip()
+    return merged
+
+
 def _sanitize_content_setting(key, value, source_label):
     value = _sanitize_coaching_setting(key, value, source_label)
     value = _sanitize_fail_reason_setting(key, value, source_label)
@@ -2849,6 +2872,8 @@ def _sanitize_content_setting(key, value, source_label):
         return _sanitize_discord_template_setting(value, source_label)
     if key == "discord_screenshots":
         return _sanitize_screenshot_setting(value, source_label)
+    if key == "payment":
+        return _sanitize_payment_setting(value, source_label)
     return value
 
 
@@ -5014,7 +5039,7 @@ def _get_fail_items(data):
 
 
 DISCORD_SCREENSHOT_SUMMARY_TEXT = (
-    "Coaching was provided using the standard screenshots and Discord chat."
+    "Coaching was provided using the standard screenshots and instructions via Discord."
 )
 
 
@@ -5741,14 +5766,14 @@ DEFAULT_GEMINI_COACHING_PROMPT = (
     "the observed performance and the coaching provided during the session. If the selected "
     "coaching includes screenshots, Discord chat, or standard instructions, explicitly include "
     "management-facing wording equivalent to 'Coaching was provided using the standard screenshots "
-    "and Discord chat.' Treat this as the coaching method, not a coaching topic. Avoid repetitive wording, group related coaching "
+    "and instructions via Discord.' Treat this as the coaching method, not a coaching topic. Avoid repetitive wording, group related coaching "
     "themes naturally, and do not invent any coaching item that was not selected."
 )
 
 GEMINI_SCREENSHOT_DISCORD_RULE = (
     'If the selected coaching includes screenshots, Discord chat, or standard instructions, include '
     'management-facing wording equivalent to "Coaching was provided using the standard screenshots '
-    'and Discord chat." Treat this as the coaching method, not a coaching topic.'
+    'and instructions via Discord." Treat this as the coaching method, not a coaching topic.'
 )
 
 DEFAULT_GEMINI_FAIL_PROMPT = (
@@ -5781,7 +5806,7 @@ def _ensure_required_gemini_coaching_rules(prompt):
     text = str(prompt or "").strip()
     if not text:
         return ""
-    if "Coaching was provided using the standard screenshots and Discord chat." in text:
+    if "Coaching was provided using the standard screenshots and instructions via Discord." in text:
         return text
     return f"{text}\n\n{GEMINI_SCREENSHOT_DISCORD_RULE}"
 
