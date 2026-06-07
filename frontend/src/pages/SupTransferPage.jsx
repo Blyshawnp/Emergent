@@ -26,6 +26,8 @@ const DEFAULT_SUP_REASONS = [
   'Damaged Gift', "Didn't Receive Gift", 'Cancel Sustaining', 'Use Own/Other',
 ];
 
+const SUP_STARS_DISCORD_POST = 'WXYZ: Supervisor Test Call Being Queued';
+
 function cleanScenarioSentence(value) {
   return String(value || '')
     .replace(/\s+/g, ' ')
@@ -437,9 +439,9 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         <div style={{ color: 'white', fontWeight: 700, fontSize: '1.125rem' }}>Call Corp WXYZ Test Transfer #: 1-828-630-7006</div>
       </div>
       <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px' }}>
-        <span><b>Discord Post for Stars:</b> WXYZ Supervisor Test Call Being Queued</span>
+        <span><b>Discord Post for Stars:</b> {SUP_STARS_DISCORD_POST}</span>
         <button className="btn btn-primary btn-sm" onClick={() => {
-          navigator.clipboard.writeText('WXYZ Supervisor Test Call Being Queued');
+          navigator.clipboard.writeText(SUP_STARS_DISCORD_POST);
           setCopied(true); setTimeout(() => setCopied(false), 3000);
         }} data-testid="sup-copy-discord">{copied ? 'Copied' : 'Copy'}</button>
       </div>
@@ -484,8 +486,6 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         </div>
       </div>
 
-      <PaymentSimulation payment={settings.payment || defaults.payment || {}} />
-
       {currentCaller.length > 0 && (
         <div className="card" style={{ margin: '16px 0' }}>
           <h3 style={{ marginBottom: 8 }}>Caller Demographics</h3>
@@ -496,6 +496,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
           </div>
         </div>
       )}
+
+      <PaymentSimulation payment={settings.payment || defaults.payment || {}} />
 
       <div className="card" style={{ marginBottom: 16 }} data-tour="sup-result">
         <h3>Transfer Result</h3>

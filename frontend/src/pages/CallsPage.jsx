@@ -556,9 +556,9 @@ export default function CallsPage({ onNavigate, navigationState }) {
         <ScenarioCard currentCaller={currentCaller} callSetup={callSetup} randFlags={randFlags} donations={donations} onRegenerate={rollRandom} showData={showData} />
       </div>
 
-      <PaymentSimulation payment={settings.payment || defaults.payment || {}} />
-
       {currentCaller.length > 0 && <CallerDemographics caller={currentCaller} />}
+
+      <PaymentSimulation payment={settings.payment || defaults.payment || {}} />
 
       <div className="card" style={{ marginBottom: 16 }} data-tour="calls-result">
         <h3 style={{ marginBottom: 8 }}>Call Result</h3>
