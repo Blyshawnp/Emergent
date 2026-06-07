@@ -55,7 +55,7 @@
   ],
   "donors_new": [
     [
-      "Sam or Sally",
+      "Sam",
       "Smith",
       "400 N Broad St",
       "Philadelphia",
@@ -65,17 +65,17 @@
       "ssmith@test.com"
     ],
     [
-      "Harold or Helen",
-      "Smith",
-      "3686 Village Dr Apt. D",
-      "Franklin",
-      "OH",
-      "45005",
-      "858-555-1212",
-      "sally@test.com"
+      "Susan",
+      "Miller-Smith",
+      "400 N Broad St",
+      "Philadelphia",
+      "PA",
+      "19103",
+      "215-515-1212",
+      "smiller@test.com"
     ],
     [
-      "Harry or Harriet J.",
+      "Harry",
       "Smith",
       "P.O. Box 6",
       "Atlasburg",
@@ -85,7 +85,17 @@
       "testentry@test.com"
     ],
     [
-      "Mark or Mary",
+      "Harriette J.",
+      "Smith",
+      "P.O. Box 6",
+      "Atlasburg",
+      "PA",
+      "15004",
+      "602-515-1212",
+      "testentry@test.com"
+    ],
+    [
+      "Mike",
       "Jackson",
       "1020 Holland Ave",
       "Port Huron",
@@ -93,11 +103,61 @@
       "48060",
       "310-515-1212",
       "mjtest@test.com"
+    ],
+    [
+      "Barbara",
+      "Jackson",
+      "1020 Holland Ave",
+      "Port Huron",
+      "MI",
+      "48060",
+      "310-515-1212",
+      "mjtest@test.com"
+    ],
+    [
+      "Mark",
+      "Jones",
+      "3686 Village Dr Apt. D",
+      "Franklin",
+      "OH",
+      "45005",
+      "937-555-1212",
+      "mjones@test.com"
+    ],
+    [
+      "Mary",
+      "Jones",
+      "3686 Village Dr Apt. D",
+      "Franklin",
+      "OH",
+      "45005",
+      "937-555-1212",
+      "mjones@test.com"
+    ],
+    [
+      "Jeff",
+      "Williams",
+      "100 S Washington Ave",
+      "Scranton",
+      "PA",
+      "18503",
+      "717-515-1212",
+      "DandJ@test.com"
+    ],
+    [
+      "Deanna",
+      "Williams",
+      "100 S Washington Ave",
+      "Scranton",
+      "PA",
+      "18503",
+      "717-515-1212",
+      "DandJ@test.com"
     ]
   ],
   "donors_existing": [
     [
-      "Ron or Samantha",
+      "Ron",
       "Jones",
       "3345 W. Auburn Rd, Apt 207",
       "Rochester Hills",
@@ -107,7 +167,17 @@
       "michele@test.com"
     ],
     [
-      "Diane or James",
+      "Samantha (Ron)",
+      "Jones",
+      "3345 W. Auburn Rd, Apt 207",
+      "Rochester Hills",
+      "MI",
+      "48309",
+      "858-555-1212",
+      "michele@test.com"
+    ],
+    [
+      "James (Diane)",
       "Williams",
       "8150 Priestley Dr",
       "Reynoldsburg",
@@ -117,7 +187,17 @@
       "DandJ@test.com"
     ],
     [
-      "Harry or Harriette",
+      "Diane",
+      "Williams",
+      "8150 Priestley Dr",
+      "Reynoldsburg",
+      "OH",
+      "43068",
+      "619-555-1212",
+      "DandJ@test.com"
+    ],
+    [
+      "Harry",
       "Jones",
       "876 McDonald Ave",
       "Brooklyn",
@@ -125,6 +205,56 @@
       "11218",
       "619-555-1212",
       "test@test.com"
+    ],
+    [
+      "Harriette (Harry)",
+      "Jones",
+      "876 McDonald Ave",
+      "Brooklyn",
+      "NY",
+      "11218",
+      "619-555-1212",
+      "test@test.com"
+    ],
+    [
+      "Mark (Mary)",
+      "Dunbar",
+      "13145 Creekside LN",
+      "Port Charlotte",
+      "FL",
+      "33953",
+      "619-555-1212",
+      "none@test.com"
+    ],
+    [
+      "Mary",
+      "Dunbar",
+      "13145 Creekside LN",
+      "Port Charlotte",
+      "FL",
+      "33953",
+      "619-555-1212",
+      "none@test.com"
+    ],
+    [
+      "Harold",
+      "Smith",
+      "3686 Village Dr Apt. D",
+      "Franklin",
+      "OH",
+      "45005",
+      "858-555-1212",
+      "sally@test.com"
+    ],
+    [
+      "Sally (Harold)",
+      "Smith",
+      "3686 Village Dr Apt. D",
+      "Franklin",
+      "OH",
+      "45005",
+      "858-555-1212",
+      "sally@test.com"
     ]
   ],
   "donors_increase": [
@@ -136,7 +266,7 @@
       "MI",
       "48888",
       "801-555-1212",
-      "TESTENTRY@TEST.COM"
+      "testentry@test.com"
     ],
     [
       "Sherri",
@@ -145,8 +275,8 @@
       "Boardman",
       "OH",
       "44512",
-      "(801) 555-1217",
-      "TESTENTRY@TEST.COM"
+      "801-555-1217",
+      "testentry@test.com"
     ]
   ],
   "discord_templates": [

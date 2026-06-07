@@ -179,6 +179,8 @@ Update metadata is stored on the Google Sheet, not in a Google Doc. The `update-
 
 The content tabs also depend on recognizable header names. For example, show content needs a show/name/title column, caller content needs category plus first/last name fields, and Discord/screenshot content needs the columns referenced by the app. Treat those headers as part of the schema and update code/config before renaming them.
 
+Local fallback caller defaults in `backend/defaults/callers.csv` and `backend/content/app_content.json` were updated to match the current Google Sheet caller data: 10 New, 10 Existing, and 2 Increase callers.
+
 ## Installer and Update Behavior
 
 MTS:
