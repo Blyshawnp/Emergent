@@ -571,7 +571,7 @@ function AppShell() {
   const [dismissedBannerIds, setDismissedBannerIds] = useState(() => readStoredIds(DISMISSED_NOTIFICATION_BANNERS_KEY));
   const [discordOpen, setDiscordOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [loadingStatus, setLoadingStatus] = useState('Starting app...');
+  const [loadingStatus, setLoadingStatus] = useState('Starting local app services...');
   const [loadingProgress, setLoadingProgress] = useState(10);
   const installedUpdateNoticeRef = useRef(null);
   const popupSessionIdsRef = useRef(new Set());
@@ -743,21 +743,23 @@ function AppShell() {
     const loadInitialSettings = async (attempt = 0) => {
       try {
         if (attempt === 0) {
-          setLoadingStatus('Starting backend...');
+          setLoadingStatus('Starting local app services...');
           setLoadingProgress(20);
         } else {
-          setLoadingStatus('Starting backend...');
+          setLoadingStatus('Starting local app services...');
           setLoadingProgress(Math.min(50, 20 + attempt * 4));
         }
 
-        console.log("backend health check started");
+        console.log("[STARTUP] backend health check started");
         await api.getHealth();
-        console.log("backend health ready");
+        console.log("[STARTUP] backend health ready");
 
         if (cancelled) return;
 
         setStartupStatuses(prev => ({ ...prev, backend: 'ready' }));
+        setLoadingStatus('Loading remote content...');
         setLoading(false);
+        console.log('[STARTUP] Google Sheet/content load start');
 
         runStartupRequest(
           'settings',
@@ -823,11 +825,12 @@ function AppShell() {
           },
           () => setHistoryStats({})
         );
+        console.log('[STARTUP] Google Sheet/content load queued');
 
       } catch (_err) {
         if (cancelled) return;
         if (attempt < INITIAL_SETTINGS_MAX_RETRIES) {
-          setLoadingStatus('Starting backend...');
+          setLoadingStatus('Starting local app services...');
           retryTimeout = window.setTimeout(() => {
             loadInitialSettings(attempt + 1);
           }, INITIAL_SETTINGS_RETRY_DELAY_MS);

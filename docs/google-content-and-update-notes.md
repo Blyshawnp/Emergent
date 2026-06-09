@@ -72,6 +72,8 @@ Update metadata is stored on the Google Sheet, not in a Google Doc. The `update-
 - `device_name`
 - `notes`
 
+SAM access is validated against this master Google Sheet tab. If the tab is missing or empty and the service account has write access, the backend can create the tab and generate one default owner/admin row in the sheet. The generated PIN is not stored in packaged fallback files and must not be copied into source control, packaged defaults, logs, or documentation.
+
 `sam-notifications`:
 
 - `Enabled`

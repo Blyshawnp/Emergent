@@ -1216,7 +1216,7 @@ export default function NotificationManagerApp() {
     isLoading: true,
     isSaving: false,
     statusKind: '',
-    statusMessage: 'Starting backend services...',
+    statusMessage: 'Starting local app services...',
     writeReady: false,
     writeError: '',
     readError: '',
@@ -1715,6 +1715,8 @@ export default function NotificationManagerApp() {
   }, []);
 
   const loadSamSetupStatus = useCallback(async () => {
+    const startedAt = Date.now();
+    console.log('[STARTUP] SAM setup status load start');
     try {
       const status = await api.getSamSetupStatus();
       const nextStatus = {
@@ -1726,22 +1728,34 @@ export default function NotificationManagerApp() {
         error: status?.error || '',
       };
       setSamSetupStatus(nextStatus);
+      console.log('[STARTUP] SAM setup status load finish', {
+        durationMs: Date.now() - startedAt,
+        ok: nextStatus.ok,
+        setupComplete: nextStatus.setupComplete,
+      });
       return nextStatus;
     } catch (error) {
       const message = getErrorMessage(error, 'SAM setup requires access to the admin configuration sheet.');
       const nextStatus = { loading: false, setupComplete: false, userName: '', userRole: '', ok: false, error: message };
       setSamSetupStatus(nextStatus);
+      console.log('[STARTUP] SAM setup status load finish', {
+        durationMs: Date.now() - startedAt,
+        ok: false,
+        error: message,
+      });
       return nextStatus;
     }
   }, []);
 
   const loadSheetItems = useCallback(async ({ silent = false } = {}) => {
+    const startedAt = Date.now();
+    console.log('[STARTUP] SAM Google Sheet/content load start', { silent });
     if (!silent) {
       setSheetState((current) => ({
         ...current,
         isLoading: true,
         statusKind: '',
-        statusMessage: '',
+        statusMessage: 'Loading remote content...',
         readError: '',
       }));
     }
@@ -1767,6 +1781,12 @@ export default function NotificationManagerApp() {
         statusKind: response?.ok === false ? 'warning' : current.statusKind,
         statusMessage: response?.ok === false ? (response?.error || 'Unable to read the master sam-notifications tab.') : current.statusMessage,
       }));
+      console.log('[STARTUP] SAM Google Sheet/content load finish', {
+        durationMs: Date.now() - startedAt,
+        ok: response?.ok !== false,
+        count: nextItems.length,
+        source: response?.source || response?.sheet?.source || '',
+      });
       refreshDiagnostics();
     } catch (error) {
       const message = getErrorMessage(error, 'Unable to read the master sam-notifications tab.');
@@ -1777,6 +1797,11 @@ export default function NotificationManagerApp() {
         statusKind: 'error',
         statusMessage: message,
       }));
+      console.log('[STARTUP] SAM Google Sheet/content load finish', {
+        durationMs: Date.now() - startedAt,
+        ok: false,
+        error: message,
+      });
     }
   }, [refreshDiagnostics]);
 
@@ -1837,6 +1862,7 @@ export default function NotificationManagerApp() {
   useEffect(() => {
     let cancelled = false;
     const startedAt = Date.now();
+    console.log('[STARTUP] SAM init start');
 
     const updateBackendState = async () => {
       try {
@@ -1876,17 +1902,23 @@ export default function NotificationManagerApp() {
             statusMessage: setup.error || 'SAM setup is required before the dashboard can open.',
             readError: setup.error || '',
           }));
+          console.log('[STARTUP] SAM init finish', {
+            durationMs: Date.now() - startedAt,
+            ok: setup.ok,
+            setupComplete: false,
+          });
           return;
         }
         await loadSheetItems();
         await loadCandidateTracking({ silent: true });
+        console.log('[STARTUP] SAM init finish', { durationMs: Date.now() - startedAt, ok: true });
       } catch (error) {
         if (cancelled) return;
         const elapsed = Date.now() - startedAt;
         const timedOut = elapsed >= BACKEND_READY_TIMEOUT_MS;
         const message = timedOut
           ? getErrorMessage(error, 'Backend services are still unavailable. Retrying in the background.')
-          : 'Starting backend services...';
+          : 'Starting local app services...';
         setSheetState((current) => ({
           ...current,
           isLoading: true,
@@ -1896,6 +1928,7 @@ export default function NotificationManagerApp() {
           readError: timedOut ? message : '',
         }));
         scheduleBackendStartupRetry(message);
+        console.log('[STARTUP] SAM init finish', { durationMs: Date.now() - startedAt, ok: false, error: message });
       }
     };
 

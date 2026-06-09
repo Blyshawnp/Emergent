@@ -108,6 +108,21 @@ function resolveAppVersion() {
 }
 
 const APP_VERSION = resolveAppVersion();
+const APP_START_TIME_MS = Date.now();
+
+function logStartupTiming(label, detail = {}) {
+  const durationMs = Date.now() - APP_START_TIME_MS;
+  const safeDetail = {};
+  for (const [key, value] of Object.entries(detail || {})) {
+    if (/token|secret|credential|password|pin|key/i.test(key)) {
+      safeDetail[key] = '<redacted>';
+    } else {
+      safeDetail[key] = value;
+    }
+  }
+  const suffix = Object.keys(safeDetail).length ? ` ${JSON.stringify(safeDetail)}` : '';
+  console.log(`[STARTUP] ${APP_DISPLAY_NAME} ${label} +${durationMs}ms${suffix}`);
+}
 
 // ═══════════════════════════════════════════════════════════════
 // PATHS
@@ -519,6 +534,7 @@ function startBackend() {
   }
 
   setBackendConnectionStatus('starting');
+  logStartupTiming('backend spawn start', { packaged: !isDev, port: BACKEND_PORT, mode: getAppModeName() });
 
   if (!isDev) {
     const backendPath = path.join(process.resourcesPath, 'backend', 'backend.exe');
@@ -591,6 +607,7 @@ function startBackend() {
     }
 
     console.log(`[BACKEND] Spawned backend.exe with pid ${backendProcess.pid}`);
+    logStartupTiming('backend process spawned', { pid: backendProcess.pid, port: BACKEND_PORT });
     backendStartedByThisApp = true;
     writeBackendOwner(backendProcess.pid);
 
@@ -662,6 +679,7 @@ function startBackend() {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
   });
+  logStartupTiming('backend process spawned', { pid: backendProcess.pid || 0, port: BACKEND_PORT });
   backendStartedByThisApp = true;
 
   backendProcess.stdout.on('data', (data) => {
@@ -851,6 +869,7 @@ function killStaleOwnedBackend() {
 }
 
 function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
+  logStartupTiming('backend health wait start', { retries, port: BACKEND_PORT });
   return new Promise((resolve, reject) => {
     const attempt = (remaining) => {
       backendReadyRetryCount = Math.max(0, retries - remaining);
@@ -885,6 +904,7 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
         if (res.statusCode === 200) {
           backendReadyRetryCount = Math.max(0, retries - remaining);
           setBackendConnectionStatus('connected');
+          logStartupTiming('backend health success', { retryCount: backendReadyRetryCount, port: BACKEND_PORT });
           resolve();
         } else {
           setTimeout(() => attempt(remaining - 1), BACKEND_STARTUP_RETRY_DELAY_MS);
@@ -939,6 +959,7 @@ function createMainWindow() {
   const iconPath = getAppIconPath();
   const appIcon = nativeImage.createFromPath(iconPath);
 
+  logStartupTiming('BrowserWindow create start', { mode: getAppModeName() });
   mainWindow = new BrowserWindow({
     width: isNotificationManagerMode ? 1180 : 1280,
     height: isNotificationManagerMode ? 760 : 800,
@@ -954,16 +975,36 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+  logStartupTiming('BrowserWindow created', { mode: getAppModeName() });
+
+  let firstShowLogged = false;
+  const showMainWindow = (reason) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    if (!appIcon.isEmpty()) {
+      mainWindow.setIcon(appIcon);
+    }
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+      if (!firstShowLogged) {
+        firstShowLogged = true;
+        logStartupTiming('first window show', { reason });
+      }
+    }
+  };
 
   // Load the frontend
   if (isDev) {
     const devUrl = isNotificationManagerMode
       ? 'http://localhost:3000/#/notification-manager'
       : 'http://localhost:3000';
+    logStartupTiming('BrowserWindow loadURL start', { target: 'dev-server' });
     mainWindow.loadURL(devUrl);
   } else {
     const frontendPath = getFrontendPath('index.html');
     requireRuntimePath(frontendPath, 'Packaged frontend index');
+    logStartupTiming('BrowserWindow loadFile start', { target: 'packaged-frontend', mode: getAppModeName() });
     if (isNotificationManagerMode) {
       mainWindow.loadFile(frontendPath, { hash: '/notification-manager' });
     } else {
@@ -971,11 +1012,20 @@ function createMainWindow() {
     }
   }
 
+  const earlyShowTimer = setTimeout(() => {
+    showMainWindow('early-load-shell');
+  }, 1200);
+  earlyShowTimer.unref?.();
+
+  mainWindow.webContents.once('did-finish-load', () => {
+    logStartupTiming('BrowserWindow did-finish-load');
+    showMainWindow('did-finish-load');
+  });
+
   mainWindow.once('ready-to-show', () => {
-    if (!appIcon.isEmpty()) {
-      mainWindow.setIcon(appIcon);
-    }
-    mainWindow.show();
+    clearTimeout(earlyShowTimer);
+    logStartupTiming('BrowserWindow ready-to-show');
+    showMainWindow('ready-to-show');
   });
 
   mainWindow.on('close', (e) => {
@@ -1233,6 +1283,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
 // SYSTEM TRAY
 // ═══════════════════════════════════════════════════════════════
 function createTray() {
+  logStartupTiming('tray create start', { mode: getAppModeName() });
   tray = new Tray(createTrayIcon());
 
   const contextMenu = Menu.buildFromTemplate([
@@ -1246,6 +1297,7 @@ function createTray() {
   tray.setToolTip(`${APP_DISPLAY_NAME} v${APP_VERSION}`);
   tray.setContextMenu(contextMenu);
   tray.on('double-click', () => { if (mainWindow) mainWindow.show(); });
+  logStartupTiming('tray created', { mode: getAppModeName() });
 }
 
 function createAppMenu() {
@@ -2125,16 +2177,31 @@ async function checkForSheetUpdates({ promptUser = true } = {}) {
 }
 
 async function checkForUpdates({ promptUser = true } = {}) {
-  const githubResult = await checkGithubReleaseForUpdates({ promptUser });
-  if (githubResult?.updateAvailable) {
-    return githubResult;
+  const startedAt = Date.now();
+  logStartupTiming('updater check start', { promptUser });
+  try {
+    const githubResult = await checkGithubReleaseForUpdates({ promptUser });
+    if (githubResult?.updateAvailable) {
+      logStartupTiming('updater check finish', { durationMs: Date.now() - startedAt, updateAvailable: true, source: githubResult.source || 'github-releases' });
+      return githubResult;
+    }
+    if (githubResult?.ok && !githubResult?.skipped) {
+      console.log('[UPDATE] GitHub Releases has no newer installer. Checking Google Sheet fallback.');
+    } else if (githubResult?.error) {
+      console.log(`[UPDATE] GitHub Releases update check unavailable; checking Google Sheet fallback. Reason: ${githubResult.error}`);
+    }
+    const sheetResult = await checkForSheetUpdates({ promptUser });
+    logStartupTiming('updater check finish', {
+      durationMs: Date.now() - startedAt,
+      ok: Boolean(sheetResult?.ok),
+      updateAvailable: Boolean(sheetResult?.updateAvailable),
+      source: sheetResult?.source || 'sheet-fallback',
+    });
+    return sheetResult;
+  } catch (err) {
+    logStartupTiming('updater check finish', { durationMs: Date.now() - startedAt, ok: false, error: err?.message || String(err) });
+    throw err;
   }
-  if (githubResult?.ok && !githubResult?.skipped) {
-    console.log('[UPDATE] GitHub Releases has no newer installer. Checking Google Sheet fallback.');
-  } else if (githubResult?.error) {
-    console.log(`[UPDATE] GitHub Releases update check unavailable; checking Google Sheet fallback. Reason: ${githubResult.error}`);
-  }
-  return checkForSheetUpdates({ promptUser });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2150,6 +2217,7 @@ process.on('unhandledRejection', (reason) => {
 
 app.whenReady().then(async () => {
   console.log(`[APP] ${APP_DISPLAY_NAME} v${APP_VERSION} starting...`);
+  logStartupTiming('app ready start', { packaged: app.isPackaged, mode: getAppModeName(), port: BACKEND_PORT });
   if (process.platform === 'win32') {
     app.setAppUserModelId(APP_RUNTIME_ID);
   }
