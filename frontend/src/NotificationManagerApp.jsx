@@ -1656,11 +1656,6 @@ export default function NotificationManagerApp() {
         }
         if (type === 'update:status') {
           setUpdaterStatus(payload || null);
-          setSheetState((current) => ({
-            ...current,
-            statusKind: payload?.state === 'error' ? 'warning' : 'info',
-            statusMessage: payload?.message || current.statusMessage,
-          }));
           return;
         }
         if (type === 'menu:replay-tutorial') {
@@ -1828,6 +1823,17 @@ export default function NotificationManagerApp() {
         return;
       }
 
+      // Poll until backend uvicorn is actually up and responding!
+      for (let i = 0; i < 15; i++) {
+        try {
+          await api.getRuntimeStatus();
+          break;
+        } catch (err) {
+          if (i === 14) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+
       await refreshDiagnostics();
       const setup = await loadSamSetupStatus();
       if (!setup.setupComplete) {
@@ -1881,7 +1887,16 @@ export default function NotificationManagerApp() {
     const waitForBackend = async () => {
       await updateBackendState();
       try {
-        await api.getRuntimeStatus();
+        // Poll until backend uvicorn is actually up and responding!
+        for (let i = 0; i < 15; i++) {
+          try {
+            await api.getRuntimeStatus();
+            break;
+          } catch (err) {
+            if (i === 14) throw err;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        }
         if (cancelled) return;
         setSheetState((current) => ({
           ...current,
@@ -2264,6 +2279,7 @@ export default function NotificationManagerApp() {
     `Ticker source: ${(sheetState.tickerSource || 'unknown').toUpperCase()}`,
     samSetupStatus.userName ? `SAM user: ${samSetupStatus.userName}` : null,
     sheetState.writeReady ? 'Direct sheet write ready' : 'Direct sheet write not configured',
+    updaterStatus?.message ? `Update status: ${updaterStatus.message}` : null,
   ].filter(Boolean);
 
   const visibleItems = items

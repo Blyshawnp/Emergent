@@ -40,8 +40,8 @@ import TutorialPreviewOverlay from "./tutorial/TutorialPreviewOverlay";
 
 const LOGO_SRC = mtsLogo;
 const APP_VERSION_FALLBACK = '1.0.1';
-const INITIAL_SETTINGS_RETRY_DELAY_MS = 180;
-const INITIAL_SETTINGS_MAX_RETRIES = 12;
+const INITIAL_SETTINGS_RETRY_DELAY_MS = 1000;
+const INITIAL_SETTINGS_MAX_RETRIES = 60;
 const SIDEBAR_COLLAPSED_KEY = 'mts-sidebar-collapsed';
 const TUTORIAL_STATUS_KEY = 'mts-tutorial-status';
 const TUTORIAL_AFTER_SETUP_KEY = 'mts-start-tutorial-after-setup';
@@ -715,6 +715,7 @@ function AppShell() {
           onFallback?.(true);
           setStartupStatuses(prev => ({ ...prev, [statusKey]: 'fallback' }));
           logTimedRequest(name, 'retry failed', retryStartedAt, { error: err?.message || String(err), fallbackUsed: true });
+          scheduleRecoveryRetry(name, requestFn, onSuccess, onFallback, statusKey, Math.min(30000, delay * 2));
         }
       }, delay);
       recoveryTimeouts.push(timeoutId);
