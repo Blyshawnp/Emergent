@@ -28,6 +28,7 @@ from urllib.request import urlopen
 
 import httpx
 from fastapi import FastAPI, APIRouter, HTTPException, Request
+import asyncio
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -6664,30 +6665,30 @@ async def get_current_session():
 
 @api_router.get("/shared/candidates/lookup")
 async def lookup_shared_candidate(name: str = ""):
-    return _lookup_shared_candidate_sessions(name)
+    return await asyncio.to_thread(_lookup_shared_candidate_sessions, name)
 
 
 @api_router.get("/shared/pending-sup-transfers")
 async def get_shared_pending_sup_transfers():
-    return _get_shared_pending_sup_transfers()
+    return await asyncio.to_thread(_get_shared_pending_sup_transfers)
 
 
 @api_router.get("/shared/admin/candidates")
 async def get_shared_admin_candidates(request: Request):
     _require_admin_token(request)
-    return _shared_admin_candidate_snapshot()
+    return await asyncio.to_thread(_shared_admin_candidate_snapshot)
 
 
 @api_router.post("/shared/admin/candidates/action")
 async def post_shared_admin_candidate_action(payload: dict, request: Request):
     _require_admin_token(request)
-    return _shared_admin_candidate_action(payload or {})
+    return await asyncio.to_thread(_shared_admin_candidate_action, payload or {})
 
 
 @api_router.get("/sam/setup/status")
 async def get_sam_setup_status():
     settings_doc = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0}) or {}
-    status = _sam_setup_status()
+    status = await asyncio.to_thread(_sam_setup_status)
     return {
         **status,
         "setupComplete": bool(settings_doc.get("sam_setup_complete")),
@@ -6698,7 +6699,7 @@ async def get_sam_setup_status():
 
 @api_router.post("/sam/setup/complete")
 async def post_sam_setup_complete(payload: dict):
-    result = _complete_sam_setup(payload or {})
+    result = await asyncio.to_thread(_complete_sam_setup, payload or {})
     if not result.get("ok"):
         return result
     await db.settings.update_one(
@@ -6727,13 +6728,13 @@ async def post_sam_setup_reset(request: Request):
 @api_router.get("/admin/verify-shared-session-sheets")
 async def verify_shared_session_sheets(request: Request):
     _require_admin_token(request)
-    return _verify_master_shared_sheets()
+    return await asyncio.to_thread(_verify_master_shared_sheets)
 
 
 @api_router.get("/admin/verify-shared-sheets")
 async def verify_shared_sheets(request: Request):
     _require_admin_token(request)
-    return _verify_master_shared_sheets()
+    return await asyncio.to_thread(_verify_master_shared_sheets)
 
 
 @api_router.get("/admin/google-sheet-permission-check")
@@ -6958,8 +6959,111 @@ _ticker_cache = {"messages": None, "last_fetch": 0, "using_fallback": False}
 _headset_cache = {"groups": None, "last_fetch": 0}
 _notification_cache = {"groups": None, "last_fetch": 0, "url": ""}
 
+_default_managed_notifications = [
+    {
+        "Enabled": True,
+        "ID": "default-welcome",
+        "Type": "ticker",
+        "Title": "Welcome",
+        "Message": f"Welcome to Mock Testing Suite v{APP_VERSION}",
+        "ShowTicker": True,
+        "ShowPopup": False,
+        "ShowBanner": False,
+        "Persistent": True,
+        "StartDate": "",
+        "StartTime": "",
+        "EndDate": "",
+        "EndTime": "",
+        "ActionText": "",
+        "ActionURL": "",
+        "CreatedAt": "2026-06-10T00:00:00Z",
+        "UpdatedAt": "2026-06-10T00:00:00Z",
+    },
+    {
+        "Enabled": True,
+        "ID": "default-tip",
+        "Type": "ticker",
+        "Title": "Tip",
+        "Message": "Tip: Use the Discord Post button to quickly copy common messages",
+        "ShowTicker": True,
+        "ShowPopup": False,
+        "ShowBanner": False,
+        "Persistent": True,
+        "StartDate": "",
+        "StartTime": "",
+        "EndDate": "",
+        "EndTime": "",
+        "ActionText": "",
+        "ActionURL": "",
+        "CreatedAt": "2026-06-10T00:00:00Z",
+        "UpdatedAt": "2026-06-10T00:00:00Z",
+    },
+    {
+        "Enabled": True,
+        "ID": "default-help",
+        "Type": "ticker",
+        "Title": "Help",
+        "Message": "Need help? Check the Help tab for step-by-step setup guides",
+        "ShowTicker": True,
+        "ShowPopup": False,
+        "ShowBanner": False,
+        "Persistent": True,
+        "StartDate": "",
+        "StartTime": "",
+        "EndDate": "",
+        "EndTime": "",
+        "ActionText": "",
+        "ActionURL": "",
+        "CreatedAt": "2026-06-10T00:00:00Z",
+        "UpdatedAt": "2026-06-10T00:00:00Z",
+    }
+]
+
 _notification_defaults = {
-    "tickerMessages": [],
+    "tickerMessages": [
+        {
+            "id": "default-welcome",
+            "type": "ticker",
+            "title": "Welcome",
+            "message": f"Welcome to Mock Testing Suite v{APP_VERSION}",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-tip",
+            "type": "ticker",
+            "title": "Tip",
+            "message": "Tip: Use the Discord Post button to quickly copy common messages",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-help",
+            "type": "ticker",
+            "title": "Help",
+            "message": "Need help? Check the Help tab for step-by-step setup guides",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        }
+    ],
     "banners": [],
     "popups": [],
 }
@@ -8513,11 +8617,11 @@ async def get_admin_runtime_diagnostics(request: Request):
 @api_router.get("/notifications/manage")
 async def get_notifications_manage(request: Request):
     _require_admin_token(request)
-    master_context = _sam_master_sheet_context()
+    master_context = await asyncio.to_thread(_sam_master_sheet_context)
     authenticated = {"ok": False, "items": [], "error": master_context.get("error") or "SAM master Google Sheet is not configured."}
     if master_context.get("ok"):
         try:
-            authenticated = _read_sam_notification_items(master_context["service"].spreadsheets(), master_context["sheet_id"])
+            authenticated = await asyncio.to_thread(_read_sam_notification_items, master_context["service"].spreadsheets(), master_context["sheet_id"])
         except Exception as exc:
             logger.exception("[NOTIFICATIONS] Failed to read master sam-notifications for SAM manager: %s", exc)
             authenticated = {"ok": False, "items": [], "error": f"Unable to read master sam-notifications tab: {exc}"}
@@ -8542,8 +8646,8 @@ async def get_notifications_manage(request: Request):
 
     return {
         "ok": False,
-        "items": [],
-        "error": authenticated.get("error") or "Unable to read the master sam-notifications tab.",
+        "items": _default_managed_notifications,
+        "error": "Remote content could not be loaded. Fallback content is being used.",
         "sheet": {
             "configured": bool(master_context.get("ok")),
             "url": DEFAULT_ADMIN_CONTENT_SHEET_URL,
@@ -8562,14 +8666,14 @@ async def get_notifications_manage(request: Request):
 @api_router.post("/notifications/manage")
 async def save_notification_manage(payload: dict, request: Request):
     _require_admin_token(request)
-    result = _save_notification_to_google_sheet((payload or {}).get("item") or payload or {})
+    result = await asyncio.to_thread(_save_notification_to_google_sheet, (payload or {}).get("item") or payload or {})
     return result
 
 
 @api_router.delete("/notifications/manage/{notification_id:path}")
 async def delete_notification_manage(notification_id: str, request: Request):
     _require_admin_token(request)
-    return _delete_notification_from_google_sheet(notification_id)
+    return await asyncio.to_thread(_delete_notification_from_google_sheet, notification_id)
 
 
 async def _fetch_approved_headsets():

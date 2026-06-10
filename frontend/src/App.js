@@ -578,6 +578,7 @@ function AppShell() {
   const popupFlowActiveRef = useRef(false);
   const tutorialAutoStartRef = useRef(false);
   const modal = useModal();
+  const [remoteContentVersion, setRemoteContentVersion] = useState(0);
 
   useEffect(() => {
     const saved = localStorage.getItem('mts-theme') || 'dark';
@@ -786,6 +787,43 @@ function AppShell() {
             setDefaults(defs || emptyDefaults());
             console.log("Discord final template count: " + (defs?.discord_templates?.length || 0));
             console.log("Discord final screenshot count: " + (defs?.discord_screenshots?.length || 0));
+
+            // Check if remote content is still loading in the background on uvicorn
+            const sources = defs?._content_sources || {};
+            const stillLoading = Object.values(sources).some(
+              (src) => src.background_loading || src.background_status === 'loading'
+            );
+            if (stillLoading && !cancelled) {
+              let attempts = 0;
+              const maxAttempts = 15;
+              const pollInterval = window.setInterval(async () => {
+                if (cancelled) {
+                  window.clearInterval(pollInterval);
+                  return;
+                }
+                attempts++;
+                try {
+                  console.log(`[STARTUP] Polling remote content defaults... attempt ${attempts}`);
+                  const nextDefs = await api.getDefaults(5000);
+                  const nextSources = nextDefs?._content_sources || {};
+                  const nextStillLoading = Object.values(nextSources).some(
+                    (src) => src.background_loading || src.background_status === 'loading'
+                  );
+                  if (!nextStillLoading || attempts >= maxAttempts) {
+                    window.clearInterval(pollInterval);
+                    setDefaults(nextDefs || emptyDefaults());
+                    setRemoteContentVersion(v => v + 1);
+                    console.log(`[STARTUP] Remote content loading finished after ${attempts} polls. Version bumped.`);
+                  }
+                } catch (err) {
+                  console.warn(`[STARTUP] Failed to poll defaults:`, err);
+                  if (attempts >= maxAttempts) {
+                    window.clearInterval(pollInterval);
+                  }
+                }
+              }, 3000);
+              recoveryTimeouts.push(pollInterval);
+            }
           },
           () => setDefaults(emptyDefaults())
         );
@@ -891,7 +929,7 @@ function AppShell() {
     fetchTicker();
     const interval = setInterval(fetchTicker, TICKER_REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [loading]);
+  }, [loading, remoteContentVersion]);
 
   useEffect(() => {
     if (loading) {
@@ -921,7 +959,7 @@ function AppShell() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [loading]);
+  }, [loading, remoteContentVersion]);
 
   useEffect(() => {
     writeStoredIds(DISMISSED_NOTIFICATION_BANNERS_KEY, dismissedBannerIds);

@@ -1199,6 +1199,7 @@ export default function NotificationManagerApp() {
   const backendStartupRetryRef = useRef({ attempt: 0, timer: null });
   const retryBackendStartupRef = useRef(null);
   const startupUpdateCheckRef = useRef(false);
+  const manualUpdateCheckRef = useRef(false);
   const [items, setItems] = useState(() => {
     try {
       const stored = localStorage.getItem(NOTIFICATION_MANAGER_STORAGE_KEY);
@@ -1417,6 +1418,9 @@ export default function NotificationManagerApp() {
   }, [handleManualDownloadUpdate, updateModal, updaterStatus]);
 
   const handleCheckForUpdates = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) {
+      manualUpdateCheckRef.current = true;
+    }
     try {
       if (!window.electronAPI?.checkForUpdates) {
         if (!silent) {
@@ -1432,7 +1436,9 @@ export default function NotificationManagerApp() {
         return;
       }
       if (result.updateAvailable) {
-        setUpdateModal(result.updateInfo);
+        if (!silent) {
+          setUpdateModal(result.updateInfo);
+        }
         return;
       }
       if (!silent) {
@@ -1651,16 +1657,24 @@ export default function NotificationManagerApp() {
           return;
         }
         if (type === 'update:available') {
-          setUpdateModal(payload);
+          if (manualUpdateCheckRef.current) {
+            setUpdateModal(payload);
+            manualUpdateCheckRef.current = false;
+          }
           return;
         }
         if (type === 'update:status') {
           setUpdaterStatus(payload || null);
-          setSheetState((current) => ({
-            ...current,
-            statusKind: payload?.state === 'error' ? 'warning' : 'info',
-            statusMessage: payload?.message || current.statusMessage,
-          }));
+          if (manualUpdateCheckRef.current) {
+            setSheetState((current) => ({
+              ...current,
+              statusKind: payload?.state === 'error' ? 'warning' : 'info',
+              statusMessage: payload?.message || current.statusMessage,
+            }));
+            if (payload?.state === 'downloaded' || payload?.state === 'error') {
+              manualUpdateCheckRef.current = false;
+            }
+          }
           return;
         }
         if (type === 'menu:replay-tutorial') {
@@ -1689,7 +1703,8 @@ export default function NotificationManagerApp() {
     if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) {
       return;
     }
-    void runStartupUpdateCheck();
+    // Do not show update status on normal startup
+    // void runStartupUpdateCheck();
   }, [runStartupUpdateCheck, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
 
   const selectedItem = items[selectedIndex] || items[0];
