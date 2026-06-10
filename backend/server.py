@@ -2239,7 +2239,7 @@ HELP_CONTENT = {
                 "Tests the candidate's ability to transfer to a supervisor. Same coaching/fail flow as calls."
             ],
             "bullets": [
-                "Post \"WXYZ Supervisor Test Call Being Queued\" in Discord Stars channel",
+                "Post \"WXYZ: Supervisor Test Call Being Queued\" in Discord Stars channel",
                 "Call the WXYZ number: <b>1-828-630-7006</b>",
                 "Pass Transfer 1 → done (go to Review). Fail both → Newbie Shift.",
             ],

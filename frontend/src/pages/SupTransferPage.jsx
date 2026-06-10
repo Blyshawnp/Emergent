@@ -429,9 +429,9 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         <div style={{ color: 'white', fontWeight: 700, fontSize: '1.125rem' }}>Call Corp WXYZ Test Transfer #: 1-828-630-7006</div>
       </div>
       <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px' }}>
-        <span><b>Discord Post for Stars:</b> WXYZ Supervisor Test Call Being Queued</span>
+        <span><b>Discord Post for Stars:</b> WXYZ: Supervisor Test Call Being Queued</span>
         <button className="btn btn-primary btn-sm" onClick={() => {
-          navigator.clipboard.writeText('WXYZ Supervisor Test Call Being Queued');
+          navigator.clipboard.writeText('WXYZ: Supervisor Test Call Being Queued');
           setCopied(true); setTimeout(() => setCopied(false), 3000);
         }} data-testid="sup-copy-discord">{copied ? 'Copied' : 'Copy'}</button>
       </div>
