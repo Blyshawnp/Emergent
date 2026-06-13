@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
   { id: 'c-dontask', label: "Don't Ask, Just Verify Address and Phone Number", helper: 'Existing member already provided address and phone number' },
@@ -81,10 +82,15 @@ function classifyCallType(callType = '') {
 
 function getCallersForType(callType, settings, defaults) {
   const callCategory = classifyCallType(callType);
-  if (callCategory === 'increase') return settings.donors_increase || defaults.donors_increase || [];
-  if (callCategory === 'new') return settings.donors_new || defaults.donors_new || [];
-  return settings.donors_existing || defaults.donors_existing || [];
+  if (callCategory === 'increase') {
+    return (settings?.donors_increase && settings.donors_increase.length > 0) ? settings.donors_increase : (defaults?.donors_increase || []);
+  }
+  if (callCategory === 'new') {
+    return (settings?.donors_new && settings.donors_new.length > 0) ? settings.donors_new : (defaults?.donors_new || []);
+  }
+  return (settings?.donors_existing && settings.donors_existing.length > 0) ? settings.donors_existing : (defaults?.donors_existing || []);
 }
+
 
 function getDonationsForShow(showData, callType) {
   if (!showData) return ['Other'];
@@ -273,6 +279,11 @@ export default function CallsPage({ onNavigate, navigationState }) {
   }, []);
 
   useEffect(() => {
+    const el = document.querySelector('[data-testid="page-content"]');
+    if (el) el.scrollTo({ top: 0, behavior: 'instant' });
+  }, [callNum]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -343,6 +354,13 @@ export default function CallsPage({ onNavigate, navigationState }) {
   const shows = settings.shows || defaults.shows || [];
   const callCoaching = getCallCoachingForDisplay(settings.call_coaching || defaults.call_coaching || DEFAULT_CALL_COACHING);
   const callFails = settings.call_fails || defaults.call_fails || DEFAULT_CALL_FAILS;
+  const screenshotItems = useMemo(
+    () => [
+      ...(Array.isArray(settings.discord_screenshots) ? settings.discord_screenshots : []),
+      ...(Array.isArray(defaults.discord_screenshots) ? defaults.discord_screenshots : []),
+    ],
+    [settings.discord_screenshots, defaults.discord_screenshots]
+  );
   const callers = useMemo(() => getCallersForType(callSetup.type, settings, defaults), [callSetup.type, settings, defaults]);
   useEffect(() => {
     if (!callers.length) return;
@@ -548,7 +566,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
         <ScenarioCard currentCaller={currentCaller} callSetup={callSetup} randFlags={randFlags} donations={donations} onRegenerate={rollRandom} showData={showData} />
       </div>
 
-      <PaymentSimulation />
+      <PaymentSimulation key={callNum} payment={settings.payment || defaults.payment || {}} />
 
       {currentCaller.length > 0 && <CallerDemographics caller={currentCaller} />}
 
@@ -563,7 +581,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
       <div className="card" style={{ marginBottom: 16 }} data-tour="calls-coaching">
         <div className="coaching-card-header">
           <h3>Coaching Given</h3>
-          <PhoneticsTableButton />
+          <PhoneticsTableButton screenshots={screenshotItems} />
         </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <CoachingGrid items={callCoaching} checked={coaching} onChange={setCoaching} />
@@ -619,20 +637,39 @@ export default function CallsPage({ onNavigate, navigationState }) {
 }
 
 // --- Extracted sub-components to reduce main component size ---
-function PaymentSimulation() {
+function PaymentSimulation({ payment }) {
+  const options = useMemo(() => getPaymentOptionsFromSettings(payment), [payment]);
+  const [cardId, setCardId] = useState('default');
+  const [eftId, setEftId] = useState('default');
+  const selectedCard = options.card.find((item) => item.id === cardId) || options.card[0];
+  const selectedEft = options.eft.find((item) => item.id === eftId) || options.eft[0];
+
   return (
     <div className="card" style={{ marginBottom: 16 }} data-tour="calls-payment">
       <h3 style={{ marginBottom: 8 }}>Payment Simulation</h3>
+      <p className="text-muted text-sm payment-training-note">Simulated/training payment info only.</p>
       <div className="payment-grid">
         <div className="payment-card payment-card-cc">
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>AMERICAN EXPRESS</div>
-          <div className="font-mono font-bold" style={{ fontSize: 18, letterSpacing: 2 }}>3782 822463 10005</div>
-          <div style={{ fontWeight: 600, fontSize: 13, marginTop: 4 }}>EXP: 07/2027 &nbsp; CVV: 1928</div>
+          <label className="payment-option-select">
+            <span>Card Option</span>
+            <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="call-card-option">
+              {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>{selectedCard.type.toUpperCase()}</div>
+          <div className="font-mono font-bold payment-card-number">{selectedCard.number}</div>
+          <div style={{ fontWeight: 600, fontSize: 13, marginTop: 4 }}>EXP: {selectedCard.exp} &nbsp; CVV: {selectedCard.cvv}</div>
         </div>
         <div className="payment-card payment-card-eft">
+          <label className="payment-option-select">
+            <span>EFT Option</span>
+            <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="call-eft-option">
+              {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
           <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>EFT / BANK DRAFT</div>
-          <div className="font-mono font-bold" style={{ fontSize: 15 }}>RTN: 021000021</div>
-          <div className="font-mono font-bold" style={{ fontSize: 15 }}>ACC: 1357902468</div>
+          <div className="font-mono font-bold" style={{ fontSize: 15 }}>RTN: {selectedEft.routing}</div>
+          <div className="font-mono font-bold" style={{ fontSize: 15 }}>ACC: {selectedEft.account}</div>
         </div>
       </div>
     </div>

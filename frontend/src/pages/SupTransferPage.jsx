@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 const DEFAULT_SUP_COACHING = [
   { label: 'Minimize dead air', helper: 'Maintain engagement throughout hold and transfer' },
   { label: 'Queue Not Changed', helper: 'Did not change queue to ACD Direct Supervisor' },
@@ -168,6 +169,13 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   const supCoaching = settings.sup_coaching || defaults.sup_coaching || DEFAULT_SUP_COACHING;
   const supFails = settings.sup_fails || defaults.sup_fails || DEFAULT_SUP_FAILS;
   const supReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;
+  const screenshotItems = useMemo(
+    () => [
+      ...(Array.isArray(settings.discord_screenshots) ? settings.discord_screenshots : []),
+      ...(Array.isArray(defaults.discord_screenshots) ? defaults.discord_screenshots : []),
+    ],
+    [settings.discord_screenshots, defaults.discord_screenshots]
+  );
   const callers = useMemo(() => {
     const allCallers = [
       ...(settings.donors_new || defaults.donors_new || []),
@@ -429,9 +437,9 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         <div style={{ color: 'white', fontWeight: 700, fontSize: '1.125rem' }}>Call Corp WXYZ Test Transfer #: 1-828-630-7006</div>
       </div>
       <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px' }}>
-        <span><b>Discord Post for Stars:</b> WXYZ: Supervisor Test Call Being Queued</span>
+        <span><b>Discord Post for Stars:</b> WXYZ Supervisor Test Call Being Queued</span>
         <button className="btn btn-primary btn-sm" onClick={() => {
-          navigator.clipboard.writeText('WXYZ: Supervisor Test Call Being Queued');
+          navigator.clipboard.writeText('WXYZ Supervisor Test Call Being Queued');
           setCopied(true); setTimeout(() => setCopied(false), 3000);
         }} data-testid="sup-copy-discord">{copied ? 'Copied' : 'Copy'}</button>
       </div>
@@ -476,6 +484,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         </div>
       </div>
 
+      <PaymentSimulation payment={settings.payment || defaults.payment || {}} />
+
       {currentCaller.length > 0 && (
         <div className="card" style={{ margin: '16px 0' }}>
           <h3 style={{ marginBottom: 8 }}>Caller Demographics</h3>
@@ -498,7 +508,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       <div className="card" style={{ marginBottom: 16 }} data-tour="sup-coaching">
         <div className="coaching-card-header">
           <h3>Coaching Given</h3>
-          <PhoneticsTableButton />
+          <PhoneticsTableButton screenshots={screenshotItems} />
         </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <div className="coaching-grid">
@@ -563,6 +573,45 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="sup-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />
         <button className="btn btn-primary" onClick={handleContinue} data-testid="sup-continue">Continue</button>
+      </div>
+    </div>
+  );
+}
+
+function PaymentSimulation({ payment }) {
+  const options = useMemo(() => getPaymentOptionsFromSettings(payment), [payment]);
+  const [cardId, setCardId] = useState('default');
+  const [eftId, setEftId] = useState('default');
+  const selectedCard = options.card.find((item) => item.id === cardId) || options.card[0];
+  const selectedEft = options.eft.find((item) => item.id === eftId) || options.eft[0];
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }} data-tour="sup-payment">
+      <h3 style={{ marginBottom: 8 }}>Payment Simulation</h3>
+      <p className="text-muted text-sm payment-training-note">Simulated/training payment info only.</p>
+      <div className="payment-grid">
+        <div className="payment-card payment-card-cc">
+          <label className="payment-option-select">
+            <span>Card Option</span>
+            <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="sup-card-option">
+              {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>{selectedCard.type.toUpperCase()}</div>
+          <div className="font-mono font-bold payment-card-number">{selectedCard.number}</div>
+          <div style={{ fontWeight: 600, fontSize: 13, marginTop: 4 }}>EXP: {selectedCard.exp} &nbsp; CVV: {selectedCard.cvv}</div>
+        </div>
+        <div className="payment-card payment-card-eft">
+          <label className="payment-option-select">
+            <span>EFT Option</span>
+            <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="sup-eft-option">
+              {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>EFT / BANK DRAFT</div>
+          <div className="font-mono font-bold" style={{ fontSize: 15 }}>RTN: {selectedEft.routing}</div>
+          <div className="font-mono font-bold" style={{ fontSize: 15 }}>ACC: {selectedEft.account}</div>
+        </div>
       </div>
     </div>
   );

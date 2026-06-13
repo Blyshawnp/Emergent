@@ -180,6 +180,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryNotice, setSummaryNotice] = useState('');
   const reviewHydratedRef = useRef(false);
+  const summaryStartedRef = useRef(false);
   const historyRecord = navigationState?.historyRecord || null;
   const reviewSessionPayload = navigationState?.reviewSession || navigationState?.session || null;
   const isHistoricalReview = Boolean(historyRecord);
@@ -255,6 +256,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           await api.updateSession({ final_status: finalStatus });
         }
 
+        // Final evaluator notes are optional and can be bypassed before Review if this feature is disabled later.
         // Check if final notes modal was completed/skipped
         const hasNotesCompletedOrSkipped = s.finalEvaluatorNotes?.completed || s.finalEvaluatorNotes?.skipped;
         if (!hasNotesCompletedOrSkipped) {
@@ -281,6 +283,13 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           reviewHydratedRef.current = true;
           return;
         }
+
+        if (summaryStartedRef.current) {
+          setLoading(false);
+          reviewHydratedRef.current = true;
+          return;
+        }
+        summaryStartedRef.current = true;
 
         setCoaching(getFallbackCoachingSummary(resolvedSession));
         setFail(getFallbackFailSummary(resolvedSession));
@@ -391,6 +400,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     const nextSession = { ...session, finalEvaluatorNotes: notesObj };
     setSession(nextSession);
     
+    summaryStartedRef.current = true;
+    
     await api.updateSession({ finalEvaluatorNotes: notesObj });
     
     setSummaryLoading(true);
@@ -424,6 +435,61 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     setIsEditingNotes(false);
     setSession({ ...session, evaluatorNotesSummaryEdited: editingNotesText });
     await api.updateSession({ evaluatorNotesSummaryEdited: editingNotesText });
+  };
+
+  const handleClearNotes = async () => {
+    const confirmed = await modal.confirmDanger(
+      'Clear Final Notes',
+      'Are you sure you want to remove all final evaluator notes and regenerate summaries?'
+    );
+    if (!confirmed) return;
+    
+    setShowFinalNotesModal(false);
+    
+    const clearedNotes = {
+      notes: '',
+      includeInCoachingSummary: true,
+      includeInFailSummary: true,
+      historyOnly: false,
+      completed: false,
+      skipped: true
+    };
+    
+    const nextSession = {
+      ...session,
+      finalEvaluatorNotes: clearedNotes,
+      evaluatorNotesSummaryEdited: undefined,
+      coaching_summary: '',
+      fail_summary: ''
+    };
+    setSession(nextSession);
+    setCoaching('');
+    setFail('');
+    
+    summaryStartedRef.current = true;
+    
+    await api.updateSession({
+      finalEvaluatorNotes: clearedNotes,
+      evaluatorNotesSummaryEdited: null,
+      coaching_summary: '',
+      fail_summary: ''
+    });
+    
+    setSummaryLoading(true);
+    setSummaryNotice(SUMMARY_PENDING_MESSAGE);
+    try {
+      const summaries = await api.generateSummaries();
+      setCoaching(summaries.coaching || getFallbackCoachingSummary(nextSession));
+      setFail(summaries.fail || getFallbackFailSummary(nextSession));
+      setSummaryDiagnostics(summaries);
+      setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
+    } catch (error) {
+      const message = getSummaryFailureMessage(error);
+      setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
+      setSummaryNotice(message);
+    } finally {
+      setSummaryLoading(false);
+    }
   };
 
   const handleStartEditNotesSummary = () => {
@@ -962,9 +1028,12 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
               data-testid="review-notes"
             />
             {!isHistoricalReview && (
-              <div className="review-btn-row" style={{ marginTop: 8 }}>
+              <div className="review-btn-row" style={{ marginTop: 8, display: 'flex', gap: 10 }}>
                 <button className="btn btn-ghost btn-sm" onClick={handleStartEditNotesSummary}>
                   Edit Evaluator Notes Summary
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={handleClearNotes} style={{ color: 'var(--color-danger)' }}>
+                  Clear/Remove Notes
                 </button>
               </div>
             )}

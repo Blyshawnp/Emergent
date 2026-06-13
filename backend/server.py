@@ -1961,28 +1961,41 @@ async def _background_remote_content_task():
         # Update in-memory defaults
         if isinstance(EXTERNAL_CONTENT.get("call_types"), list) and EXTERNAL_CONTENT["call_types"]:
             CALL_TYPES = EXTERNAL_CONTENT["call_types"]
+            DEFAULT_SETTINGS["call_types"] = CALL_TYPES
         if isinstance(EXTERNAL_CONTENT.get("sup_reasons"), list) and EXTERNAL_CONTENT["sup_reasons"]:
             SUP_REASONS = EXTERNAL_CONTENT["sup_reasons"]
+            DEFAULT_SETTINGS["sup_reasons"] = SUP_REASONS
         if isinstance(EXTERNAL_CONTENT.get("shows"), list) and EXTERNAL_CONTENT["shows"]:
             SHOWS = EXTERNAL_CONTENT["shows"]
+            DEFAULT_SETTINGS["shows"] = SHOWS
         if isinstance(EXTERNAL_CONTENT.get("donors_new"), list) and EXTERNAL_CONTENT["donors_new"]:
             NEW_DONORS = EXTERNAL_CONTENT["donors_new"]
+            DEFAULT_SETTINGS["donors_new"] = NEW_DONORS
         if isinstance(EXTERNAL_CONTENT.get("donors_existing"), list) and EXTERNAL_CONTENT["donors_existing"]:
             EXISTING_MEMBERS = EXTERNAL_CONTENT["donors_existing"]
+            DEFAULT_SETTINGS["donors_existing"] = EXISTING_MEMBERS
         if isinstance(EXTERNAL_CONTENT.get("donors_increase"), list) and EXTERNAL_CONTENT["donors_increase"]:
             INCREASE_SUSTAINING = EXTERNAL_CONTENT["donors_increase"]
+            DEFAULT_SETTINGS["donors_increase"] = INCREASE_SUSTAINING
         if isinstance(EXTERNAL_CONTENT.get("discord_templates"), list) and EXTERNAL_CONTENT["discord_templates"]:
             DISCORD_TEMPLATES = EXTERNAL_CONTENT["discord_templates"]
+            DEFAULT_SETTINGS["discord_templates"] = DISCORD_TEMPLATES
         if isinstance(EXTERNAL_CONTENT.get("discord_screenshots"), list) and EXTERNAL_CONTENT["discord_screenshots"]:
             DISCORD_SCREENSHOTS = EXTERNAL_CONTENT["discord_screenshots"]
+            DEFAULT_SETTINGS["discord_screenshots"] = DISCORD_SCREENSHOTS
         if isinstance(EXTERNAL_CONTENT.get("call_coaching"), list) and EXTERNAL_CONTENT["call_coaching"]:
             CALL_COACHING = EXTERNAL_CONTENT["call_coaching"]
+            DEFAULT_SETTINGS["call_coaching"] = CALL_COACHING
         if isinstance(EXTERNAL_CONTENT.get("call_fails"), list) and EXTERNAL_CONTENT["call_fails"]:
             CALL_FAILS = EXTERNAL_CONTENT["call_fails"]
+            DEFAULT_SETTINGS["call_fails"] = CALL_FAILS
         if isinstance(EXTERNAL_CONTENT.get("sup_coaching"), list) and EXTERNAL_CONTENT["sup_coaching"]:
             SUP_COACHING = EXTERNAL_CONTENT["sup_coaching"]
+            DEFAULT_SETTINGS["sup_coaching"] = SUP_COACHING
         if isinstance(EXTERNAL_CONTENT.get("sup_fails"), list) and EXTERNAL_CONTENT["sup_fails"]:
             SUP_FAILS = EXTERNAL_CONTENT["sup_fails"]
+            DEFAULT_SETTINGS["sup_fails"] = SUP_FAILS
+
 
         if EXTERNAL_CONTENT.get("help_markdown"):
             global HELP_DOC_MARKDOWN
