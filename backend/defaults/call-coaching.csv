@@ -5,4 +5,6 @@
 "c-phonetics","Phonetics table provided to candidate","",""
 "c-verbatim","Read script verbatim","No adlibbing or skipping sections",""
 "c-nav","Use effective script navigation","","Scroll down to avoid missing parts of the script|Use the Back and Next buttons and not the Icons"
+"c-search-name","Search name for every call","Search the caller's name on every call to avoid duplicate member records.",""
+"c-no-volunteer","Do not volunteer information","Do not verify details the member has not provided, such as an email address.",""
 "c-other","Other","",""

@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import FailReasonGrid from '../components/FailReasonGrid';
 import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 const DEFAULT_SUP_COACHING = [
   { label: 'Minimize dead air', helper: 'Maintain engagement throughout hold and transfer' },
@@ -13,6 +14,8 @@ const DEFAULT_SUP_COACHING = [
   { label: 'Discord permission', helper: 'Ask explicit permission to transfer via Discord' },
   { label: 'Did not notify caller of transfer', helper: 'Notify caller before transferring' },
   { label: 'Screenshots/Discord Chat', helper: 'Coached with standard instructions and screenshots' },
+  { label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
+  { label: 'Do not volunteer information', helper: 'Do not verify details the member has not provided, such as an email address.' },
   { label: 'Other' },
 ];
 
@@ -84,6 +87,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   const [coaching, setCoaching] = useState({});
   const [coachNotes, setCoachNotes] = useState('');
   const [fails, setFails] = useState({});
+  const [failReasonDetails, setFailReasonDetails] = useState({});
+  const [expandedFailDetails, setExpandedFailDetails] = useState({});
   const [failNotes, setFailNotes] = useState('');
   const [isFinal, setIsFinal] = useState(false);
   const [isSupervisorOnly, setIsSupervisorOnly] = useState(false);
@@ -124,6 +129,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
           savedDraft?.result ||
           Object.values(savedDraft?.coaching || {}).some(Boolean) ||
           Object.values(savedDraft?.fails || {}).some(Boolean) ||
+          Object.values(savedDraft?.failReasonDetails || savedDraft?.fail_reason_details || {}).some((value) => String(value || '').trim()) ||
           String(savedDraft?.coach_notes || savedDraft?.fail_notes || '').trim()
         );
         const hydrateSource = draftMatchesRequestedTransfer && (requestedTransferNum || draftHasUserState) ? savedDraft : savedTransfer;
@@ -141,6 +147,13 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
           setCoaching(hydrateSource?.coaching || {});
           setCoachNotes(hydrateSource?.coach_notes || '');
           setFails(hydrateSource?.fails || {});
+          const hydratedFailDetails = hydrateSource?.failReasonDetails || hydrateSource?.fail_reason_details || {};
+          setFailReasonDetails(hydratedFailDetails);
+          setExpandedFailDetails(Object.fromEntries(
+            Object.entries(hydratedFailDetails)
+              .filter(([, value]) => String(value || '').trim())
+              .map(([key]) => [key, true])
+          ));
           setFailNotes(hydrateSource?.fail_notes || '');
           setSupRandFlags(hydrateSource?.rand_flags || {
             phone: ['Mobile', 'Landline'][Math.floor(Math.random() * 2)],
@@ -167,6 +180,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
 
   const shows = useMemo(() => settings.shows || defaults.shows || [], [settings.shows, defaults.shows]);
   const supCoaching = settings.sup_coaching || defaults.sup_coaching || DEFAULT_SUP_COACHING;
+  const supCoachingSplit = Math.ceil(supCoaching.length / 2);
   const supFails = settings.sup_fails || defaults.sup_fails || DEFAULT_SUP_FAILS;
   const supReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;
   const screenshotItems = useMemo(
@@ -251,6 +265,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         coaching,
         coach_notes: coachNotes,
         fails,
+        failReasonDetails,
         fail_notes: failNotes,
         rand_flags: supRandFlags,
       },
@@ -262,7 +277,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [transferNum, result, setup, currentCaller, shows, coaching, coachNotes, fails, failNotes, supRandFlags, candidateName]);
+  }, [transferNum, result, setup, currentCaller, shows, coaching, coachNotes, fails, failReasonDetails, failNotes, supRandFlags, candidateName]);
 
   useEffect(() => {
     return () => {
@@ -301,12 +316,15 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
     setCoaching({});
     setCoachNotes('');
     setFails({});
+    setFailReasonDetails({});
+    setExpandedFailDetails({});
     setFailNotes('');
   };
 
   const handleContinue = async () => {
     if (!result) { await modal.warning('Notice', 'Select PASS or FAIL.'); return; }
     if (result === 'Fail' && !Object.values(fails).some(v => v)) { await modal.warning('Notice', 'Select at least one Fail Reason.'); return; }
+    if (result === 'Fail' && fails['Other'] && !failNotes.trim()) { await modal.warning('Notice', 'You selected "Other" — please provide notes.'); return; }
     const hasCoaching = Object.values(coaching).some(v => v);
     if (!hasCoaching) {
       const cont = await modal.showModal({
@@ -326,7 +344,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       transfer_num: transferNum, result,
       caller: setup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
       show: setup.show || (shows.length ? shows[0][0] : ''), reason: setup.reason,
-      coaching, coach_notes: coachNotes, fails, fail_notes: failNotes,
+      coaching, coach_notes: coachNotes, fails, failReasonDetails, fail_notes: failNotes,
     };
     latestDraftPayloadRef.current = null;
     await api.saveSupTransfer(data);
@@ -484,7 +502,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         </div>
       </div>
 
-      <PaymentSimulation payment={settings.payment || defaults.payment || {}} />
+      <PaymentSimulation key={transferNum} payment={settings.payment || defaults.payment || {}} />
 
       {currentCaller.length > 0 && (
         <div className="card" style={{ margin: '16px 0' }}>
@@ -512,8 +530,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <div className="coaching-grid">
-          <div>{supCoaching.slice(0, 4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
-          <div>{supCoaching.slice(4).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
+          <div>{supCoaching.slice(0, supCoachingSplit).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
+          <div>{supCoaching.slice(supCoachingSplit).map(item => <CoachItem key={item.label} item={item} checked={coaching} onToggle={k => toggle(k, setCoaching)} />)}</div>
         </div>
         <div style={{ marginTop: 16 }}>
           <label className="text-sm font-bold">Other Coaching Notes</label>
@@ -532,14 +550,15 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       {result === 'Fail' && (
         <div className="card card-fail" style={{ marginBottom: 16 }}>
           <h3 style={{ color: 'var(--color-danger)' }}>Fail Reasons</h3>
-          <div className="coaching-grid">
-            <div>{supFails.slice(0, 3).map(item => (
-              <label key={item} className="checkbox-label"><input type="checkbox" checked={!!fails[item]} onChange={() => toggle(item, setFails)} /><span>{item}</span></label>
-            ))}</div>
-            <div>{supFails.slice(3).map(item => (
-              <label key={item} className="checkbox-label"><input type="checkbox" checked={!!fails[item]} onChange={() => toggle(item, setFails)} /><span>{item}</span></label>
-            ))}</div>
-          </div>
+          <FailReasonGrid
+            items={supFails}
+            checked={fails}
+            onCheckedChange={setFails}
+            details={failReasonDetails}
+            onDetailsChange={setFailReasonDetails}
+            expanded={expandedFailDetails}
+            onExpandedChange={setExpandedFailDetails}
+          />
           <div style={{ marginTop: 16 }}>
             <label className="text-sm font-bold">Other Fail Notes</label>
             <textarea
@@ -591,24 +610,28 @@ function PaymentSimulation({ payment }) {
       <p className="text-muted text-sm payment-training-note">Simulated/training payment info only.</p>
       <div className="payment-grid">
         <div className="payment-card payment-card-cc">
-          <label className="payment-option-select">
-            <span>Card Option</span>
-            <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="sup-card-option">
-              {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>{selectedCard.type.toUpperCase()}</div>
+          <div className="payment-card-top">
+            <div style={{ fontWeight: 700, fontSize: 12 }}>{selectedCard.type.toUpperCase()}</div>
+            <label className="payment-option-select">
+              <span>Card Option</span>
+              <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="sup-card-option">
+                {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="font-mono font-bold payment-card-number">{selectedCard.number}</div>
           <div style={{ fontWeight: 600, fontSize: 13, marginTop: 4 }}>EXP: {selectedCard.exp} &nbsp; CVV: {selectedCard.cvv}</div>
         </div>
         <div className="payment-card payment-card-eft">
-          <label className="payment-option-select">
-            <span>EFT Option</span>
-            <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="sup-eft-option">
-              {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>EFT / BANK DRAFT</div>
+          <div className="payment-card-top">
+            <div style={{ fontWeight: 700, fontSize: 12 }}>EFT / BANK DRAFT</div>
+            <label className="payment-option-select">
+              <span>EFT Option</span>
+              <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="sup-eft-option">
+                {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="font-mono font-bold" style={{ fontSize: 15 }}>RTN: {selectedEft.routing}</div>
           <div className="font-mono font-bold" style={{ fontSize: 15 }}>ACC: {selectedEft.account}</div>
         </div>

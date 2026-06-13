@@ -4,7 +4,9 @@ Based on the coaching checkboxes selected during the mock certification session,
 
 The summary must be objective, professional, and suitable for internal documentation. Use the existing session-note line structure when possible, keeping each completed call or supervisor transfer management-facing and concise.
 
-Incorporate the selected coaching checklist items directly into the summary instead of generalizing vaguely. Reference the specific coached items in plain language, and only reference coaching items that appear in the session notes. Keep checkbox-specific guidance from the session notes intact when it explains what was coached, including donor-information verification guidance and phonetics-table coaching.
+Incorporate the selected coaching checklist items directly into the summary instead of generalizing vaguely. Reference the specific coached items in plain language, and only reference coaching items that appear in the session notes. Keep checkbox-specific guidance from the session notes intact when it explains what was coached, including donor-information verification guidance, phonetics-table coaching, caller-name search coaching, and coaching on not volunteering unprovided member information.
+
+If a failed call or supervisor transfer includes fail-reason detail lines, preserve the connection between the fail reason and its detail. Do not drop the detail or attach it to a different reason.
 
 Do not address the candidate. Do not use second-person language such as "you" or "your". Do not give new advice or instructions that are not already reflected in the session notes. Describe the observed performance and the coaching provided during the session.
 

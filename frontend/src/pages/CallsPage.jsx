@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import FailReasonGrid from '../components/FailReasonGrid';
 import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
@@ -16,6 +17,8 @@ const DEFAULT_CALL_COACHING = [
   { id: 'c-phonetics', label: 'Phonetics table provided to candidate' },
   { id: 'c-verbatim', label: 'Read script verbatim', helper: 'No adlibbing or skipping sections' },
   { id: 'c-nav', label: 'Use effective script navigation', children: ['Scroll down to avoid missing parts of the script', 'Use the Back and Next buttons and not the Icons'] },
+  { id: 'c-search-name', label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
+  { id: 'c-no-volunteer', label: 'Do not volunteer information', helper: 'Do not verify details the member has not provided, such as an email address.' },
   { id: 'c-other', label: 'Other' },
 ];
 
@@ -266,6 +269,8 @@ export default function CallsPage({ onNavigate, navigationState }) {
   const [coaching, setCoaching] = useState({});
   const [coachNotes, setCoachNotes] = useState('');
   const [fails, setFails] = useState({});
+  const [failReasonDetails, setFailReasonDetails] = useState({});
+  const [expandedFailDetails, setExpandedFailDetails] = useState({});
   const [failNotes, setFailNotes] = useState('');
   const [randFlags, setRandFlags] = useState({});
   const [isFinal, setIsFinal] = useState(false);
@@ -316,6 +321,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
           savedDraft?.result ||
           Object.values(savedDraft?.coaching || {}).some(Boolean) ||
           Object.values(savedDraft?.fails || {}).some(Boolean) ||
+          Object.values(savedDraft?.failReasonDetails || savedDraft?.fail_reason_details || {}).some((value) => String(value || '').trim()) ||
           String(savedDraft?.coach_notes || savedDraft?.fail_notes || '').trim()
         );
         const hydrateSource = draftMatchesRequestedCall && (requestedCallNum || draftHasUserState) ? savedDraft : savedCall;
@@ -335,6 +341,13 @@ export default function CallsPage({ onNavigate, navigationState }) {
           setCoaching(hydrateSource?.coaching || {});
           setCoachNotes(hydrateSource?.coach_notes || '');
           setFails(hydrateSource?.fails || {});
+          const hydratedFailDetails = hydrateSource?.failReasonDetails || hydrateSource?.fail_reason_details || {};
+          setFailReasonDetails(hydratedFailDetails);
+          setExpandedFailDetails(Object.fromEntries(
+            Object.entries(hydratedFailDetails)
+              .filter(([, value]) => String(value || '').trim())
+              .map(([key]) => [key, true])
+          ));
           setFailNotes(hydrateSource?.fail_notes || '');
           setRandFlags(hydrateSource?.rand_flags || generateRandomFlags());
         } else {
@@ -392,6 +405,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
         coaching,
         coach_notes: coachNotes,
         fails,
+        failReasonDetails,
         fail_notes: failNotes,
         rand_flags: randFlags,
       },
@@ -403,7 +417,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [callNum, result, callSetup, currentCaller, donations, coaching, coachNotes, fails, failNotes, randFlags, candidateName]);
+  }, [callNum, result, callSetup, currentCaller, donations, coaching, coachNotes, fails, failReasonDetails, failNotes, randFlags, candidateName]);
 
   useEffect(() => {
     return () => {
@@ -441,6 +455,8 @@ export default function CallsPage({ onNavigate, navigationState }) {
     setCoaching({});
     setCoachNotes('');
     setFails({});
+    setFailReasonDetails({});
+    setExpandedFailDetails({});
     setFailNotes('');
     rollRandom();
   }, [rollRandom]);
@@ -472,7 +488,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
       call_num: callNum, result, type: callSetup.type, show: callSetup.show,
       caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
       donation: callSetup.donation || donations[0],
-      coaching, coach_notes: coachNotes, fails, fail_notes: failNotes, rand_flags: randFlags,
+      coaching, coach_notes: coachNotes, fails, failReasonDetails, fail_notes: failNotes, rand_flags: randFlags,
     };
     latestDraftPayloadRef.current = null;
     await api.saveCall(callData);
@@ -487,7 +503,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
       const el = document.querySelector('[data-testid="page-content"]');
       if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [result, fails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, randFlags, modal, onNavigate, resetCall]);
+  }, [result, fails, failReasonDetails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, randFlags, modal, onNavigate, resetCall]);
 
   const handleDiscardSession = useCallback(async () => {
     const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');
@@ -603,7 +619,15 @@ export default function CallsPage({ onNavigate, navigationState }) {
         <div className="card card-fail" style={{ marginBottom: 16 }} data-tour="calls-fail-reasons">
           <h3 style={{ color: 'var(--color-danger)' }}>Fail Reasons</h3>
           <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
-          <FailGrid items={callFails} checked={fails} onChange={setFails} />
+          <FailReasonGrid
+            items={callFails}
+            checked={fails}
+            onCheckedChange={setFails}
+            details={failReasonDetails}
+            onDetailsChange={setFailReasonDetails}
+            expanded={expandedFailDetails}
+            onExpandedChange={setExpandedFailDetails}
+          />
           <div style={{ marginTop: 16 }}>
             <label className="text-sm font-bold">Other Fail Notes</label>
             <textarea
@@ -650,24 +674,28 @@ function PaymentSimulation({ payment }) {
       <p className="text-muted text-sm payment-training-note">Simulated/training payment info only.</p>
       <div className="payment-grid">
         <div className="payment-card payment-card-cc">
-          <label className="payment-option-select">
-            <span>Card Option</span>
-            <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="call-card-option">
-              {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>{selectedCard.type.toUpperCase()}</div>
+          <div className="payment-card-top">
+            <div style={{ fontWeight: 700, fontSize: 12 }}>{selectedCard.type.toUpperCase()}</div>
+            <label className="payment-option-select">
+              <span>Card Option</span>
+              <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="call-card-option">
+                {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="font-mono font-bold payment-card-number">{selectedCard.number}</div>
           <div style={{ fontWeight: 600, fontSize: 13, marginTop: 4 }}>EXP: {selectedCard.exp} &nbsp; CVV: {selectedCard.cvv}</div>
         </div>
         <div className="payment-card payment-card-eft">
-          <label className="payment-option-select">
-            <span>EFT Option</span>
-            <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="call-eft-option">
-              {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-          </label>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>EFT / BANK DRAFT</div>
+          <div className="payment-card-top">
+            <div style={{ fontWeight: 700, fontSize: 12 }}>EFT / BANK DRAFT</div>
+            <label className="payment-option-select">
+              <span>EFT Option</span>
+              <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="call-eft-option">
+                {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="font-mono font-bold" style={{ fontSize: 15 }}>RTN: {selectedEft.routing}</div>
           <div className="font-mono font-bold" style={{ fontSize: 15 }}>ACC: {selectedEft.account}</div>
         </div>
@@ -727,17 +755,3 @@ function CoachingItem({ item, checked, onToggle }) {
   );
 }
 
-function FailGrid({ items, checked, onChange }) {
-  const toggle = (key) => onChange(prev => ({ ...prev, [key]: !prev[key] }));
-  const half = Math.ceil(items.length / 2);
-  return (
-    <div className="coaching-grid">
-      <div>{items.slice(0, half).map(item => (
-        <label key={item} className="checkbox-label"><input type="checkbox" checked={!!checked[item]} onChange={() => toggle(item)} /><span>{item}</span></label>
-      ))}</div>
-      <div>{items.slice(half).map(item => (
-        <label key={item} className="checkbox-label"><input type="checkbox" checked={!!checked[item]} onChange={() => toggle(item)} /><span>{item}</span></label>
-      ))}</div>
-    </div>
-  );
-}
