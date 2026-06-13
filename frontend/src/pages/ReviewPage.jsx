@@ -99,6 +99,32 @@ function getFallbackFailSummary(session) {
   return 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
 }
 
+const SUMMARY_PENDING_MESSAGE = 'Generating summaries...';
+const SUMMARY_TIMEOUT_MESSAGE = 'Summary generation timed out. You can continue reviewing the session or retry summary generation.';
+
+function isSummaryPlaceholder(text) {
+  if (!text) return true;
+  const t = text.trim();
+  return (
+    t === '' ||
+    t === SUMMARY_PENDING_MESSAGE ||
+    t === SUMMARY_TIMEOUT_MESSAGE ||
+    t.startsWith('No coaching summary was generated before Review loaded') ||
+    t.startsWith('No fail summary was generated before Review loaded') ||
+    t.startsWith('No saved coaching summary is available') ||
+    t.startsWith('No saved fail summary is available') ||
+    t === 'Generating review summaries...' ||
+    t === 'Loading review...'
+  );
+}
+
+function getSafeSummaryForSubmit(text, fallback = '') {
+  if (isSummaryPlaceholder(text)) {
+    return fallback;
+  }
+  return text;
+}
+
 function getSummaryFailureMessage(error, fallback = 'Unable to generate summaries.') {
   const message = error?.response?.data?.detail || error?.message || String(error || fallback);
   const lowered = message.toLowerCase();
@@ -123,6 +149,21 @@ function getReviewBackTarget(session, isHistoricalReview) {
   return { page: 'basics' };
 }
 
+function formatFinalNotesSummary(notes) {
+  if (!notes) return 'No final notes were added.';
+  const lines = [];
+  if (notes.historyOnly) {
+    lines.push("(History-Only Notes - not included in summaries)");
+  }
+  if (notes.notes?.trim()) lines.push(notes.notes.trim());
+  if (notes.strengths?.trim()) lines.push(`Strengths: ${notes.strengths.trim()}`);
+  if (notes.needsCoaching?.trim()) lines.push(`Needs Coaching: ${notes.needsCoaching.trim()}`);
+  if (notes.other?.trim()) lines.push(`Other Notes: ${notes.other.trim()}`);
+  
+  if (lines.length === 0) return 'No final notes were added.';
+  return lines.join('\n\n');
+}
+
 export default function ReviewPage({ onNavigate, navigationState, onHistoryRefresh }) {
   const modal = useModal();
   const modalRef = useRef(modal);
@@ -142,6 +183,32 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const historyRecord = navigationState?.historyRecord || null;
   const reviewSessionPayload = navigationState?.reviewSession || navigationState?.session || null;
   const isHistoricalReview = Boolean(historyRecord);
+
+  // New States
+  const [showFinalNotesModal, setShowFinalNotesModal] = useState(false);
+  const [tempNotes, setTempNotes] = useState({
+    notes: '',
+    includeInCoachingSummary: true,
+    includeInFailSummary: true,
+    historyOnly: false,
+  });
+
+  const [isEditingCoaching, setIsEditingCoaching] = useState(false);
+  const [tempCoaching, setTempCoaching] = useState('');
+
+  const [isEditingFail, setIsEditingFail] = useState(false);
+  const [tempFail, setTempFail] = useState('');
+
+  const [isEditingNotes, setIsEditingNotes] = useState(false);
+  const [editingNotesText, setEditingNotesText] = useState('');
+
+  const [showRegenInstructionsModal, setShowRegenInstructionsModal] = useState(false);
+  const [regenType, setRegenType] = useState('coaching');
+  const [regenInstructions, setRegenInstructions] = useState('');
+
+  const [coachingEdited, setCoachingEdited] = useState(false);
+  const [failEdited, setFailEdited] = useState(false);
+  const [manuallyEdited, setManuallyEdited] = useState(false);
 
   useEffect(() => {
     modalRef.current = modal;
@@ -186,6 +253,23 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
 
         if (!s.final_status) {
           await api.updateSession({ final_status: finalStatus });
+        }
+
+        // Check if final notes modal was completed/skipped
+        const hasNotesCompletedOrSkipped = s.finalEvaluatorNotes?.completed || s.finalEvaluatorNotes?.skipped;
+        if (!hasNotesCompletedOrSkipped) {
+          setTempNotes({
+            notes: s.finalEvaluatorNotes?.notes || '',
+            includeInCoachingSummary: s.finalEvaluatorNotes?.includeInCoachingSummary !== false,
+            includeInFailSummary: s.finalEvaluatorNotes?.includeInFailSummary !== false,
+            historyOnly: s.finalEvaluatorNotes?.historyOnly === true
+          });
+          setShowFinalNotesModal(true);
+          setCoaching(getFallbackCoachingSummary(resolvedSession));
+          setFail(getFallbackFailSummary(resolvedSession));
+          setLoading(false);
+          reviewHydratedRef.current = true;
+          return;
         }
 
         const savedCoaching = (s.coaching_summary || '').trim();
@@ -234,14 +318,19 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   }, [historyRecord, reviewSessionPayload]);
 
   useEffect(() => {
-    if (isHistoricalReview || !reviewHydratedRef.current || !session?.candidate_name) {
+    if (isHistoricalReview || !reviewHydratedRef.current || !session?.candidate_name || showFinalNotesModal) {
       return undefined;
     }
     const timer = window.setTimeout(() => {
-      api.updateSession({ coaching_summary: coaching, fail_summary: fail }).catch(() => {});
+      if (!isSummaryPlaceholder(coaching) || !isSummaryPlaceholder(fail)) {
+        api.updateSession({
+          coaching_summary: getSafeSummaryForSubmit(coaching, ''),
+          fail_summary: getSafeSummaryForSubmit(fail, ''),
+        }).catch(() => {});
+      }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [coaching, fail, isHistoricalReview, session?.candidate_name]);
+  }, [coaching, fail, isHistoricalReview, session?.candidate_name, showFinalNotesModal]);
 
   if (loading) return <div className="page-loading" data-testid="review-page">{historyRecord ? 'Loading review...' : 'Generating review summaries...'}</div>;
   if (!session) return <div className="stub-page" data-testid="review-page"><h1>No Active Session</h1><p>Start a session from the Home screen.</p></div>;
@@ -274,6 +363,81 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     if (btn) { const orig = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = orig; }, 3000); }
   };
 
+  const handleContinueFinalNotes = async () => {
+    const notesObj = {
+      ...tempNotes,
+      completed: true,
+      skipped: false,
+      createdAt: session.finalEvaluatorNotes?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveNotesAndLoadReview(notesObj);
+  };
+
+  const handleSkipFinalNotes = async () => {
+    const notesObj = {
+      ...tempNotes,
+      completed: false,
+      skipped: true,
+      createdAt: session.finalEvaluatorNotes?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await saveNotesAndLoadReview(notesObj);
+  };
+
+  const saveNotesAndLoadReview = async (notesObj) => {
+    setShowFinalNotesModal(false);
+    
+    const nextSession = { ...session, finalEvaluatorNotes: notesObj };
+    setSession(nextSession);
+    
+    await api.updateSession({ finalEvaluatorNotes: notesObj });
+    
+    setSummaryLoading(true);
+    setSummaryNotice(SUMMARY_PENDING_MESSAGE);
+    
+    try {
+      const summaries = await api.generateSummaries();
+      setCoaching((current) => (
+        isSummaryPlaceholder(current) ? (summaries.coaching || getFallbackCoachingSummary(nextSession)) : current
+      ));
+      setFail((current) => (
+        isSummaryPlaceholder(current) ? (summaries.fail || getFallbackFailSummary(nextSession)) : current
+      ));
+      setSummaryDiagnostics(summaries);
+      setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
+    } catch (error) {
+      const message = getSummaryFailureMessage(error);
+      console.log('[REVIEW] summary generation failed', { message });
+      setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
+      setSummaryNotice(message);
+      if (message === SUMMARY_TIMEOUT_MESSAGE) {
+        setCoaching((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
+        setFail((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
+      }
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const handleSaveNotesSummary = async () => {
+    setIsEditingNotes(false);
+    setSession({ ...session, evaluatorNotesSummaryEdited: editingNotesText });
+    await api.updateSession({ evaluatorNotesSummaryEdited: editingNotesText });
+  };
+
+  const handleStartEditNotesSummary = () => {
+    const currentText = session.evaluatorNotesSummaryEdited !== undefined
+      ? session.evaluatorNotesSummaryEdited
+      : formatFinalNotesSummary(session.finalEvaluatorNotes);
+    setEditingNotesText(currentText);
+    setIsEditingNotes(true);
+  };
+
+  const handleCancelNotesSummary = () => {
+    setIsEditingNotes(false);
+  };
+
   const handleRegen = async (type) => {
     if (isHistoricalReview) return;
     if (regenerating) return;
@@ -281,21 +445,79 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     setSummaryNotice('');
     try {
       const r = await api.regenerateSummary(type);
-      setSummaryDiagnostics(r);
-      if (r.ok) {
-        if (type === 'coaching') setCoaching(r.text);
-        else setFail(r.text);
-
-      } else {
-        if (r.text) {
-          if (type === 'coaching') setCoaching(r.text);
-          else setFail(r.text);
+      if (r.ok && r.text && !isSummaryPlaceholder(r.text)) {
+        if (type === 'coaching') {
+          setCoaching(r.text);
+          setIsEditingCoaching(false);
         } else {
-          setSummaryNotice(getSummaryFailureMessage({ message: r.error || 'Unknown error' }));
+          setFail(r.text);
+          setIsEditingFail(false);
         }
+        setManuallyEdited(false);
+        setSummaryDiagnostics(r);
+      } else {
+        await modal.showModal({
+          type: 'alert',
+          title: 'Regeneration Unavailable',
+          body: 'Gemini could not regenerate this summary. Your existing summary was kept.',
+          graphic: 'warning',
+          buttons: [{ label: 'OK', cls: 'btn-primary', value: true }]
+        });
       }
-    } catch (e) { setSummaryNotice(getSummaryFailureMessage(e)); }
-    finally { setRegenerating(''); }
+    } catch (e) {
+      await modal.showModal({
+        type: 'alert',
+        title: 'Regeneration Failed',
+        body: 'Gemini could not regenerate this summary. Your existing summary was kept.',
+        graphic: 'warning',
+        buttons: [{ label: 'OK', cls: 'btn-primary', value: true }]
+      });
+    } finally {
+      setRegenerating('');
+    }
+  };
+
+  const handleRegenWithInstructions = async () => {
+    setShowRegenInstructionsModal(false);
+    if (isHistoricalReview) return;
+    if (regenerating) return;
+    setRegenerating(regenType);
+    setSummaryNotice('');
+    
+    const currentVal = regenType === 'coaching' ? coaching : fail;
+    try {
+      const r = await api.regenerateSummary(regenType, regenInstructions, currentVal);
+      if (r.ok && r.text && !isSummaryPlaceholder(r.text)) {
+        if (regenType === 'coaching') {
+          setCoaching(r.text);
+          setIsEditingCoaching(false);
+        } else {
+          setFail(r.text);
+          setIsEditingFail(false);
+        }
+        setManuallyEdited(false);
+        setSummaryDiagnostics(r);
+      } else {
+        await modal.showModal({
+          type: 'alert',
+          title: 'Regeneration Unavailable',
+          body: 'Gemini could not regenerate this summary. Your existing summary was kept.',
+          graphic: 'warning',
+          buttons: [{ label: 'OK', cls: 'btn-primary', value: true }]
+        });
+      }
+    } catch (e) {
+      console.error('[REVIEW] Summary regeneration failed:', e);
+      await modal.showModal({
+        type: 'alert',
+        title: 'Regeneration Failed',
+        body: 'Gemini could not regenerate this summary. Your existing summary was kept.',
+        graphic: 'warning',
+        buttons: [{ label: 'OK', cls: 'btn-primary', value: true }]
+      });
+    } finally {
+      setRegenerating('');
+    }
   };
 
   const handleRetrySummaries = async () => {
@@ -419,21 +641,47 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     try {
       await api.discardSession();
     } catch (e) {
-      // Surface the error but still navigate home so the user is not stuck.
       await modal.error('Discard Failed', e.message || 'Unknown error');
     }
     onNavigate('home');
   };
 
   const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
-  const summaryStatus = (() => {
-    if (isHistoricalReview || !summaryDiagnostics) return '';
-    if (summaryDiagnostics.gemini_error) return `Gemini unavailable: ${summaryDiagnostics.gemini_error}`;
-    if (summaryDiagnostics.used_gemini) return 'Gemini summaries generated';
-    if (summaryDiagnostics.used_fallback) return 'Using fallback summaries';
+  
+  const getSummaryStatusText = () => {
+    if (isHistoricalReview) return '';
+    if (summaryLoading) return SUMMARY_PENDING_MESSAGE;
+    
+    if (coachingEdited || failEdited || manuallyEdited) {
+      return 'Manually edited';
+    }
+
+    const isTimeout = summaryDiagnostics?.gemini_error?.toLowerCase().includes('timeout') ||
+                      summaryDiagnostics?.gemini_error?.toLowerCase().includes('timed out') ||
+                      summaryNotice?.toLowerCase().includes('timeout') ||
+                      summaryNotice?.toLowerCase().includes('timed out');
+                      
+    if (isTimeout) {
+      return 'Gemini timed out, so a fallback summary was used. You can retry or regenerate with instructions.';
+    }
+
+    if (summaryDiagnostics?.gemini_error || summaryNotice) {
+      const err = summaryDiagnostics?.gemini_error || summaryNotice;
+      return `Gemini unavailable: ${err}. Using fallback summaries.`;
+    }
+
+    if (summaryDiagnostics?.used_gemini) {
+      return 'Gemini summary generated';
+    }
+
+    if (summaryDiagnostics?.used_fallback) {
+      return 'Fallback summary used';
+    }
+
     return '';
-  })();
-  const visibleSummaryStatus = summaryLoading ? 'Generating summaries...' : (summaryNotice || summaryStatus);
+  };
+
+  const summaryStatusText = getSummaryStatusText();
 
   return (
     <div className="page-with-sticky-actions" data-testid="review-page">
@@ -491,9 +739,9 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       </div>
 
       <div style={{ marginTop: 32 }}>
-        {visibleSummaryStatus && (
+        {summaryStatusText && (
           <div className="gemini-summary-status" data-testid="review-gemini-status">
-            <span>{visibleSummaryStatus}</span>
+            <span>{summaryStatusText}</span>
             {!isHistoricalReview && summaryNotice && !summaryLoading && (
               <button
                 type="button"
@@ -516,20 +764,83 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             </span>
           )}
         </div>
-        <textarea className="review-textarea" rows={6} value={coaching} onChange={e => setCoaching(e.target.value)} data-testid="review-coaching" readOnly={isHistoricalReview} />
-        <div className="review-btn-row" data-tour="review-coaching-actions">
-          <button className="btn btn-primary btn-sm" id="btn-copy-coaching" onClick={() => copyText(coaching, 'btn-copy-coaching')} data-testid="review-copy-coaching">Copy</button>
-          {!isHistoricalReview && (
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => handleRegen('coaching')}
-              disabled={Boolean(regenerating)}
-              data-testid="review-regen-coaching"
-            >
-              {regenerating === 'coaching' ? 'Regenerating...' : 'Regenerate'}
-            </button>
-          )}
-        </div>
+        {!isHistoricalReview && (
+          <div className="text-muted text-xs" style={{ marginBottom: 8 }}>
+            You can edit this summary before finishing. Use Regenerate with Instructions if you want Gemini to revise the wording.
+          </div>
+        )}
+        {isEditingCoaching ? (
+          <>
+            <textarea
+              className="review-textarea review-textarea-editing"
+              rows={6}
+              value={tempCoaching}
+              onChange={e => setTempCoaching(e.target.value)}
+              data-testid="review-coaching"
+            />
+            <div className="review-btn-row" style={{ marginTop: 8 }}>
+              <button
+                className="btn btn-success btn-sm"
+                onClick={async () => {
+                  setCoaching(tempCoaching);
+                  setIsEditingCoaching(false);
+                  setCoachingEdited(true);
+                  await api.updateSession({ coaching_summary: tempCoaching });
+                }}
+              >
+                Save
+              </button>
+              <button className="btn btn-muted btn-sm" onClick={() => setIsEditingCoaching(false)}>Cancel</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <textarea
+              className="review-textarea"
+              rows={6}
+              value={coaching}
+              readOnly
+              data-testid="review-coaching"
+            />
+            <div className="review-btn-row" data-tour="review-coaching-actions">
+              {!isHistoricalReview && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setTempCoaching(coaching);
+                    setIsEditingCoaching(true);
+                  }}
+                >
+                  Edit Coaching Summary
+                </button>
+              )}
+              {!isHistoricalReview && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => handleRegen('coaching')}
+                  disabled={Boolean(regenerating)}
+                  data-testid="review-regen-coaching"
+                >
+                  {regenerating === 'coaching' ? 'Regenerating...' : 'Regenerate'}
+                </button>
+              )}
+              {!isHistoricalReview && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setRegenType('coaching');
+                    setRegenInstructions('');
+                    setShowRegenInstructionsModal(true);
+                  }}
+                  disabled={Boolean(regenerating)}
+                >
+                  Regenerate with Instructions
+                </button>
+              )}
+              <button className="btn btn-primary btn-sm" id="btn-copy-coaching" onClick={() => copyText(coaching, 'btn-copy-coaching')} data-testid="review-copy-coaching">Copy</button>
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ marginTop: 24 }}>
@@ -542,26 +853,229 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             </span>
           )}
         </div>
-        <textarea className="review-textarea" rows={6} value={fail} onChange={e => setFail(e.target.value)} data-testid="review-fail" readOnly={isHistoricalReview} />
-        <div className="review-btn-row" data-tour="review-fail-actions">
-          <button className="btn btn-primary btn-sm" id="btn-copy-fail" onClick={() => copyText(fail, 'btn-copy-fail')} data-testid="review-copy-fail">Copy</button>
-          {!isHistoricalReview && (
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => handleRegen('fail')}
-              disabled={Boolean(regenerating)}
-              data-testid="review-regen-fail"
-            >
-              {regenerating === 'fail' ? 'Regenerating...' : 'Regenerate'}
-            </button>
-          )}
-        </div>
+        {!isHistoricalReview && fail !== 'N/A' && (
+          <div className="text-muted text-xs" style={{ marginBottom: 8 }}>
+            You can edit this summary before finishing. Use Regenerate with Instructions if you want Gemini to revise the wording.
+          </div>
+        )}
+        {isEditingFail ? (
+          <>
+            <textarea
+              className="review-textarea review-textarea-editing"
+              rows={6}
+              value={tempFail}
+              onChange={e => setTempFail(e.target.value)}
+              data-testid="review-fail"
+            />
+            <div className="review-btn-row" style={{ marginTop: 8 }}>
+              <button
+                className="btn btn-success btn-sm"
+                onClick={async () => {
+                  setFail(tempFail);
+                  setIsEditingFail(false);
+                  setFailEdited(true);
+                  await api.updateSession({ fail_summary: tempFail });
+                }}
+              >
+                Save
+              </button>
+              <button className="btn btn-muted btn-sm" onClick={() => setIsEditingFail(false)}>Cancel</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <textarea
+              className="review-textarea"
+              rows={6}
+              value={fail}
+              readOnly
+              data-testid="review-fail"
+            />
+            <div className="review-btn-row" data-tour="review-fail-actions">
+              {!isHistoricalReview && fail !== 'N/A' && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setTempFail(fail);
+                    setIsEditingFail(true);
+                  }}
+                >
+                  Edit Fail Summary
+                </button>
+              )}
+              {!isHistoricalReview && fail !== 'N/A' && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => handleRegen('fail')}
+                  disabled={Boolean(regenerating)}
+                  data-testid="review-regen-fail"
+                >
+                  {regenerating === 'fail' ? 'Regenerating...' : 'Regenerate'}
+                </button>
+              )}
+              {!isHistoricalReview && fail !== 'N/A' && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setRegenType('fail');
+                    setRegenInstructions('');
+                    setShowRegenInstructionsModal(true);
+                  }}
+                  disabled={Boolean(regenerating)}
+                >
+                  Regenerate with Instructions
+                </button>
+              )}
+              <button className="btn btn-primary btn-sm" id="btn-copy-fail" onClick={() => copyText(fail, 'btn-copy-fail')} data-testid="review-copy-fail">Copy</button>
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ marginTop: 24 }}>
-        <h3>Notes</h3>
-        <textarea className="review-textarea" rows={4} value={s.review_notes || s.notes || ''} readOnly data-testid="review-notes" />
+        <h3>Evaluator Notes Summary</h3>
+        {isEditingNotes ? (
+          <>
+            <textarea
+              className="review-textarea review-textarea-editing"
+              rows={4}
+              value={editingNotesText}
+              onChange={(e) => setEditingNotesText(e.target.value)}
+              data-testid="review-notes"
+            />
+            <div className="review-btn-row" style={{ marginTop: 8 }}>
+              <button className="btn btn-success btn-sm" onClick={handleSaveNotesSummary}>Save Notes Summary</button>
+              <button className="btn btn-muted btn-sm" onClick={handleCancelNotesSummary}>Cancel</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <textarea
+              className="review-textarea"
+              rows={4}
+              value={
+                s.evaluatorNotesSummaryEdited !== undefined
+                  ? s.evaluatorNotesSummaryEdited
+                  : formatFinalNotesSummary(s.finalEvaluatorNotes)
+              }
+              readOnly
+              data-testid="review-notes"
+            />
+            {!isHistoricalReview && (
+              <div className="review-btn-row" style={{ marginTop: 8 }}>
+                <button className="btn btn-ghost btn-sm" onClick={handleStartEditNotesSummary}>
+                  Edit Evaluator Notes Summary
+                </button>
+              </div>
+            )}
+          </>
+        )}
       </div>
+
+      {/* Final Notes Modal */}
+      {showFinalNotesModal && (
+        <div className="modal-overlay open" style={{ zIndex: 3000 }}>
+          <div className="modal" style={{ width: '600px', maxHeight: '90vh' }}>
+            <div className="modal-header">
+              <h2>Final Notes</h2>
+            </div>
+            <div className="modal-body" style={{ textAlign: 'left' }}>
+              <p className="text-muted" style={{ marginBottom: 16 }}>
+                Add anything important that was not captured by the checklist. These notes can be included in the coaching summary, fail summary, or saved only in History.
+              </p>
+              
+              <div className="form-group" style={{ marginBottom: 16 }}>
+                <label className="form-label" style={{ fontWeight: 600, display: 'block', marginBottom: 6 }}>Final Evaluator Notes</label>
+                <textarea
+                  className="review-textarea"
+                  style={{ width: '100%', minHeight: '120px', padding: '10px' }}
+                  value={tempNotes.notes}
+                  onChange={(e) => setTempNotes({ ...tempNotes, notes: e.target.value })}
+                  placeholder="Enter final evaluator notes..."
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={tempNotes.includeInCoachingSummary && !tempNotes.historyOnly}
+                    disabled={tempNotes.historyOnly}
+                    onChange={(e) => setTempNotes({ ...tempNotes, includeInCoachingSummary: e.target.checked })}
+                  />
+                  <span>Include in coaching summary</span>
+                </label>
+              </div>
+
+              {finalStatus !== 'Pass' && finalStatus !== 'RESUMED-PASS' && (
+                <div className="form-group" style={{ marginBottom: 8 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={tempNotes.includeInFailSummary && !tempNotes.historyOnly}
+                      disabled={tempNotes.historyOnly}
+                      onChange={(e) => setTempNotes({ ...tempNotes, includeInFailSummary: e.target.checked })}
+                    />
+                    <span>Include in fail summary if this session fails</span>
+                  </label>
+                </div>
+              )}
+
+              <div className="form-group" style={{ marginBottom: 16 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={tempNotes.historyOnly}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setTempNotes({
+                        ...tempNotes,
+                        historyOnly: checked,
+                        includeInCoachingSummary: checked ? false : tempNotes.includeInCoachingSummary,
+                        includeInFailSummary: checked ? false : tempNotes.includeInFailSummary,
+                      });
+                    }}
+                  />
+                  <span style={{ fontWeight: tempNotes.historyOnly ? 600 : 'normal' }}>Save to history only</span>
+                </label>
+              </div>
+            </div>
+            <div className="modal-footer cmodal-btns" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+              <button className="btn btn-muted" onClick={handleBack}>Back</button>
+              <span style={{ flexGrow: 1 }} />
+              <button className="btn btn-muted" onClick={handleSkipFinalNotes}>Skip</button>
+              <button className="btn btn-primary" onClick={handleContinueFinalNotes}>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Regenerate Summary with Instructions Modal */}
+      {showRegenInstructionsModal && (
+        <div className="modal-overlay open" style={{ zIndex: 3000 }}>
+          <div className="modal" style={{ width: '560px', maxHeight: '80vh' }}>
+            <div className="modal-header">
+              <h2>Regenerate Summary with Instructions</h2>
+            </div>
+            <div className="modal-body" style={{ textAlign: 'left' }}>
+              <p className="text-muted" style={{ marginBottom: 16 }}>
+                Tell Gemini how you want this summary revised.
+              </p>
+              <textarea
+                className="review-textarea"
+                style={{ width: '100%', minHeight: '120px', padding: '10px' }}
+                value={regenInstructions}
+                onChange={(e) => setRegenInstructions(e.target.value)}
+                placeholder="Examples:&#10;- Make it shorter.&#10;- Make it warmer and more encouraging.&#10;- Focus more on verification mistakes.&#10;- Mention that the candidate improved on the second call.&#10;- Do not mention the tech issue.&#10;- Make it more direct."
+              />
+            </div>
+            <div className="modal-footer cmodal-btns" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+              <button className="btn btn-muted" onClick={() => setShowRegenInstructionsModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleRegenWithInstructions}>Regenerate</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="footer-bar sticky-action-footer" data-testid="review-footer">
         <button className="btn btn-muted btn-lg" onClick={handleBack} data-testid="review-back">

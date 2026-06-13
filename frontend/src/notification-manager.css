@@ -642,6 +642,42 @@ body.notification-manager-body.nm-dialog-open {
   background: rgba(2, 6, 23, 0.34);
 }
 
+.nm-final-notes-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.22);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  margin-top: 4px;
+}
+
+.nm-final-notes-section {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.08);
+  display: grid;
+  gap: 6px;
+}
+
+.nm-final-notes-heading {
+  font-size: 0.85rem;
+  color: #a5b4fc;
+  letter-spacing: 0.02em;
+}
+
+.nm-final-notes-history-warning {
+  font-size: 0.76rem;
+  color: #fbbf24;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+}
+
 .nm-update-modal {
   width: min(900px, calc(100vw - 48px));
   max-height: 85vh;

@@ -3009,6 +3009,12 @@ SHARED_CANDIDATE_SESSION_HEADERS = [
     "extensions_disabled",
     "popups_allowed",
     "skills",
+    "final_notes_strengths",
+    "final_notes_needs_coaching",
+    "final_notes_other",
+    "final_notes_history_only",
+    "evaluator_notes_summary",
+    "final_notes_created_at",
 ]
 
 SHARED_PENDING_SUP_TRANSFER_HEADERS = [
@@ -3039,6 +3045,10 @@ SHARED_PENDING_SUP_TRANSFER_HEADERS = [
     "extensions_disabled",
     "popups_allowed",
     "skills",
+    "final_notes_strengths",
+    "final_notes_needs_coaching",
+    "final_notes_other",
+    "evaluator_notes_summary",
 ]
 
 UPDATE_MTS_TAB = "update-MTS"
@@ -4656,6 +4666,39 @@ def _mock_call_summary(session):
     return "; ".join(parts)
 
 
+def _final_notes_field(session, field_name):
+    """Extract a specific field from finalEvaluatorNotes."""
+    notes = session.get("finalEvaluatorNotes") or {}
+    if not notes:
+        return ""
+    if field_name == "other":
+        return str(notes.get("other") or notes.get("notes") or "").strip()
+    return str(notes.get(field_name) or "").strip()
+
+
+def _get_evaluator_notes_summary(session):
+    """Generate the evaluator notes summary representation for the candidate row."""
+    if session.get("evaluatorNotesSummaryEdited"):
+        return session.get("evaluatorNotesSummaryEdited")
+    if session.get("evaluatorNotesSummary"):
+        return session.get("evaluatorNotesSummary")
+    notes = session.get("finalEvaluatorNotes") or {}
+    if not notes:
+        return ""
+    parts = []
+    if notes.get("historyOnly"):
+        parts.append("(History-Only Notes - not included in summaries)")
+    if notes.get("notes"):
+        parts.append(notes.get("notes").strip())
+    if notes.get("strengths"):
+        parts.append(f"Strengths: {notes.get('strengths').strip()}")
+    if notes.get("needsCoaching"):
+        parts.append(f"Needs Coaching: {notes.get('needsCoaching').strip()}")
+    if notes.get("other"):
+        parts.append(f"Other Notes: {notes.get('other').strip()}")
+    return "\n\n".join(p for p in parts if p)
+
+
 def _candidate_session_row(session, existing_rows=None):
     existing_rows = existing_rows or []
     status = compute_final_status(session)
@@ -4716,6 +4759,12 @@ def _candidate_session_row(session, existing_rows=None):
         _shared_optional_bool(session.get("extensions_disabled")),
         _shared_optional_bool(session.get("popups_allowed")),
         ", ".join(session.get("skills") or []) if isinstance(session.get("skills"), list) else session.get("skills") or "",
+        _final_notes_field(session, "strengths"),
+        _final_notes_field(session, "needsCoaching"),
+        _final_notes_field(session, "other"),
+        _shared_bool((session.get("finalEvaluatorNotes") or {}).get("historyOnly", False)),
+        _get_evaluator_notes_summary(session),
+        (session.get("finalEvaluatorNotes") or {}).get("createdAt") or "",
     ], pending_id, needs_sup
 
 
@@ -4774,6 +4823,10 @@ def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=
         _shared_optional_bool(session.get("extensions_disabled")),
         _shared_optional_bool(session.get("popups_allowed")),
         ", ".join(session.get("skills") or []) if isinstance(session.get("skills"), list) else session.get("skills") or "",
+        _final_notes_field(session, "strengths"),
+        _final_notes_field(session, "needsCoaching"),
+        _final_notes_field(session, "other"),
+        _get_evaluator_notes_summary(session),
     ]
 
 
@@ -5279,19 +5332,24 @@ def _build_section_coaching_summary(section, label, include_fail_details=False):
         details.extend(_dedupe_preserve_order(special_guidance))
     if has_discord_screenshot:
         details.append(DISCORD_SCREENSHOT_SUMMARY_TEXT)
-    if coaching_notes:
+    if coaching_notes and coaching.get("Other"):
         details.append(f"Coaching notes: {coaching_notes}.")
     if result == "Fail" and include_fail_details:
         fail_items = _extract_fail_summary_parts(section)
         fail_notes = _normalize_notes_sentence((section or {}).get("fail_notes", ""))
         if fail_items:
             details.append("Failed-call reasons documented during coaching: " + _format_management_list(fail_items) + ".")
-        if fail_notes:
+        fails = (section or {}).get("fails", {}) or {}
+        if fail_notes and fails.get("Other"):
             details.append(f"Failed-call other notes: {fail_notes}.")
-    if not details:
-        details.append("No coaching items were selected for this portion of the session.")
 
-    return f"{label} - {result.upper()} - {' '.join(details)}"
+    if not details:
+        if result == "Pass":
+            return f"{label} - Pass - No additional coaching concerns documented."
+        else:
+            return f"{label} - Fail - No coaching items were selected for this portion of the session."
+
+    return f"{label} - {result} - {' '.join(details)}"
 
 
 def _build_section_fail_summary(section, label):
@@ -5308,17 +5366,46 @@ def _build_section_fail_summary(section, label):
     else:
         details.append("Fail reasons: N/A.")
 
-    if fail_notes:
+    if fail_notes and fails.get("Other"):
         details.append(f"Fail notes: {fail_notes}.")
 
-    return f"{label} - FAIL - {' '.join(details)}"
+    return f"{label} - Fail - {' '.join(details)}"
+
+
+def _has_tech_issue(session):
+    val = str(session.get("tech_issue") or "").strip()
+    return bool(val and val not in {"N/A", "No", "None"})
 
 
 def _is_fail_na(session):
-    """Fail Summary is only for session-level failures, not coaching/incomplete outcomes."""
+    """Fail Summary is only for session-level failures, not coaching/incomplete outcomes.
+    But it must not be only N/A when fail reasons, failed calls, stopped responding, tech issue, or evaluator notes exist.
+    """
+    final_status = compute_final_status(session)
+    if final_status in {"Pass", "RESUMED-PASS"}:
+        return True
+
     if session.get("auto_fail_reason"):
         return False
-    return compute_final_status(session) not in {"Fail", "FAIL-Final Attempt", "NC/NS"}
+    if _has_tech_issue(session) or session.get("stopped_responding"):
+        return False
+
+    # Check failed calls/transfers
+    for i in range(1, 4):
+        if (session.get(f"call_{i}") or {}).get("result") == "Fail":
+            return False
+    for i in range(1, 3):
+        if (session.get(f"sup_transfer_{i}") or {}).get("result") == "Fail":
+            return False
+
+    # Check evaluator notes
+    notes = session.get("finalEvaluatorNotes") or {}
+    has_notes = bool(notes.get("needsCoaching", "").strip() or notes.get("other", "").strip() or notes.get("strengths", "").strip() or notes.get("notes", "").strip())
+    include_notes = notes.get("includeInFailSummary", True) and not notes.get("historyOnly", False)
+    if has_notes and include_notes:
+        return False
+
+    return final_status not in {"Fail", "FAIL-Final Attempt", "NC/NS"}
 
 
 def compute_final_status(session):
@@ -5662,7 +5749,7 @@ async def _upsert_history_record(record, source_session=None):
 def build_clean_coaching(session):
     auto_fail = session.get("auto_fail_reason")
     lines = []
-    include_fail_details = _is_fail_na(session)
+    include_fail_details = True
     if not session.get("supervisor_only", False):
         for i in range(1, 4):
             line = _build_section_coaching_summary(
@@ -5675,7 +5762,7 @@ def build_clean_coaching(session):
     for i in range(1, 3):
         line = _build_section_coaching_summary(
             session.get(f"sup_transfer_{i}"),
-            f"Supervisor Transfer {i}",
+            f"Sup Transfer {i}",
             include_fail_details=include_fail_details,
         )
         if line:
@@ -5687,42 +5774,93 @@ def build_clean_coaching(session):
             "Their DTE would not go into Ready status. It was stuck on Full Capacity / Ready for Got Calls status."
         )
     if lines:
-        return "\n".join(lines)
-    if auto_fail:
-        return (
+        base_summary = "\n".join(lines)
+    elif auto_fail:
+        base_summary = (
             "No coaching summary was generated before the session ended. "
             f"Session closed under the recorded auto-fail reason: {_sentence_case(auto_fail)}."
         )
-    return "No coaching summary was generated because no coaching items were selected for this session."
+    else:
+        base_summary = "No coaching summary was generated because no coaching items were selected for this session."
+
+    notes = session.get("finalEvaluatorNotes") or {}
+    if notes and notes.get("includeInCoachingSummary", True) and not notes.get("historyOnly", False):
+        fallback_parts = []
+        if notes.get("notes"):
+            fallback_parts.append(notes.get("notes").strip())
+        if notes.get("strengths"):
+            fallback_parts.append(notes.get("strengths").strip())
+        if notes.get("needsCoaching"):
+            fallback_parts.append(notes.get("needsCoaching").strip())
+        if notes.get("other"):
+            fallback_parts.append(notes.get("other").strip())
+        if fallback_parts:
+            fallback_notes_str = "Additional Notes: " + " ".join(fallback_parts)
+            if base_summary.startswith("No coaching summary was generated"):
+                return fallback_notes_str
+            return base_summary + "\n\n" + fallback_notes_str
+
+    return base_summary
 
 
 def build_clean_fail(session):
     auto_fail = session.get("auto_fail_reason")
     if auto_fail:
-        return (
-            "Session Auto-Fail - FAIL - "
+        base_fail = (
+            "Session Auto-Fail - Fail - "
             f"Recorded auto-fail reason: {_sentence_case(auto_fail)}."
         )
-
-    lines = []
-    if session.get("supervisor_only", False):
-        for i in range(1, 3):
-            line = _build_section_fail_summary(session.get(f"sup_transfer_{i}"), f"Supervisor Transfer {i}")
-            if line:
-                lines.append(line)
     else:
-        for i in range(1, 4):
-            line = _build_section_fail_summary(session.get(f"call_{i}"), f"Call {i}")
-            if line:
-                lines.append(line)
-        if compute_final_status(session) == "FAIL-Final Attempt":
+        lines = []
+        if session.get("supervisor_only", False):
             for i in range(1, 3):
-                line = _build_section_fail_summary(session.get(f"sup_transfer_{i}"), f"Supervisor Transfer {i}")
+                line = _build_section_fail_summary(session.get(f"sup_transfer_{i}"), f"Sup Transfer {i}")
                 if line:
                     lines.append(line)
-    if lines:
-        return "\n".join(lines)
-    return "N/A"
+        else:
+            for i in range(1, 4):
+                line = _build_section_fail_summary(session.get(f"call_{i}"), f"Call {i}")
+                if line:
+                    lines.append(line)
+            calls_failed = sum(1 for i in range(1, 4) if (session.get(f"call_{i}") or {}).get("result") == "Fail")
+            if calls_failed < 2 or compute_final_status(session) == "FAIL-Final Attempt":
+                for i in range(1, 3):
+                    line = _build_section_fail_summary(session.get(f"sup_transfer_{i}"), f"Sup Transfer {i}")
+                    if line:
+                        lines.append(line)
+        if lines:
+            base_fail = "\n".join(lines)
+        else:
+            if _has_tech_issue(session):
+                base_fail = "Session ended due to Technical Issues."
+            elif session.get("stopped_responding") or "stopped responding" in str(session.get("auto_fail_reason") or "").lower():
+                base_fail = "Candidate stopped responding in Discord during the session."
+            else:
+                base_fail = ""
+
+    notes = session.get("finalEvaluatorNotes") or {}
+    include_notes = notes.get("includeInFailSummary", True) and not notes.get("historyOnly", False)
+    has_notes = bool(notes.get("notes", "").strip() or notes.get("needsCoaching", "").strip() or notes.get("other", "").strip() or notes.get("strengths", "").strip())
+    
+    if has_notes and include_notes:
+        fallback_parts = []
+        if notes.get("notes"):
+            fallback_parts.append(notes.get("notes").strip())
+        if notes.get("needsCoaching"):
+            fallback_parts.append(notes.get("needsCoaching").strip())
+        if notes.get("other"):
+            fallback_parts.append(notes.get("other").strip())
+        if notes.get("strengths"):
+            fallback_parts.append(notes.get("strengths").strip())
+        
+        fallback_notes_str = "Additional Notes: " + " ".join(fallback_parts)
+        if not base_fail:
+            return fallback_notes_str
+        return base_fail + "\n\n" + fallback_notes_str
+    else:
+        if not base_fail:
+            return "No structured fail reason was selected. See evaluator notes and call results for context."
+        return base_fail
 
 
 DEFAULT_GEMINI_COACHING_PROMPT = (
@@ -5743,7 +5881,12 @@ DEFAULT_GEMINI_COACHING_PROMPT = (
     "coaching includes screenshots, Discord chat, or standard instructions, explicitly include "
     "management-facing wording equivalent to 'Coaching was provided using the standard screenshots "
     "and Discord chat.' Treat this as the coaching method, not a coaching topic. Avoid repetitive wording, group related coaching "
-    "themes naturally, and do not invent any coaching item that was not selected."
+    "themes naturally, and do not invent any coaching item that was not selected. "
+    "CRITICAL WORDING RULES FOR EVALUATOR NOTES: "
+    "If additional evaluator notes are provided, incorporate them directly and professionally. "
+    "Do NOT use phrasing like 'The evaluator noted...', 'The evaluator stated...', or 'The notes say...'. "
+    "Instead, use direct, professional phrasing (e.g. prefix with 'Additional Notes: ' followed by the direct observations). "
+    "Keep wording professional, direct, and clear. Do not overstate the notes."
 )
 
 GEMINI_SCREENSHOT_DISCORD_RULE = (
@@ -5763,7 +5906,12 @@ DEFAULT_GEMINI_FAIL_PROMPT = (
     "Do not use second-person language such as 'you' or 'your'. Do not give advice or "
     "instructions such as 'should', 'try to', or 'remember to'. State what occurred during "
     "the session and any additional contributing issues. Avoid repetitive wording, group "
-    "related fail reasons naturally, and do not invent fail reasons that were not selected."
+    "related fail reasons naturally, and do not invent fail reasons that were not selected. "
+    "CRITICAL WORDING RULES FOR EVALUATOR NOTES: "
+    "If additional evaluator notes are provided, incorporate them directly and professionally. "
+    "Do NOT use phrasing like 'The evaluator noted...', 'The evaluator stated...', or 'The notes say...'. "
+    "Instead, use direct, professional phrasing (e.g. prefix with 'Additional Notes: ' followed by the direct observations). "
+    "Keep wording professional, direct, and clear. Do not overstate the notes."
 )
 
 
@@ -5876,8 +6024,14 @@ def _gemini_response_finish_reasons(response):
             reasons.append(str(reason))
     return reasons
 
-@lru_cache(maxsize=8)
+_cached_gemini_model = None
+_cached_gemini_model_key = None
+
 def _select_supported_gemini_model(api_key: str) -> str:
+    global _cached_gemini_model, _cached_gemini_model_key
+    if _cached_gemini_model and _cached_gemini_model_key == api_key:
+        return _cached_gemini_model
+
     if not api_key:
         raise RuntimeError("Gemini is enabled, but no API key is saved.")
 
@@ -5901,6 +6055,8 @@ def _select_supported_gemini_model(api_key: str) -> str:
     for preferred_model in PREFERRED_GEMINI_TEXT_MODELS:
         if preferred_model in supported:
             logger.info("[GEMINI] Using supported model %s", preferred_model)
+            _cached_gemini_model = preferred_model
+            _cached_gemini_model_key = api_key
             return preferred_model
 
     discovered = ", ".join(sorted(supported.keys())) or "none"
@@ -5910,7 +6066,7 @@ def _select_supported_gemini_model(api_key: str) -> str:
     )
 
 
-def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type):
+def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type, final_notes_text="", instructions="", current_summary=""):
     if not api_key:
         raise RuntimeError("Gemini is enabled, but no API key is saved.")
     source_text = str(source_text or "").strip()
@@ -5924,11 +6080,27 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
 
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(_select_supported_gemini_model(api_key))
-    prompt = (
-        f"{prompt_template}\n\n"
-        f"Session notes:\n{source_text}\n\n"
-        "Return only the final summary text with no heading, markdown, or extra commentary."
-    )
+    if instructions:
+        prompt = (
+            f"{prompt_template}\n\n"
+            f"You are revising the following existing {summary_type} summary:\n"
+            f"--- EXISTING SUMMARY START ---\n{current_summary}\n--- EXISTING SUMMARY END ---\n\n"
+            f"Please revise it based on these instructions:\n"
+            f"Instructions: {instructions}\n\n"
+            f"For context, the session notes are:\n{source_text}\n"
+        )
+        if final_notes_text:
+            prompt += f"\nAnd the evaluator's final notes are:\n{final_notes_text}\n"
+        prompt += "\nReturn only the revised summary text with no heading, markdown, or extra commentary."
+    else:
+        prompt = (
+            f"{prompt_template}\n\n"
+            f"Session notes:\n{source_text}\n"
+        )
+        if final_notes_text:
+            prompt += f"\nEvaluator's final notes:\n{final_notes_text}\n"
+        prompt += "\nReturn only the final summary text with no heading, markdown, or extra commentary."
+
     response = model.generate_content(prompt)
     text = _extract_gemini_text(response)
     if not text:
@@ -5936,7 +6108,7 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
     return text
 
 
-def _generate_gemini_summary_with_timeout(source_text, prompt_template, api_key, summary_type):
+def _generate_gemini_summary_with_timeout(source_text, prompt_template, api_key, summary_type, final_notes_text="", instructions="", current_summary=""):
     last_error = None
     for attempt in range(1, GEMINI_RETRY_ATTEMPTS + 1):
         future = _gemini_executor.submit(
@@ -5945,6 +6117,9 @@ def _generate_gemini_summary_with_timeout(source_text, prompt_template, api_key,
             prompt_template,
             api_key,
             summary_type,
+            final_notes_text,
+            instructions,
+            current_summary
         )
         try:
             return future.result(timeout=GEMINI_REQUEST_TIMEOUT_SECONDS)
@@ -6029,7 +6204,10 @@ def test_gemini_connection_with_timeout(api_key):
         return {"ok": False, "code": code, "message": message, "detail": detail}
 
 
-def generate_summaries(session, api_key="", settings=None):
+def generate_summaries(session, api_key="", settings=None, instructions="", current_summary="", summary_type=None):
+    import time
+    start_time = time.perf_counter()
+
     auto_fail_summaries = _auto_fail_review_summaries(session)
     use_gemini = bool(settings and settings.get("enable_gemini"))
     api_key = (api_key or "").strip()
@@ -6051,16 +6229,49 @@ def generate_summaries(session, api_key="", settings=None):
         "fail_prompt_source": fail_prompt_source,
         "gemini_error": "",
     }
-    if auto_fail_summaries:
+    
+    source = "retry" if instructions else ("gemini" if use_gemini and api_key else "fallback")
+    logger.info(
+        "[SUMMARY LOG] summary start, source=%s, fields=%d, payload_size=%d",
+        source,
+        len(session),
+        len(str(session)),
+    )
+
+    if auto_fail_summaries and not instructions:
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
+        logger.info(
+            "[SUMMARY LOG] summary end (auto_fail), source=%s, duration_ms=%d, fields=%d, payload_size=%d",
+            "fallback",
+            duration_ms,
+            len(session),
+            len(str(session)),
+        )
         return {**auto_fail_summaries, **diagnostics}
 
     coaching = build_clean_coaching(session)
     fail = "N/A" if _is_fail_na(session) else build_clean_fail(session)
 
     if not use_gemini:
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
+        logger.info(
+            "[SUMMARY LOG] summary end (fallback), source=%s, duration_ms=%d, fields=%d, payload_size=%d",
+            "fallback",
+            duration_ms,
+            len(session),
+            len(str(session)),
+        )
         return {"coaching": coaching, "fail": fail, **diagnostics}
     if not api_key:
         message = "Gemini is enabled, but no API key is saved. Using generic summaries instead."
+        duration_ms = int((time.perf_counter() - start_time) * 1000)
+        logger.info(
+            "[SUMMARY LOG] summary end (fallback_no_key), source=%s, duration_ms=%d, fields=%d, payload_size=%d",
+            "fallback",
+            duration_ms,
+            len(session),
+            len(str(session)),
+        )
         return {
             "coaching": coaching,
             "fail": fail,
@@ -6068,38 +6279,130 @@ def generate_summaries(session, api_key="", settings=None):
             **{**diagnostics, "gemini_error": message},
         }
 
-    try:
-        used_gemini = False
-        gemini_coaching = _generate_gemini_summary_with_timeout(
-            coaching,
-            coaching_prompt,
-            api_key,
-            "coaching",
-        ) if coaching != "No coaching data recorded." else coaching
-        used_gemini = used_gemini or coaching != "No coaching data recorded."
+    # Format evaluator notes for coaching summary
+    notes = session.get("finalEvaluatorNotes") or {}
+    coaching_notes_text = ""
+    if notes.get("includeInCoachingSummary", True) and not notes.get("historyOnly", False):
+        notes_parts = []
+        if notes.get("notes"):
+            notes_parts.append(notes.get("notes").strip())
+        if notes.get("strengths"):
+            notes_parts.append(notes.get("strengths").strip())
+        if notes.get("needsCoaching"):
+            notes_parts.append(notes.get("needsCoaching").strip())
+        if notes.get("other"):
+            notes_parts.append(notes.get("other").strip())
+        if notes_parts:
+            coaching_notes_text = "Additional Notes: " + " ".join(notes_parts)
 
-        gemini_fail = _generate_gemini_summary_with_timeout(
-            fail,
-            fail_prompt,
-            api_key,
-            "fail",
-        ) if fail != "N/A" else fail
-        used_gemini = used_gemini or fail != "N/A"
+    # Format evaluator notes for fail summary
+    fail_notes_text = ""
+    is_fail = not _is_fail_na(session)
+    if is_fail and notes.get("includeInFailSummary", True) and not notes.get("historyOnly", False):
+        notes_parts = []
+        if notes.get("notes"):
+            notes_parts.append(notes.get("notes").strip())
+        if notes.get("needsCoaching"):
+            notes_parts.append(notes.get("needsCoaching").strip())
+        if notes.get("other"):
+            notes_parts.append(notes.get("other").strip())
+        if notes.get("strengths"):
+            notes_parts.append(notes.get("strengths").strip())
+        if notes_parts:
+            fail_notes_text = "Additional Notes: " + " ".join(notes_parts)
 
-        return {
-            "coaching": gemini_coaching,
-            "fail": gemini_fail,
-            **{**diagnostics, "used_gemini": used_gemini, "used_fallback": not used_gemini},
-        }
-    except Exception as exc:
-        logger.exception("[GEMINI] Summary generation failed: %s", exc)
-        message = f"Gemini summary generation failed: {_safe_gemini_error_message(exc, api_key)}"
-        return {
-            "coaching": coaching,
-            "fail": fail,
-            "error": message,
-            **{**diagnostics, "gemini_error": message},
-        }
+    res_coaching = None
+    res_fail = None
+    gemini_error = ""
+    used_gemini = False
+
+    # Generate coaching summary if needed
+    if summary_type is None or summary_type == "coaching":
+        if coaching == "No coaching data recorded." and not instructions:
+            res_coaching = coaching
+        else:
+            try:
+                if instructions and summary_type == "coaching":
+                    res_coaching = _generate_gemini_summary_with_timeout(
+                        coaching,
+                        coaching_prompt,
+                        api_key,
+                        "coaching",
+                        final_notes_text=coaching_notes_text,
+                        instructions=instructions,
+                        current_summary=current_summary
+                    )
+                else:
+                    res_coaching = _generate_gemini_summary_with_timeout(
+                        coaching,
+                        coaching_prompt,
+                        api_key,
+                        "coaching",
+                        final_notes_text=coaching_notes_text
+                    )
+                used_gemini = True
+            except Exception as exc:
+                logger.exception("[GEMINI] Coaching summary generation failed: %s", exc)
+                gemini_error = f"Coaching summary failed: {_safe_gemini_error_message(exc, api_key)}"
+                res_coaching = coaching
+
+    # Generate fail summary if needed
+    if summary_type is None or summary_type == "fail":
+        if fail == "N/A" and not instructions:
+            res_fail = fail
+        else:
+            try:
+                if instructions and summary_type == "fail":
+                    res_fail = _generate_gemini_summary_with_timeout(
+                        fail,
+                        fail_prompt,
+                        api_key,
+                        "fail",
+                        final_notes_text=fail_notes_text,
+                        instructions=instructions,
+                        current_summary=current_summary
+                    )
+                else:
+                    res_fail = _generate_gemini_summary_with_timeout(
+                        fail,
+                        fail_prompt,
+                        api_key,
+                        "fail",
+                        final_notes_text=fail_notes_text
+                    )
+                used_gemini = True
+            except Exception as exc:
+                logger.exception("[GEMINI] Fail summary generation failed: %s", exc)
+                if gemini_error:
+                    gemini_error += " | "
+                gemini_error += f"Fail summary failed: {_safe_gemini_error_message(exc, api_key)}"
+                res_fail = fail
+
+    # Return result
+    ret = {
+        **diagnostics,
+        "used_gemini": used_gemini,
+        "used_fallback": not used_gemini,
+    }
+    if res_coaching is not None:
+        ret["coaching"] = res_coaching
+    if res_fail is not None:
+        ret["fail"] = res_fail
+    if gemini_error:
+        ret["gemini_error"] = gemini_error
+        ret["error"] = gemini_error
+        
+    duration_ms = int((time.perf_counter() - start_time) * 1000)
+    final_source = "retry" if instructions else ("gemini" if used_gemini else "fallback")
+    logger.info(
+        "[SUMMARY LOG] summary end, source=%s, duration_ms=%d, fields=%d, payload_size=%d",
+        final_source,
+        duration_ms,
+        len(session),
+        len(str(session)),
+    )
+        
+    return ret
 
 
 def _count_results(session, prefix, total, target):
@@ -6196,7 +6499,7 @@ def _auto_fail_review_summaries(session):
             if line:
                 coaching_lines.append(line)
     for i in range(1, 3):
-        line = _build_section_coaching_summary(session.get(f"sup_transfer_{i}"), f"Supervisor Transfer {i}")
+        line = _build_section_coaching_summary(session.get(f"sup_transfer_{i}"), f"Sup Transfer {i}")
         if line:
             coaching_lines.append(line)
 
@@ -6843,6 +7146,14 @@ async def update_session(payload: dict, request: Request):
     existing = await db.sessions.find_one({"_id": "active_session"})
     if not existing:
         return {"ok": False, "error": "No active session", "session": None}
+        
+    if "coaching_summary" in payload or "fail_summary" in payload:
+        logger.info(
+            "[SUMMARY LOG] source=edited, fields=%d, payload_size=%d",
+            len(payload),
+            len(str(payload)),
+        )
+        
     payload["last_saved"] = datetime.now(timezone.utc).strftime("%I:%M %p")
     await db.sessions.update_one({"_id": "active_session"}, {"$set": payload}, upsert=False)
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
@@ -8790,12 +9101,14 @@ async def gen_summaries(payload: dict):
 @api_router.post("/gemini/regenerate")
 async def regen_summary(payload: dict):
     summary_type = payload.get("type", "coaching")
+    instructions = payload.get("instructions", "")
+    current_summary = payload.get("current_summary", "")
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {"ok": False, "error": "No active session"}
     settings = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
     api_key = _get_stored_gemini_api_key(settings)
-    result = generate_summaries(doc, api_key, settings)
+    result = generate_summaries(doc, api_key, settings, instructions=instructions, current_summary=current_summary, summary_type=summary_type)
     if result.get("error"):
         return {"ok": False, "error": result["error"], "text": result.get(summary_type, ""), **result}
     return {"ok": True, "text": result.get(summary_type, ""), **result}
@@ -8829,6 +9142,12 @@ async def finish_all(payload: dict, request: Request):
         "fail_summary": payload.get("fail_summary", ""),
         "history_id": doc.get("history_id") or doc.get("resume_source_history_id") or str(uuid.uuid4()),
     }
+
+    # Remove finalEvaluatorNotes / evaluatorNotesSummaryEdited if user opted out of saving to History
+    notes = record.get("finalEvaluatorNotes") or {}
+    if not notes.get("saveToHistory", True):
+        record.pop("finalEvaluatorNotes", None)
+        record.pop("evaluatorNotesSummaryEdited", None)
 
     _saved_record, action = await _upsert_history_record(record, doc)
     shared_result = _sync_shared_candidate_tracking(_saved_record)

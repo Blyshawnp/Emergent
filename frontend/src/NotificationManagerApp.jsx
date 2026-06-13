@@ -796,6 +796,8 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             ) : visibleEntries.map(({ row, index, key: rowKey }) => {
               const results = [row.call_1_result, row.call_2_result, row.call_3_result, row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || row.mock_call_summary || 'Recorded';
               const notes = row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded';
+              const hasFinalNotes = Boolean(row.final_notes_strengths || row.final_notes_needs_coaching || row.final_notes_other || row.evaluator_notes_summary);
+              const isFinalNotesHistoryOnly = hasFinalNotes && (row.final_notes_history_only === true || row.final_notes_history_only === 'TRUE');
               const attempts = Array.isArray(row.attempts) ? row.attempts : [];
               const isExpanded = Boolean(expanded[rowKey]);
               const statusUpper = String(row.status || row.latest_status || '').toUpperCase();
@@ -824,6 +826,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                     <td className="nm-meta">{results}</td>
                     <td className="nm-meta nm-notes-cell">
                       <div className="nm-notes-preview">{notes}</div>
+                      {hasFinalNotes ? <span className="nm-final-notes-badge" title={isFinalNotesHistoryOnly ? 'Final notes (history only — not in review summary)' : 'Final evaluator notes available'}>📝 Final Notes{isFinalNotesHistoryOnly ? ' (History)' : ''}</span> : null}
                       <button type="button" className="nm-link-button" onClick={() => setExpanded((current) => ({ ...current, [rowKey]: !current[rowKey] }))}>
                         {isExpanded ? 'Hide Details' : 'View Details'}
                       </button>
@@ -863,6 +866,19 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                           <div><strong>Basics:</strong> Headset {row.headset_brand || 'N/A'}; USB {row.headset_usb === true ? 'Yes' : row.headset_usb === false ? 'No' : 'N/A'}; Noise cancelling {row.noise_cancel === true ? 'Yes' : row.noise_cancel === false ? 'No' : 'N/A'}; VPN {row.vpn_on === true ? 'Yes' : row.vpn_on === false ? 'No' : 'N/A'}</div>
                           <div><strong>Call Results:</strong> {[row.call_1_result, row.call_2_result, row.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
                           <div><strong>Sup Transfer Results:</strong> {[row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+                          {hasFinalNotes ? (
+                            <div className="nm-final-notes-section">
+                              <strong className="nm-final-notes-heading">Final Evaluator Notes</strong>
+                              {isFinalNotesHistoryOnly ? (
+                                <div className="nm-final-notes-history-warning">⚠ History only — not included in the Review summary</div>
+                              ) : null}
+                              {row.final_notes_strengths ? <div><strong>Strengths:</strong> {row.final_notes_strengths}</div> : null}
+                              {row.final_notes_needs_coaching ? <div><strong>Needs Coaching:</strong> {row.final_notes_needs_coaching}</div> : null}
+                              {row.final_notes_other ? <div><strong>Other:</strong> {row.final_notes_other}</div> : null}
+                              {row.evaluator_notes_summary ? <div><strong>Evaluator Summary:</strong> {row.evaluator_notes_summary}</div> : null}
+                              {row.final_notes_created_at ? <div className="nm-meta"><strong>Notes Created:</strong> {row.final_notes_created_at}</div> : null}
+                            </div>
+                          ) : null}
                           {attempts.length ? (
                             <div className="nm-attempt-list">
                               <strong>Attempt History</strong>
@@ -875,6 +891,17 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                                   <div>Calls: {[attempt.call_1_result, attempt.call_2_result, attempt.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
                                   <div>Sup Transfers: {[attempt.sup_transfer_1_result, attempt.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
                                   <div>Review Notes: {attempt.review_notes || 'N/A'}</div>
+                                  {(attempt.final_notes_strengths || attempt.final_notes_needs_coaching || attempt.final_notes_other) ? (
+                                    <div className="nm-final-notes-section">
+                                      <strong className="nm-final-notes-heading">Final Notes</strong>
+                                      {(attempt.final_notes_history_only === true || attempt.final_notes_history_only === 'TRUE') ? (
+                                        <div className="nm-final-notes-history-warning">⚠ History only — not in review summary</div>
+                                      ) : null}
+                                      {attempt.final_notes_strengths ? <div>Strengths: {attempt.final_notes_strengths}</div> : null}
+                                      {attempt.final_notes_needs_coaching ? <div>Needs Coaching: {attempt.final_notes_needs_coaching}</div> : null}
+                                      {attempt.final_notes_other ? <div>Other: {attempt.final_notes_other}</div> : null}
+                                    </div>
+                                  ) : null}
                                 </details>
                               ))}
                             </div>

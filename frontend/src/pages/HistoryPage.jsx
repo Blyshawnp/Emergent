@@ -251,7 +251,24 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
               </div>
               <div style={{ marginTop: 12 }}>
                 <div className="text-sm font-bold">Notes</div>
-                <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>{detail.notes || detail.review_notes || 'None recorded'}</div>
+                <div className="text-sm text-muted" style={{ whiteSpace: 'pre-wrap' }}>
+                  {(() => {
+                    if (detail.evaluatorNotesSummaryEdited) return detail.evaluatorNotesSummaryEdited;
+                    if (detail.finalEvaluatorNotes) {
+                      const notes = detail.finalEvaluatorNotes;
+                      const lines = [];
+                      if (notes.historyOnly) {
+                        lines.push("(History-Only Notes - not included in summaries)");
+                      }
+                      if (notes.notes?.trim()) lines.push(notes.notes.trim());
+                      if (notes.strengths?.trim()) lines.push(`Strengths: ${notes.strengths.trim()}`);
+                      if (notes.needsCoaching?.trim()) lines.push(`Needs Coaching: ${notes.needsCoaching.trim()}`);
+                      if (notes.other?.trim()) lines.push(`Other Notes: ${notes.other.trim()}`);
+                      return lines.join('\n\n') || 'No final notes were added.';
+                    }
+                    return detail.notes || detail.review_notes || 'None recorded';
+                  })()}
+                </div>
               </div>
             </div>
             <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
