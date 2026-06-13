@@ -1032,6 +1032,15 @@ DISCORD_POST_MESSAGE_ALIASES = {
     "content",
 }
 
+CONTENT_CATEGORY_HEADER_ALIASES = {
+    "category",
+    "group",
+    "section",
+    "type",
+}
+
+DEFAULT_CONTENT_CATEGORY = "Uncategorized"
+
 SCREENSHOT_TITLE_HEADER_ALIASES = {
     "title",
     "name",
@@ -1400,6 +1409,7 @@ def _normalize_discord_posts(rows):
         logger.warning("[CONTENT] Headset-shaped rows were rejected for Discord posts.")
         return []
 
+    category_header = _find_csv_header(rows, CONTENT_CATEGORY_HEADER_ALIASES)
     title_header = _find_csv_header(rows, DISCORD_POST_HEADER_ALIASES)
     message_header = _find_csv_header(rows, DISCORD_POST_MESSAGE_ALIASES)
     if not title_header or not message_header:
@@ -1409,10 +1419,12 @@ def _normalize_discord_posts(rows):
     items = []
     for row in rows:
         row = row or {}
+        category = str(row.get(category_header) or "").strip() if category_header else ""
+        category = category or DEFAULT_CONTENT_CATEGORY
         title = str(row.get(title_header) or "").strip()
         message = str(row.get(message_header) or "")
         if title:
-            items.append([title, message])
+            items.append({"category": category, "title": title, "message": message})
     return items
 
 
@@ -1427,6 +1439,7 @@ def _normalize_screenshots(rows):
         logger.warning("[CONTENT] Headset-shaped rows were rejected for screenshots.")
         return []
 
+    category_header = _find_csv_header(rows, CONTENT_CATEGORY_HEADER_ALIASES)
     title_header = _find_csv_header(rows, SCREENSHOT_TITLE_HEADER_ALIASES)
     image_header = _find_csv_header(rows, SCREENSHOT_PATH_HEADER_ALIASES)
     if not title_header or not image_header:
@@ -1436,10 +1449,12 @@ def _normalize_screenshots(rows):
     items = []
     for row in rows:
         row = row or {}
+        category = str(row.get(category_header) or "").strip() if category_header else ""
+        category = category or DEFAULT_CONTENT_CATEGORY
         title = str(row.get(title_header) or "").strip()
         image_path = str(row.get(image_header) or "").strip()
         if title:
-            items.append({"title": title, "image_url": image_path})
+            items.append({"category": category, "title": title, "image_url": image_path})
     return items
 
 
@@ -2304,9 +2319,10 @@ HELP_CONTENT = {
                 "Click \"Discord Post\" in the sidebar to open the panel with two tabs:"
             ],
             "bullets": [
-                "<b>Templates</b> — Pre-written messages for Pass, Fail, Sup Intro, etc. Click \"Copy\" to copy to clipboard",
-                "<b>Screenshots</b> — Welcome images that can be copied to clipboard for Discord. Click \"Copy Image\" to copy",
-                "Both tabs are searchable",
+                "<b>Templates</b> - Pre-written messages for Pass, Fail, Sup Intro, etc. Click \"Copy\" to copy to clipboard",
+                "<b>Screenshots</b> - Welcome images that can be copied to clipboard for Discord. Click \"Copy Image\" to copy",
+                "<b>Category</b> - When configured, use the category filter to group templates and screenshots.",
+                "Both tabs remain searchable within the selected category",
             ],
         },
         {
@@ -2813,9 +2829,11 @@ def _sanitize_discord_template_setting(value, source_label):
     rows = []
     for item in value:
         if isinstance(item, (list, tuple)) and len(item) >= 2:
+            category = str(item[2] or "").strip() if len(item) >= 3 else ""
             title = str(item[0] or "").strip()
             message = str(item[1] or "")
         elif isinstance(item, dict):
+            category = str(item.get("category") or item.get("Category") or "").strip()
             title = str(
                 item.get("title")
                 or item.get("Title")
@@ -2840,8 +2858,9 @@ def _sanitize_discord_template_setting(value, source_label):
             )
         else:
             continue
+        category = category or DEFAULT_CONTENT_CATEGORY
         if title:
-            rows.append([title, message])
+            rows.append({"category": category, "title": title, "message": message})
     return rows
 
 
@@ -2853,10 +2872,12 @@ def _sanitize_screenshot_setting(value, source_label):
     for item in value:
         if not isinstance(item, dict):
             continue
+        category = str(item.get("category") or item.get("Category") or "").strip()
+        category = category or DEFAULT_CONTENT_CATEGORY
         title = str(item.get("title") or item.get("Title") or "").strip()
         image_url = str(item.get("image_url") or item.get("ImagePath") or item.get("imagePath") or item.get("url") or "").strip()
         if title:
-            items.append({"title": title, "image_url": image_url})
+            items.append({"category": category, "title": title, "image_url": image_url})
     return items
 
 

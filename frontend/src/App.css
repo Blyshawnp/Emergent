@@ -1591,6 +1591,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .discord-screenshot-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-md); width: 100%; min-width: 0; }
 .discord-screenshot-header .discord-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
 .discord-screenshot-header .discord-copy { align-self: flex-start; white-space: nowrap; }
+.discord-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.discord-category-badge { flex: 0 0 auto; max-width: 160px; padding: 2px 8px; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-secondary); background: var(--bg-card-hover); font-size: var(--font-size-xs); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discord-category-filter { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; color: var(--text-secondary); font-size: var(--font-size-xs); font-weight: 700; }
+.discord-category-filter select { width: auto; min-width: 180px; max-width: 260px; padding: 6px 28px 6px 10px; font-size: var(--font-size-xs); }
 
 /* Custom Modal */
 .cmodal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 3000; opacity: 0; pointer-events: none; transition: opacity 200ms ease; }
@@ -1804,6 +1808,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .discord-edit-row { display: flex; gap: var(--space-md); align-items: flex-start; margin-bottom: var(--space-md); padding-bottom: var(--space-md); border-bottom: 1px solid var(--border-subtle); }
 .discord-edit-row:last-of-type { border-bottom: none; }
+.discord-edit-category { min-width: 140px; max-width: 140px; }
 .discord-edit-trigger { min-width: 160px; max-width: 160px; }
 .discord-edit-msg { flex: 1; }
 

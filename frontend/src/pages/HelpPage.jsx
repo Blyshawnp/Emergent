@@ -268,7 +268,7 @@ const HELP_TOPICS = [
       'Turn on Enable Gemini AI Summaries.',
       'Paste your API key into the Gemini API Key box.',
       'Click Save Settings.',
-      'Open a session and check Review — Gemini will now polish the coaching and fail summaries.',
+      'Open a session and check Review - Gemini will now polish the coaching and fail summaries.',
     ],
   },
   {
@@ -310,6 +310,7 @@ const HELP_TOPICS = [
     summary: 'The Discord panel keeps reusable Discord messages and screenshot images close at hand during a session.',
     bullets: [
       'Open Discord Post from the sidebar.',
+      'Use Category to filter grouped templates or screenshots when categories are configured. Search still works within the selected category.',
       'Search templates and copy message text with one click. Copy buttons change to Copied for 3 seconds.',
       'Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.',
       'Use the Phonetics Table button on Calls or Supervisor Transfer screens to open Phonetics.png and copy it for Discord when supported.',

@@ -17,8 +17,8 @@ The files in `backend/defaults/` are the packaged master defaults used when a us
 - `sup-coaching.csv`: supervisor-transfer coaching checkboxes.
 - `call-fail-reasons.csv`: call fail reason checkboxes.
 - `sup-fail-reasons.csv`: supervisor-transfer fail reason checkboxes.
-- `discord-posts.csv`: reusable Discord post templates.
-- `screenshots.csv`: screenshot title and image path entries.
+- `discord-posts.csv`: reusable Discord post templates with optional Category, Title, and Message columns.
+- `screenshots.csv`: screenshot entries with optional Category plus Title and ImagePath columns.
 - `headsets.csv`: approved headset brands and models.
 - `help.md`: packaged help document fallback.
 - `faq.md`: packaged FAQ fallback.

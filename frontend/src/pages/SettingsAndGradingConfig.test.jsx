@@ -101,12 +101,12 @@ afterEach(() => {
 test('settings shows immediate feedback for Discord list changes and clear save confirmation', async () => {
   api.getSettings.mockResolvedValue({
     tester_name: 'Tester',
-    discord_templates: [['Existing Trigger', 'Existing message']],
-    discord_screenshots: [{ title: 'Existing Screenshot', image_url: '' }],
+    discord_templates: [{ category: 'Sup Transfer', title: 'Existing Trigger', message: 'Existing message' }],
+    discord_screenshots: [{ category: 'Setup', title: 'Existing Screenshot', image_url: '' }],
   });
   api.getDefaults.mockResolvedValue({
-    discord_templates: [['Existing Trigger', 'Existing message']],
-    discord_screenshots: [{ title: 'Existing Screenshot', image_url: '' }],
+    discord_templates: [{ category: 'Sup Transfer', title: 'Existing Trigger', message: 'Existing message' }],
+    discord_screenshots: [{ category: 'Setup', title: 'Existing Screenshot', image_url: '' }],
   });
   api.saveSettings.mockResolvedValue({ ok: true });
 
@@ -131,6 +131,8 @@ test('settings shows immediate feedback for Discord list changes and clear save 
 
   expect(view.container.textContent).toContain('Apply to List');
   expect(view.container.textContent).toContain('Reset Posts to Defaults');
+  expect(view.container.textContent).toContain('Category');
+  expect(view.container.querySelector('input[value="Sup Transfer"]')).not.toBeNull();
   expect(view.container.textContent).toContain('Added. Click Save Settings to keep changes.');
   expect(view.container.querySelector('[data-testid="settings-unsaved-banner"]')).not.toBeNull();
 
@@ -145,6 +147,7 @@ test('settings shows immediate feedback for Discord list changes and clear save 
   });
 
   expect(view.container.textContent).toContain('Added. Click Save Settings to keep changes.');
+  expect(view.container.querySelector('input[value="Setup"]')).not.toBeNull();
 
   await act(async () => {
     view.container.querySelector('[data-testid="settings-save"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));

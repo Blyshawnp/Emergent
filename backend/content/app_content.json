@@ -150,75 +150,97 @@
     ]
   ],
   "discord_templates": [
-    [
-      "Pass",
-      "**:tada: Congratulations! You passed your test calls! :tada:**\n- 24-48hrs to go live. Watch your inbox.\n- Log out of Call Corp and Simple Script.\n- Complete TLMS courses.\n- Remove extra mock shifts from Gateway.\n**Welcome to ACDD!**"
-    ],
-    [
-      "Fail",
-      "Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours."
-    ],
-    [
-      "Fail Final",
-      "Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck."
-    ],
-    [
-      "Incomplete",
-      "Our time is up. We'll schedule another session for Supervisor Transfers.\nPlease give me a moment."
-    ],
-    [
-      "Ncns",
-      "Candidate was a No Call / No Show for mock testing."
-    ],
-    [
-      "Sup Intro",
-      "I'll help you complete the Supervisor Transfer test call. I'll provide instructions step by step. OK?"
-    ],
-    [
-      "Sup Instructions",
-      "When you need to transfer:\n1) Ask in chat first\n2) Give CCM time to check\n3) When CCM says ok - let caller know you are transferring"
-    ],
-    [
-      "Sup Transfer",
-      "1. Click Transfer in CC\n2. Select Queue > ACD Direct Supervisor\n3. Tell caller to hold, click Blind Transfer"
-    ],
-    [
-      "Sup Dte",
-      "Change DTE to Ready (green)."
-    ],
-    [
-      "Sup Status",
-      "I show Ready. Calling now."
-    ],
-    [
-      "Sup Transfer Now",
-      "You may transfer the call now."
-    ],
-    [
-      "Sup Stars",
-      "WXYZ: Supervisor Test Call Being Queued"
-    ],
-    [
-      "Sup Disposition",
-      "Click cancel (red phone), disposition as Test/Training.\nThen disposition in Call Corp."
-    ],
-    [
-      "Sup Retry",
-      "Transfer was not successful. Review steps and let me know when ready."
-    ],
-    [
-      "Ran Out Of Time",
-      "We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion."
-    ]
+    {
+      "category": "Uncategorized",
+      "title": "Pass",
+      "message": "**:tada: Congratulations! You passed your test calls! :tada:**\n- 24-48hrs to go live. Watch your inbox.\n- Log out of Call Corp and Simple Script.\n- Complete TLMS courses.\n- Remove extra mock shifts from Gateway.\n**Welcome to ACDD!**"
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Fail",
+      "message": "Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Fail Final",
+      "message": "Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Incomplete",
+      "message": "Our time is up. We'll schedule another session for Supervisor Transfers.\nPlease give me a moment."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Ncns",
+      "message": "Candidate was a No Call / No Show for mock testing."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Intro",
+      "message": "I'll help you complete the Supervisor Transfer test call. I'll provide instructions step by step. OK?"
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Instructions",
+      "message": "When you need to transfer:\n1) Ask in chat first\n2) Give CCM time to check\n3) When CCM says ok - let caller know you are transferring"
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Transfer",
+      "message": "1. Click Transfer in CC\n2. Select Queue > ACD Direct Supervisor\n3. Tell caller to hold, click Blind Transfer"
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Dte",
+      "message": "Change DTE to Ready (green)."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Status",
+      "message": "I show Ready. Calling now."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Transfer Now",
+      "message": "You may transfer the call now."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Stars",
+      "message": "WXYZ: Supervisor Test Call Being Queued"
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Disposition",
+      "message": "Click cancel (red phone), disposition as Test/Training.\nThen disposition in Call Corp."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Sup Retry",
+      "message": "Transfer was not successful. Review steps and let me know when ready."
+    },
+    {
+      "category": "Uncategorized",
+      "title": "Ran Out Of Time",
+      "message": "We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion."
+    }
   ],
   "discord_screenshots": [
     {
       "title": "Welcome New Agent",
-      "image_url": "/welcome-new-agent.png"
+      "image_url": "/welcome-new-agent.png",
+      "category": "Uncategorized"
     },
     {
       "title": "Welcome to Stars",
-      "image_url": "/welcome-to-stars.png"
+      "image_url": "/welcome-to-stars.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "DTE Disposition Box",
+      "image_url": "/DTE-Disposition-Box.png",
+      "category": "Uncategorized"
     }
   ],
   "call_coaching": [

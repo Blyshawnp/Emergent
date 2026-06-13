@@ -1356,6 +1356,7 @@ function AppShell() {
 }
 
 function DiscordModal({ settings, defaults, onClose }) {
+  const defaultCategory = 'Uncategorized';
   const [modalDefaults, setModalDefaults] = useState(defaults || emptyDefaults());
   const [defaultsLoadStatus, setDefaultsLoadStatus] = useState('idle');
   const defaultsFetchStartedRef = useRef(false);
@@ -1424,12 +1425,13 @@ function DiscordModal({ settings, defaults, onClose }) {
   const templates = templatesSrc.map(t => {
     if (!t) return null;
     if (Array.isArray(t)) {
-      return { title: String(t[0] || ''), message: String(t[1] || '') };
+      return { category: String(t[2] || defaultCategory), title: String(t[0] || ''), message: String(t[1] || '') };
     }
     if (typeof t === 'object') {
+      const category = t.category || t.Category || t.group || t.Group || '';
       const title = t.title || t.Title || t.name || t.Name || t.label || t.Label || '';
       const message = t.message || t.Message || t.text || t.Text || t.content || t.Content || t.body || t.Body || '';
-      return { title: String(title), message: String(message) };
+      return { category: String(category || defaultCategory), title: String(title), message: String(message) };
     }
     return null;
   }).filter(Boolean);
@@ -1448,22 +1450,52 @@ function DiscordModal({ settings, defaults, onClose }) {
   const screenshots = screenshotsSrc.map(s => {
     if (!s) return null;
     if (typeof s === 'object') {
+      const category = s.category || s.Category || s.group || s.Group || '';
       const title = s.title || s.name || 'Screenshot';
       const imageUrl = s.image_url || s.imageUrl || s.url || s.src || '';
-      return { title: String(title), imageUrl: String(imageUrl) };
+      return { category: String(category || defaultCategory), title: String(title), imageUrl: String(imageUrl) };
     }
     return null;
   }).filter(Boolean);
 
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('templates');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const activeItems = tab === 'templates' ? templates : screenshots;
+  const categories = useMemo(() => {
+    const seen = new Set();
+    activeItems.forEach((item) => {
+      const category = String(item.category || '').trim();
+      if (category) seen.add(category);
+    });
+    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  }, [activeItems]);
 
-  const filteredTemplates = templates.filter(({ title, message }) =>
-    title.toLowerCase().includes(search.toLowerCase()) || message.toLowerCase().includes(search.toLowerCase())
+  useEffect(() => {
+    setCategoryFilter('all');
+  }, [tab]);
+
+  useEffect(() => {
+    if (categoryFilter !== 'all' && !categories.includes(categoryFilter)) {
+      setCategoryFilter('all');
+    }
+  }, [categories, categoryFilter]);
+
+  const filteredTemplates = templates.filter(({ category, title, message }) =>
+    (categoryFilter === 'all' || category === categoryFilter) &&
+    (
+      category.toLowerCase().includes(search.toLowerCase()) ||
+      title.toLowerCase().includes(search.toLowerCase()) ||
+      message.toLowerCase().includes(search.toLowerCase())
+    )
   );
 
   const filteredScreenshots = screenshots.filter(s =>
-    s.title.toLowerCase().includes(search.toLowerCase())
+    (categoryFilter === 'all' || s.category === categoryFilter) &&
+    (
+      s.category.toLowerCase().includes(search.toLowerCase()) ||
+      s.title.toLowerCase().includes(search.toLowerCase())
+    )
   );
 
   return (
@@ -1479,6 +1511,15 @@ function DiscordModal({ settings, defaults, onClose }) {
         </div>
         <div style={{ padding: '0 24px 12px' }}>
           <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={tab === 'templates' ? 'Search templates...' : 'Search screenshots...'} data-testid="discord-search" style={{ width: '100%' }} />
+          {categories.length > 0 && (
+            <label className="discord-category-filter">
+              <span>Category</span>
+              <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} data-testid="discord-category-filter">
+                <option value="all">{tab === 'templates' ? 'All Templates' : 'All Screenshots'}</option>
+                {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
+          )}
         </div>
         <div className="modal-body" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
           {tab === 'templates' ? (
@@ -1490,8 +1531,8 @@ function DiscordModal({ settings, defaults, onClose }) {
                     ? 'Discord templates could not be loaded.'
                     : 'No templates match your search.'}
               </p>
-            ) : filteredTemplates.map(({ title, message }, i) => (
-              <DiscordRow key={i} title={title} message={message} />
+            ) : filteredTemplates.map(({ category, title, message }, i) => (
+              <DiscordRow key={i} category={category} title={title} message={message} />
             ))
           ) : (
             filteredScreenshots.length === 0 ? (
@@ -1503,7 +1544,7 @@ function DiscordModal({ settings, defaults, onClose }) {
                     : 'No screenshots match your search.'}
               </p>
             ) : filteredScreenshots.map((ss, i) => (
-              <DiscordScreenshotRow key={i} title={ss.title} imageUrl={ss.imageUrl} />
+              <DiscordScreenshotRow key={i} category={ss.category} title={ss.title} imageUrl={ss.imageUrl} />
             ))
           )}
         </div>
@@ -1512,11 +1553,14 @@ function DiscordModal({ settings, defaults, onClose }) {
   );
 }
 
-function DiscordRow({ title, message }) {
+function DiscordRow({ category, title, message }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="discord-row">
-      <div className="discord-title">{title}</div>
+      <div className="discord-title-row">
+        {category && <span className="discord-category-badge">{category}</span>}
+        <div className="discord-title">{title}</div>
+      </div>
       <div className="discord-msg">{message}</div>
       <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={() => {
         navigator.clipboard.writeText(message);
@@ -1527,7 +1571,7 @@ function DiscordRow({ title, message }) {
   );
 }
 
-function DiscordScreenshotRow({ title, imageUrl }) {
+function DiscordScreenshotRow({ category, title, imageUrl }) {
   const [copied, setCopied] = useState(false);
   const [previewError, setPreviewError] = useState(false);
   const resolvedImageUrl = resolveScreenshotUrl(imageUrl);
@@ -1567,7 +1611,10 @@ function DiscordScreenshotRow({ title, imageUrl }) {
   return (
     <div className="discord-row" style={{ flexDirection: 'column', gap: 8 }}>
       <div className="discord-screenshot-header">
-        <div className="discord-title">{title}</div>
+        <div className="discord-title-row">
+          {category && <span className="discord-category-badge">{category}</span>}
+          <div className="discord-title">{title}</div>
+        </div>
         <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={handleCopy} disabled={!resolvedImageUrl || previewError}>{copied ? 'Copied' : 'Copy Image'}</button>
       </div>
       {resolvedImageUrl && !previewError ? (
