@@ -5,7 +5,19 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 
-function computeFinalStatus(session) {
+const READINESS_NEEDS_RETEST = 'Needs Retest / Additional Coaching';
+const READINESS_OVERRIDE_REASONS = [
+  'Accuracy/detail concerns',
+  'Needed excessive prompting',
+  'Caller control concerns',
+  'System navigation concerns',
+  'Professional tone concerns',
+  'Not ready for independent calls',
+  'Other',
+];
+const READINESS_OVERRIDE_RESULTS = ['Pass', 'Fail', READINESS_NEEDS_RETEST];
+
+function computeCalculatedStatus(session) {
   if (!session) return 'Fail';
 
   const autoFail = session.auto_fail_reason;
@@ -52,6 +64,59 @@ function computeFinalStatus(session) {
 
   if (callsFailed >= 2) return finalAttempt ? 'FAIL-Final Attempt' : 'Fail';
   return 'Incomplete';
+}
+
+function normalizeFinalReadinessJudgment(judgment, calculatedResult) {
+  const existing = judgment && typeof judgment === 'object' ? judgment : {};
+  const overrideApplied = Boolean(existing.overrideApplied);
+  return {
+    useCalculatedResult: existing.useCalculatedResult !== false && !overrideApplied,
+    calculatedResult: calculatedResult || existing.calculatedResult || '',
+    overrideApplied,
+    overrideResult: existing.overrideResult || '',
+    primaryReason: existing.primaryReason || '',
+    explanation: existing.explanation || '',
+    createdAt: existing.createdAt || '',
+    updatedAt: existing.updatedAt || '',
+  };
+}
+
+function computeFinalStatus(session) {
+  if (!session) return 'Fail';
+  const calculated = computeCalculatedStatus(session);
+  const judgment = normalizeFinalReadinessJudgment(session.finalReadinessJudgment, calculated);
+  if (judgment.overrideApplied && READINESS_OVERRIDE_RESULTS.includes(judgment.overrideResult)) {
+    return judgment.overrideResult;
+  }
+  return calculated;
+}
+
+function formatReadinessOverrideSummary(judgment) {
+  if (!judgment?.overrideApplied) return '';
+  const parts = [
+    `Evaluator Override Applied: calculated result was ${judgment.calculatedResult || 'N/A'} and final result is ${judgment.overrideResult}.`,
+  ];
+  if (judgment.primaryReason) parts.push(`Primary reason: ${judgment.primaryReason}.`);
+  if (judgment.explanation) parts.push(`Explanation: ${judgment.explanation}`);
+  return parts.join(' ');
+}
+
+function appendReadinessOverrideSummary(text, judgment) {
+  const note = formatReadinessOverrideSummary(judgment);
+  if (!note) return text;
+  const base = String(text || '').trim();
+  if (base.includes('Evaluator Override Applied:')) return base;
+  return base ? `${base}\n\n${note}` : note;
+}
+
+function validateReadinessJudgment(judgment) {
+  if (!judgment?.overrideApplied) return '';
+  if (!READINESS_OVERRIDE_RESULTS.includes(judgment.overrideResult)) return 'Select an override result.';
+  if (!judgment.primaryReason) return 'Select a primary reason for the override.';
+  if (judgment.primaryReason === 'Other' && !String(judgment.explanation || '').trim()) {
+    return 'Enter an explanation when the primary reason is Other.';
+  }
+  return '';
 }
 
 function normalizeReviewSession(session) {
@@ -238,8 +303,11 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         if ((!s || !s.candidate_name) && reviewSessionPayload?.candidate_name) {
           const restored = normalizeReviewSession(mergeBasicsIntoSession(reviewSessionPayload, buildBasicsFromRecord(reviewSessionPayload)));
           await api.startSession(restored).catch(() => {});
+          const restoredCalculatedStatus = computeCalculatedStatus(restored);
+          const restoredJudgment = normalizeFinalReadinessJudgment(restored.finalReadinessJudgment, restoredCalculatedStatus);
+          const restoredFinalStatus = computeFinalStatus({ ...restored, finalReadinessJudgment: restoredJudgment });
           setSettings(currentSettings || {});
-          setSession({ ...restored, final_status: computeFinalStatus(restored) });
+          setSession({ ...restored, final_status: restoredFinalStatus, finalReadinessJudgment: restoredJudgment });
           setCoaching((restored.coaching_summary || '').trim());
           setFail((restored.fail_summary || '').trim());
           setLoading(false);
@@ -248,12 +316,14 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         }
         if (!s || !s.candidate_name) { setSession(null); setLoading(false); return; }
         setSettings(currentSettings || {});
-        const finalStatus = computeFinalStatus(s);
-        const resolvedSession = normalizeReviewSession(mergeBasicsIntoSession({ ...s, final_status: finalStatus }, buildBasicsFromRecord(s)));
+        const calculatedStatus = computeCalculatedStatus(s);
+        const judgment = normalizeFinalReadinessJudgment(s.finalReadinessJudgment, calculatedStatus);
+        const finalStatus = computeFinalStatus({ ...s, finalReadinessJudgment: judgment });
+        const resolvedSession = normalizeReviewSession(mergeBasicsIntoSession({ ...s, final_status: finalStatus, finalReadinessJudgment: judgment }, buildBasicsFromRecord(s)));
         setSession(resolvedSession);
 
-        if (!s.final_status) {
-          await api.updateSession({ final_status: finalStatus });
+        if (!s.final_status || JSON.stringify(s.finalReadinessJudgment || {}) !== JSON.stringify(judgment)) {
+          await api.updateSession({ final_status: finalStatus, finalReadinessJudgment: judgment });
         }
 
         // Final evaluator notes are optional and can be bypassed before Review if this feature is disabled later.
@@ -332,14 +402,16 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     }
     const timer = window.setTimeout(() => {
       if (!isSummaryPlaceholder(coaching) || !isSummaryPlaceholder(fail)) {
+        const autosaveCalculated = computeCalculatedStatus(session);
+        const autosaveJudgment = normalizeFinalReadinessJudgment(session.finalReadinessJudgment, autosaveCalculated);
         api.updateSession({
-          coaching_summary: getSafeSummaryForSubmit(coaching, ''),
-          fail_summary: getSafeSummaryForSubmit(fail, ''),
+          coaching_summary: getSafeSummaryForSubmit(appendReadinessOverrideSummary(coaching, autosaveJudgment), ''),
+          fail_summary: getSafeSummaryForSubmit(appendReadinessOverrideSummary(fail, autosaveJudgment), ''),
         }).catch(() => {});
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [coaching, fail, isHistoricalReview, session?.candidate_name, showFinalNotesModal]);
+  }, [coaching, fail, isHistoricalReview, session, showFinalNotesModal]);
 
   if (loading) return <div className="page-loading" data-testid="review-page">{historyRecord ? 'Loading review...' : 'Generating review summaries...'}</div>;
   if (!session) return <div className="stub-page" data-testid="review-page"><h1>No Active Session</h1><p>Start a session from the Home screen.</p></div>;
@@ -354,11 +426,16 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const s2r = (s.sup_transfer_2 || {}).result;
   const newbie = s.newbie_shift_data;
 
-  const finalStatus = computeFinalStatus(s);
+  const calculatedStatus = computeCalculatedStatus(s);
+  const finalReadinessJudgment = normalizeFinalReadinessJudgment(s.finalReadinessJudgment, calculatedStatus);
+  const finalStatus = computeFinalStatus({ ...s, finalReadinessJudgment });
+  const coachingForDisplay = appendReadinessOverrideSummary(coaching, finalReadinessJudgment);
+  const failForDisplay = appendReadinessOverrideSummary(fail, finalReadinessJudgment);
   let bannerClass, bannerText;
   if (finalStatus === 'Pass' || finalStatus === 'RESUMED-PASS') { bannerClass = 'banner-pass'; bannerText = finalStatus === 'RESUMED-PASS' ? 'RESUMED SESSION PASSED' : 'SESSION PASSED'; }
-  else if (finalStatus === 'Incomplete') { bannerClass = 'banner-incomplete'; bannerText = 'SESSION INCOMPLETE — Pending Newbie Shift'; }
-  else { bannerClass = 'banner-fail'; bannerText = finalStatus === 'FAIL-Final Attempt' ? 'SESSION FAILED — FINAL ATTEMPT' : autoFail ? `AUTO-FAIL: ${autoFail.toUpperCase()}` : 'SESSION FAILED'; }
+  else if (finalStatus === 'Incomplete') { bannerClass = 'banner-incomplete'; bannerText = 'SESSION INCOMPLETE - Pending Newbie Shift'; }
+  else if (finalStatus === READINESS_NEEDS_RETEST) { bannerClass = 'banner-incomplete'; bannerText = 'NEEDS RETEST / ADDITIONAL COACHING'; }
+  else { bannerClass = 'banner-fail'; bannerText = finalStatus === 'FAIL-Final Attempt' ? 'SESSION FAILED - FINAL ATTEMPT' : autoFail ? `AUTO-FAIL: ${autoFail.toUpperCase()}` : 'SESSION FAILED'; }
 
   const colorResult = (r) => {
     if (r === 'Pass') return <span style={{ color: 'var(--color-success)', fontWeight: 700 }}>PASS</span>;
@@ -370,6 +447,58 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     await navigator.clipboard.writeText(text);
     const btn = document.getElementById(btnId);
     if (btn) { const orig = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = orig; }, 3000); }
+  };
+
+  const saveReadinessJudgment = async (nextJudgment) => {
+    const normalized = normalizeFinalReadinessJudgment(nextJudgment, calculatedStatus);
+    const nextFinalStatus = computeFinalStatus({ ...session, finalReadinessJudgment: normalized });
+    const nextSession = { ...session, final_status: nextFinalStatus, finalReadinessJudgment: normalized };
+    setSession(nextSession);
+    if (!isHistoricalReview) {
+      await api.updateSession({
+        final_status: nextFinalStatus,
+        finalReadinessJudgment: normalized,
+      }).catch(() => {});
+    }
+  };
+
+  const handleReadinessUseCalculated = async (useCalculatedResult) => {
+    const now = new Date().toISOString();
+    if (useCalculatedResult) {
+      await saveReadinessJudgment({
+        ...finalReadinessJudgment,
+        useCalculatedResult: true,
+        calculatedResult: calculatedStatus,
+        overrideApplied: false,
+        overrideResult: '',
+        primaryReason: '',
+        explanation: '',
+        updatedAt: now,
+      });
+      return;
+    }
+    await saveReadinessJudgment({
+      ...finalReadinessJudgment,
+      useCalculatedResult: false,
+      calculatedResult: calculatedStatus,
+      overrideApplied: true,
+      overrideResult: finalReadinessJudgment.overrideResult || '',
+      createdAt: finalReadinessJudgment.createdAt || now,
+      updatedAt: now,
+    });
+  };
+
+  const handleReadinessField = async (field, value) => {
+    const now = new Date().toISOString();
+    await saveReadinessJudgment({
+      ...finalReadinessJudgment,
+      useCalculatedResult: false,
+      calculatedResult: calculatedStatus,
+      overrideApplied: true,
+      [field]: value,
+      createdAt: finalReadinessJudgment.createdAt || now,
+      updatedAt: now,
+    });
   };
 
   const handleContinueFinalNotes = async () => {
@@ -607,9 +736,15 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   };
 
   const runFillForm = async ({ showSuccess = true } = {}) => {
+    const readinessError = validateReadinessJudgment(finalReadinessJudgment);
+    if (readinessError) {
+      await modal.warning('Final Readiness Judgment Required', readinessError);
+      return false;
+    }
     setFilling(true);
     try {
-      const r = await api.fillForm(coaching, fail, isHistoricalReview ? session : null);
+      const sessionForFill = { ...session, final_status: finalStatus, finalReadinessJudgment };
+      const r = await api.fillForm(coachingForDisplay, failForDisplay, isHistoricalReview ? sessionForFill : null);
       if (r.ok) {
         setHasFilledForm(true);
         if (showSuccess) {
@@ -632,6 +767,12 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const handleFinish = async () => {
     if (isHistoricalReview) {
       onNavigate('history');
+      return;
+    }
+
+    const readinessError = validateReadinessJudgment(finalReadinessJudgment);
+    if (readinessError) {
+      await modal.warning('Final Readiness Judgment Required', readinessError);
       return;
     }
 
@@ -668,7 +809,13 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     if (!confirmed) return;
     setFinishing(true);
     try {
-      const r = await api.finishSession(coaching, fail);
+      await api.updateSession({
+        final_status: finalStatus,
+        finalReadinessJudgment,
+        coaching_summary: getSafeSummaryForSubmit(coachingForDisplay, ''),
+        fail_summary: getSafeSummaryForSubmit(failForDisplay, ''),
+      }).catch(() => {});
+      const r = await api.finishSession(coachingForDisplay, failForDisplay);
       if (r.ok) {
         if (onHistoryRefresh) {
           await onHistoryRefresh('review-finish').catch((error) => {
@@ -692,7 +839,12 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
 
   const handleBack = async () => {
     if (!isHistoricalReview && session?.candidate_name) {
-      await api.updateSession({ coaching_summary: coaching, fail_summary: fail }).catch(() => {});
+      await api.updateSession({
+        final_status: finalStatus,
+        finalReadinessJudgment,
+        coaching_summary: coachingForDisplay,
+        fail_summary: failForDisplay,
+      }).catch(() => {});
     }
     const target = getReviewBackTarget(session, isHistoricalReview);
     onNavigate(target.page, target.state);
@@ -769,6 +921,80 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       )}
       <div className={`banner ${bannerClass}`} data-testid="review-banner">{bannerText}</div>
 
+      <div className="card final-readiness-card" data-testid="final-readiness-judgment">
+        <div className="final-readiness-header">
+          <div>
+            <h3>Final Readiness Judgment</h3>
+            <div className="text-sm text-muted">Calculated result: <strong>{calculatedStatus}</strong></div>
+          </div>
+          {finalReadinessJudgment.overrideApplied && (
+            <span className="readiness-override-badge">Evaluator Override Applied</span>
+          )}
+        </div>
+        <div className="text-sm font-bold" style={{ marginTop: 12 }}>Do you agree with this calculated result?</div>
+        <div className="readiness-radio-row">
+          <label className={`radio-label ${isHistoricalReview ? 'disabled' : ''}`}>
+            <input
+              type="radio"
+              name="final-readiness-mode"
+              checked={!finalReadinessJudgment.overrideApplied}
+              disabled={isHistoricalReview}
+              onChange={() => handleReadinessUseCalculated(true)}
+            />
+            Yes, use calculated result
+          </label>
+          <label className={`radio-label ${isHistoricalReview ? 'disabled' : ''}`}>
+            <input
+              type="radio"
+              name="final-readiness-mode"
+              checked={finalReadinessJudgment.overrideApplied}
+              disabled={isHistoricalReview}
+              onChange={() => handleReadinessUseCalculated(false)}
+            />
+            No, override result
+          </label>
+        </div>
+        {finalReadinessJudgment.overrideApplied && (
+          <div className="final-readiness-override-grid">
+            <label>
+              <span>Override result</span>
+              <select
+                value={finalReadinessJudgment.overrideResult}
+                onChange={(event) => handleReadinessField('overrideResult', event.target.value)}
+                disabled={isHistoricalReview}
+                data-testid="readiness-override-result"
+              >
+                <option value="">Select result</option>
+                {READINESS_OVERRIDE_RESULTS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Primary reason</span>
+              <select
+                value={finalReadinessJudgment.primaryReason}
+                onChange={(event) => handleReadinessField('primaryReason', event.target.value)}
+                disabled={isHistoricalReview}
+                data-testid="readiness-primary-reason"
+              >
+                <option value="">Select reason</option>
+                {READINESS_OVERRIDE_REASONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <label className="full">
+              <span>Additional explanation</span>
+              <textarea
+                rows={3}
+                value={finalReadinessJudgment.explanation}
+                onChange={(event) => handleReadinessField('explanation', event.target.value)}
+                disabled={isHistoricalReview}
+                placeholder="Explain why the calculated result is being overridden."
+                data-testid="readiness-explanation"
+              />
+            </label>
+          </div>
+        )}
+      </div>
+
       <div className="card" style={{ marginTop: 24 }}>
         <div style={{ lineHeight: 1.7 }}>
           <div className="candidate-header review-candidate-header">
@@ -776,7 +1002,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           </div><br />
           <strong>Tester:</strong> {s.tester_name || 'N/A'}<br />
           <strong>Date:</strong> {reviewSessionDate(s) || 'N/A'}<br />
-          <strong>Status:</strong> {s.status || s.final_status || finalStatus}<br />
+          <strong>Status:</strong> {finalStatus}<br />
+          {finalReadinessJudgment.overrideApplied && <><strong>Calculated Result:</strong> {calculatedStatus}<br /></>}
           <strong>Final Attempt:</strong> {s.final_attempt ? 'Yes' : 'No'}<br />
           <strong>Headset USB:</strong> {s.headset_usb === true ? 'Yes' : s.headset_usb === false ? 'No' : 'N/A'}<br />
           <strong>Noise Cancelling Mic:</strong> {s.noise_cancel === true ? 'Yes' : s.noise_cancel === false ? 'No' : 'N/A'}<br />
@@ -789,16 +1016,16 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           <strong>Skills:</strong> {supOnly ? 'Supervisor Transfer ONLY' : 'Mock Calls + Supervisor Transfer'}<br />
           {autoFail && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{autoFail}</span><br /></>}
           {!supOnly && (<>
-            <br /><strong>— CALL RESULTS —</strong><br />
+            <br /><strong>- CALL RESULTS -</strong><br />
             <strong>Call 1:</strong> {colorResult(c1r)}<br />
             <strong>Call 2:</strong> {colorResult(c2r)}<br />
             <strong>Call 3:</strong> {colorResult(c3r)}<br />
           </>)}
-          <br /><strong>— SUP TRANSFER RESULTS —</strong><br />
+          <br /><strong>- SUP TRANSFER RESULTS -</strong><br />
           <strong>Transfer 1:</strong> {colorResult(s1r)}<br />
           <strong>Transfer 2:</strong> {colorResult(s2r)}<br />
           {newbie && (<>
-            <br /><strong>— NEWBIE SHIFT —</strong><br />
+            <br /><strong>- NEWBIE SHIFT -</strong><br />
             <strong>Date/Time:</strong> {newbie.newbie_date || ''} at {newbie.newbie_time || ''} {newbie.newbie_tz || ''}<br />
           </>)}
         </div>
@@ -864,7 +1091,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             <textarea
               className="review-textarea"
               rows={6}
-              value={coaching}
+              value={coachingForDisplay}
               readOnly
               data-testid="review-coaching"
             />
@@ -903,7 +1130,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                   Regenerate with Instructions
                 </button>
               )}
-              <button className="btn btn-primary btn-sm" id="btn-copy-coaching" onClick={() => copyText(coaching, 'btn-copy-coaching')} data-testid="review-copy-coaching">Copy</button>
+              <button className="btn btn-primary btn-sm" id="btn-copy-coaching" onClick={() => copyText(coachingForDisplay, 'btn-copy-coaching')} data-testid="review-copy-coaching">Copy</button>
             </div>
           </>
         )}
@@ -953,7 +1180,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             <textarea
               className="review-textarea"
               rows={6}
-              value={fail}
+              value={failForDisplay}
               readOnly
               data-testid="review-fail"
             />
@@ -992,7 +1219,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                   Regenerate with Instructions
                 </button>
               )}
-              <button className="btn btn-primary btn-sm" id="btn-copy-fail" onClick={() => copyText(fail, 'btn-copy-fail')} data-testid="review-copy-fail">Copy</button>
+              <button className="btn btn-primary btn-sm" id="btn-copy-fail" onClick={() => copyText(failForDisplay, 'btn-copy-fail')} data-testid="review-copy-fail">Copy</button>
             </div>
           </>
         )}

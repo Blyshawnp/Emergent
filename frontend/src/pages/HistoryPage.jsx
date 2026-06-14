@@ -32,7 +32,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       setHistory(nextHistory);
       console.log('[HISTORY PAGE] fresh history loaded', { count: nextHistory.length });
     } catch (_err) {
-      // History data load failed — table remains empty
+      // History data load failed - table remains empty
     }
   }, [onHistoryRefresh]);
 
@@ -78,7 +78,21 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   const colorResult = (r) => {
     if (r === 'Pass') return <span style={{ color: 'var(--color-success)', fontWeight: 700 }}>PASS</span>;
     if (r === 'Fail') return <span style={{ color: 'var(--color-danger)', fontWeight: 700 }}>FAIL</span>;
-    return <span style={{ color: 'var(--text-tertiary)' }}>—</span>;
+    return <span style={{ color: 'var(--text-tertiary)' }}>-</span>;
+  };
+
+  const readinessJudgment = (record) => {
+    const judgment = record?.finalReadinessJudgment && typeof record.finalReadinessJudgment === 'object'
+      ? record.finalReadinessJudgment
+      : {};
+    return {
+      ...judgment,
+      calculatedResult: judgment.calculatedResult || record?.calculated_result || '',
+      overrideApplied: Boolean(judgment.overrideApplied || record?.readiness_override_applied === true || record?.readiness_override_applied === 'TRUE'),
+      overrideResult: judgment.overrideResult || record?.readiness_override_result || '',
+      primaryReason: judgment.primaryReason || record?.readiness_override_reason || '',
+      explanation: judgment.explanation || record?.readiness_override_explanation || '',
+    };
   };
 
   const extractChecked = (obj) => {
@@ -196,7 +210,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         <div className="modal-overlay open" onClick={e => { if (e.target === e.currentTarget) setDetail(null); }}>
           <div className="modal" style={{ width: 700, maxHeight: '85vh' }}>
             <div className="modal-header">
-              <h2>{detail.candidate || detail.candidate_name || 'Unknown'} — <span style={{ color: ({ Pass: 'var(--color-success)', 'RESUMED-PASS': 'var(--color-success)', Fail: 'var(--color-danger)', 'FAIL-Final Attempt': 'var(--color-danger)', Incomplete: 'var(--color-warning)' }[detail.status]) || 'var(--text-secondary)' }}>{(detail.status || '').toUpperCase()}</span></h2>
+              <h2>{detail.candidate || detail.candidate_name || 'Unknown'} - <span style={{ color: ({ Pass: 'var(--color-success)', 'RESUMED-PASS': 'var(--color-success)', Fail: 'var(--color-danger)', 'FAIL-Final Attempt': 'var(--color-danger)', Incomplete: 'var(--color-warning)' }[detail.status]) || 'var(--text-secondary)' }}>{(detail.status || '').toUpperCase()}</span></h2>
               <button className="modal-close" onClick={() => setDetail(null)}>&times;</button>
             </div>
             <div className="modal-body" style={{ lineHeight: 1.7 }}>
@@ -205,6 +219,15 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 <div className="text-sm"><strong>Candidate:</strong> {detail.candidate || detail.candidate_name || 'Unknown'}</div>
                 <div className="text-sm"><strong>Tester:</strong> {detail.tester_name || 'N/A'}</div>
                 <div className="text-sm"><strong>Status:</strong> {detail.status || detail.final_status || 'Unknown'}</div>
+                {readinessJudgment(detail).calculatedResult && (
+                  <div className="text-sm"><strong>Calculated Result:</strong> {readinessJudgment(detail).calculatedResult}</div>
+                )}
+                {readinessJudgment(detail).overrideApplied && (
+                  <div className="text-sm"><strong>Evaluator Override Applied:</strong> {readinessJudgment(detail).overrideResult || detail.final_status || detail.status || 'N/A'}</div>
+                )}
+                {readinessJudgment(detail).overrideApplied && readinessJudgment(detail).primaryReason && (
+                  <div className="text-sm"><strong>Override Reason:</strong> {readinessJudgment(detail).primaryReason}</div>
+                )}
                 <div className="text-sm"><strong>Date:</strong> {detailDate(detail) || 'Unknown'}</div>
                 <div className="text-sm"><strong>Final Attempt:</strong> {detail.final_attempt ? 'Yes' : 'No'}</div>
                 {detail.headset_brand && <div className="text-sm"><strong>Headset:</strong> {detail.headset_brand}</div>}
