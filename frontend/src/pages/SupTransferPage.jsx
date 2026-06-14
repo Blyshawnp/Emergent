@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
-import api from '../api';
+import api, { findDiscordTemplateMessage } from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import PhoneticsTableButton from '../components/PhoneticsTableButton';
@@ -88,6 +88,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   const [isFinal, setIsFinal] = useState(false);
   const [isSupervisorOnly, setIsSupervisorOnly] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedDiscordTemplate, setCopiedDiscordTemplate] = useState('');
   const [candidateName, setCandidateName] = useState('');
   const hydratedRef = useRef(false);
   const latestDraftPayloadRef = useRef(null);
@@ -387,6 +388,23 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
     onNavigate('review');
   }, [candidateName, modal, onNavigate]);
 
+  const copyDiscordTemplate = useCallback(async (templateTitle, label) => {
+    const message = findDiscordTemplateMessage(settings, defaults, templateTitle);
+    if (!String(message || '').trim()) {
+      await modal.warning('Discord Post Unavailable', `${label} is not available from Discord posts right now.`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(message);
+      setCopiedDiscordTemplate(templateTitle);
+      window.setTimeout(() => {
+        setCopiedDiscordTemplate((current) => (current === templateTitle ? '' : current));
+      }, 3000);
+    } catch (_error) {
+      await modal.warning('Copy Failed', 'Unable to copy this Discord post automatically. Please open Discord Post and copy it manually.');
+    }
+  }, [defaults, modal, settings]);
+
   const handleDiscardSession = useCallback(async () => {
     const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');
     if (!confirmed) return;
@@ -531,7 +549,22 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
 
       {result === 'Fail' && (
         <div className="card card-fail" style={{ marginBottom: 16 }}>
-          <h3 style={{ color: 'var(--color-danger)' }}>Fail Reasons</h3>
+          <div className="fail-card-header">
+            <h3 style={{ color: 'var(--color-danger)' }}>Fail Reasons</h3>
+            {transferNum === 1 && (
+              <div className="inline-discord-copy">
+                <span>Copy Failed 1st Sup Transfer Discord post</span>
+                <button
+                  type="button"
+                  className={`discord-copy ${copiedDiscordTemplate === 'Failed 1st Sup Transfer' ? 'copied' : ''}`}
+                  onClick={() => copyDiscordTemplate('Failed 1st Sup Transfer', 'Copy Failed 1st Sup Transfer Discord post')}
+                  data-testid="sup-fail-discord-copy"
+                >
+                  {copiedDiscordTemplate === 'Failed 1st Sup Transfer' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            )}
+          </div>
           <div className="coaching-grid">
             <div>{supFails.slice(0, 3).map(item => (
               <label key={item} className="checkbox-label"><input type="checkbox" checked={!!fails[item]} onChange={() => toggle(item, setFails)} /><span>{item}</span></label>

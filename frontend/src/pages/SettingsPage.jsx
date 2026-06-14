@@ -1033,7 +1033,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
         <>
           <h3 style={{ marginBottom: 16 }}>Discord Message Templates</h3>
           <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
-            Trigger / Message pairs. The tester can copy these from the Discord panel during a session.
+            Trigger / Message pairs. The tester can copy these from the Discord panel during a session. Basics, Sup Transfer, and Newbie Shift copy buttons use these same template triggers when available.
           </p>
           {discord.map(([trigger, msg], i) => (
             <div key={i} className="discord-edit-row">
@@ -1322,7 +1322,7 @@ function CalendarTab({ s, set }) {
         <input type="checkbox" checked={s.enable_calendar || false} onChange={e => set('enable_calendar', e.target.checked)} data-testid="settings-cal-on" />
         <span>Enable Google Calendar for Newbie Shifts</span>
       </label>
-      <p className="text-muted text-sm" style={{ marginTop: 16 }}>The "Add to Google Calendar" button on the Newbie Shift screen creates a calendar event with the title "Supervisor Test Call - [Candidate Name]". No additional setup needed.</p>
+      <p className="text-muted text-sm" style={{ marginTop: 16 }}>The "Add to Google Calendar" button on the Newbie Shift screen creates a calendar event with the title "Supervisor Test Call - [Candidate Name]". The Discord copy button beside it uses the Out of Time (Needs Sup) template from Discord Posts. No additional setup needed.</p>
     </div>
   );
 }

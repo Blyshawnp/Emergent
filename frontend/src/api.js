@@ -31,6 +31,43 @@ function getBackendUrl() {
 const BACKEND_URL = getBackendUrl();
 const BASE = `${BACKEND_URL}/api`;
 
+export function normalizeDiscordTemplate(template) {
+  if (!template) return null;
+  if (Array.isArray(template)) {
+    return { title: String(template[0] || ''), message: String(template[1] || '') };
+  }
+  if (typeof template === 'object') {
+    const title = template.title || template.Title || template.trigger || template.Trigger || template.name || template.Name || template.label || template.Label || '';
+    const message = template.message || template.Message || template.text || template.Text || template.content || template.Content || template.body || template.Body || '';
+    return { title: String(title), message: String(message) };
+  }
+  return null;
+}
+
+export function normalizeDiscordTemplates(templates) {
+  return (Array.isArray(templates) ? templates : [])
+    .map(normalizeDiscordTemplate)
+    .filter((item) => item && item.title);
+}
+
+export function getActiveDiscordTemplates(settings = {}, defaults = {}) {
+  if (settings?.discord_override && Array.isArray(settings.discord_templates) && settings.discord_templates.length) {
+    return settings.discord_templates;
+  }
+  if (Array.isArray(defaults?.discord_templates) && defaults.discord_templates.length) {
+    return defaults.discord_templates;
+  }
+  return Array.isArray(settings?.discord_templates) ? settings.discord_templates : [];
+}
+
+export function findDiscordTemplateMessage(settings = {}, defaults = {}, title = '') {
+  const needle = String(title || '').trim().toLowerCase();
+  if (!needle) return '';
+  const templates = normalizeDiscordTemplates(getActiveDiscordTemplates(settings, defaults));
+  const match = templates.find((item) => item.title.trim().toLowerCase() === needle);
+  return match ? match.message : '';
+}
+
 function getAdminToken() {
   try {
     return window.electronAPI?.getAdminToken?.() || '';

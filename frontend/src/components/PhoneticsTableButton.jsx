@@ -48,7 +48,7 @@ export default function PhoneticsTableButton({ screenshots = [] }) {
 
   return (
     <>
-      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(true)} data-testid="phonetics-table-button">
+      <button type="button" className="btn btn-primary btn-sm phonetics-table-trigger" onClick={() => setOpen(true)} data-testid="phonetics-table-button">
         Phonetics Table
       </button>
       {open && (

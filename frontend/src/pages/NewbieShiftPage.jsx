@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import api from '../api';
+import api, { findDiscordTemplateMessage } from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
@@ -7,6 +7,9 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 export default function NewbieShiftPage({ onNavigate }) {
   const modal = useModal();
   const [techOpen, setTechOpen] = useState(false);
+  const [settings, setSettings] = useState({});
+  const [defaults, setDefaults] = useState({});
+  const [copiedDiscordTemplate, setCopiedDiscordTemplate] = useState('');
   const [isFinal, setIsFinal] = useState(false);
   const [candidateName, setCandidateName] = useState('');
   const tomorrow = new Date();
@@ -18,8 +21,15 @@ export default function NewbieShiftPage({ onNavigate }) {
 
   useEffect(() => {
     let cancelled = false;
-    api.getCurrentSession().then(({ session }) => {
-      if (!cancelled && session) {
+    Promise.all([
+      api.getCurrentSession(),
+      api.getSettings().catch(() => ({})),
+      api.getDefaults(8000).catch(() => ({})),
+    ]).then(([{ session }, currentSettings, currentDefaults]) => {
+      if (cancelled) return;
+      setSettings(currentSettings || {});
+      setDefaults(currentDefaults || {});
+      if (session) {
         setIsFinal(session.final_attempt || false);
         setCandidateName(session.candidate_name || '');
       }
@@ -67,6 +77,25 @@ export default function NewbieShiftPage({ onNavigate }) {
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dateStr}/${dateStr}&details=${details}`;
     window.open(url, '_blank');
   }, [date, tz, modal, getFormattedTime, getCalendarTitle]);
+
+  const copyDiscordTemplate = useCallback(async () => {
+    const templateTitle = 'Out of Time (Needs Sup)';
+    const label = 'Copy Out of Time (Needs Sup) Discord post';
+    const message = findDiscordTemplateMessage(settings, defaults, templateTitle);
+    if (!String(message || '').trim()) {
+      await modal.warning('Discord Post Unavailable', `${label} is not available from Discord posts right now.`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(message);
+      setCopiedDiscordTemplate(templateTitle);
+      window.setTimeout(() => {
+        setCopiedDiscordTemplate((current) => (current === templateTitle ? '' : current));
+      }, 3000);
+    } catch (_error) {
+      await modal.warning('Copy Failed', 'Unable to copy this Discord post automatically. Please open Discord Post and copy it manually.');
+    }
+  }, [defaults, modal, settings]);
 
   const handleContinue = useCallback(async () => {
     const ft = getFormattedTime();
@@ -127,8 +156,19 @@ export default function NewbieShiftPage({ onNavigate }) {
           Calendar event: <b>{getCalendarTitle()}</b>
         </div>
       )}
-      <div style={{ marginTop: 24, textAlign: 'center' }}>
+      <div className="newbie-action-row">
         <button className="btn btn-primary" onClick={handleGcal} data-testid="newbie-gcal" title="Opens Google Calendar with a pre-filled event">Add to Google Calendar</button>
+        <div className="inline-discord-copy">
+          <span>Copy Out of Time (Needs Sup) Discord post</span>
+          <button
+            type="button"
+            className={`discord-copy ${copiedDiscordTemplate === 'Out of Time (Needs Sup)' ? 'copied' : ''}`}
+            onClick={copyDiscordTemplate}
+            data-testid="newbie-discord-copy"
+          >
+            {copiedDiscordTemplate === 'Out of Time (Needs Sup)' ? 'Copied' : 'Copy'}
+          </button>
+        </div>
       </div>
 
       <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
