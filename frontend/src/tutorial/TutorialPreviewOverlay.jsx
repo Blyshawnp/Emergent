@@ -144,7 +144,7 @@ export default function TutorialPreviewOverlay({
       page: 'basics',
       target: '[data-testid="basics-brand"]',
       fallbackTarget: '[data-testid="basics-page"]',
-      content: 'Record the candidate headset here. Start typing to search approved headsets, use the dropdown arrow to browse, or manually type a confirmed USB noise-cancelling model.',
+      content: 'Select the headset brand/model first. Approved headset selections automatically mark USB and Noise Cancelling as Yes, while unlisted models still need those answers checked manually.',
       placement: 'right',
     },
     {
@@ -176,7 +176,7 @@ export default function TutorialPreviewOverlay({
       page: 'suptransfer',
       target: '[data-tour="sup-discord-banner"]',
       fallbackTarget: '[data-testid="suptransfer-page"]',
-      content: 'Supervisor Transfer covers the live transfer portion. Copy the Discord message, choose the transfer setup details, watch the time check, and score whether the transfer passes.',
+      content: 'Supervisor Transfer covers the live transfer portion. Copy the Discord message, choose setup details, score the transfer, and use the Fail Reasons copy button when Transfer 1 fails.',
       placement: 'bottom',
     },
     {

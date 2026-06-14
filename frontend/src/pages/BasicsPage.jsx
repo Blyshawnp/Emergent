@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import api from '../api';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import api, { findDiscordTemplateMessage } from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
@@ -133,6 +133,7 @@ function hasBasicsDraft(form) {
 export default function BasicsPage({ onNavigate }) {
   const modal = useModal();
   const [settings, setSettings] = useState({});
+  const [defaults, setDefaults] = useState({});
   const [techOpen, setTechOpen] = useState(false);
   const [supervisorOnlyMode, setSupervisorOnlyMode] = useState(false);
   const [headsetLookupOpen, setHeadsetLookupOpen] = useState(false);
@@ -162,10 +163,11 @@ export default function BasicsPage({ onNavigate }) {
 
     (async () => {
       try {
-        const [currentSettings, sessionResponse, headsetResponse] = await Promise.all([
+        const [currentSettings, sessionResponse, headsetResponse, defaultsResponse] = await Promise.all([
           api.getSettings(),
           api.getCurrentSession(),
           api.getApprovedHeadsets().catch((error) => ({ groups: [], error: error.message || 'Unable to load the approved headset list right now.' })),
+          api.getDefaults(8000).catch(() => ({})),
         ]);
         if (cancelled) return;
 
@@ -173,6 +175,7 @@ export default function BasicsPage({ onNavigate }) {
         const storedSupervisorOnly = Boolean(session?.supervisor_only) || window.sessionStorage.getItem(SUP_ONLY_MODE_KEY) === '1';
         setSupervisorOnlyMode(storedSupervisorOnly);
         setSettings(currentSettings);
+        setDefaults(defaultsResponse || {});
         setForm((prev) => ({
           ...prev,
           tester_name: currentSettings.tester_name || '',
@@ -286,6 +289,11 @@ export default function BasicsPage({ onNavigate }) {
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
+  const currentHeadsetIsApproved = useMemo(() => {
+    const value = String(form.headset_brand || '').trim();
+    return Boolean(value) && headsetIsApproved(value, approvedHeadsets);
+  }, [approvedHeadsets, form.headset_brand]);
+
   const allApprovedHeadsetOptions = useMemo(() => {
     return approvedHeadsets.flatMap((group) =>
       (group.models || []).map((model) => selectedHeadsetLabel(group, model))
@@ -322,7 +330,17 @@ export default function BasicsPage({ onNavigate }) {
 
   const handleInputChange = (e) => {
     const val = e.target.value;
-    set('headset_brand', val);
+    setForm((current) => {
+      const next = { ...current, headset_brand: val };
+      if (String(val || '').trim() && headsetIsApproved(val, approvedHeadsets)) {
+        next.headset_usb = true;
+        next.noise_cancel = true;
+      } else {
+        next.headset_usb = null;
+        next.noise_cancel = null;
+      }
+      return next;
+    });
     setDropdownOpen(true);
     setHighlightedIndex(-1);
   };
@@ -339,9 +357,48 @@ export default function BasicsPage({ onNavigate }) {
   };
 
   const handleSelectOption = (value) => {
-    set('headset_brand', value);
+    setForm((current) => ({
+      ...current,
+      headset_brand: value,
+      headset_usb: true,
+      noise_cancel: true,
+    }));
     setDropdownOpen(false);
   };
+
+  const copyDiscordTemplate = useCallback(async (templateTitle, label) => {
+    const message = findDiscordTemplateMessage(settings, defaults, templateTitle);
+    if (!String(message || '').trim()) {
+      await modal.warning('Discord Post Unavailable', `${label} is not available from Discord posts right now.`);
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(message);
+      return true;
+    } catch (_error) {
+      await modal.warning('Copy Failed', 'Unable to copy this Discord post automatically. Please open Discord Post and copy it manually.');
+      return false;
+    }
+  }, [defaults, modal, settings]);
+
+  const showFailDiscordModal = useCallback(async ({ title, body, templateTitle, helperText }) => {
+    let copied = false;
+    while (true) {
+      const choice = await modal.showModal({
+        type: 'confirm',
+        title,
+        body: `${body}<div class="fail-discord-copy-helper"><b>${helperText}</b>${copied ? '<span>Copied to clipboard.</span>' : ''}</div>`,
+        graphic: 'warning',
+        buttons: [
+          { label: copied ? 'Copied' : 'Copy', cls: 'discord-copy', value: 'copy-discord' },
+          { label: 'Yes', cls: 'btn-primary', value: true },
+          { label: 'No', cls: 'btn-muted', value: false },
+        ],
+      });
+      if (choice !== 'copy-discord') return choice;
+      copied = await copyDiscordTemplate(templateTitle, helperText);
+    }
+  }, [copyDiscordTemplate, modal]);
 
   const scrollIntoView = (index) => {
     const el = itemRefs.current[index];
@@ -593,7 +650,10 @@ export default function BasicsPage({ onNavigate }) {
   };
 
   const handleContinue = async () => {
-    const d = form;
+    const headsetApproved = Boolean(String(form.headset_brand || '').trim()) && headsetIsApproved(form.headset_brand, approvedHeadsets);
+    const d = headsetApproved
+      ? { ...form, headset_usb: true, noise_cancel: true }
+      : form;
     let candidateBlockResult = { allowed: true, override: false };
     if (!d.candidate_name.trim()) { await modal.warning('Missing Info', 'Candidate Name is required.'); return; }
     if (confirmedCandidateMatch) {
@@ -606,7 +666,8 @@ export default function BasicsPage({ onNavigate }) {
       candidateBlockResult = await handleCandidateBlockOrOverride({ candidate_name: d.candidate_name });
       if (!candidateBlockResult.allowed) return;
     }
-    if (d.headset_usb === null || d.noise_cancel === null || !d.headset_brand.trim()) { await modal.warning('Missing Info', 'All Headset fields are required.'); return; }
+    if (!d.headset_brand.trim()) { await modal.warning('Missing Info', 'Headset brand/model is required.'); return; }
+    if (!headsetApproved && (d.headset_usb === null || d.noise_cancel === null)) { await modal.warning('Missing Info', 'USB and Noise Cancelling answers are required for headsets that are not on the approved list.'); return; }
     if (d.vpn_on === null) { await modal.warning('Missing Info', 'VPN question must be answered.'); return; }
     if (d.vpn_on && d.vpn_off === null) { await modal.warning('Missing Info', 'Please confirm if the candidate can turn off their VPN.'); return; }
     if (d.chrome_default === null || d.extensions_disabled === null || d.popups_allowed === null) { await modal.warning('Missing Info', 'All Browser questions must be answered.'); return; }
@@ -615,15 +676,11 @@ export default function BasicsPage({ onNavigate }) {
       const reasons = [];
       if (!d.headset_usb) reasons.push('Wrong headset (not USB)');
       if (!d.noise_cancel) reasons.push('Wrong headset (not noise cancelling)');
-      const yes = await modal.showModal({
-        type: 'confirm',
+      const yes = await showFailDiscordModal({
         title: 'Headset Issue',
         body: `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`,
-        graphic: 'warning',
-        buttons: [
-          { label: 'Yes', cls: 'btn-primary', value: true },
-          { label: 'No', cls: 'btn-muted', value: false },
-        ],
+        templateTitle: 'Wrong Headset',
+        helperText: 'Headset Fail Discord Post',
       });
       if (yes) {
         const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
@@ -635,7 +692,12 @@ export default function BasicsPage({ onNavigate }) {
       return;
     }
     if (d.vpn_on && d.vpn_off === false) {
-      const yes = await modal.confirm('VPN Issue', 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?');
+      const yes = await showFailDiscordModal({
+        title: 'VPN Issue',
+        body: 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?',
+        templateTitle: 'VPN Fail',
+        helperText: 'VPN Fail Discord Post',
+      });
       if (yes) {
         const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -691,10 +753,10 @@ export default function BasicsPage({ onNavigate }) {
     onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
   };
 
-  const RadioGroup = ({ name, value, onChange }) => (
+  const RadioGroup = ({ name, value, onChange, disabled = false }) => (
     <div className="radio-group">
-      <label className="radio-label"><input type="radio" name={name} checked={value === true} onChange={() => onChange(true)} /> Yes</label>
-      <label className="radio-label"><input type="radio" name={name} checked={value === false} onChange={() => onChange(false)} /> No</label>
+      <label className={`radio-label ${disabled ? 'disabled' : ''}`}><input type="radio" name={name} checked={value === true} onChange={() => onChange(true)} disabled={disabled} /> Yes</label>
+      <label className={`radio-label ${disabled ? 'disabled' : ''}`}><input type="radio" name={name} checked={value === false} onChange={() => onChange(false)} disabled={disabled} /> No</label>
     </div>
   );
 
@@ -772,14 +834,6 @@ export default function BasicsPage({ onNavigate }) {
         <h3 style={{ marginBottom: 12 }}>Headset Requirements</h3>
         <div className="basics-headset-layout">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <label className="text-sm font-bold" style={{ minWidth: 160 }}>Is the headset USB?</label>
-              <RadioGroup name="b-usb" value={form.headset_usb} onChange={v => set('headset_usb', v)} />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <label className="text-sm font-bold" style={{ minWidth: 160 }}>Noise Cancelling Mic?</label>
-              <RadioGroup name="b-noise" value={form.noise_cancel} onChange={v => set('noise_cancel', v)} />
-            </div>
             <div className="basics-headset-brand-row">
               <label className="text-sm font-bold" style={{ minWidth: 160 }}>Brand / Model</label>
               <div ref={containerRef} className="headset-autocomplete-container" style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
@@ -850,6 +904,19 @@ export default function BasicsPage({ onNavigate }) {
             </div>
             <div className="basics-headset-note">
               {HEADSET_HELPER_TEXT}
+            </div>
+            {currentHeadsetIsApproved && (
+              <div className="basics-headset-auto-note">
+                Approved headset selected. USB and Noise Cancelling are marked Yes automatically.
+              </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <label className="text-sm font-bold" style={{ minWidth: 160 }}>Is the headset USB?</label>
+              <RadioGroup name="b-usb" value={form.headset_usb} onChange={v => set('headset_usb', v)} disabled={currentHeadsetIsApproved} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <label className="text-sm font-bold" style={{ minWidth: 160 }}>Noise Cancelling Mic?</label>
+              <RadioGroup name="b-noise" value={form.noise_cancel} onChange={v => set('noise_cancel', v)} disabled={currentHeadsetIsApproved} />
             </div>
           </div>
           <div className="basics-headset-info-panel">
@@ -975,7 +1042,7 @@ export default function BasicsPage({ onNavigate }) {
                               type="button"
                               className="headset-lookup-model-btn"
                               onClick={() => {
-                                set('headset_brand', `${group.brand} ${model}`);
+                                handleSelectOption(`${group.brand} ${model}`);
                                 setHeadsetLookupOpen(false);
                               }}
                             >

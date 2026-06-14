@@ -42,11 +42,13 @@ Smart Resume restores work in progress so you do not lose data from a paused or 
 Basics verifies candidate readiness before any scoring begins.
 - Candidate Name is required.
 - Final Attempt marks this as the candidate's last allowed mock attempt and affects routing later.
-- Headset must be USB with a noise-cancelling microphone.
+- Select the headset brand/model before answering USB and Noise Cancelling.
+- Headset must be USB with a noise-cancelling microphone. Approved headset selections automatically mark USB and Noise Cancelling as Yes.
 - VPN must be off, and required browser checks must pass before you can continue.
 - When checking for VPN or proxy, use more than one linked checker because databases can update at different times.
 - The VPN/proxy checker websites are https://www.ip2location.com/, https://ip.teoh.io/vpn-detection, and https://nodedata.io/vpn-detection-test.
 - Click a VPN/proxy website to copy it to your clipboard. The item changes to Copied for 3 seconds, and the app does not navigate away.
+- Headset and VPN fail popups include Discord copy buttons when the matching post template is available.
 - Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.
 - When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.
 - Choose Correct Candidate only after confirming the match. The app loads the matching Basics context and starts Calls, or Supervisor Transfer 1 for Supervisor Transfer Only.
@@ -63,6 +65,7 @@ Basics verifies candidate readiness before any scoring begins.
 Use the Brand / Model autocomplete to confirm a candidate is using an allowed USB noise-cancelling model.
 - Start typing in Brand / Model to search approved headsets.
 - Click the dropdown arrow in the field to view approved headset options.
+- Pick an approved headset first so USB and Noise Cancelling can be marked Yes automatically.
 - If the model is not listed, double-check that the headset is USB and has a noise-cancelling microphone before continuing.
 - If the headset is confirmed USB with a noise-cancelling microphone, type it manually in the field.
 - Manually entered headset models that are not on the approved list may be logged to the headset-review-log tab for admin review.
@@ -116,6 +119,7 @@ Stopped Responding ends the session as a fail when the candidate goes silent and
 Supervisor Transfer verifies the candidate can complete the transfer process correctly.
 - Post the Discord queue message and use the WXYZ supervisor test number.
 - Choose caller, show, and supervisor reason before scoring the transfer.
+- When Supervisor Transfer 1 fails, use the Fail Reasons copy button to copy the Failed 1st Sup Transfer Discord post.
 - Pass Transfer 1 to complete the transfer requirement.
 - If both transfers fail, the session routes to Newbie Shift follow-up.
 
@@ -133,6 +137,7 @@ Use this when mock calls were already completed earlier and only the transfer po
 Newbie Shift schedules follow-up work when a candidate cannot complete the flow today.
 - Enter the follow-up date, start time, AM/PM, and timezone.
 - Use Add to Google Calendar to open a prefilled calendar event.
+- Use the Discord copy button next to Add to Google Calendar to copy the Out of Time (Needs Sup) post.
 - Continue to Review to save the Newbie Shift details on the session.
 
 ## 17. Review Screen
@@ -211,6 +216,7 @@ The Discord panel keeps reusable Discord messages and screenshot images close at
 - Open Discord Post from the sidebar.
 - Use Category to filter grouped templates or screenshots when categories are configured. Search still works within the selected category.
 - Search templates and copy message text with one click. Copy buttons change to Copied for 3 seconds.
+- Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.
 - Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.
 - Use the Phonetics Table button on Calls or Supervisor Transfer screens to open Phonetics.png and copy it for Discord when supported.
 - Templates and screenshots are managed in Settings.
