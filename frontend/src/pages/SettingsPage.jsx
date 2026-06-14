@@ -968,13 +968,38 @@ function FailReasonsTab({ s, set, defaults, feedback, onFeedback }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* DISCORD TAB                                                     */
 /* ═══════════════════════════════════════════════════════════════ */
+function normalizeDiscordPost(item) {
+  if (Array.isArray(item)) {
+    return { title: String(item[0] || ''), message: String(item[1] || ''), category: String(item[2] || 'Uncategorized') };
+  }
+  if (item && typeof item === 'object') {
+    return {
+      title: String(item.title || item.Title || item.trigger || item.Trigger || item.name || item.Name || item.label || item.Label || ''),
+      message: String(item.message || item.Message || item.text || item.Text || item.content || item.Content || item.body || item.Body || ''),
+      category: String(item.category || item.Category || item.group || item.Group || 'Uncategorized'),
+    };
+  }
+  return { title: '', message: '', category: 'Uncategorized' };
+}
+
+function normalizeScreenshotItem(item) {
+  if (item && typeof item === 'object') {
+    return {
+      title: String(item.title || item.Title || item.name || item.Name || ''),
+      image_url: String(item.image_url || item.ImagePath || item.imagePath || item.url || ''),
+      category: String(item.category || item.Category || item.group || item.Group || 'Uncategorized'),
+    };
+  }
+  return { title: '', image_url: '', category: 'Uncategorized' };
+}
+
 function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
   const modal = useModal();
   const [section, setSection] = useState('posts');
-  const discord = s.discord_templates || [];
-  const screenshots = s.discord_screenshots || [];
+  const discord = (s.discord_templates || []).map(normalizeDiscordPost);
+  const screenshots = (s.discord_screenshots || []).map(normalizeScreenshotItem);
   const update = (i, field, val) => {
-    const next = discord.map((item, idx) => idx === i ? (field === 0 ? [val, item[1]] : [item[0], val]) : item);
+    const next = discord.map((item, idx) => idx === i ? { ...item, [field]: val } : item);
     set('discord_templates', next);
     onFeedback?.('discord', 'Updated. Click Save Settings to keep changes.');
   };
@@ -983,7 +1008,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
     onFeedback?.('discord', 'Removed. Click Save Settings to keep changes.');
   };
   const add = () => {
-    set('discord_templates', [...discord, ['New Trigger', 'Message text here']]);
+    set('discord_templates', [...discord, { category: 'Uncategorized', title: 'New Trigger', message: 'Message text here' }]);
     onFeedback?.('discord', 'Added. Click Save Settings to keep changes.');
   };
   const updateSS = (i, key, val) => {
@@ -995,7 +1020,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
     onFeedback?.('discord', 'Removed. Click Save Settings to keep changes.');
   };
   const addSS = () => {
-    set('discord_screenshots', [...screenshots, { title: 'New Screenshot', image_url: '' }]);
+    set('discord_screenshots', [...screenshots, { category: 'Uncategorized', title: 'New Screenshot', image_url: '' }]);
     onFeedback?.('discord', 'Added. Click Save Settings to keep changes.');
   };
   const uploadSS = async (i, file) => {
@@ -1033,17 +1058,21 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
         <>
           <h3 style={{ marginBottom: 16 }}>Discord Message Templates</h3>
           <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
-            Trigger / Message pairs. The tester can copy these from the Discord panel during a session.
+            Category, trigger, and message entries. The tester can copy these from the Discord panel during a session.
           </p>
-          {discord.map(([trigger, msg], i) => (
+          {discord.map((item, i) => (
             <div key={i} className="discord-edit-row">
+              <div className="discord-edit-category">
+                <label className="text-xs text-muted" style={{ display: 'block', marginBottom: 2 }}>Category</label>
+                <input type="text" value={item.category} onChange={e => update(i, 'category', e.target.value)} style={{ width: '100%' }} />
+              </div>
               <div className="discord-edit-trigger">
                 <label className="text-xs text-muted" style={{ display: 'block', marginBottom: 2 }}>Trigger</label>
-                <input type="text" value={trigger} onChange={e => update(i, 0, e.target.value)} style={{ width: '100%' }} />
+                <input type="text" value={item.title} onChange={e => update(i, 'title', e.target.value)} style={{ width: '100%' }} />
               </div>
               <div className="discord-edit-msg">
                 <label className="text-xs text-muted" style={{ display: 'block', marginBottom: 2 }}>Message</label>
-                <textarea value={msg} onChange={e => update(i, 1, e.target.value)} rows={3} style={{ width: '100%' }} />
+                <textarea value={item.message} onChange={e => update(i, 'message', e.target.value)} rows={3} style={{ width: '100%' }} />
               </div>
               <button className="btn btn-danger btn-sm" onClick={() => remove(i)} style={{ alignSelf: 'flex-start', marginTop: 18, flexShrink: 0 }} title="Remove template">X</button>
             </div>
@@ -1066,6 +1095,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
           {screenshots.map((ss, i) => (
             <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border-subtle)' }}>
               <div style={{ flex: 1 }}>
+                <div className="form-row" style={{ marginBottom: 8 }}><label style={{ minWidth: 80 }}>Category</label><input type="text" value={ss.category} onChange={e => updateSS(i, 'category', e.target.value)} /></div>
                 <div className="form-row" style={{ marginBottom: 8 }}><label style={{ minWidth: 80 }}>Title</label><input type="text" value={ss.title} onChange={e => updateSS(i, 'title', e.target.value)} /></div>
                 <div className="form-row" style={{ marginBottom: 8 }}>
                   <label style={{ minWidth: 80 }}>Image File</label>
