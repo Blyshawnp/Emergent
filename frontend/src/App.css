@@ -971,6 +971,55 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .review-textarea { width: 100%; padding: 14px 16px; background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: var(--radius-md); font-family: var(--font-body); font-size: var(--font-size-sm); line-height: 1.6; resize: vertical; }
 .review-textarea:focus { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.15); outline: none; }
 .review-btn-row { display: flex; gap: var(--space-sm); margin-top: var(--space-sm); }
+.final-readiness-card {
+  margin-top: 18px;
+  padding: 16px 20px;
+}
+.final-readiness-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.final-readiness-header h3 {
+  margin: 0 0 4px;
+}
+.readiness-override-badge {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+}
+.readiness-radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+}
+.final-readiness-override-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+.final-readiness-override-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+}
+.final-readiness-override-grid .full {
+  grid-column: 1 / -1;
+}
+.final-readiness-override-grid textarea {
+  min-height: 74px;
+  resize: vertical;
+}
 .candidate-header {
   white-space: nowrap;
   text-align: right;
@@ -1658,6 +1707,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 @media (max-width: 640px) {
   .cmodal { width: 92vw; }
+  .final-readiness-header {
+    flex-direction: column;
+  }
+  .final-readiness-override-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ══════════ TECH ISSUE DIALOG ══════════ */

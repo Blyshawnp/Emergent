@@ -3028,6 +3028,12 @@ SHARED_CANDIDATE_SESSION_HEADERS = [
     "final_notes_history_only",
     "evaluator_notes_summary",
     "final_notes_created_at",
+    "calculated_result",
+    "final_result",
+    "readiness_override_applied",
+    "readiness_override_result",
+    "readiness_override_reason",
+    "readiness_override_explanation",
 ]
 
 SHARED_PENDING_SUP_TRANSFER_HEADERS = [
@@ -3062,6 +3068,12 @@ SHARED_PENDING_SUP_TRANSFER_HEADERS = [
     "final_notes_needs_coaching",
     "final_notes_other",
     "evaluator_notes_summary",
+    "calculated_result",
+    "final_result",
+    "readiness_override_applied",
+    "readiness_override_result",
+    "readiness_override_reason",
+    "readiness_override_explanation",
 ]
 
 UPDATE_MTS_TAB = "update-MTS"
@@ -3765,8 +3777,49 @@ def _shared_status(status):
         "Fail": "FAIL",
         "Incomplete": "INCOMPLETE",
         "NC/NS": "FAIL",
+        "Needs Retest / Additional Coaching": "INCOMPLETE",
     }
     return mapping.get(status, status or "INCOMPLETE")
+
+
+FINAL_READINESS_NEEDS_RETEST = "Needs Retest / Additional Coaching"
+FINAL_READINESS_ALLOWED_RESULTS = {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "Incomplete", "NC/NS", FINAL_READINESS_NEEDS_RETEST}
+
+
+def _readiness_judgment(session):
+    judgment = (session or {}).get("finalReadinessJudgment") or {}
+    return judgment if isinstance(judgment, dict) else {}
+
+
+def _readiness_override_applied(session):
+    judgment = _readiness_judgment(session)
+    return bool(judgment.get("overrideApplied")) and str(judgment.get("overrideResult") or "").strip() in FINAL_READINESS_ALLOWED_RESULTS
+
+
+def _readiness_override_note(session):
+    if not _readiness_override_applied(session):
+        return ""
+    judgment = _readiness_judgment(session)
+    calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
+    final_result = str(judgment.get("overrideResult") or "").strip()
+    reason = str(judgment.get("primaryReason") or "").strip()
+    explanation = str(judgment.get("explanation") or "").strip()
+    parts = [
+        f"Evaluator Override Applied: calculated result was {calculated or 'N/A'} and final result is {final_result}.",
+    ]
+    if reason:
+        parts.append(f"Primary reason: {reason}.")
+    if explanation:
+        parts.append(f"Explanation: {explanation}")
+    return " ".join(parts).strip()
+
+
+def _append_readiness_override_note(text, session):
+    note = _readiness_override_note(session)
+    if not note:
+        return text
+    base = str(text or "").strip()
+    return f"{base}\n\n{note}" if base else note
 
 
 def _count_completed(session, prefix, total):
@@ -4712,6 +4765,21 @@ def _get_evaluator_notes_summary(session):
     return "\n\n".join(p for p in parts if p)
 
 
+def _readiness_tracking_values(session):
+    judgment = _readiness_judgment(session)
+    calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
+    final_result = compute_final_status(session)
+    override_applied = _readiness_override_applied(session)
+    return [
+        calculated,
+        final_result,
+        _shared_bool(override_applied),
+        str(judgment.get("overrideResult") or "").strip() if override_applied else "",
+        str(judgment.get("primaryReason") or "").strip() if override_applied else "",
+        str(judgment.get("explanation") or "").strip() if override_applied else "",
+    ]
+
+
 def _candidate_session_row(session, existing_rows=None):
     existing_rows = existing_rows or []
     status = compute_final_status(session)
@@ -4778,6 +4846,7 @@ def _candidate_session_row(session, existing_rows=None):
         _shared_bool((session.get("finalEvaluatorNotes") or {}).get("historyOnly", False)),
         _get_evaluator_notes_summary(session),
         (session.get("finalEvaluatorNotes") or {}).get("createdAt") or "",
+        *_readiness_tracking_values(session),
     ], pending_id, needs_sup
 
 
@@ -4840,6 +4909,7 @@ def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=
         _final_notes_field(session, "needsCoaching"),
         _final_notes_field(session, "other"),
         _get_evaluator_notes_summary(session),
+        *_readiness_tracking_values(session),
     ]
 
 
@@ -5397,6 +5467,8 @@ def _is_fail_na(session):
     final_status = compute_final_status(session)
     if final_status in {"Pass", "RESUMED-PASS"}:
         return True
+    if final_status == FINAL_READINESS_NEEDS_RETEST:
+        return False
 
     if session.get("auto_fail_reason"):
         return False
@@ -5421,7 +5493,7 @@ def _is_fail_na(session):
     return final_status not in {"Fail", "FAIL-Final Attempt", "NC/NS"}
 
 
-def compute_final_status(session):
+def compute_calculated_status(session):
     auto_fail = session.get("auto_fail_reason")
     sup_only = session.get("supervisor_only", False)
     calls_passed = sum(1 for i in range(1, 4) if (session.get(f"call_{i}") or {}).get("result") == "Pass")
@@ -5462,6 +5534,12 @@ def compute_final_status(session):
     return "Incomplete"
 
 
+def compute_final_status(session):
+    if _readiness_override_applied(session):
+        return str(_readiness_judgment(session).get("overrideResult") or "").strip()
+    return compute_calculated_status(session)
+
+
 def normalize_history_status(entry):
     explicit_status = entry.get("status")
     computed_status = compute_final_status(entry)
@@ -5473,7 +5551,7 @@ def normalize_history_status(entry):
         return "FAIL-Final Attempt"
     if explicit_status == "Pass" and _is_resumed_sup_transfer_session(entry):
         return "RESUMED-PASS"
-    if explicit_status in {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "Incomplete", "NC/NS"}:
+    if explicit_status in FINAL_READINESS_ALLOWED_RESULTS:
         return explicit_status
 
     explicit_final_status = entry.get("final_status")
@@ -5481,7 +5559,7 @@ def normalize_history_status(entry):
         return "FAIL-Final Attempt"
     if explicit_final_status == "Pass" and _is_resumed_sup_transfer_session(entry):
         return "RESUMED-PASS"
-    if explicit_final_status in {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "Incomplete", "NC/NS"}:
+    if explicit_final_status in FINAL_READINESS_ALLOWED_RESULTS:
         return explicit_final_status
 
     if computed_status != "Fail":
@@ -5810,10 +5888,10 @@ def build_clean_coaching(session):
         if fallback_parts:
             fallback_notes_str = "Additional Notes: " + " ".join(fallback_parts)
             if base_summary.startswith("No coaching summary was generated"):
-                return fallback_notes_str
-            return base_summary + "\n\n" + fallback_notes_str
+                return _append_readiness_override_note(fallback_notes_str, session)
+            return _append_readiness_override_note(base_summary + "\n\n" + fallback_notes_str, session)
 
-    return base_summary
+    return _append_readiness_override_note(base_summary, session)
 
 
 def build_clean_fail(session):
@@ -5868,12 +5946,12 @@ def build_clean_fail(session):
         
         fallback_notes_str = "Additional Notes: " + " ".join(fallback_parts)
         if not base_fail:
-            return fallback_notes_str
-        return base_fail + "\n\n" + fallback_notes_str
+            return _append_readiness_override_note(fallback_notes_str, session)
+        return _append_readiness_override_note(base_fail + "\n\n" + fallback_notes_str, session)
     else:
         if not base_fail:
-            return "No structured fail reason was selected. See evaluator notes and call results for context."
-        return base_fail
+            return _append_readiness_override_note("No structured fail reason was selected. See evaluator notes and call results for context.", session)
+        return _append_readiness_override_note(base_fail, session)
 
 
 DEFAULT_GEMINI_COACHING_PROMPT = (
@@ -6482,6 +6560,7 @@ def _completion_flags_for_form(session):
     if auto_fail_flags:
         return auto_fail_flags
 
+    final_status = compute_final_status(session)
     sup_only = session.get("supervisor_only", False)
     calls_passed = _count_results(session, "call", 3, "Pass")
     sups_passed = _count_results(session, "sup_transfer", 2, "Pass")
@@ -6489,6 +6568,12 @@ def _completion_flags_for_form(session):
     mock_complete = "Yes" if sup_only or calls_passed >= 2 else "No"
     sup_complete = "Yes" if sups_passed >= 1 else "No"
     all_complete = "Yes" if mock_complete == "Yes" and sup_complete == "Yes" else "No"
+    if final_status in {"Pass", "RESUMED-PASS"}:
+        mock_complete = "Yes"
+        sup_complete = "Yes"
+        all_complete = "Yes"
+    elif final_status in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
+        all_complete = "No"
 
     return {
         "mock_complete": mock_complete,
@@ -6517,27 +6602,27 @@ def _auto_fail_review_summaries(session):
             coaching_lines.append(line)
 
     if auto_fail_type == "ncns":
-        return {"coaching": "N/A", "fail": f"{name} was a NC/NS."}
+        return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(f"{name} was a NC/NS.", session)}
     if auto_fail_type == "not_ready":
-        return {"coaching": "N/A", "fail": f"{name} was not ready or prepared for the session."}
+        return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(f"{name} was not ready or prepared for the session.", session)}
     if auto_fail_type == "headset":
         return {
-            "coaching": f"{name} was informed that a USB headset with a noise-cancelling microphone is required to contract with ACD.",
-            "fail": f"{name} was not using an approved USB headset with a noise-cancelling microphone.",
+            "coaching": _append_readiness_override_note(f"{name} was informed that a USB headset with a noise-cancelling microphone is required to contract with ACD.", session),
+            "fail": _append_readiness_override_note(f"{name} was not using an approved USB headset with a noise-cancelling microphone.", session),
         }
     if auto_fail_type == "vpn":
         return {
-            "coaching": f"{name} was informed that the use of a VPN is not acceptable when contracting with ACD.",
-            "fail": f"{name} was using a VPN and was unable to turn it off.",
+            "coaching": _append_readiness_override_note(f"{name} was informed that the use of a VPN is not acceptable when contracting with ACD.", session),
+            "fail": _append_readiness_override_note(f"{name} was using a VPN and was unable to turn it off.", session),
         }
     if auto_fail_type == "stopped":
         return {
-            "coaching": "\n".join(coaching_lines) if coaching_lines else "N/A",
-            "fail": f"{name} stopped responding.",
+            "coaching": _append_readiness_override_note("\n".join(coaching_lines) if coaching_lines else "N/A", session),
+            "fail": _append_readiness_override_note(f"{name} stopped responding.", session),
         }
     return {
-        "coaching": "\n".join(coaching_lines) if coaching_lines else "N/A",
-        "fail": _sentence_case(auto_fail_reason) + ".",
+        "coaching": _append_readiness_override_note("\n".join(coaching_lines) if coaching_lines else "N/A", session),
+        "fail": _append_readiness_override_note(_sentence_case(auto_fail_reason) + ".", session),
     }
 
 
@@ -6581,7 +6666,8 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
     completion_flags = _completion_flags_for_form(session)
 
     fail_reason = "N/A"
-    if session.get("auto_fail_reason") or _is_form_fail_session(session):
+    final_status = compute_final_status(session)
+    if session.get("auto_fail_reason") or _is_form_fail_session(session) or final_status in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
         fail_reason = (fail_summary or "").strip() or summaries["fail"]
 
     return {
