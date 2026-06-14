@@ -214,7 +214,7 @@ export default function TutorialPreviewOverlay({
       page: 'settings',
       target: '[data-tour="settings-tabs"]',
       fallbackTarget: '[data-testid="settings-page"]',
-      content: 'Settings manages app behavior and integrations: tester identity, form links, sounds, theme, Gemini summaries, Discord posts and screenshots, updates, and ticker speed.',
+      content: 'Settings manages app behavior and integrations: tester identity, form links, welcome voice, sound volume, theme, Gemini summaries, Discord posts and screenshots, updates, and ticker speed.',
       placement: 'bottom',
     },
     {

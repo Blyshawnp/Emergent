@@ -386,7 +386,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
             data-testid="settings-update-now"
             title={manualUpdateMode ? `Download Mock Testing Suite v${pendingUpdate.latestVersion}` : `Install Mock Testing Suite v${pendingUpdate.latestVersion}`}
           >
-            {manualUpdateMode ? `Download Update — v${pendingUpdate.latestVersion}` : `Install Update — v${pendingUpdate.latestVersion}`}
+            {manualUpdateMode ? `Download Update - v${pendingUpdate.latestVersion}` : `Install Update - v${pendingUpdate.latestVersion}`}
           </button>
         ) : (
           <button
@@ -423,7 +423,12 @@ function GeneralTab({ s, set }) {
     <div className="card" data-testid="settings-general">
       <h3 style={{ marginBottom: 16 }}>Profile</h3>
       <SettingsRow label="Tester Name"><input type="text" value={s.tester_name || ''} onChange={e => set('tester_name', e.target.value)} style={{ maxWidth: 300 }} data-testid="settings-name" /></SettingsRow>
-      <SettingsRow label="Display Name"><input type="text" value={s.display_name || ''} onChange={e => set('display_name', e.target.value)} placeholder="Home screen greeting" style={{ maxWidth: 300 }} data-testid="settings-display" /></SettingsRow>
+      <SettingsRow label="Display Name">
+        <div>
+          <input type="text" value={s.display_name || ''} onChange={e => set('display_name', e.target.value)} placeholder="Home screen greeting" style={{ maxWidth: 300 }} data-testid="settings-display" />
+          <div className="text-muted text-xs" style={{ marginTop: 6 }}>If blank, the app uses the first name from Tester Name.</div>
+        </div>
+      </SettingsRow>
       <h3 style={{ margin: '24px 0 16px' }}>URLs</h3>
       <SettingsRow label="Cert Form URL"><input type="text" value={s.form_url || ''} onChange={e => set('form_url', e.target.value)} style={{ maxWidth: 500 }} data-testid="settings-form-url" /></SettingsRow>
       <SettingsRow label="Cert Spreadsheet URL"><input type="text" value={s.cert_sheet_url || ''} onChange={e => set('cert_sheet_url', e.target.value)} style={{ maxWidth: 500 }} data-testid="settings-cert-sheet-url" /></SettingsRow>
@@ -434,11 +439,34 @@ function GeneralTab({ s, set }) {
           <option value="edge">Edge</option>
         </select>
       </SettingsRow>
-      <SettingsRow label="Sounds Enabled">
-        <label className="checkbox-label">
-          <input type="checkbox" checked={s.enable_sounds !== false} onChange={e => set('enable_sounds', e.target.checked)} data-testid="settings-sounds-enabled" />
-          <span>Play app sounds</span>
-        </label>
+      <SettingsRow label="Welcome voice">
+        <select
+          value={s.welcome_voice || 'male'}
+          onChange={e => set('welcome_voice', e.target.value)}
+          style={{ maxWidth: 220 }}
+          data-testid="settings-welcome-voice"
+        >
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+        </select>
+      </SettingsRow>
+      <SettingsRow label="Sound volume">
+        <select
+          value={s.sound_volume || (s.enable_sounds === false ? 'off' : 'medium')}
+          onChange={e => {
+            const level = e.target.value;
+            set('sound_volume', level);
+            set('enable_sounds', level !== 'off');
+          }}
+          style={{ maxWidth: 220 }}
+          data-testid="settings-sound-volume"
+        >
+          <option value="off">Off</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+        <div className="text-muted text-xs" style={{ marginTop: 6 }}>Controls welcome audio and app sound effects.</div>
       </SettingsRow>
       <h3 style={{ margin: '24px 0 16px' }}>Notifications</h3>
       <SettingsRow label="Ticker Speed">

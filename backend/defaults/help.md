@@ -4,12 +4,15 @@
 Mock Testing Suite is the control center for certification mock sessions, supervisor transfers, and follow-up scheduling.
 - Open the app from the desktop shortcut or Start menu.
 - The first launch runs the Setup Wizard, then the Tutorial.
+- The default welcome audio plays before setup is complete, and personalized welcome audio is used on returning launches when a matching file exists.
 - Everything begins from the Home screen: new sessions, supervisor-only work, and history.
 - Active session drafts are saved automatically while you work, so moving between screens never wipes progress.
 
 ## 2. Setup Wizard
 The first-run wizard captures your tester identity and the form/spreadsheet links the app needs to fill.
 - Enter your first name, last name, and (optional) display name.
+- First install uses the default welcome audio and does not need your name before setup is complete.
+- After setup, returning launches use Display Name when available. If Display Name is blank, the app uses the first name from Tester Name.
 - Confirm the certification form URL and the certification spreadsheet URL.
 - When you finish the wizard, the Tutorial starts automatically if it has not been completed yet.
 - You can revisit any of these values later from Settings.
@@ -183,7 +186,7 @@ Steps:
 7. Turn on Enable Gemini AI Summaries.
 8. Paste your API key into the Gemini API Key box.
 9. Click Save Settings.
-10. Open a session and check Review — Gemini will now polish the coaching and fail summaries.
+10. Open a session and check Review - Gemini will now polish the coaching and fail summaries.
 
 ## 21. Fill Form
 Fill Form pushes session data into the configured Microsoft certification form using a browser.
@@ -201,7 +204,10 @@ History stores recent local sessions. You can reopen a session in read-only Revi
 
 ## 23. Settings
 Settings controls your profile, integrations, and app preferences.
-- General: tester identity, form/spreadsheet links, browser behavior, sounds, theme, and ticker speed.
+- General: tester identity, form/spreadsheet links, browser behavior, welcome voice, sound volume, theme, and ticker speed.
+- Female welcome audio files use -f before .mp3, such as welcome-shawn-f.mp3.
+- Missing personalized welcome files fall back to default welcome audio.
+- Sound volume controls welcome audio and app sound effects.
 - Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.
 - Help content is not editable from normal Settings.
 - Notifications are managed by admins in SAM through the master Google Sheet, not from normal MTS Settings.
