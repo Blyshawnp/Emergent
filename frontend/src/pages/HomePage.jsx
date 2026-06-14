@@ -254,10 +254,15 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   }, [history.length, startupStatuses?.history]);
 
   useEffect(() => {
-    const testerNameForWelcome = settings.tester_name || settings.display_name || '';
-    if (!testerNameForWelcome) return;
+    const hasIdentity = Boolean((settings.display_name || settings.tester_name || '').trim());
+    if (settings?.setup_complete === false || (settings?.setup_complete !== true && !hasIdentity)) return;
     if (window.sessionStorage.getItem('mts-welcome-sound-played') === '1') return;
-    playSound('welcome', testerNameForWelcome);
+    playSound('welcome', {
+      testerName: settings.tester_name || '',
+      displayName: settings.display_name || '',
+      setupComplete: settings.setup_complete !== false,
+      welcomeVoice: settings.welcome_voice || 'male',
+    });
     window.sessionStorage.setItem('mts-welcome-sound-played', '1');
   }, [settings]);
 
@@ -373,7 +378,7 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
       <div className="home-header" style={{ marginBottom: 12 }} data-tour="home-header">
         <div>
           <h1 style={{ marginBottom: 0 }}>Welcome, {name}!</h1>
-          <p className="text-muted" style={{ margin: 0 }}>Mock Testing Suite — Certification</p>
+          <p className="text-muted" style={{ margin: 0 }}>Mock Testing Suite - Certification</p>
         </div>
       </div>
       <div className="stats-row" style={{ marginBottom: 16 }}>

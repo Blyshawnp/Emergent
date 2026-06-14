@@ -1,5 +1,5 @@
 """
-Mock Testing Suite — FastAPI Backend
+Mock Testing Suite - FastAPI Backend
 All routes in a single file for simplicity. Uses SQLite for local persistence.
 """
 import os
@@ -921,7 +921,7 @@ def _normalize_faq_markdown(text):
     admin types ``Q:`` and ``A:`` lines). Returns ``(markdown, question_count)``.
 
     A return of ``question_count == 0`` means the doc had no recognizable Q&A
-    structure — callers should treat that as malformed and fall back to local
+    structure - callers should treat that as malformed and fall back to local
     defaults rather than serving an empty FAQ.
     """
     if not text or not text.strip():
@@ -1768,7 +1768,7 @@ def _load_google_sheet_content(runtime_config, local_content=None):
                         candidate_tab,
                     )
                     logger.warning(
-                        "[CONTENT] Google Sheet tab '%s' has %d row(s) but produced no usable %s data — check tab columns; using local defaults",
+                        "[CONTENT] Google Sheet tab '%s' has %d row(s) but produced no usable %s data - check tab columns; using local defaults",
                         candidate_tab,
                         row_count,
                         content_key,
@@ -2225,9 +2225,9 @@ HELP_CONTENT = {
                 "The Home screen is your dashboard. It shows your stats (Total Sessions, Pass Rate, NC/NS Rate) and recent sessions."
             ],
             "bullets": [
-                "<b>Start New Session</b> — Begin a full mock call + supervisor transfer session",
-                "<b>Supervisor Transfer Only</b> — Used when a candidate previously ran out of time and only needs supervisor transfers",
-                "<b>Session History</b> — View all past sessions with search and detail views",
+                "<b>Start New Session</b> - Begin a full mock call + supervisor transfer session",
+                "<b>Supervisor Transfer Only</b> - Used when a candidate previously ran out of time and only needs supervisor transfers",
+                "<b>Session History</b> - View all past sessions with search and detail views",
             ],
         },
         {
@@ -2237,16 +2237,16 @@ HELP_CONTENT = {
                 "<b>Footer buttons:</b>",
             ],
             "bullets": [
-                "<b>Tester Name</b> — Auto-filled from your settings",
-                "<b>Candidate Name</b> — Type the candidate's full name (required)",
-                "<b>Final Attempt</b> — Mark whether this is the candidate's last allowed mock session",
-                "<b>Headset</b> — Must be USB with noise-cancelling microphone. If not, auto-fails",
-                "<b>VPN</b> — If they have one, they must turn it off. If they can't, auto-fails",
-                "<b>Browser</b> — Must be default, extensions off, pop-ups allowed",
-                "<b style=\"color: var(--color-danger)\">NC/NS</b> — No Call / No Show. Instantly fails and goes to Review",
-                "<b style=\"color: var(--color-danger)\">Not Ready</b> — Candidate wasn't prepared for the session",
-                "<b style=\"color: var(--color-danger)\">Stopped Responding</b> — Candidate went silent in Discord",
-                "<b>Tech Issue</b> — Opens the Technical Issues dialog for troubleshooting",
+                "<b>Tester Name</b> - Auto-filled from your settings",
+                "<b>Candidate Name</b> - Type the candidate's full name (required)",
+                "<b>Final Attempt</b> - Mark whether this is the candidate's last allowed mock session",
+                "<b>Headset</b> - Must be USB with noise-cancelling microphone. If not, auto-fails",
+                "<b>VPN</b> - If they have one, they must turn it off. If they can't, auto-fails",
+                "<b>Browser</b> - Must be default, extensions off, pop-ups allowed",
+                "<b style=\"color: var(--color-danger)\">NC/NS</b> - No Call / No Show. Instantly fails and goes to Review",
+                "<b style=\"color: var(--color-danger)\">Not Ready</b> - Candidate wasn't prepared for the session",
+                "<b style=\"color: var(--color-danger)\">Stopped Responding</b> - Candidate went silent in Discord",
+                "<b>Tech Issue</b> - Opens the Technical Issues dialog for troubleshooting",
             ],
         },
         {
@@ -2256,13 +2256,13 @@ HELP_CONTENT = {
                 "<b>Routing logic:</b> 2 passes (1 New Donor + 1 Existing Member) → Sup Transfers. 2 fails → session ends. 1+1 → Call 3.",
             ],
             "bullets": [
-                "<b>Call Setup</b> — Select Call Type, Show, Caller, and Donation from the dropdowns",
-                "<b>Scenario Card</b> — Shows the caller's info, gift, and randomized variables (Phone Type, SMS, E-Newsletter, Shipping, CC Fee)",
-                "<b>Regenerate</b> — Re-rolls the random scenario variables without changing the call data",
-                "<b>Payment Simulation</b> — Shows the credit card and EFT info for the test call",
-                "<b>Pass/Fail</b> — Click PASS or FAIL after the call",
-                "<b>Coaching</b> — Select coaching checkboxes (required — if none selected, you'll be asked to confirm). Search name for every call and Do not volunteer information are available when those topics were coached.",
-                "<b>Fail Reasons</b> — If FAIL, you must select at least one fail reason. Use + Add detail for optional reason-specific context; Other still uses the regular notes box.",
+                "<b>Call Setup</b> - Select Call Type, Show, Caller, and Donation from the dropdowns",
+                "<b>Scenario Card</b> - Shows the caller's info, gift, and randomized variables (Phone Type, SMS, E-Newsletter, Shipping, CC Fee)",
+                "<b>Regenerate</b> - Re-rolls the random scenario variables without changing the call data",
+                "<b>Payment Simulation</b> - Shows the credit card and EFT info for the test call",
+                "<b>Pass/Fail</b> - Click PASS or FAIL after the call",
+                "<b>Coaching</b> - Select coaching checkboxes (required - if none selected, you'll be asked to confirm). Search name for every call and Do not volunteer information are available when those topics were coached.",
+                "<b>Fail Reasons</b> - If FAIL, you must select at least one fail reason. Use + Add detail for optional reason-specific context; Other still uses the regular notes box.",
             ],
         },
         {
@@ -2282,10 +2282,10 @@ HELP_CONTENT = {
                 "The Smart Resume flow helps you continue a candidate into Supervisor Transfer when the mock calls were already completed in an earlier session."
             ],
             "bullets": [
-                "<b>When it appears</b> — Click <b>Supervisor Transfer Only</b> from Home, then answer <b>Yes</b> when asked if you previously conducted the mock session for that candidate.",
-                "<b>How it finds sessions</b> — The app looks through saved history for prior mock-call sessions tied to the current tester name in Settings. It only shows sessions that already have mock call results and have not already completed supervisor transfers.",
-                "<b>What you’ll see</b> — If matching sessions exist, a resume picker opens so you can choose the right candidate. If none exist, the app tells you there are no resumable sessions for that tester.",
-                "<b>How to continue</b> — Select the candidate, confirm the prompt, and the app restores the earlier Basics and mock-call data, then opens directly on <b>Supervisor Transfer #1</b>.",
+                "<b>When it appears</b> - Click <b>Supervisor Transfer Only</b> from Home, then answer <b>Yes</b> when asked if you previously conducted the mock session for that candidate.",
+                "<b>How it finds sessions</b> - The app looks through saved history for prior mock-call sessions tied to the current tester name in Settings. It only shows sessions that already have mock call results and have not already completed supervisor transfers.",
+                "<b>What you’ll see</b> - If matching sessions exist, a resume picker opens so you can choose the right candidate. If none exist, the app tells you there are no resumable sessions for that tester.",
+                "<b>How to continue</b> - Select the candidate, confirm the prompt, and the app restores the earlier Basics and mock-call data, then opens directly on <b>Supervisor Transfer #1</b>.",
             ],
         },
         {
@@ -2296,7 +2296,7 @@ HELP_CONTENT = {
             "bullets": [
                 "Enter the date using the date picker or type in MM/DD/YYYY format",
                 "Enter time as H:MM (e.g. 10:30)",
-                "<b>Add to Google Calendar</b> — Creates an event titled \"Supervisor Test Call - [Candidate Name]\"",
+                "<b>Add to Google Calendar</b> - Creates an event titled \"Supervisor Test Call - [Candidate Name]\"",
             ],
         },
         {
@@ -2305,12 +2305,12 @@ HELP_CONTENT = {
                 "Final review of the session. The Pass/Fail/Incomplete banner is calculated automatically."
             ],
             "bullets": [
-                "<b>Coaching Summary</b> — Generated from your coaching checkboxes (or Gemini AI if enabled)",
-                "<b>Fail Summary</b> — Generated from fail reasons (N/A for passing sessions)",
-                "<b>Copy</b> — Copies the summary text to your clipboard",
-                "<b>Regenerate</b> — Rebuilds the summary from checkbox data",
-                "<b>Fill Form</b> — Opens the Cert Form and maps session data to form fields",
-                "<b>Save & Finish</b> — Saves to history and clears the session",
+                "<b>Coaching Summary</b> - Generated from your coaching checkboxes (or Gemini AI if enabled)",
+                "<b>Fail Summary</b> - Generated from fail reasons (N/A for passing sessions)",
+                "<b>Copy</b> - Copies the summary text to your clipboard",
+                "<b>Regenerate</b> - Rebuilds the summary from checkbox data",
+                "<b>Fill Form</b> - Opens the Cert Form and maps session data to form fields",
+                "<b>Save & Finish</b> - Saves to history and clears the session",
             ],
         },
         {
@@ -2331,10 +2331,10 @@ HELP_CONTENT = {
                 "Available on every session screen. Opens a troubleshooting wizard:"
             ],
             "bullets": [
-                "<b>Internet Speed</b> — Asks for speed test results. Below 25 Mbps down / 10 Mbps up = fail",
-                "<b>Calls Won't Route</b> — Checks DTE status, then browser troubleshooting",
-                "<b>No Script Pop</b> — Browser troubleshooting steps",
-                "<b>Discord/Other</b> — Manual notes with resolution tracking",
+                "<b>Internet Speed</b> - Asks for speed test results. Below 25 Mbps down / 10 Mbps up = fail",
+                "<b>Calls Won't Route</b> - Checks DTE status, then browser troubleshooting",
+                "<b>No Script Pop</b> - Browser troubleshooting steps",
+                "<b>Discord/Other</b> - Manual notes with resolution tracking",
             ],
         },
     ],
@@ -2365,17 +2365,17 @@ HELP_CONTENT = {
         {
             "title": "Auto-Fail Scenarios",
             "bullets": [
-                "<b>NC/NS</b> — No Call / No Show",
-                "<b>Stopped Responding</b> — Candidate went silent in Discord",
-                "<b>Not Ready</b> — Incorrect setup, can't log in",
-                "<b>Wrong Headset</b> — Not USB or not noise-cancelling",
-                "<b>VPN</b> — Using VPN and can't turn it off",
+                "<b>NC/NS</b> - No Call / No Show",
+                "<b>Stopped Responding</b> - Candidate went silent in Discord",
+                "<b>Not Ready</b> - Incorrect setup, can't log in",
+                "<b>Wrong Headset</b> - Not USB or not noise-cancelling",
+                "<b>VPN</b> - Using VPN and can't turn it off",
             ],
         },
     ],
     "integrations": [
         {
-            "title": "Gemini AI — Smart Summaries",
+            "title": "Gemini AI - Smart Summaries",
             "paragraphs": [
                 "When enabled, Gemini creates clean coaching and fail summaries from the coaching and fail reason checkboxes you selected during the session."
             ],
@@ -2384,14 +2384,14 @@ HELP_CONTENT = {
         {
             "title": "Google Calendar",
             "paragraphs": [
-                "The \"Add to Google Calendar\" button on the Newbie Shift screen creates a calendar event. No setup needed — it uses a Google Calendar URL template."
+                "The \"Add to Google Calendar\" button on the Newbie Shift screen creates a calendar event. No setup needed - it uses a Google Calendar URL template."
             ],
         },
     ],
     "faq": [
         {"q": "What if the candidate stops responding?", "a": "Click the red \"Stopped Responding\" button. This instantly ends the session as a fail."},
         {"q": "What if the candidate has technical issues?", "a": "Click \"Tech Issue\". The app walks you through troubleshooting: check DTE status, clear browsing data, re-login."},
-        {"q": "Can I go back and change something?", "a": "Yes — click \"Back\" on any screen. Your data is saved as you go."},
+        {"q": "Can I go back and change something?", "a": "Yes - click \"Back\" on any screen. Your data is saved as you go."},
         {"q": "What if I forget to select coaching?", "a": "The app will ask you to confirm if you want to continue without coaching."},
         {"q": "How do I do a Supervisor Transfer ONLY session?", "a": "On the Home screen, click \"Supervisor Transfer Only\". This skips Mock Calls."},
         {"q": "What does \"Final Attempt\" mean?", "a": "Use this on The Basics screen when the candidate is on their last allowed attempt. The app uses it in the session flow and messaging."},
@@ -2399,7 +2399,7 @@ HELP_CONTENT = {
         {"q": "What if 2 calls fail?", "a": "The session ends immediately and goes to Review. They should reschedule within 24 hours."},
         {"q": "Where is my data stored?", "a": "In the app's local database."},
         {"q": "How do I customize the Discord templates?", "a": "Go to Settings → Discord tab. You can add, edit, and remove both message templates and screenshot images."},
-        {"q": "Can I edit the caller data and shows?", "a": "Yes — go to Settings. The Call Types, Shows, Callers, and Sup Reasons tabs let you fully customize all scenario data."},
+        {"q": "Can I edit the caller data and shows?", "a": "Yes - go to Settings. The Call Types, Shows, Callers, and Sup Reasons tabs let you fully customize all scenario data."},
     ],
     "support": {
         "intro": "Need help with the app? Reach out using one of these options:",
@@ -2580,7 +2580,7 @@ def _log_content_source_summary():
         f"{key}={info.get('source', 'builtin')}({info.get('count', 0)})"
         for key, info in sorted(_content_source_status.items())
     ]
-    logger.info("[CONTENT] Source summary — %s", ", ".join(parts))
+    logger.info("[CONTENT] Source summary - %s", ", ".join(parts))
 
 
 _log_content_source_summary()
@@ -2711,6 +2711,8 @@ DEFAULT_SETTINGS = {
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
     "ticker_speed": "normal",
     "enable_sounds": True,
+    "sound_volume": "medium",
+    "welcome_voice": "male",
     "theme": "dark",
     "enable_gemini": True,
     "gemini_api_key": "",
@@ -2891,6 +2893,19 @@ def _sanitize_content_setting(key, value, source_label):
     return value
 
 
+def _normalize_sound_volume(value, enable_sounds=True):
+    level = str(value or "").strip().lower()
+    if enable_sounds is False:
+        return "off"
+    if level in {"off", "low", "medium", "high"}:
+        return level
+    return "medium"
+
+
+def _normalize_welcome_voice(value):
+    return "female" if str(value or "").strip().lower() == "female" else "male"
+
+
 def sanitize_settings(doc: Optional[dict]) -> dict:
     base = {key: value for key, value in DEFAULT_SETTINGS.items() if key not in ADMIN_ONLY_SETTINGS_KEYS}
     if doc:
@@ -2899,6 +2914,9 @@ def sanitize_settings(doc: Optional[dict]) -> dict:
                 if key in DEFAULT_MANAGED_SETTINGS_KEYS and not doc.get(_managed_custom_flag(key)):
                     continue
                 base[key] = _sanitize_content_setting(key, value, "saved")
+    base["sound_volume"] = _normalize_sound_volume(base.get("sound_volume"), base.get("enable_sounds"))
+    base["enable_sounds"] = base["sound_volume"] != "off"
+    base["welcome_voice"] = _normalize_welcome_voice(base.get("welcome_voice"))
     for key in SENSITIVE_SETTINGS_KEYS:
         base[key] = ""
         if key == GEMINI_API_KEY_SETTING:
@@ -2929,6 +2947,11 @@ def normalize_settings_payload(payload: dict) -> dict:
             continue
 
         value = _sanitize_content_setting(key, value, "incoming")
+        if key == "sound_volume":
+            value = _normalize_sound_volume(value)
+            sanitized["enable_sounds"] = value != "off"
+        elif key == "welcome_voice":
+            value = _normalize_welcome_voice(value)
         if key in DEFAULT_MANAGED_SETTINGS_KEYS and _content_values_equal(value, DEFAULT_SETTINGS.get(key)):
             unset_defaults[key] = ""
             unset_defaults[_managed_custom_flag(key)] = ""
@@ -5201,7 +5224,7 @@ def _resolve_auto_fail_message(name, auto_fail):
             return f"{name} {template}{suffix}"
     if any(kw in af for kw in AUTO_FAIL_HEADSET_KEYWORDS):
         return f"{name} did not have a qualifying headset: {auto_fail}."
-    return f"{name} — {auto_fail}."
+    return f"{name} - {auto_fail}."
 
 
 def _collect_call_coaching_lines(session):

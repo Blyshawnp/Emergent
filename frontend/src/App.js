@@ -13,7 +13,7 @@ import ReviewPage from './pages/ReviewPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import HelpPage from './pages/HelpPage';
-import { setSoundsEnabled, unlockSounds } from './utils/sound';
+import { setSoundSettings, unlockSounds } from './utils/sound';
 import {
   DEFAULT_NOTIFICATION_GROUPS,
   resolveTickerDurationSeconds,
@@ -485,7 +485,7 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
       <div className="cmodal" style={{ maxWidth: '600px', width: '90%' }}>
         <img className="cmodal-graphic" src={updateGraphic} alt="" style={{ height: '60px', objectFit: 'contain' }} />
         <div className="cmodal-title" style={{ fontSize: '1.4rem', marginBottom: '8px' }}>
-          Update Available — {updateInfo.releaseTitle || `Version ${updateInfo.latestVersion}`}
+          Update Available - {updateInfo.releaseTitle || `Version ${updateInfo.latestVersion}`}
         </div>
         <div className="cmodal-body" style={{ width: '100%', textAlign: 'left', fontSize: '0.95rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px', padding: '10px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
@@ -670,7 +670,7 @@ function AppShell() {
     const showInstalledPopup = async () => {
       await modal.showModal({
         type: 'alert',
-        title: `Updated Successfully — Version ${updateState.installedUpdate.latestVersion}`,
+        title: `Updated Successfully - Version ${updateState.installedUpdate.latestVersion}`,
         body: formatUpdateBody(updateState.installedUpdate, false, false),
         graphic: 'update',
         buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
@@ -766,7 +766,7 @@ function AppShell() {
           () => api.getSettings(5000),
           (s) => {
             setSettings(s || {});
-            setSoundsEnabled(s?.enable_sounds !== false);
+            setSoundSettings(s || {});
             if (s?.setup_complete === false) {
               setPage('setup');
             } else {
@@ -1070,7 +1070,7 @@ function AppShell() {
     if (page === 'settings') {
       api.getSettings().then(s => {
         setSettings(s);
-        setSoundsEnabled(s.enable_sounds !== false);
+        setSoundSettings(s || {});
       }).catch(() => {});
     }
   }, [page]);
@@ -1079,7 +1079,7 @@ function AppShell() {
     try {
       const s = await api.getSettings();
       setSettings(s);
-      setSoundsEnabled(s.enable_sounds !== false);
+      setSoundSettings(s || {});
     } catch (_error) {
       // Ignore settings refresh errors here; the user can still proceed to Home.
     }
@@ -1336,7 +1336,7 @@ function AppShell() {
             <div className="status-bar">
               <span id="status-text"></span>
               <span className="status-spacer" />
-              <span>{`Mock Testing Suite v${appVersion} — By Shawn P. Bly`}</span>
+              <span>{`Mock Testing Suite v${appVersion} - By Shawn P. Bly`}</span>
             </div>
           </main>
         </div>

@@ -16,7 +16,7 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
   const [certSheetUrl, setCertSheetUrl] = useState('https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg');
 
   useEffect(() => {
-    playSound('setup');
+    playSound('welcome', { setupComplete: false });
   }, []);
 
   const steps = [
@@ -30,7 +30,7 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
           <div className="card setup-card">
             <div className="form-row"><label>First Name</label><input type="text" value={first} onChange={e => setFirst(e.target.value)} placeholder="e.g. Jordan" data-testid="setup-first" /></div>
             <div className="form-row"><label>Last Name</label><input type="text" value={last} onChange={e => setLast(e.target.value)} placeholder="e.g. Taylor" data-testid="setup-last" /></div>
-            <div className="form-row"><label>Display Name</label><input type="text" value={display} onChange={e => setDisplay(e.target.value)} placeholder="Optional nickname" data-testid="setup-display" /></div>
+            <div className="form-row"><label>Display Name</label><input type="text" value={display} onChange={e => setDisplay(e.target.value)} placeholder="Optional nickname" data-testid="setup-display" /><small className="text-muted">If blank, the app uses the first name from Tester Name.</small></div>
           </div>
         </div>
       </div>
@@ -57,8 +57,8 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
           <h1 className="setup-heading">Unlock App Power-Ups</h1>
           <p className="setup-sub">Enable these anytime in the Settings tab.</p>
           <div className="card setup-card" style={{ textAlign: 'left', lineHeight: 1.8 }}>
-            <p><strong>Gemini AI</strong> — Generates clean, professional coaching summaries from your checkboxes.</p>
-            <p><strong>Google Calendar</strong> — Adds Newbie Shifts to your calendar with one click.</p>
+            <p><strong>Gemini AI</strong> - Generates clean, professional coaching summaries from your checkboxes.</p>
+            <p><strong>Google Calendar</strong> - Adds Newbie Shifts to your calendar with one click.</p>
             <p className="text-muted text-sm" style={{ marginTop: 12 }}>Step-by-step setup guides are in the Help tab.</p>
           </div>
         </div>
@@ -79,7 +79,7 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
       try {
         await api.completeSetup({
           tester_name: `${first.trim()} ${last.trim()}`,
-          display_name: display.trim() || first.trim(),
+          display_name: display.trim(),
           form_url: formUrl.trim(),
           cert_sheet_url: certSheetUrl.trim(),
         });

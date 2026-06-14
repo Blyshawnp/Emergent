@@ -8,18 +8,19 @@ const SOUND_FILES = {
 
 const DEFAULT_VOLUME = 0.26;
 const SOUND_VOLUMES = {
-  popup: 0.22,
-  warning: 0.28,
-  success: 0.27,
-  setup: 0.28,
-  notificationApp: 0.55,
-  welcome: 0.28,
+  off: 0,
+  low: 0.3,
+  medium: 0.6,
+  high: 1,
 };
 
 const WELCOME_FOLDER = 'welcome';
 const DEFAULT_WELCOME_FILE = 'welcome-default.mp3';
+const DEFAULT_WELCOME_FILE_FEMALE = 'welcome-default-f.mp3';
 
 let soundsEnabled = true;
+let soundVolumeLevel = 'medium';
+let welcomeVoice = 'male';
 let soundsUnlocked = false;
 
 const audioCache = new Map();
@@ -36,29 +37,72 @@ function buildAssetUrl(relativePath) {
   return `${getBasePublicUrl()}/${cleanPath}`;
 }
 
-function sanitizeFirstName(testerName = '') {
-  return String(testerName || '')
+function normalizeAudioKey(value = '') {
+  return String(value || '')
     .trim()
-    .split(/\s+/)[0]
     .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s+/g, '-')
     .replace(/[^a-z0-9_-]/g, '');
 }
 
-function getWelcomeSoundUrl(testerName = '') {
-  const firstName = sanitizeFirstName(testerName);
-  if (!firstName) {
-    return buildAssetUrl(`assets/sounds/${WELCOME_FOLDER}/${DEFAULT_WELCOME_FILE}`);
-  }
-  return buildAssetUrl(`assets/sounds/${WELCOME_FOLDER}/welcome-${firstName}.mp3`);
+function normalizeFirstName(testerName = '') {
+  const first = String(testerName || '').trim().split(/\s+/)[0] || '';
+  return normalizeAudioKey(first);
+}
+
+function getWelcomeAudioKey(options = {}) {
+  const displayName = typeof options === 'string' ? '' : options.displayName;
+  const testerName = typeof options === 'string' ? options : options.testerName;
+  const displayKey = normalizeAudioKey(displayName || '');
+  return displayKey || normalizeFirstName(testerName || '');
 }
 
 function getDefaultWelcomeUrl() {
   return buildAssetUrl(`assets/sounds/${WELCOME_FOLDER}/${DEFAULT_WELCOME_FILE}`);
 }
 
+function getDefaultFemaleWelcomeUrl() {
+  return buildAssetUrl(`assets/sounds/${WELCOME_FOLDER}/${DEFAULT_WELCOME_FILE_FEMALE}`);
+}
+
+function welcomeFileUrl(fileName) {
+  return buildAssetUrl(`assets/sounds/${WELCOME_FOLDER}/${fileName}`);
+}
+
+function getWelcomeSoundUrls(options = {}) {
+  if (typeof options === 'string') {
+    options = { testerName: options, setupComplete: true };
+  }
+
+  const setupComplete = options.setupComplete !== false;
+  const selectedVoice = String(options.welcomeVoice || welcomeVoice || 'male').toLowerCase() === 'female' ? 'female' : 'male';
+  const audioKey = getWelcomeAudioKey(options);
+
+  if (!setupComplete) {
+    return [getDefaultWelcomeUrl()];
+  }
+
+  if (selectedVoice === 'female') {
+    return [
+      audioKey ? welcomeFileUrl(`welcome-${audioKey}-f.mp3`) : '',
+      getDefaultFemaleWelcomeUrl(),
+      audioKey ? welcomeFileUrl(`welcome-${audioKey}.mp3`) : '',
+      getDefaultWelcomeUrl(),
+    ].filter(Boolean);
+  }
+
+  return [
+    audioKey ? welcomeFileUrl(`welcome-${audioKey}.mp3`) : '',
+    getDefaultWelcomeUrl(),
+  ].filter(Boolean);
+}
+
 function getSoundUrl(type, testerName = '') {
   if (type === 'welcome') {
-    return getWelcomeSoundUrl(testerName);
+    return getWelcomeSoundUrls(testerName)[0] || getDefaultWelcomeUrl();
   }
 
   const file = SOUND_FILES[type];
@@ -73,8 +117,17 @@ function createAudio(url) {
   return audio;
 }
 
-function getVolumeForType(type) {
-  return SOUND_VOLUMES[type] ?? DEFAULT_VOLUME;
+function normalizeVolumeLevel(level, enabled = true) {
+  if (enabled === false) return 'off';
+  const normalized = String(level || '').trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(SOUND_VOLUMES, normalized)) {
+    return normalized;
+  }
+  return 'medium';
+}
+
+function getVolumeForType(_type) {
+  return SOUND_VOLUMES[soundVolumeLevel] ?? DEFAULT_VOLUME;
 }
 
 function getOrCreateAudio(url) {
@@ -138,13 +191,15 @@ async function ensureLoaded(audio, url) {
 
 async function safePlayUrl(url, type = '') {
   if (!soundsEnabled || !url) return false;
+  const volume = getVolumeForType(type);
+  if (volume <= 0) return false;
 
   try {
     const audio = getOrCreateAudio(url);
     if (!audio) return false;
 
     await ensureLoaded(audio, url);
-    audio.volume = getVolumeForType(type);
+    audio.volume = volume;
     resetAudio(audio);
     await audio.play();
     return true;
@@ -157,6 +212,7 @@ function warmCoreSounds() {
   const urls = [
     ...Object.values(SOUND_FILES).map((file) => buildAssetUrl(`assets/sounds/${file}`)),
     getDefaultWelcomeUrl(),
+    getDefaultFemaleWelcomeUrl(),
   ];
 
   urls.forEach((url) => {
@@ -171,6 +227,17 @@ function warmCoreSounds() {
 
 export function setSoundsEnabled(enabled) {
   soundsEnabled = enabled !== false;
+  soundVolumeLevel = enabled === false ? 'off' : 'medium';
+}
+
+export function setSoundSettings(settings = {}) {
+  if (typeof settings === 'string') {
+    soundVolumeLevel = normalizeVolumeLevel(settings);
+  } else {
+    soundVolumeLevel = normalizeVolumeLevel(settings.sound_volume, settings.enable_sounds);
+    welcomeVoice = String(settings.welcome_voice || 'male').trim().toLowerCase() === 'female' ? 'female' : 'male';
+  }
+  soundsEnabled = soundVolumeLevel !== 'off';
 }
 
 export function unlockSounds() {
@@ -187,17 +254,23 @@ export async function playSound(type, testerName = '') {
   }
 
   if (type === 'welcome') {
-    const customUrl = getWelcomeSoundUrl(testerName);
-    const fallbackUrl = getDefaultWelcomeUrl();
-
-    if (customUrl !== fallbackUrl) {
-      const playedCustom = await safePlayUrl(customUrl, 'welcome');
-      if (playedCustom) return true;
+    const urls = getWelcomeSoundUrls(testerName);
+    const tried = new Set();
+    for (const url of urls) {
+      if (!url || tried.has(url)) continue;
+      tried.add(url);
+      const played = await safePlayUrl(url, 'welcome');
+      if (played) return true;
     }
-
-    return safePlayUrl(fallbackUrl, 'welcome');
+    return false;
   }
 
   const url = getSoundUrl(type, testerName);
   return safePlayUrl(url, type);
 }
+
+export const welcomeAudioInternals = {
+  normalizeAudioKey,
+  getWelcomeAudioKey,
+  getWelcomeSoundUrls,
+};

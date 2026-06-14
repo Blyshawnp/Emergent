@@ -12,6 +12,7 @@ const HELP_TOPICS = [
     bullets: [
       'Open the app from the desktop shortcut or Start menu.',
       'The first launch runs the Setup Wizard, then the Tutorial.',
+      'The default welcome audio plays before setup is complete, and personalized welcome audio is used on returning launches when a matching file exists.',
       'Everything begins from the Home screen: new sessions, supervisor-only work, and history.',
       'Active session drafts are saved automatically while you work, so moving between screens never wipes progress.',
     ],
@@ -22,6 +23,8 @@ const HELP_TOPICS = [
     summary: 'The first-run wizard captures your tester identity and the form/spreadsheet links the app needs to fill.',
     bullets: [
       'Enter your first name, last name, and (optional) display name.',
+      'First install uses the default welcome audio and does not need your name before setup is complete.',
+      'After setup, returning launches use Display Name when available. If Display Name is blank, the app uses the first name from Tester Name.',
       'Confirm the certification form URL and the certification spreadsheet URL.',
       'When you finish the wizard, the Tutorial starts automatically if it has not been completed yet.',
       'You can revisit any of these values later from Settings.',
@@ -247,7 +250,7 @@ const HELP_TOPICS = [
     bullets: [
       'Gemini is optional. The app still creates generic summaries without it.',
       'Gemini only rewrites the wording; it does not change pass/fail status or routing.',
-      'Turn Gemini on in Settings → Gemini AI after adding an API key (next topic).',
+      'Turn Gemini on in Settings -> Gemini AI after adding an API key (next topic).',
       'Use Test Gemini Connection after saving the key. If it fails, the status shows the backend failure reason without exposing the key.',
       'If the API key is typed or already saved, Settings shows the key as configured instead of saying no key is configured.',
       'If Gemini connects but the test response is blocked or empty, the app explains that safety/API settings may need a simpler prompt or adjustment.',
@@ -303,7 +306,10 @@ const HELP_TOPICS = [
     title: '23. Settings',
     summary: 'Settings controls your profile, integrations, and app preferences.',
     bullets: [
-      'General: tester identity, form/spreadsheet links, browser behavior, sounds, theme, and ticker speed.',
+      'General: tester identity, form/spreadsheet links, browser behavior, welcome voice, sound volume, theme, and ticker speed.',
+      'Female welcome audio files use -f before .mp3, such as welcome-shawn-f.mp3.',
+      'Missing personalized welcome files fall back to default welcome audio.',
+      'Sound volume controls welcome audio and app sound effects.',
       'Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.',
       'Help content is not editable from normal Settings.',
       'Notifications are managed by admins in SAM through the master Google Sheet, not from normal MTS Settings.',

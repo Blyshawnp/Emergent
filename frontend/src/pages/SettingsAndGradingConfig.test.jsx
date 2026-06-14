@@ -163,6 +163,54 @@ test('settings shows immediate feedback for Discord list changes and clear save 
   await view.unmount();
 });
 
+test('settings exposes welcome voice and sound volume controls', async () => {
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Shawn Bly',
+    display_name: '',
+    enable_sounds: true,
+    sound_volume: 'medium',
+    welcome_voice: 'male',
+  });
+  api.getDefaults.mockResolvedValue({});
+  api.saveSettings.mockResolvedValue({ ok: true });
+
+  const view = await renderComponent(
+    <SettingsPage
+      onNavigate={jest.fn()}
+      updateState={{}}
+      refreshUpdateState={jest.fn()}
+      appVersion="1.0.1"
+    />
+  );
+
+  expect(view.container.textContent).toContain('If blank, the app uses the first name from Tester Name.');
+  expect(view.container.querySelector('[data-testid="settings-welcome-voice"]').value).toBe('male');
+  expect(view.container.querySelector('[data-testid="settings-sound-volume"]').value).toBe('medium');
+
+  await act(async () => {
+    const voice = view.container.querySelector('[data-testid="settings-welcome-voice"]');
+    voice.value = 'female';
+    voice.dispatchEvent(new Event('change', { bubbles: true }));
+    const volume = view.container.querySelector('[data-testid="settings-sound-volume"]');
+    volume.value = 'off';
+    volume.dispatchEvent(new Event('change', { bubbles: true }));
+    await flushPromises();
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-save"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+    welcome_voice: 'female',
+    sound_volume: 'off',
+    enable_sounds: false,
+  }));
+
+  await view.unmount();
+});
+
 test('calls page renders custom coaching and fail reasons from saved settings', async () => {
   api.getCurrentSession.mockResolvedValue({
     session: {
