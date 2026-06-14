@@ -6,4 +6,6 @@
 "Discord permission","Ask explicit permission to transfer via Discord",""
 "Did not notify caller of transfer","Notify caller before transferring",""
 "Screenshots/Discord Chat","Coached with standard instructions and screenshots",""
+"Search name for every call","Search the caller's name on every call to avoid duplicate member records.",""
+"Do not volunteer information","Do not verify details the member has not provided, such as an email address.",""
 "Other","",""

@@ -265,6 +265,16 @@
       ]
     },
     {
+      "id": "c-search-name",
+      "label": "Search name for every call",
+      "helper": "Search the caller's name on every call to avoid duplicate member records."
+    },
+    {
+      "id": "c-no-volunteer",
+      "label": "Do not volunteer information",
+      "helper": "Do not verify details the member has not provided, such as an email address."
+    },
+    {
       "id": "c-other",
       "label": "Other"
     }
@@ -313,6 +323,14 @@
     {
       "label": "Screenshots/Discord Chat",
       "helper": "Coached with standard instructions and screenshots"
+    },
+    {
+      "label": "Search name for every call",
+      "helper": "Search the caller's name on every call to avoid duplicate member records."
+    },
+    {
+      "label": "Do not volunteer information",
+      "helper": "Do not verify details the member has not provided, such as an email address."
     },
     {
       "label": "Other"

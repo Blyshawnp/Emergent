@@ -145,6 +145,7 @@ const HELP_TOPICS = [
     summary: 'Coaching checkboxes record what coaching was actually given on each call.',
     bullets: [
       'Check only the items you actually coached during the call.',
+      'Search name for every call and Do not volunteer information are available when those coaching topics were covered.',
       'Coaching selections feed the Coaching Summary on the Review screen.',
       'Use Other notes only when no existing checkbox describes the coaching clearly.',
     ],
@@ -155,6 +156,8 @@ const HELP_TOPICS = [
     summary: 'Fail reasons explain why a call did not pass.',
     bullets: [
       'When a call is marked FAIL, select at least one fail reason.',
+      'For any checked fail reason except Other, use + Add detail only when you need to capture what specifically happened.',
+      'Fail reason details stay tied to that specific checked reason and appear in the Review summaries.',
       'Pick every reason that applies; the Review summary lists all of them.',
       'Use Other notes only when the existing list does not describe the issue.',
     ],

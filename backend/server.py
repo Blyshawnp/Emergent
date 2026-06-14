@@ -2164,6 +2164,8 @@ CALL_COACHING = [
     {"id": "c-phonetics", "label": "Phonetics table provided to candidate"},
     {"id": "c-verbatim", "label": "Read script verbatim", "helper": "No adlibbing or skipping sections"},
     {"id": "c-nav", "label": "Use effective script navigation", "children": ["Scroll down to avoid missing parts of the script", "Use the Back and Next buttons and not the Icons"]},
+    {"id": "c-search-name", "label": "Search name for every call", "helper": "Search the caller's name on every call to avoid duplicate member records."},
+    {"id": "c-no-volunteer", "label": "Do not volunteer information", "helper": "Do not verify details the member has not provided, such as an email address."},
     {"id": "c-other", "label": "Other"},
 ]
 
@@ -2186,6 +2188,8 @@ SUP_COACHING = [
     {"label": "Discord permission", "helper": "Ask explicit permission to transfer via Discord"},
     {"label": "Did not notify caller of transfer", "helper": "Notify caller before transferring"},
     {"label": "Screenshots/Discord Chat", "helper": "Coached with standard instructions and screenshots"},
+    {"label": "Search name for every call", "helper": "Search the caller's name on every call to avoid duplicate member records."},
+    {"label": "Do not volunteer information", "helper": "Do not verify details the member has not provided, such as an email address."},
     {"label": "Other"},
 ]
 
@@ -2242,14 +2246,14 @@ HELP_CONTENT = {
                 "<b>Regenerate</b> — Re-rolls the random scenario variables without changing the call data",
                 "<b>Payment Simulation</b> — Shows the credit card and EFT info for the test call",
                 "<b>Pass/Fail</b> — Click PASS or FAIL after the call",
-                "<b>Coaching</b> — Select coaching checkboxes (required — if none selected, you'll be asked to confirm)",
-                "<b>Fail Reasons</b> — If FAIL, you must select at least one fail reason",
+                "<b>Coaching</b> — Select coaching checkboxes (required — if none selected, you'll be asked to confirm). Search name for every call and Do not volunteer information are available when those topics were coached.",
+                "<b>Fail Reasons</b> — If FAIL, you must select at least one fail reason. Use + Add detail for optional reason-specific context; Other still uses the regular notes box.",
             ],
         },
         {
             "title": "Supervisor Transfer Screen (Up to 2)",
             "paragraphs": [
-                "Tests the candidate's ability to transfer to a supervisor. Same coaching/fail flow as calls."
+                "Tests the candidate's ability to transfer to a supervisor. Same coaching/fail flow as calls, including optional + Add detail fields for checked fail reasons."
             ],
             "bullets": [
                 "Post \"WXYZ: Supervisor Test Call Being Queued\" in Discord Stars channel",
@@ -5071,9 +5075,11 @@ def _get_fail_items(data):
         return []
     items = []
     fails = data.get("fails", {})
+    fail_details = data.get("failReasonDetails") or data.get("fail_reason_details") or {}
     for key, checked in fails.items():
         if checked and key != "Other":
-            items.append(key.lower())
+            detail = str(fail_details.get(key) or "").strip()
+            items.append(f"{key.lower()} (Detail: {detail})" if detail else key.lower())
     notes = data.get("fail_notes", "")
     if notes:
         items.append(notes)
@@ -5213,6 +5219,14 @@ SPECIAL_COACHING_GUIDANCE = (
         "phonetics table provided",
         "A phonetics table of the sound-alike letters was provided to the candidate for reference.",
     ),
+    (
+        "search name for every call",
+        "Coaching was given on searching the caller's name on every call to help avoid creating duplicate member records.",
+    ),
+    (
+        "do not volunteer information",
+        "Coaching was given on avoiding verification of information the member has not yet provided, such as an email address.",
+    ),
 )
 
 
@@ -5271,6 +5285,30 @@ def _extract_fail_summary_parts(section):
         if checked and key:
             parts.append(str(key).strip())
     return _reject_headset_like_summary_parts(_dedupe_preserve_order(parts), "fail")
+
+
+def _extract_fail_reason_details(section):
+    details = (section or {}).get("failReasonDetails") or (section or {}).get("fail_reason_details") or {}
+    if not isinstance(details, dict):
+        return {}
+    return {
+        str(reason or "").strip(): _normalize_notes_sentence(value)
+        for reason, value in details.items()
+        if str(reason or "").strip() and _normalize_notes_sentence(value)
+    }
+
+
+def _format_fail_reason_detail_lines(section):
+    fail_items = [item for item in _extract_fail_summary_parts(section) if item != "Other"]
+    fail_details = _extract_fail_reason_details(section)
+    lines = []
+    for item in fail_items:
+        detail = fail_details.get(item)
+        if detail:
+            lines.append(f"Fail reason: {item}. Detail: {detail}.")
+        else:
+            lines.append(f"Fail reason: {item}.")
+    return lines
 
 
 def _reject_headset_like_summary_parts(parts, summary_type):
@@ -5348,10 +5386,10 @@ def _build_section_coaching_summary(section, label, include_fail_details=False):
     if coaching_notes and coaching.get("Other"):
         details.append(f"Coaching notes: {coaching_notes}.")
     if result == "Fail" and include_fail_details:
-        fail_items = _extract_fail_summary_parts(section)
+        fail_detail_lines = _format_fail_reason_detail_lines(section)
         fail_notes = _normalize_notes_sentence((section or {}).get("fail_notes", ""))
-        if fail_items:
-            details.append("Failed-call reasons documented during coaching: " + _format_management_list(fail_items) + ".")
+        if fail_detail_lines:
+            details.extend(fail_detail_lines)
         fails = (section or {}).get("fails", {}) or {}
         if fail_notes and fails.get("Other"):
             details.append(f"Failed-call other notes: {fail_notes}.")
@@ -5371,10 +5409,13 @@ def _build_section_fail_summary(section, label):
 
     fails = (section or {}).get("fails", {}) or {}
     fail_items = _extract_fail_summary_parts(section)
+    fail_detail_lines = _format_fail_reason_detail_lines(section)
     fail_notes = _normalize_notes_sentence((section or {}).get("fail_notes", ""))
     details = []
 
-    if fail_items:
+    if fail_detail_lines:
+        details.extend(fail_detail_lines)
+    elif fail_items:
         details.append("Fail reasons: " + _format_management_list(fail_items) + ".")
     else:
         details.append("Fail reasons: N/A.")
@@ -5887,7 +5928,11 @@ DEFAULT_GEMINI_COACHING_PROMPT = (
     "generalizing vaguely. Reference the specific coached items in plain language, and only "
     "reference coaching items that appear in the session notes. Keep checkbox-specific "
     "guidance from the session notes intact when it explains what was coached, including "
-    "donor-information verification guidance and phonetics-table coaching. Do not address "
+    "donor-information verification guidance, phonetics-table coaching, caller-name search "
+    "coaching, and coaching on not volunteering unprovided member information. If a failed "
+    "call or supervisor transfer includes fail-reason detail lines, preserve the connection "
+    "between the fail reason and its detail. Do not drop the detail or attach it to a different "
+    "reason. Do not address "
     "the candidate. Do not use second-person language such as 'you' or 'your'. Do not give "
     "new advice or instructions that are not already reflected in the session notes. Describe "
     "the observed performance and the coaching provided during the session. If the selected "
@@ -5915,7 +5960,9 @@ DEFAULT_GEMINI_FAIL_PROMPT = (
     "summary must be objective, professional, and suitable for internal documentation. "
     "Incorporate the selected fail checklist items directly into the summary instead of "
     "generalizing vaguely. Reference the specific fail reasons in plain language, and only "
-    "reference fail reasons that appear in the session notes. Do not address the candidate. "
+    "reference fail reasons that appear in the session notes. If a fail reason includes a "
+    "Detail line, keep that detail tied to the same fail reason and include it as the specific "
+    "context for what occurred. Do not address the candidate. "
     "Do not use second-person language such as 'you' or 'your'. Do not give advice or "
     "instructions such as 'should', 'try to', or 'remember to'. State what occurred during "
     "the session and any additional contributing issues. Avoid repetitive wording, group "
