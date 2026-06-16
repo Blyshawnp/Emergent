@@ -2,6 +2,14 @@
 
 Use this checklist after building packaged MTS and SAM from the integration branch. Record pass, fail, or not tested for each item before release.
 
+## Fresh Install Reset Before GUI Smoke
+
+- Run `dev-tools\reset-local-app-data-for-fresh-install-test.ps1` first and confirm the dry-run target list is limited to local MTS/SAM app-data folders.
+- To intentionally reset local testing state, run `dev-tools\reset-local-app-data-for-fresh-install-test.ps1 -Apply`, type `RESET` when prompted, then relaunch MTS/SAM.
+- Use `-IncludeLocalCache` only when app-specific `%LOCALAPPDATA%` cache folders also need to be cleared.
+- Confirm the reset target list does not include repo files, build outputs, `production-ready`, Google Sheets content, Supabase data, or credentials.
+- After reset, MTS should behave like a fresh install: Setup Wizard appears, and the Tutorial can appear after setup completion.
+
 ## Build And Package Preconditions
 
 - Confirm `node --check desktop\src\main.js` passed.

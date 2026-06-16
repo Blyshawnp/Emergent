@@ -1,6 +1,6 @@
 # Dev Tools Cleanup Plan
 
-This is an audit and replacement plan for `dev-tools/*.bat` and `dev-tools/*.ps1`. No scripts were deleted or changed in this branch.
+This is an audit and replacement plan for `dev-tools/*.bat` and `dev-tools/*.ps1`.
 
 The audit is static. Build scripts were not executed because most of them intentionally delete/rebuild generated outputs.
 
@@ -23,6 +23,8 @@ The audit is static. Build scripts were not executed because most of them intent
 | `dev-tools/full-clean-rebuild.bat` | Works as legacy wrapper | Yes | Yes | Yes | Yes | Delegates to `clean-rebuild-all.bat all`. Retain as compatibility wrapper or replace with a warning. |
 | `dev-tools/clean-app-main-junk.bat` | Works as maintained wrapper | No | No | No | No | Supports dry run and delegates to cleanup PowerShell script. |
 | `dev-tools/clean-app-main-junk.ps1` | Works as cautious cleanup helper | No | No | No | No | Plans/removes temporary junk with safeguards and explicit `CLEAN` confirmation unless dry-run. |
+| `dev-tools/reset-local-app-data-for-fresh-install-test.bat` | Works as maintained wrapper | No | No | No | No | Thin wrapper for the fresh-install reset script. Dry-run by default unless `-Apply` is passed. |
+| `dev-tools/reset-local-app-data-for-fresh-install-test.ps1` | Works as cautious local app-data reset helper | No | No | No | No | Targets only MTS/SAM app-specific local runtime folders under `%APPDATA%` by default, with optional `%LOCALAPPDATA%` cache cleanup. Requires dry-run review plus `RESET` confirmation before deleting. |
 | `dev-tools/validate-latest-yml.ps1` | Works as validation helper | No | No | No | No | Validates `latest.yml` path/url/sha512 against installer and blockmap in a dist folder. Used by rebuild scripts. |
 | `dev-tools/CLEAN-REBUILD-MAIN-APP-NO-PRODUCTION-TOUCH.bat` | Outdated duplicate | MTS only | No | No | Partial Tester only | Manual BAT implementation duplicates older main-app-only behavior, uses its own venv/PyInstaller flow, and does not build SAM. Replace with maintained desktop-only script. |
 | `dev-tools/reset-dev.bat` | Outdated/risky utility | MTS only when option 3 selected | No | No | Partial Tester only | Resets packaged MongoDB/local storage and can rebuild MTS only through `npm run build:win`. Current app uses SQLite, so MongoDB reset wording and behavior are stale. |
@@ -50,6 +52,8 @@ Keep as working current tooling:
 - `full-clean-rebuild.bat`
 - `clean-app-main-junk.bat`
 - `clean-app-main-junk.ps1`
+- `reset-local-app-data-for-fresh-install-test.bat`
+- `reset-local-app-data-for-fresh-install-test.ps1`
 - `validate-latest-yml.ps1`
 
 Known caveat: in restricted/sandboxed shells, toolchain probes such as `python --version` can fail even when the script is valid. Run build scripts in a normal local PowerShell session or with appropriate approval before treating that as a script defect.
