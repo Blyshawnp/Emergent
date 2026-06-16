@@ -938,6 +938,7 @@ function ensureBackendAvailable() {
 function createMainWindow() {
   const iconPath = getAppIconPath();
   const appIcon = nativeImage.createFromPath(iconPath);
+  const appWindowTitle = `${APP_DISPLAY_NAME} v${APP_VERSION}`;
 
   mainWindow = new BrowserWindow({
     width: isNotificationManagerMode ? 1180 : 1280,
@@ -945,7 +946,7 @@ function createMainWindow() {
     minWidth: isNotificationManagerMode ? 960 : 1024,
     minHeight: isNotificationManagerMode ? 640 : 700,
     icon: appIcon.isEmpty() ? iconPath : appIcon,
-    title: `${APP_DISPLAY_NAME} v${APP_VERSION}`,
+    title: appWindowTitle,
     show: false,
     backgroundColor: '#0f1117',
     webPreferences: {
@@ -953,6 +954,15 @@ function createMainWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     }
+  });
+
+  mainWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
+    mainWindow.setTitle(appWindowTitle);
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.setTitle(appWindowTitle);
   });
 
   // Load the frontend
@@ -975,6 +985,7 @@ function createMainWindow() {
     if (!appIcon.isEmpty()) {
       mainWindow.setIcon(appIcon);
     }
+    mainWindow.setTitle(appWindowTitle);
     mainWindow.show();
   });
 

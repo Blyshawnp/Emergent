@@ -8,6 +8,11 @@ $mtsDist = Join-Path $desktopDir 'dist'
 $samDist = Join-Path $desktopDir 'dist-notification-manager'
 $mtsInstaller = 'Mock-Testing-Suite-Setup-1.0.1.exe'
 $samInstaller = 'Sam-Setup-1.0.1.exe'
+$repoPython = Join-Path $rootDir '.venv\Scripts\python.exe'
+if (Test-Path -LiteralPath $repoPython) {
+  $env:MTS_BUILD_PYTHON = $repoPython
+  $env:PATH = "$(Split-Path -Parent $repoPython);$env:PATH"
+}
 
 $logDir = Join-Path $rootDir 'dev-tools\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
