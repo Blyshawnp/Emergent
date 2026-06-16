@@ -55,6 +55,18 @@ function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function setInputValue(input, value) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function setSelectValue(select, value) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
+  setter.call(select, value);
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 async function renderComponent(element) {
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -170,6 +182,7 @@ test('settings exposes welcome voice and sound volume controls', async () => {
     enable_sounds: true,
     sound_volume: 'medium',
     welcome_voice: 'male',
+    ticker_speed: undefined,
   });
   api.getDefaults.mockResolvedValue({});
   api.saveSettings.mockResolvedValue({ ok: true });
@@ -186,14 +199,12 @@ test('settings exposes welcome voice and sound volume controls', async () => {
   expect(view.container.textContent).toContain('If blank, the app uses the first name from Tester Name.');
   expect(view.container.querySelector('[data-testid="settings-welcome-voice"]').value).toBe('male');
   expect(view.container.querySelector('[data-testid="settings-sound-volume"]').value).toBe('medium');
+  expect(view.container.querySelector('[data-testid="settings-ticker-speed"]').value).toBe('normal');
 
   await act(async () => {
-    const voice = view.container.querySelector('[data-testid="settings-welcome-voice"]');
-    voice.value = 'female';
-    voice.dispatchEvent(new Event('change', { bubbles: true }));
-    const volume = view.container.querySelector('[data-testid="settings-sound-volume"]');
-    volume.value = 'off';
-    volume.dispatchEvent(new Event('change', { bubbles: true }));
+    setSelectValue(view.container.querySelector('[data-testid="settings-welcome-voice"]'), 'female');
+    setSelectValue(view.container.querySelector('[data-testid="settings-sound-volume"]'), 'off');
+    setSelectValue(view.container.querySelector('[data-testid="settings-ticker-speed"]'), 'fast');
     await flushPromises();
   });
 
@@ -206,7 +217,91 @@ test('settings exposes welcome voice and sound volume controls', async () => {
     welcome_voice: 'female',
     sound_volume: 'off',
     enable_sounds: false,
+    ticker_speed: 'fast',
   }));
+
+  await view.unmount();
+});
+
+test('settings payment tab shows defaults and persists add/remove edits', async () => {
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Tester',
+    payment: {},
+  });
+  api.getDefaults.mockResolvedValue({});
+  api.saveSettings.mockResolvedValue({ ok: true });
+
+  const view = await renderComponent(
+    <SettingsPage
+      onNavigate={jest.fn()}
+      updateState={{}}
+      refreshUpdateState={jest.fn()}
+      appVersion="1.0.1"
+    />
+  );
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-tab-payment"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.querySelector('[data-testid="settings-payment-card-0"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-card-1"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-card-2"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-eft-0"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-eft-1"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-eft-2"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-remove-card-0"]').disabled).toBe(true);
+  expect(view.container.querySelector('[data-testid="settings-payment-remove-eft-0"]').disabled).toBe(true);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-payment-add-card"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-payment-add-eft"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.querySelector('[data-testid="settings-payment-card-3"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-eft-3"]')).not.toBeNull();
+
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="settings-payment-card-3-label"]'), 'Travel Card');
+    setInputValue(view.container.querySelector('[data-testid="settings-payment-card-3-number"]'), '4111 1111 1111 1111');
+    setInputValue(view.container.querySelector('[data-testid="settings-payment-eft-3-label"]'), 'Backup EFT');
+    setInputValue(view.container.querySelector('[data-testid="settings-payment-eft-3-routing"]'), '111000025');
+    await flushPromises();
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-payment-remove-card-1"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-payment-remove-eft-1"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.querySelector('[data-testid="settings-payment-card-3"]')).toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-eft-3"]')).toBeNull();
+  expect(view.container.querySelector('[data-testid="settings-payment-card-2-label"]').value).toBe('Travel Card');
+  expect(view.container.querySelector('[data-testid="settings-payment-eft-2-label"]').value).toBe('Backup EFT');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-save"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const saved = api.saveSettings.mock.calls[0][0];
+  expect(saved.payment.card_options).toHaveLength(3);
+  expect(saved.payment.eft_options).toHaveLength(3);
+  expect(saved.payment.card_options.some((item) => item.label === 'Travel Card')).toBe(true);
+  expect(saved.payment.eft_options.some((item) => item.label === 'Backup EFT')).toBe(true);
+  expect(saved.payment.card_options[0].id).toBe('default');
+  expect(saved.payment.eft_options[0].id).toBe('default');
 
   await view.unmount();
 });

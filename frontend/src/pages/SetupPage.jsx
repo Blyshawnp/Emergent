@@ -14,6 +14,9 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
   const [display, setDisplay] = useState('');
   const [formUrl, setFormUrl] = useState('https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl');
   const [certSheetUrl, setCertSheetUrl] = useState('https://acddirect-my.sharepoint.com/:x:/p/becky_sowles/IQDxXC0z-rUHS6oowjotk0e6AZeldAj2eFiqT8oNiOEAWjA?rtime=5Q1giSl33kg');
+  const [tickerSpeed, setTickerSpeed] = useState('normal');
+  const [welcomeVoice, setWelcomeVoice] = useState('male');
+  const [soundVolume, setSoundVolume] = useState('medium');
 
   useEffect(() => {
     playSound('welcome', { setupComplete: false });
@@ -49,14 +52,38 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
         </div>
       </div>
     ),
-    // Step 2 - Power-ups
+    // Step 2 - Preferences
     () => (
       <div className="setup-step">
         <div className="setup-center">
           <img src={mtsLogo} alt="Mock Testing Suite" className="setup-logo" />
-          <h1 className="setup-heading">Unlock App Power-Ups</h1>
-          <p className="setup-sub">Enable these anytime in the Settings tab.</p>
+          <h1 className="setup-heading">App Preferences</h1>
+          <p className="setup-sub">These can be changed later in Settings.</p>
           <div className="card setup-card" style={{ textAlign: 'left', lineHeight: 1.8 }}>
+            <div className="form-row">
+              <label>Ticker Speed</label>
+              <select value={tickerSpeed} onChange={e => setTickerSpeed(e.target.value)} data-testid="setup-ticker-speed">
+                <option value="slow">Slow</option>
+                <option value="normal">Normal</option>
+                <option value="fast">Fast</option>
+              </select>
+            </div>
+            <div className="form-row">
+              <label>Welcome Voice</label>
+              <select value={welcomeVoice} onChange={e => setWelcomeVoice(e.target.value)} data-testid="setup-welcome-voice">
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+            </div>
+            <div className="form-row">
+              <label>Sound Volume</label>
+              <select value={soundVolume} onChange={e => setSoundVolume(e.target.value)} data-testid="setup-sound-volume">
+                <option value="off">Off</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
             <p><strong>Gemini AI</strong> - Generates clean, professional coaching summaries from your checkboxes.</p>
             <p><strong>Google Calendar</strong> - Adds Newbie Shifts to your calendar with one click.</p>
             <p className="text-muted text-sm" style={{ marginTop: 12 }}>Step-by-step setup guides are in the Help tab.</p>
@@ -82,6 +109,10 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
           display_name: display.trim(),
           form_url: formUrl.trim(),
           cert_sheet_url: certSheetUrl.trim(),
+          ticker_speed: tickerSpeed || 'normal',
+          welcome_voice: welcomeVoice || 'male',
+          sound_volume: soundVolume || 'medium',
+          enable_sounds: soundVolume !== 'off',
         });
         if (onSetupCompleted) {
           await onSetupCompleted();

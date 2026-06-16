@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import geminiSettingsGraphic from '../assets/images/Gemini.png';
+import { getPaymentOptionsFromSettings, syncLegacyPaymentFields } from '../utils/paymentOptions';
 
 const TABS = [
   { key: 'general', label: 'General' },
@@ -1160,17 +1161,158 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
 /* ═══════════════════════════════════════════════════════════════ */
 function PaymentTab({ s, set }) {
   const pay = s.payment || {};
-  const setP = (key, val) => set('payment', { ...pay, [key]: val });
+  const options = getPaymentOptionsFromSettings(pay);
+  const updatePayment = (nextPayment) => set('payment', syncLegacyPaymentFields(nextPayment));
+
+  const updateCard = (index, field, value) => {
+    const nextCards = options.card.map((item, idx) => idx === index ? { ...item, [field]: value } : item);
+    updatePayment({ ...pay, card_options: nextCards, eft_options: options.eft });
+  };
+
+  const addCard = () => {
+    const nextIndex = options.card.length + 1;
+    updatePayment({
+      ...pay,
+      card_options: [
+        ...options.card,
+        {
+          id: `card_${Date.now()}`,
+          label: `Card ${nextIndex}`,
+          type: '',
+          number: '',
+          exp: '',
+          cvv: '',
+        },
+      ],
+      eft_options: options.eft,
+    });
+  };
+
+  const removeCard = (index) => {
+    if (index === 0 || options.card.length <= 1) return;
+    updatePayment({
+      ...pay,
+      card_options: options.card.filter((_, idx) => idx !== index),
+      eft_options: options.eft,
+    });
+  };
+
+  const updateEft = (index, field, value) => {
+    const nextEft = options.eft.map((item, idx) => idx === index ? { ...item, [field]: value } : item);
+    updatePayment({ ...pay, card_options: options.card, eft_options: nextEft });
+  };
+
+  const addEft = () => {
+    const nextIndex = options.eft.length + 1;
+    updatePayment({
+      ...pay,
+      card_options: options.card,
+      eft_options: [
+        ...options.eft,
+        {
+          id: `eft_${Date.now()}`,
+          label: `EFT ${nextIndex}`,
+          routing: '',
+          account: '',
+        },
+      ],
+    });
+  };
+
+  const removeEft = (index) => {
+    if (index === 0 || options.eft.length <= 1) return;
+    updatePayment({
+      ...pay,
+      card_options: options.card,
+      eft_options: options.eft.filter((_, idx) => idx !== index),
+    });
+  };
+
   return (
     <div className="card" data-testid="settings-payment">
       <h3 style={{ marginBottom: 16 }}>Credit Card</h3>
-      <SettingsRow label="Type"><input type="text" value={pay.cc_type || ''} onChange={e => setP('cc_type', e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
-      <SettingsRow label="Number"><input type="text" value={pay.cc_number || ''} onChange={e => setP('cc_number', e.target.value)} style={{ maxWidth: 250 }} /></SettingsRow>
-      <SettingsRow label="Exp"><input type="text" value={pay.cc_exp || ''} onChange={e => setP('cc_exp', e.target.value)} style={{ maxWidth: 120 }} /></SettingsRow>
-      <SettingsRow label="CVV"><input type="text" value={pay.cc_cvv || ''} onChange={e => setP('cc_cvv', e.target.value)} style={{ maxWidth: 100 }} /></SettingsRow>
+      <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
+        These options appear in the Call and Sup Transfer payment dropdowns. Each new call starts on Default.
+      </p>
+      <PaymentOptionEditor
+        type="card"
+        items={options.card}
+        onUpdate={updateCard}
+        onRemove={removeCard}
+      />
+      <button type="button" className="btn btn-primary btn-sm" onClick={addCard} data-testid="settings-payment-add-card">+ Add Credit Card Option</button>
       <h3 style={{ margin: '24px 0 16px' }}>EFT</h3>
-      <SettingsRow label="Routing"><input type="text" value={pay.eft_routing || ''} onChange={e => setP('eft_routing', e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
-      <SettingsRow label="Account"><input type="text" value={pay.eft_account || ''} onChange={e => setP('eft_account', e.target.value)} style={{ maxWidth: 200 }} /></SettingsRow>
+      <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
+        EFT options use the same reset behavior and return to Default for each new call or Sup Transfer.
+      </p>
+      <PaymentOptionEditor
+        type="eft"
+        items={options.eft}
+        onUpdate={updateEft}
+        onRemove={removeEft}
+      />
+      <button type="button" className="btn btn-primary btn-sm" onClick={addEft} data-testid="settings-payment-add-eft">+ Add EFT Option</button>
+    </div>
+  );
+}
+
+function PaymentOptionEditor({ type, items, onUpdate, onRemove }) {
+  const isCard = type === 'card';
+  return (
+    <div className="payment-settings-list" data-testid={`settings-payment-${type}-list`}>
+      {items.map((item, index) => (
+        <div className="payment-settings-row" key={`${item.id}-${index}`} data-testid={`settings-payment-${type}-${index}`}>
+          <div className="payment-settings-row-header">
+            <strong>{index === 0 ? 'Default' : item.label || `${isCard ? 'Card' : 'EFT'} ${index + 1}`}</strong>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => onRemove(index)}
+              disabled={index === 0 || items.length <= 1}
+              data-testid={`settings-payment-remove-${type}-${index}`}
+            >
+              Remove
+            </button>
+          </div>
+          <div className="settings-admin-field-grid">
+            <label className="settings-admin-field">
+              <span>Label</span>
+              <input type="text" value={item.label || ''} onChange={e => onUpdate(index, 'label', e.target.value)} data-testid={`settings-payment-${type}-${index}-label`} />
+            </label>
+            {isCard ? (
+              <>
+                <label className="settings-admin-field">
+                  <span>Type</span>
+                  <input type="text" value={item.type || ''} onChange={e => onUpdate(index, 'type', e.target.value)} data-testid={`settings-payment-card-${index}-type`} />
+                </label>
+                <label className="settings-admin-field">
+                  <span>Number</span>
+                  <input type="text" value={item.number || ''} onChange={e => onUpdate(index, 'number', e.target.value)} data-testid={`settings-payment-card-${index}-number`} />
+                </label>
+                <label className="settings-admin-field">
+                  <span>Exp</span>
+                  <input type="text" value={item.exp || ''} onChange={e => onUpdate(index, 'exp', e.target.value)} data-testid={`settings-payment-card-${index}-exp`} />
+                </label>
+                <label className="settings-admin-field">
+                  <span>CVV</span>
+                  <input type="text" value={item.cvv || ''} onChange={e => onUpdate(index, 'cvv', e.target.value)} data-testid={`settings-payment-card-${index}-cvv`} />
+                </label>
+              </>
+            ) : (
+              <>
+                <label className="settings-admin-field">
+                  <span>Routing</span>
+                  <input type="text" value={item.routing || ''} onChange={e => onUpdate(index, 'routing', e.target.value)} data-testid={`settings-payment-eft-${index}-routing`} />
+                </label>
+                <label className="settings-admin-field">
+                  <span>Account</span>
+                  <input type="text" value={item.account || ''} onChange={e => onUpdate(index, 'account', e.target.value)} data-testid={`settings-payment-eft-${index}-account`} />
+                </label>
+              </>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

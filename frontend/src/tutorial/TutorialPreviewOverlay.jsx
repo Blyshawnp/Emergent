@@ -5,6 +5,15 @@ const STEP_TARGET_TIMEOUT_MS = 1800;
 const PREPARE_SELECTOR_TIMEOUT_MS = 1500;
 const SCROLL_SETTLE_MS = 180;
 
+export const TUTORIAL_COPY = {
+  callsSetup: 'Calls is where you set up the scenario. Choose the call type, show, caller, and donation details, then use payment simulation. Saved payment options appear here and each new call starts on Default.',
+  callsScoring: 'Call scoring is grouped here. Mark each call Pass or Fail, record coaching checkboxes, select fail reasons, and add optional fail reason details when needed.',
+  supervisorTransfer: 'Supervisor Transfer covers the live transfer portion. Copy the Discord message, choose setup details, use payment dropdowns starting on Default, score the transfer, and use the Fail Reasons copy button when Transfer 1 fails.',
+  reviewFill: 'Review is the final checkpoint. Confirm Basics, results, coaching and fail summaries, set Final Readiness Judgment if evaluator override is needed, use Fill Form, then Save & Finish.',
+  settingsPage: 'Settings manages app behavior and integrations: tester identity, form links, welcome voice, sound volume, ticker speed, payment options, Gemini summaries, Discord posts and screenshots, updates, and theme.',
+  helpPage: 'Help is the reference center for workflow guidance, troubleshooting, setup notes, payment settings, Discord categories, update/about details, and replaying this tutorial later.',
+};
+
 function isTargetVisible(selector) {
   if (!selector) return false;
   const element = document.querySelector(selector);
@@ -160,7 +169,7 @@ export default function TutorialPreviewOverlay({
       page: 'calls',
       target: '[data-tour="calls-setup"]',
       fallbackTarget: '[data-testid="calls-page"]',
-      content: 'Calls is where you set up the scenario. Choose the call type, show, caller, and donation details, then use the scenario and payment simulation to run the mock call.',
+      content: TUTORIAL_COPY.callsSetup,
       placement: 'right',
     },
     {
@@ -168,7 +177,7 @@ export default function TutorialPreviewOverlay({
       page: 'calls',
       target: '[data-tour="calls-result"]',
       fallbackTarget: '[data-testid="calls-page"]',
-      content: 'Call scoring is grouped here. Mark each call Pass or Fail, record coaching checkboxes, select fail reasons when needed, and use Stopped Responding only for the chat auto-fail path.',
+      content: TUTORIAL_COPY.callsScoring,
       placement: 'bottom',
     },
     {
@@ -176,7 +185,7 @@ export default function TutorialPreviewOverlay({
       page: 'suptransfer',
       target: '[data-tour="sup-discord-banner"]',
       fallbackTarget: '[data-testid="suptransfer-page"]',
-      content: 'Supervisor Transfer covers the live transfer portion. Copy the Discord message, choose setup details, score the transfer, and use the Fail Reasons copy button when Transfer 1 fails.',
+      content: TUTORIAL_COPY.supervisorTransfer,
       placement: 'bottom',
     },
     {
@@ -199,7 +208,7 @@ export default function TutorialPreviewOverlay({
       },
       target: '[data-testid="review-banner"]',
       fallbackTarget: '[data-testid="review-page"]',
-      content: 'Review is the final checkpoint. Confirm Basics, results, coaching and fail summaries, use Fill Form, then Save & Finish when the session is complete.',
+      content: TUTORIAL_COPY.reviewFill,
       placement: 'bottom',
     },
     {
@@ -214,7 +223,7 @@ export default function TutorialPreviewOverlay({
       page: 'settings',
       target: '[data-tour="settings-tabs"]',
       fallbackTarget: '[data-testid="settings-page"]',
-      content: 'Settings manages app behavior and integrations: tester identity, form links, welcome voice, sound volume, theme, Gemini summaries, Discord posts and screenshots, updates, and ticker speed.',
+      content: TUTORIAL_COPY.settingsPage,
       placement: 'bottom',
     },
     {
@@ -222,7 +231,7 @@ export default function TutorialPreviewOverlay({
       page: 'help',
       target: '[data-tour="help-header"]',
       fallbackTarget: '[data-testid="help-page"]',
-      content: 'Help is the reference center for workflow guidance, troubleshooting, FAQ content, setup notes, update/about details, and replaying this tutorial later.',
+      content: TUTORIAL_COPY.helpPage,
       placement: 'bottom',
     },
   ].map((step) => ({

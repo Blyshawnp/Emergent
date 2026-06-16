@@ -121,6 +121,10 @@ test('help page renders current help topics and configured faq entries', async (
   expect(view.container.textContent).toContain('Getting Started');
   expect(view.container.textContent).toContain('Supervisor Transfer Only');
   expect(view.container.textContent).toContain('Ticker and Notifications');
+  expect(view.container.textContent).toContain('Setup Wizard includes ticker speed');
+  expect(view.container.textContent).toContain('Payment Settings starts with 3 Credit Card defaults and 3 EFT defaults');
+  expect(view.container.textContent).toContain('Final Readiness Judgment lets the evaluator keep the calculated result');
+  expect(view.container.textContent).toContain('Use Category to filter grouped templates or screenshots');
   expect(view.container.textContent).toContain('Where is my data stored?');
   expect(view.container.textContent).toContain('In the local app database.');
   expect(view.container.textContent).toContain('support@example.com');

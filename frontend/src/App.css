@@ -132,8 +132,8 @@ a { color: var(--color-primary); text-decoration: none; }
 .sidebar-divider { height: 1px; margin: 4px var(--space-md); background: rgba(255,255,255,0.08); flex-shrink: 0; }
 .sidebar-links { display: flex; flex-direction: column; gap: 1px; padding: 0 0 var(--space-sm); }
 /* Action Buttons - styled colored buttons */
-.sidebar-actions { display: flex; flex-direction: column; gap: 5px; padding: 0 10px 6px; flex-shrink: 0; }
-.action-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 37px; padding: 9px 12px; border: none; border-radius: var(--radius-md); font-family: var(--font-body); font-size: var(--font-size-sm); font-weight: 750; color: #fff; cursor: pointer; transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast), filter var(--transition-fast); text-align: center; }
+.sidebar-actions { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 6px; flex-shrink: 0; }
+.action-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 38px; padding: 9px 12px; border: none; border-radius: var(--radius-md); font-family: var(--font-body); font-size: var(--font-size-sm); font-weight: 750; color: #fff; cursor: pointer; transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast), filter var(--transition-fast); text-align: center; line-height: 1.1; white-space: nowrap; }
 .action-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); filter: brightness(1.1); }
 .action-icon { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .action-discord { background: #4752c4; }
@@ -142,8 +142,10 @@ a { color: var(--color-primary); text-decoration: none; }
 .link-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 20px; background: transparent; color: #7e8fad; border: none; border-left: 3px solid transparent; font-size: var(--font-size-xs); font-weight: 600; font-family: var(--font-body); cursor: pointer; text-align: left; transition: all var(--transition-fast); }
 .link-btn .nav-icon { font-size: 14px; width: 22px; text-align: center; }
 .link-btn:hover { background: rgba(255,255,255,0.04); color: #64b5f6; border-left-color: #64b5f6; }
-.sidebar-footer { padding: 4px 12px 8px; flex-shrink: 0; }
-.exit-btn { width: 100%; min-height: 37px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 9px 12px; background: var(--color-danger); color: white; border: none; border-radius: var(--radius-md); font-weight: 750; font-size: var(--font-size-sm); font-family: var(--font-body); cursor: pointer; transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast); text-align: center; }
+.action-label,
+.exit-btn-label { line-height: 1.1; }
+.sidebar-footer { padding: 4px 10px 8px; flex-shrink: 0; }
+.exit-btn { width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 9px 12px; background: var(--color-danger); color: white; border: none; border-radius: var(--radius-md); font-weight: 750; font-size: var(--font-size-sm); font-family: var(--font-body); cursor: pointer; transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast); text-align: center; line-height: 1.1; white-space: nowrap; }
 .exit-btn:hover { background: var(--color-danger-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220,38,38,0.3); }
 .exit-btn-icon { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
@@ -1786,6 +1788,28 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .editable-row { display: flex; gap: var(--space-sm); align-items: center; margin-bottom: var(--space-sm); }
 .editable-row input { flex: 1; }
+
+.payment-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.payment-settings-row {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--bg-card);
+}
+
+.payment-settings-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+}
 
 .settings-admin-header {
   display: flex;

@@ -2220,6 +2220,18 @@ SUP_FAILS = [
 HELP_CONTENT = {
     "howto": [
         {
+            "title": "Setup Wizard and Preferences",
+            "paragraphs": [
+                "The first launch setup captures tester identity, form links, ticker speed, welcome voice, and sound volume."
+            ],
+            "bullets": [
+                "<b>Display Name</b> - Optional. If blank, the app uses the first name from Tester Name.",
+                "<b>Ticker Speed</b> - Defaults to Normal and can be changed later in Settings.",
+                "<b>Welcome Voice</b> - Choose Male or Female. Female welcome audio files use -f before .mp3.",
+                "<b>Sound Volume</b> - Controls welcome audio and app sound effects.",
+            ],
+        },
+        {
             "title": "Home Screen",
             "paragraphs": [
                 "The Home screen is your dashboard. It shows your stats (Total Sessions, Pass Rate, NC/NS Rate) and recent sessions."
@@ -2259,7 +2271,7 @@ HELP_CONTENT = {
                 "<b>Call Setup</b> - Select Call Type, Show, Caller, and Donation from the dropdowns",
                 "<b>Scenario Card</b> - Shows the caller's info, gift, and randomized variables (Phone Type, SMS, E-Newsletter, Shipping, CC Fee)",
                 "<b>Regenerate</b> - Re-rolls the random scenario variables without changing the call data",
-                "<b>Payment Simulation</b> - Shows the credit card and EFT info for the test call",
+                "<b>Payment Simulation</b> - Shows the saved Credit Card and EFT options from Settings. Each new call starts on Default.",
                 "<b>Pass/Fail</b> - Click PASS or FAIL after the call",
                 "<b>Coaching</b> - Select coaching checkboxes (required - if none selected, you'll be asked to confirm). Search name for every call and Do not volunteer information are available when those topics were coached.",
                 "<b>Fail Reasons</b> - If FAIL, you must select at least one fail reason. Use + Add detail for optional reason-specific context; Other still uses the regular notes box.",
@@ -2273,6 +2285,7 @@ HELP_CONTENT = {
             "bullets": [
                 "Post \"WXYZ: Supervisor Test Call Being Queued\" in Discord Stars channel",
                 "Call the WXYZ number: <b>1-828-630-7006</b>",
+                "Payment dropdowns use saved Settings options and start on Default for each Supervisor Transfer.",
                 "Pass Transfer 1 → done (go to Review). Fail both → Newbie Shift.",
             ],
         },
@@ -2307,6 +2320,7 @@ HELP_CONTENT = {
             "bullets": [
                 "<b>Coaching Summary</b> - Generated from your coaching checkboxes (or Gemini AI if enabled)",
                 "<b>Fail Summary</b> - Generated from fail reasons (N/A for passing sessions)",
+                "<b>Final Readiness Judgment</b> - Keep the calculated result or override it with a final evaluator result and reason.",
                 "<b>Copy</b> - Copies the summary text to your clipboard",
                 "<b>Regenerate</b> - Rebuilds the summary from checkbox data",
                 "<b>Fill Form</b> - Opens the Cert Form and maps session data to form fields",
@@ -2323,6 +2337,17 @@ HELP_CONTENT = {
                 "<b>Screenshots</b> - Welcome images that can be copied to clipboard for Discord. Click \"Copy Image\" to copy",
                 "<b>Category</b> - When configured, use the category filter to group templates and screenshots.",
                 "Both tabs remain searchable within the selected category",
+            ],
+        },
+        {
+            "title": "Settings Payment Options",
+            "paragraphs": [
+                "Settings starts with 3 Credit Card defaults and 3 EFT defaults for payment simulation."
+            ],
+            "bullets": [
+                "Admins or evaluators can add or remove payment options without removing the Default starting point.",
+                "Saved options appear in Calls and Supervisor Transfer payment dropdowns.",
+                "Each new Call and Supervisor Transfer starts the dropdowns on Default.",
             ],
         },
         {
@@ -7141,6 +7166,14 @@ async def complete_setup(payload: dict, request: Request):
         update_data["form_url"] = payload["form_url"]
     if "cert_sheet_url" in payload:
         update_data["cert_sheet_url"] = payload["cert_sheet_url"]
+    if "ticker_speed" in payload:
+        ticker_speed = str(payload.get("ticker_speed") or "normal").strip().lower()
+        update_data["ticker_speed"] = ticker_speed if ticker_speed in {"slow", "normal", "fast"} else "normal"
+    if "welcome_voice" in payload:
+        update_data["welcome_voice"] = _normalize_welcome_voice(payload.get("welcome_voice"))
+    if "sound_volume" in payload:
+        update_data["sound_volume"] = _normalize_sound_volume(payload.get("sound_volume"), payload.get("enable_sounds", True))
+        update_data["enable_sounds"] = update_data["sound_volume"] != "off"
     await db.settings.update_one({"_id": "app_settings"}, {"$set": update_data}, upsert=True)
     return {"ok": True}
 

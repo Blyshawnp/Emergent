@@ -13,6 +13,9 @@ The first-run wizard captures your tester identity and the form/spreadsheet link
 - Enter your first name, last name, and (optional) display name.
 - First install uses the default welcome audio and does not need your name before setup is complete.
 - After setup, returning launches use Display Name when available. If Display Name is blank, the app uses the first name from Tester Name.
+- Setup Wizard includes ticker speed, welcome voice, and sound volume. Ticker speed defaults to Normal.
+- Welcome voice can be Male or Female. Female welcome audio files use -f before .mp3.
+- Sound volume controls welcome audio and app sound effects.
 - Confirm the certification form URL and the certification spreadsheet URL.
 - When you finish the wizard, the Tutorial starts automatically if it has not been completed yet.
 - You can revisit any of these values later from Settings.
@@ -21,6 +24,7 @@ The first-run wizard captures your tester identity and the form/spreadsheet link
 The guided tutorial walks through the main app workflow without changing any session data.
 - The tutorial runs once on first launch.
 - You can replay it any time from the Help screen using the Replay Tutorial button.
+- The tutorial points out current Settings, payment, headset, Discord, and Review behavior.
 - Use Next, Back, Skip, and Finish inside the tutorial to control it.
 - Tutorial completion is only marked after Skip or Finish.
 
@@ -96,6 +100,9 @@ Use Tech Issue when a real technical problem is interrupting the session, before
 ## 10. Calls Screen
 The Calls screen scores up to three mock calls.
 - For each call pick Call Type, Show, Caller, and Donation amount.
+- Payment Simulation uses the saved Credit Card and EFT options from Settings.
+- Each new call starts payment dropdowns on Default even if you changed the prior call.
+- Settings starts with 3 Credit Card defaults and 3 EFT defaults, and admins or evaluators can add or remove options.
 - Mark the call Pass or Fail before moving on.
 - Two passed calls (with the required mix of New Donor and Existing Member work) route to Supervisor Transfer.
 - Two failed calls route directly to Review.
@@ -103,12 +110,15 @@ The Calls screen scores up to three mock calls.
 ## 11. Coaching Checkboxes
 Coaching checkboxes record what coaching was actually given on each call.
 - Check only the items you actually coached during the call.
+- Search name for every call and Do not volunteer information are available when those coaching topics were covered.
 - Coaching selections feed the Coaching Summary on the Review screen.
 - Use Other notes only when no existing checkbox describes the coaching clearly.
 
 ## 12. Fail Reason Checkboxes
 Fail reasons explain why a call did not pass.
 - When a call is marked FAIL, select at least one fail reason.
+- For any checked fail reason except Other, use + Add detail only when you need to capture what specifically happened.
+- Fail reason details stay tied to that specific checked reason and appear in the Review summaries.
 - Pick every reason that applies; the Review summary lists all of them.
 - Use Other notes only when the existing list does not describe the issue.
 
@@ -122,6 +132,7 @@ Stopped Responding ends the session as a fail when the candidate goes silent and
 Supervisor Transfer verifies the candidate can complete the transfer process correctly.
 - Post the Discord queue message and use the WXYZ supervisor test number.
 - Choose caller, show, and supervisor reason before scoring the transfer.
+- Supervisor Transfer payment dropdowns use saved Settings options and start on Default.
 - When Supervisor Transfer 1 fails, use the Fail Reasons copy button to copy the Failed 1st Sup Transfer Discord post.
 - Pass Transfer 1 to complete the transfer requirement.
 - If both transfers fail, the session routes to Newbie Shift follow-up.
@@ -153,6 +164,8 @@ Review is the final checkpoint before filling forms or saving the session.
 - Failed call or failed supervisor-transfer details stay in Coaching Summary when the overall session passed or remains incomplete.
 - Reason for Fail Summary is only used when the overall session fails.
 - Summaries can always be edited manually before Fill Form or Save and Finish.
+- Final Readiness Judgment lets the evaluator keep the calculated result or override it with a final result and reason.
+- When an override is applied, summaries and saved history preserve both the calculated result and the final evaluator result.
 - Use Fill Form to push session data into the certification form.
 - Save and Finish stores the session in local History, immediately updates shared Candidate Sessions, and updates Pending Sup Transfers when applicable.
 - If the shared Google Sheet update fails, the local save still completes and the app warns you without crashing.
@@ -213,6 +226,9 @@ Settings controls your profile, integrations, and app preferences.
 - Female welcome audio files use -f before .mp3, such as welcome-shawn-f.mp3.
 - Missing personalized welcome files fall back to default welcome audio.
 - Sound volume controls welcome audio and app sound effects.
+- Ticker speed can be changed in Setup Wizard or Settings and falls back to Normal when missing.
+- Payment Settings starts with 3 Credit Card defaults and 3 EFT defaults. Admins or evaluators can add or remove payment simulation options.
+- Call and Supervisor Transfer payment dropdowns show saved options and reset to Default for each new call or transfer.
 - Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.
 - Help content is not editable from normal Settings.
 - Notifications are managed by admins in SAM through the master Google Sheet, not from normal MTS Settings.
@@ -232,7 +248,7 @@ The ticker and notification system surfaces operational messages without blockin
 - Ticker messages scroll across the top of the app.
 - Ticker, banner, and popup content is managed by admins through SAM and the master sam-notifications sheet.
 - Banner and popup notifications can also appear from the same source.
-- Ticker Speed is controlled in Settings; the ticker URL is admin-only.
+- Ticker Speed can be set during Setup Wizard and changed later in Settings; the ticker URL is admin-only.
 
 ## 26. Updates and About
 Update checks and app version info live in the app menu and Settings.
