@@ -435,11 +435,13 @@ test('basics headset search matches brand and model portions while preserving un
 test('calls and supervisor coaching render backfilled default reasons and helper text', async () => {
   const callCoaching = [
     { id: 'custom', label: 'Custom Coaching', children: [] },
+    { id: 'c-other', label: 'Other' },
     { id: 'c-search-name', label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
     { id: 'c-no-volunteer', label: 'Do not volunteer information', helper: 'Do not verify details the member has not provided, such as an email address.' },
   ];
   const supCoaching = [
     { label: 'Custom Supervisor Coaching', children: [] },
+    { label: 'Other' },
     { label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
     { label: 'Do not volunteer information', helper: 'Do not verify details the member has not provided, such as an email address.' },
   ];
@@ -481,6 +483,9 @@ test('calls and supervisor coaching render backfilled default reasons and helper
   expect(callsView.container.textContent).toContain('Do not volunteer information');
   expect(callsView.container.textContent).toContain("Search the caller's name on every call to avoid duplicate member records.");
   expect(callsView.container.textContent).toContain('Do not verify details the member has not provided, such as an email address.');
+  const callsLabels = Array.from(callsView.container.querySelectorAll('.coaching-group label')).map((label) => label.textContent.trim());
+  expect(callsLabels.indexOf('Search name for every call')).toBeLessThan(callsLabels.indexOf('Other'));
+  expect(callsLabels.indexOf('Do not volunteer information')).toBeLessThan(callsLabels.indexOf('Other'));
   await callsView.unmount();
 
   const supView = await renderComponent(<SupTransferPage onNavigate={jest.fn()} />);
@@ -488,5 +493,8 @@ test('calls and supervisor coaching render backfilled default reasons and helper
   expect(supView.container.textContent).toContain('Do not volunteer information');
   expect(supView.container.textContent).toContain("Search the caller's name on every call to avoid duplicate member records.");
   expect(supView.container.textContent).toContain('Do not verify details the member has not provided, such as an email address.');
+  const supLabels = Array.from(supView.container.querySelectorAll('.coaching-group label')).map((label) => label.textContent.trim());
+  expect(supLabels.indexOf('Search name for every call')).toBeLessThan(supLabels.indexOf('Other'));
+  expect(supLabels.indexOf('Do not volunteer information')).toBeLessThan(supLabels.indexOf('Other'));
   await supView.unmount();
 });

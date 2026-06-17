@@ -7,6 +7,7 @@ BACKEND_DIR = ROOT / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+import server  # noqa: E402
 from server import (  # noqa: E402
     build_form_fill_payload,
     compute_final_status,
@@ -378,3 +379,63 @@ def test_headset_like_selection_data_is_rejected_from_summaries():
     assert "Plantronics" not in summaries["fail"]
     assert "Poly" not in summaries["fail"]
     assert "Skipped parts of script" in summaries["fail"]
+
+
+def test_readiness_override_fail_summary_and_form_completion_flags():
+    session = _session(
+        call_1={"result": "Pass", "coaching": {"Show appreciation": True}},
+        call_2={"result": "Pass", "coaching": {"Verification": True}},
+        sup_transfer_1={"result": "Pass", "coaching": {"Discord permission": True}},
+        finalReadinessJudgment={
+            "calculatedResult": "Pass",
+            "overrideApplied": True,
+            "overrideResult": "Fail",
+            "primaryReason": "Accuracy/detail concerns",
+            "explanation": "Evaluator observed repeated detail issues.",
+        },
+    )
+
+    summaries = generate_summaries(session)
+    payload = build_form_fill_payload(session, _settings(), summaries["coaching"], summaries["fail"])
+
+    assert compute_final_status(session) == "Fail"
+    assert "Evaluator Override Applied" in summaries["fail"]
+    assert "Accuracy/detail concerns" in summaries["fail"]
+    assert "Evaluator observed repeated detail issues" in summaries["fail"]
+    assert payload["mock_complete"] == "No"
+    assert payload["sup_complete"] == "No"
+    assert payload["all_complete"] == "No"
+
+
+def test_gemini_payload_includes_final_readiness_judgment(monkeypatch):
+    captured = {}
+
+    def fake_generate(source_text, prompt_template, api_key, summary_type, final_notes_text="", instructions="", current_summary=""):
+      captured[summary_type] = {
+          "source_text": source_text,
+          "final_notes_text": final_notes_text,
+      }
+      return f"{summary_type} summary"
+
+    monkeypatch.setattr(server, "_generate_gemini_summary_with_timeout", fake_generate)
+    session = _session(
+        call_1={"result": "Pass", "coaching": {"Show appreciation": True}},
+        call_2={"result": "Pass", "coaching": {"Verification": True}},
+        sup_transfer_1={"result": "Pass", "coaching": {"Discord permission": True}},
+        finalReadinessJudgment={
+            "calculatedResult": "Pass",
+            "overrideApplied": True,
+            "overrideResult": "Fail",
+            "primaryReason": "Accuracy/detail concerns",
+            "explanation": "Evaluator observed repeated detail issues.",
+        },
+    )
+
+    result = generate_summaries(session, api_key="test-key", settings={"enable_gemini": True})
+
+    assert result["used_gemini"] is True
+    assert "Final Readiness Judgment" in captured["coaching"]["final_notes_text"]
+    assert "calculated result is Pass" in captured["coaching"]["final_notes_text"]
+    assert "final result is Fail" in captured["coaching"]["final_notes_text"]
+    assert "Accuracy/detail concerns" in captured["fail"]["final_notes_text"]
+    assert "Evaluator observed repeated detail issues" in captured["fail"]["final_notes_text"]

@@ -27,6 +27,7 @@ The guided tutorial walks through the main app workflow without changing any ses
 - The tutorial points out current Settings, payment, headset, Discord, and Review behavior.
 - Use Next, Back, Skip, and Finish inside the tutorial to control it.
 - Tutorial completion is only marked after Skip or Finish.
+- Optional tutorial videos are local files only. Place tutorial.mp4 or mts-tutorial.mp4 in frontend/public/assets/tutorial, then rebuild the app. If no video exists, the guided tutorial remains the fallback.
 
 ## 4. Home Screen
 Home is the launcher for every session type and the entry point to history.
@@ -71,6 +72,7 @@ Basics verifies candidate readiness before any scoring begins.
 ## 7. Headset Autocomplete
 Use the Brand / Model autocomplete to confirm a candidate is using an allowed USB noise-cancelling model.
 - Start typing in Brand / Model to search approved headsets.
+- Search works by brand or model number, such as H390 or H650e.
 - Click the dropdown arrow in the field to view approved headset options.
 - Pick an approved headset first so USB and Noise Cancelling can be marked Yes automatically.
 - If the model is not listed, double-check that the headset is USB and has a noise-cancelling microphone before continuing.
@@ -111,6 +113,8 @@ The Calls screen scores up to three mock calls.
 Coaching checkboxes record what coaching was actually given on each call.
 - Check only the items you actually coached during the call.
 - Search name for every call and Do not volunteer information are available when those coaching topics were covered.
+- Search name for every call and Do not volunteer information appear before Other, which stays last for custom notes.
+- Helper text appears below coaching items when extra guidance is configured, and child checkboxes stay disabled until their parent item is checked.
 - Coaching selections feed the Coaching Summary on the Review screen.
 - Use Other notes only when no existing checkbox describes the coaching clearly.
 
@@ -229,6 +233,7 @@ Settings controls your profile, integrations, and app preferences.
 - Ticker speed can be changed in Setup Wizard or Settings and falls back to Normal when missing.
 - Payment Settings starts with 3 Credit Card defaults and 3 EFT defaults. Admins or evaluators can add or remove payment simulation options.
 - Call and Supervisor Transfer payment dropdowns show saved options and reset to Default for each new call or transfer.
+- Sound Volume supports Off, Low, Medium, and High.
 - Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.
 - Help content is not editable from normal Settings.
 - Notifications are managed by admins in SAM through the master Google Sheet, not from normal MTS Settings.
@@ -238,6 +243,7 @@ The Discord panel keeps reusable Discord messages and screenshot images close at
 - Open Discord Post from the sidebar.
 - Use Category to filter grouped templates or screenshots when categories are configured. Search still works within the selected category.
 - Search templates and copy message text with one click. Copy buttons change to Copied for 3 seconds.
+- Template rows show the category above the blue post title, with the full message beside it.
 - Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.
 - Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.
 - Use the Phonetics Table button on Calls or Supervisor Transfer screens to open Phonetics.png and copy it for Discord when supported.
@@ -257,6 +263,7 @@ Update checks and app version info live in the app menu and Settings.
 - If RequiredVersion is newer than your installed version, the update is required and normal use is blocked until Update Now is selected.
 - Optional updates show release notes and can be installed now or deferred.
 - Deferred updates can be installed later from Settings when available.
+- When a download cannot open automatically, use the manual download option shown in the updater message.
 - About shows the app version and support identity details (also shown on this Help screen).
 
 ## 27. Troubleshooting

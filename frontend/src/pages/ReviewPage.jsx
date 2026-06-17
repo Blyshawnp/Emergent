@@ -250,15 +250,6 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const reviewSessionPayload = navigationState?.reviewSession || navigationState?.session || null;
   const isHistoricalReview = Boolean(historyRecord);
 
-  // New States
-  const [showFinalNotesModal, setShowFinalNotesModal] = useState(false);
-  const [tempNotes, setTempNotes] = useState({
-    notes: '',
-    includeInCoachingSummary: true,
-    includeInFailSummary: true,
-    historyOnly: false,
-  });
-
   const [isEditingCoaching, setIsEditingCoaching] = useState(false);
   const [tempCoaching, setTempCoaching] = useState('');
 
@@ -326,24 +317,6 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           await api.updateSession({ final_status: finalStatus, finalReadinessJudgment: judgment });
         }
 
-        // Final evaluator notes are optional and can be bypassed before Review if this feature is disabled later.
-        // Check if final notes modal was completed/skipped
-        const hasNotesCompletedOrSkipped = s.finalEvaluatorNotes?.completed || s.finalEvaluatorNotes?.skipped;
-        if (!hasNotesCompletedOrSkipped) {
-          setTempNotes({
-            notes: s.finalEvaluatorNotes?.notes || '',
-            includeInCoachingSummary: s.finalEvaluatorNotes?.includeInCoachingSummary !== false,
-            includeInFailSummary: s.finalEvaluatorNotes?.includeInFailSummary !== false,
-            historyOnly: s.finalEvaluatorNotes?.historyOnly === true
-          });
-          setShowFinalNotesModal(true);
-          setCoaching(getFallbackCoachingSummary(resolvedSession));
-          setFail(getFallbackFailSummary(resolvedSession));
-          setLoading(false);
-          reviewHydratedRef.current = true;
-          return;
-        }
-
         const savedCoaching = (s.coaching_summary || '').trim();
         const savedFail = (s.fail_summary || '').trim();
         if (savedCoaching || savedFail) {
@@ -368,7 +341,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         setSummaryNotice('Generating summaries...');
         reviewHydratedRef.current = true;
 
-        api.generateSummaries()
+        api.generateSummaries(resolvedSession)
           .then((summaries) => {
             if (cancelled) return;
             setCoaching(summaries.coaching || getFallbackCoachingSummary(resolvedSession));
@@ -397,7 +370,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   }, [historyRecord, reviewSessionPayload]);
 
   useEffect(() => {
-    if (isHistoricalReview || !reviewHydratedRef.current || !session?.candidate_name || showFinalNotesModal) {
+    if (isHistoricalReview || !reviewHydratedRef.current || !session?.candidate_name) {
       return undefined;
     }
     const timer = window.setTimeout(() => {
@@ -411,7 +384,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [coaching, fail, isHistoricalReview, session, showFinalNotesModal]);
+  }, [coaching, fail, isHistoricalReview, session]);
 
   if (loading) return <div className="page-loading" data-testid="review-page">{historyRecord ? 'Loading review...' : 'Generating review summaries...'}</div>;
   if (!session) return <div className="stub-page" data-testid="review-page"><h1>No Active Session</h1><p>Start a session from the Home screen.</p></div>;
@@ -449,6 +422,40 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     if (btn) { const orig = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = orig; }, 3000); }
   };
 
+  const refreshSummariesForSession = async (nextSession, notice = SUMMARY_PENDING_MESSAGE) => {
+    if (isHistoricalReview || !nextSession?.candidate_name) return;
+    summaryStartedRef.current = true;
+    setSummaryLoading(true);
+    setSummaryNotice(notice);
+    try {
+      const summaries = await api.generateSummaries(nextSession);
+      const nextCoaching = summaries.coaching || getFallbackCoachingSummary(nextSession);
+      const nextFail = summaries.fail || getFallbackFailSummary(nextSession);
+      setCoaching(nextCoaching);
+      setFail(nextFail);
+      setCoachingEdited(false);
+      setFailEdited(false);
+      setManuallyEdited(false);
+      setSummaryDiagnostics(summaries);
+      setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
+      await api.updateSession({
+        coaching_summary: getSafeSummaryForSubmit(nextCoaching, ''),
+        fail_summary: getSafeSummaryForSubmit(nextFail, ''),
+      }).catch(() => {});
+    } catch (error) {
+      const message = getSummaryFailureMessage(error);
+      console.log('[REVIEW] summary generation failed after readiness change', { message });
+      setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
+      setSummaryNotice(message);
+      if (message === SUMMARY_TIMEOUT_MESSAGE) {
+        setCoaching((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : appendReadinessOverrideSummary(current, nextSession.finalReadinessJudgment)));
+        setFail((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : appendReadinessOverrideSummary(current, nextSession.finalReadinessJudgment)));
+      }
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
   const saveReadinessJudgment = async (nextJudgment) => {
     const normalized = normalizeFinalReadinessJudgment(nextJudgment, calculatedStatus);
     const nextFinalStatus = computeFinalStatus({ ...session, finalReadinessJudgment: normalized });
@@ -459,6 +466,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         final_status: nextFinalStatus,
         finalReadinessJudgment: normalized,
       }).catch(() => {});
+      await refreshSummariesForSession(nextSession, 'Final Readiness Judgment changed. Regenerating summaries...');
     }
   };
 
@@ -501,65 +509,6 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     });
   };
 
-  const handleContinueFinalNotes = async () => {
-    const notesObj = {
-      ...tempNotes,
-      completed: true,
-      skipped: false,
-      createdAt: session.finalEvaluatorNotes?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveNotesAndLoadReview(notesObj);
-  };
-
-  const handleSkipFinalNotes = async () => {
-    const notesObj = {
-      ...tempNotes,
-      completed: false,
-      skipped: true,
-      createdAt: session.finalEvaluatorNotes?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveNotesAndLoadReview(notesObj);
-  };
-
-  const saveNotesAndLoadReview = async (notesObj) => {
-    setShowFinalNotesModal(false);
-    
-    const nextSession = { ...session, finalEvaluatorNotes: notesObj };
-    setSession(nextSession);
-    
-    summaryStartedRef.current = true;
-    
-    await api.updateSession({ finalEvaluatorNotes: notesObj });
-    
-    setSummaryLoading(true);
-    setSummaryNotice(SUMMARY_PENDING_MESSAGE);
-    
-    try {
-      const summaries = await api.generateSummaries();
-      setCoaching((current) => (
-        isSummaryPlaceholder(current) ? (summaries.coaching || getFallbackCoachingSummary(nextSession)) : current
-      ));
-      setFail((current) => (
-        isSummaryPlaceholder(current) ? (summaries.fail || getFallbackFailSummary(nextSession)) : current
-      ));
-      setSummaryDiagnostics(summaries);
-      setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
-    } catch (error) {
-      const message = getSummaryFailureMessage(error);
-      console.log('[REVIEW] summary generation failed', { message });
-      setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
-      setSummaryNotice(message);
-      if (message === SUMMARY_TIMEOUT_MESSAGE) {
-        setCoaching((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
-        setFail((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : current));
-      }
-    } finally {
-      setSummaryLoading(false);
-    }
-  };
-
   const handleSaveNotesSummary = async () => {
     setIsEditingNotes(false);
     setSession({ ...session, evaluatorNotesSummaryEdited: editingNotesText });
@@ -572,9 +521,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       'Are you sure you want to remove all final evaluator notes and regenerate summaries?'
     );
     if (!confirmed) return;
-    
-    setShowFinalNotesModal(false);
-    
+
     const clearedNotes = {
       notes: '',
       includeInCoachingSummary: true,
@@ -607,7 +554,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     setSummaryLoading(true);
     setSummaryNotice(SUMMARY_PENDING_MESSAGE);
     try {
-      const summaries = await api.generateSummaries();
+      const summaries = await api.generateSummaries(nextSession);
       setCoaching(summaries.coaching || getFallbackCoachingSummary(nextSession));
       setFail(summaries.fail || getFallbackFailSummary(nextSession));
       setSummaryDiagnostics(summaries);
@@ -720,7 +667,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     setSummaryLoading(true);
     setSummaryNotice('Generating summaries...');
     try {
-      const r = await api.generateSummaries();
+      const r = await api.generateSummaries(session);
       setSummaryDiagnostics(r);
       setCoaching(r.coaching || getFallbackCoachingSummary(session));
       setFail(r.fail || getFallbackFailSummary(session));
@@ -744,7 +691,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     setFilling(true);
     try {
       const sessionForFill = { ...session, final_status: finalStatus, finalReadinessJudgment };
-      const r = await api.fillForm(coachingForDisplay, failForDisplay, isHistoricalReview ? sessionForFill : null);
+      const r = await api.fillForm(coachingForDisplay, failForDisplay, sessionForFill);
       if (r.ok) {
         setHasFilledForm(true);
         if (showSuccess) {
@@ -1267,84 +1214,6 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           </>
         )}
       </div>
-
-      {/* Final Notes Modal */}
-      {showFinalNotesModal && (
-        <div className="modal-overlay open" style={{ zIndex: 3000 }}>
-          <div className="modal" style={{ width: '600px', maxHeight: '90vh' }}>
-            <div className="modal-header">
-              <h2>Final Notes</h2>
-            </div>
-            <div className="modal-body" style={{ textAlign: 'left' }}>
-              <p className="text-muted" style={{ marginBottom: 16 }}>
-                Add anything important that was not captured by the checklist. These notes can be included in the coaching summary, fail summary, or saved only in History.
-              </p>
-              
-              <div className="form-group" style={{ marginBottom: 16 }}>
-                <label className="form-label" style={{ fontWeight: 600, display: 'block', marginBottom: 6 }}>Final Evaluator Notes</label>
-                <textarea
-                  className="review-textarea"
-                  style={{ width: '100%', minHeight: '120px', padding: '10px' }}
-                  value={tempNotes.notes}
-                  onChange={(e) => setTempNotes({ ...tempNotes, notes: e.target.value })}
-                  placeholder="Enter final evaluator notes..."
-                />
-              </div>
-
-              <div className="form-group" style={{ marginBottom: 8 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={tempNotes.includeInCoachingSummary && !tempNotes.historyOnly}
-                    disabled={tempNotes.historyOnly}
-                    onChange={(e) => setTempNotes({ ...tempNotes, includeInCoachingSummary: e.target.checked })}
-                  />
-                  <span>Include in coaching summary</span>
-                </label>
-              </div>
-
-              {finalStatus !== 'Pass' && finalStatus !== 'RESUMED-PASS' && (
-                <div className="form-group" style={{ marginBottom: 8 }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={tempNotes.includeInFailSummary && !tempNotes.historyOnly}
-                      disabled={tempNotes.historyOnly}
-                      onChange={(e) => setTempNotes({ ...tempNotes, includeInFailSummary: e.target.checked })}
-                    />
-                    <span>Include in fail summary if this session fails</span>
-                  </label>
-                </div>
-              )}
-
-              <div className="form-group" style={{ marginBottom: 16 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={tempNotes.historyOnly}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setTempNotes({
-                        ...tempNotes,
-                        historyOnly: checked,
-                        includeInCoachingSummary: checked ? false : tempNotes.includeInCoachingSummary,
-                        includeInFailSummary: checked ? false : tempNotes.includeInFailSummary,
-                      });
-                    }}
-                  />
-                  <span style={{ fontWeight: tempNotes.historyOnly ? 600 : 'normal' }}>Save to history only</span>
-                </label>
-              </div>
-            </div>
-            <div className="modal-footer cmodal-btns" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-              <button className="btn btn-muted" onClick={handleBack}>Back</button>
-              <span style={{ flexGrow: 1 }} />
-              <button className="btn btn-muted" onClick={handleSkipFinalNotes}>Skip</button>
-              <button className="btn btn-primary" onClick={handleContinueFinalNotes}>Continue</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Regenerate Summary with Instructions Modal */}
       {showRegenInstructionsModal && (

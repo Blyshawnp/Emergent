@@ -1646,12 +1646,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .discord-row { display: flex; align-items: flex-start; gap: var(--space-md); padding: var(--space-md); border-bottom: 1px solid var(--border-subtle); }
 .discord-row:last-child { border-bottom: none; }
 .discord-row:hover { background: var(--bg-card-hover); }
-.discord-template-row { display: grid; grid-template-columns: minmax(96px, 128px) minmax(130px, 180px) minmax(0, 1fr) auto; align-items: start; column-gap: var(--space-md); row-gap: var(--space-xs); }
-.discord-category-cell,
+.discord-template-row { display: grid; grid-template-columns: minmax(130px, 180px) minmax(0, 1fr) auto; align-items: start; column-gap: var(--space-md); row-gap: var(--space-xs); }
+.discord-template-meta,
 .discord-template-title,
 .discord-msg { min-width: 0; }
+.discord-template-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .discord-title { min-width: 110px; font-weight: 700; font-size: var(--font-size-sm); color: var(--color-primary); padding-top: 2px; }
-.discord-template-title { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
+.discord-template-title { min-width: 0; max-width: 100%; overflow-wrap: anywhere; line-height: 1.35; }
 .discord-msg { flex: 1; font-size: var(--font-size-sm); color: var(--text-secondary); white-space: pre-wrap; line-height: 1.5; overflow-wrap: anywhere; }
 .discord-copy { flex-shrink: 0; min-height: 30px; padding: 5px 12px; background: var(--color-primary); color: white; border: none; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 700; cursor: pointer; font-family: var(--font-body); transition: background-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast), opacity var(--transition-fast); white-space: nowrap; }
 .discord-template-row .discord-copy { justify-self: end; align-self: start; }
@@ -1710,10 +1711,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .discord-category-filter select { width: auto; min-width: 180px; max-width: 260px; padding: 6px 28px 6px 10px; font-size: var(--font-size-xs); }
 @media (max-width: 760px) {
   .discord-template-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .discord-category-cell,
-  .discord-template-title { grid-column: 1 / 2; }
+  .discord-template-meta { grid-column: 1 / 2; }
   .discord-msg { grid-column: 1 / -1; }
-  .discord-template-row .discord-copy { grid-column: 2 / 3; grid-row: 1 / 3; }
+  .discord-template-row .discord-copy { grid-column: 2 / 3; grid-row: 1 / 2; }
 }
 
 /* Custom Modal */

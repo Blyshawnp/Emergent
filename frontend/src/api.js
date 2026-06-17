@@ -183,7 +183,7 @@ const api = {
   getApprovedHeadsets: () => request('GET', '/headsets', null, 5000),
   logHeadsetReview: (payload) => request('POST', '/headsets/review-log', payload, 10000),
   getHelpContent: () => request('GET', '/help/content', null, 8000),
-  generateSummaries: () => request('POST', '/gemini/summaries', {}, 90000),
+  generateSummaries: (session = null) => request('POST', '/gemini/summaries', session ? { session } : {}, 90000),
   regenerateSummary: (type, instructions = '', current_summary = '') => request('POST', '/gemini/regenerate', { type, instructions, current_summary }, 90000),
   testGeminiConnection: () => request('POST', '/test-gemini', {}, 15000),
   fillForm: (coaching, fail, session = null) => request('POST', '/form/fill', { coaching, fail_reason: fail, session }, 120000),

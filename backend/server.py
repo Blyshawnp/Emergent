@@ -3947,6 +3947,23 @@ def _append_readiness_override_note(text, session):
     return f"{base}\n\n{note}" if base else note
 
 
+def _readiness_context_text(session):
+    judgment = _readiness_judgment(session)
+    calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
+    final_result = compute_final_status(session)
+    reason = str(judgment.get("primaryReason") or "").strip()
+    explanation = str(judgment.get("explanation") or "").strip()
+    parts = [
+        f"Final Readiness Judgment: calculated result is {calculated or 'N/A'}; final result is {final_result or 'N/A'}.",
+        f"Override applied: {'Yes' if _readiness_override_applied(session) else 'No'}.",
+    ]
+    if reason:
+        parts.append(f"Override reason: {reason}.")
+    if explanation:
+        parts.append(f"Override explanation: {explanation}")
+    return " ".join(parts).strip()
+
+
 def _count_completed(session, prefix, total):
     return sum(1 for i in range(1, total + 1) if (session.get(f"{prefix}_{i}") or {}).get("result"))
 
@@ -6538,9 +6555,11 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
             **{**diagnostics, "gemini_error": message},
         }
 
+    readiness_context_text = _readiness_context_text(session)
+
     # Format evaluator notes for coaching summary
     notes = session.get("finalEvaluatorNotes") or {}
-    coaching_notes_text = ""
+    coaching_notes_text = readiness_context_text
     if notes.get("includeInCoachingSummary", True) and not notes.get("historyOnly", False):
         notes_parts = []
         if notes.get("notes"):
@@ -6552,10 +6571,10 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
         if notes.get("other"):
             notes_parts.append(notes.get("other").strip())
         if notes_parts:
-            coaching_notes_text = "Additional Notes: " + " ".join(notes_parts)
+            coaching_notes_text = "\n".join(part for part in [coaching_notes_text, "Additional Notes: " + " ".join(notes_parts)] if part)
 
     # Format evaluator notes for fail summary
-    fail_notes_text = ""
+    fail_notes_text = readiness_context_text
     is_fail = not _is_fail_na(session)
     if is_fail and notes.get("includeInFailSummary", True) and not notes.get("historyOnly", False):
         notes_parts = []
@@ -6568,7 +6587,7 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
         if notes.get("strengths"):
             notes_parts.append(notes.get("strengths").strip())
         if notes_parts:
-            fail_notes_text = "Additional Notes: " + " ".join(notes_parts)
+            fail_notes_text = "\n".join(part for part in [fail_notes_text, "Additional Notes: " + " ".join(notes_parts)] if part)
 
     res_coaching = None
     res_fail = None
@@ -6740,6 +6759,10 @@ def _completion_flags_for_form(session):
         mock_complete = "Yes"
         sup_complete = "Yes"
         all_complete = "Yes"
+    elif _readiness_override_applied(session) and final_status in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
+        mock_complete = "No"
+        sup_complete = "No"
+        all_complete = "No"
     elif final_status in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
         all_complete = "No"
 
@@ -9354,7 +9377,10 @@ async def log_headset_review(payload: dict):
 # ══════════════════════════════════════════════════════════════════
 @api_router.post("/gemini/summaries")
 async def gen_summaries(payload: dict):
-    doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
+    payload_session = payload.get("session") if isinstance(payload, dict) else None
+    doc = payload_session if isinstance(payload_session, dict) else None
+    if not doc:
+        doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {
             "coaching": "No active session.",

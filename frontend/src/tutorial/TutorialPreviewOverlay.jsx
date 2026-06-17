@@ -7,11 +7,11 @@ const SCROLL_SETTLE_MS = 180;
 
 export const TUTORIAL_COPY = {
   callsSetup: 'Calls is where you set up the scenario. Choose the call type, show, caller, and donation details, then use payment simulation. Saved payment options appear here and each new call starts on Default.',
-  callsScoring: 'Call scoring is grouped here. Mark each call Pass or Fail, record coaching checkboxes, select fail reasons, and add optional fail reason details when needed.',
+  callsScoring: 'Call scoring is grouped here. Mark each call Pass or Fail, record coaching checkboxes, read helper text when present, select fail reasons, and add optional fail reason details when needed.',
   supervisorTransfer: 'Supervisor Transfer covers the live transfer portion. Copy the Discord message, choose setup details, use payment dropdowns starting on Default, score the transfer, and use the Fail Reasons copy button when Transfer 1 fails.',
-  reviewFill: 'Review is the final checkpoint. Confirm Basics, results, coaching and fail summaries, set Final Readiness Judgment if evaluator override is needed, use Fill Form, then Save & Finish.',
-  settingsPage: 'Settings manages app behavior and integrations: tester identity, form links, welcome voice, sound volume, ticker speed, payment options, Gemini summaries, Discord posts and screenshots, updates, and theme.',
-  helpPage: 'Help is the reference center for workflow guidance, troubleshooting, setup notes, payment settings, Discord categories, update/about details, and replaying this tutorial later.',
+  reviewFill: 'Review is the final checkpoint. Confirm Basics, results, coaching and fail summaries, set Final Readiness Judgment if evaluator override is needed, use Fill Form, then Save & Finish. Readiness changes regenerate the summaries used for History and form fill.',
+  settingsPage: 'Settings manages app behavior and integrations: tester identity, form links, welcome voice, sound volume, ticker speed, payment options, Gemini summaries, Discord posts and screenshots, updates, and theme. Payment lists start with 3 Credit Card and 3 EFT defaults and can be edited.',
+  helpPage: 'Help is the reference center for workflow guidance, troubleshooting, setup notes, payment settings, Discord categories, update/about details, optional local tutorial video, and replaying this tutorial later.',
 };
 
 function isTargetVisible(selector) {
@@ -153,7 +153,7 @@ export default function TutorialPreviewOverlay({
       page: 'basics',
       target: '[data-testid="basics-brand"]',
       fallbackTarget: '[data-testid="basics-page"]',
-      content: 'Select the headset brand/model first. Approved headset selections automatically mark USB and Noise Cancelling as Yes, while unlisted models still need those answers checked manually.',
+      content: 'Select the headset brand/model first. Search by brand or model number, such as H390 or H650e. Approved headset selections automatically mark USB and Noise Cancelling as Yes, while unlisted models still need those answers checked manually.',
       placement: 'right',
     },
     {
