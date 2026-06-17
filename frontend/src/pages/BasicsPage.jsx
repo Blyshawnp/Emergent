@@ -5,7 +5,7 @@ import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
-const HEADSET_HELPER_TEXT = 'Start typing or click the dropdown arrow to view approved headsets.';
+const HEADSET_HELPER_TEXT = 'Search approved headsets by brand or model number, such as Logitech, H390, or H650e.';
 const HEADSET_DETAIL_BULLETS = [
   'If the brand/model is not listed, confirm it is USB and has a noise-cancelling microphone.',
   'Unsure? Post in Discord Tester Room.',
@@ -59,6 +59,45 @@ function normalizeLookupValue(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function normalizeHeadsetSearchValue(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function compactHeadsetSearchValue(value) {
+  return normalizeHeadsetSearchValue(value).replace(/\s+/g, '');
+}
+
+function headsetSearchTokens(value) {
+  return normalizeHeadsetSearchValue(value).split(' ').filter(Boolean);
+}
+
+function headsetOptionMatchesQuery(option, query) {
+  const normalizedOption = normalizeHeadsetSearchValue(option);
+  const normalizedQuery = normalizeHeadsetSearchValue(query);
+  if (!normalizedQuery) return true;
+  if (normalizedOption.includes(normalizedQuery)) return true;
+
+  const compactOption = compactHeadsetSearchValue(option);
+  const compactQuery = compactHeadsetSearchValue(query);
+  if (compactQuery && compactOption.includes(compactQuery)) return true;
+
+  const tokens = headsetSearchTokens(query);
+  return tokens.length > 0 && tokens.every((token) => normalizedOption.includes(token) || compactOption.includes(token));
+}
+
+function headsetModelTokenMatches(modelText, query) {
+  const normalizedQuery = normalizeHeadsetSearchValue(query);
+  if (!normalizedQuery) return false;
+  const compactQuery = compactHeadsetSearchValue(query);
+  return headsetSearchTokens(modelText)
+    .filter((token) => /\d/.test(token))
+    .some((token) => token === normalizedQuery || token === compactQuery);
+}
+
 function isMissingHeadsetValue(value) {
   const normalized = normalizeLookupValue(value);
   return !normalized || normalized === 'n/a' || normalized === 'na' || normalized === 'none' || normalized === 'unknown';
@@ -104,13 +143,18 @@ function findUsableBasicsRecord(records, candidateName, excludeSessionId = '') {
 }
 
 function headsetIsApproved(value, approvedHeadsets) {
-  const normalized = normalizeLookupValue(value);
+  const normalized = normalizeHeadsetSearchValue(value);
+  const compact = compactHeadsetSearchValue(value);
   if (!normalized) return true;
   return (approvedHeadsets || []).some((group) => {
     const brand = String(group?.brand || '').trim();
     return (group?.models || []).some((model) => {
       const modelText = String(model || '').trim();
-      return normalizeLookupValue(`${brand} ${modelText}`) === normalized || normalizeLookupValue(modelText) === normalized;
+      return normalizeHeadsetSearchValue(`${brand} ${modelText}`) === normalized
+        || normalizeHeadsetSearchValue(modelText) === normalized
+        || compactHeadsetSearchValue(`${brand} ${modelText}`) === compact
+        || compactHeadsetSearchValue(modelText) === compact
+        || headsetModelTokenMatches(modelText, value);
     });
   });
 }
@@ -301,13 +345,11 @@ export default function BasicsPage({ onNavigate }) {
   }, [approvedHeadsets]);
 
   const filteredDropdownOptions = useMemo(() => {
-    const typed = String(form.headset_brand || '').trim().toLowerCase();
+    const typed = String(form.headset_brand || '').trim();
     if (!typed) {
       return allApprovedHeadsetOptions;
     }
-    return allApprovedHeadsetOptions.filter(option =>
-      option.toLowerCase().includes(typed)
-    );
+    return allApprovedHeadsetOptions.filter(option => headsetOptionMatchesQuery(option, typed));
   }, [allApprovedHeadsetOptions, form.headset_brand]);
 
   // Reset highlighted item when filtered options change
