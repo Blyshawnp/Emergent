@@ -29,6 +29,28 @@ const DEFAULT_SUP_REASONS = [
   'Damaged Gift', "Didn't Receive Gift", 'Cancel Sustaining', 'Use Own/Other',
 ];
 
+function getSupCoachingForDisplay(items = []) {
+  const source = Array.isArray(items) && items.length ? items : DEFAULT_SUP_COACHING;
+  const ordered = [];
+  const otherItems = [];
+  const seen = new Set();
+
+  source.forEach((item) => {
+    if (!item || !item.label) return;
+    const key = String(item.label || '').trim().toLowerCase();
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    const normalized = { ...item };
+    if (key === 'other') {
+      otherItems.push(normalized);
+    } else {
+      ordered.push(normalized);
+    }
+  });
+
+  return [...ordered, ...otherItems];
+}
+
 function cleanScenarioSentence(value) {
   return String(value || '')
     .replace(/\s+/g, ' ')
@@ -180,7 +202,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   }, [transferNum]);
 
   const shows = useMemo(() => settings.shows || defaults.shows || [], [settings.shows, defaults.shows]);
-  const supCoaching = settings.sup_coaching || defaults.sup_coaching || DEFAULT_SUP_COACHING;
+  const supCoaching = getSupCoachingForDisplay(settings.sup_coaching || defaults.sup_coaching || DEFAULT_SUP_COACHING);
   const supCoachingSplit = Math.ceil(supCoaching.length / 2);
   const supFails = settings.sup_fails || defaults.sup_fails || DEFAULT_SUP_FAILS;
   const supReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;

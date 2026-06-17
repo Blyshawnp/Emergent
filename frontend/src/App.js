@@ -1557,10 +1557,10 @@ function DiscordRow({ category, title, message }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="discord-row discord-template-row">
-      <div className="discord-category-cell">
+      <div className="discord-template-meta">
         {category && <span className="discord-category-badge">{category}</span>}
+        <div className="discord-title discord-template-title">{title}</div>
       </div>
-      <div className="discord-title discord-template-title">{title}</div>
       <div className="discord-msg">{message}</div>
       <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={() => {
         navigator.clipboard.writeText(message);

@@ -43,6 +43,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  global.fetch = jest.fn().mockResolvedValue({ ok: false });
 });
 
 afterEach(() => {
@@ -123,11 +124,36 @@ test('help page renders current help topics and configured faq entries', async (
   expect(view.container.textContent).toContain('Ticker and Notifications');
   expect(view.container.textContent).toContain('Setup Wizard includes ticker speed');
   expect(view.container.textContent).toContain('Payment Settings starts with 3 Credit Card defaults and 3 EFT defaults');
+  expect(view.container.textContent).toContain('H390 or H650e');
+  expect(view.container.textContent).toContain('Sound Volume supports Off, Low, Medium, and High');
+  expect(view.container.textContent).toContain('Template rows show the category above the blue post title');
   expect(view.container.textContent).toContain('Final Readiness Judgment lets the evaluator keep the calculated result');
+  expect(view.container.textContent).toContain('Optional tutorial videos are local files only');
   expect(view.container.textContent).toContain('Use Category to filter grouped templates or screenshots');
   expect(view.container.textContent).toContain('Where is my data stored?');
   expect(view.container.textContent).toContain('In the local app database.');
   expect(view.container.textContent).toContain('support@example.com');
+
+  await view.unmount();
+});
+
+test('help page shows tutorial video action only when a local video exists', async () => {
+  global.fetch = jest.fn()
+    .mockResolvedValueOnce({ ok: false })
+    .mockResolvedValueOnce({ ok: true });
+  api.getHelpContent.mockResolvedValue({ help_markdown: '# Help\n', faq_markdown: '', support: {} });
+
+  const view = await renderComponent(
+    <HelpPage
+      appVersion="1.0.1"
+      settings={{ enable_gemini: false, gemini_api_key: '' }}
+      onNavigate={jest.fn()}
+      onReplayTutorial={jest.fn()}
+    />
+  );
+
+  expect(view.container.querySelector('[data-testid="help-tutorial-video"]')?.getAttribute('href')).toBe('/assets/tutorial/mts-tutorial.mp4');
+  expect(view.container.textContent).toContain('Watch Tutorial Video');
 
   await view.unmount();
 });

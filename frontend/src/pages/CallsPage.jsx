@@ -23,6 +23,28 @@ const DEFAULT_CALL_COACHING = [
 ];
 
 const PHONETICS_LABEL_RE = /phonetics/i;
+const OTHER_COACHING_RE = /^other$/i;
+
+function moveOtherCoachingLast(items = []) {
+  const ordered = [];
+  const otherItems = [];
+  const seen = new Set();
+
+  items.forEach((item) => {
+    if (!item || !item.label) return;
+    const key = String(item.id || item.label || '').trim().toLowerCase();
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    const normalized = { ...item };
+    if (OTHER_COACHING_RE.test(String(normalized.label || '').trim())) {
+      otherItems.push(normalized);
+    } else {
+      ordered.push(normalized);
+    }
+  });
+
+  return [...ordered, ...otherItems];
+}
 
 function getCallCoachingForDisplay(items = []) {
   const source = Array.isArray(items) && items.length ? items : DEFAULT_CALL_COACHING;
@@ -43,9 +65,9 @@ function getCallCoachingForDisplay(items = []) {
   const verifyIndex = normalized.findIndex(item => /verification/i.test(String(item.label || '')));
   if (verifyIndex >= 0) {
     normalized.splice(verifyIndex + 1, 0, topLevelPhonetics);
-    return normalized;
+    return moveOtherCoachingLast(normalized);
   }
-  return [topLevelPhonetics, ...normalized];
+  return moveOtherCoachingLast([topLevelPhonetics, ...normalized]);
 }
 
 const DEFAULT_CALL_FAILS = [

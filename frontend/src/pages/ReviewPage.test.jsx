@@ -47,6 +47,11 @@ function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function setNativeValue(element, value) {
+  const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, 'value');
+  descriptor.set.call(element, value);
+}
+
 const passingSession = {
   candidate_name: 'Taylor Example',
   tester_name: 'Tester One',
@@ -66,7 +71,7 @@ const passingSession = {
   fail_summary: 'N/A',
 };
 
-async function renderReview(session = passingSession) {
+async function renderReview(session = passingSession, navigationState = null) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -75,13 +80,20 @@ async function renderReview(session = passingSession) {
   api.getCurrentSession.mockResolvedValue({ session });
   api.getSettings.mockResolvedValue({});
   api.updateSession.mockResolvedValue({ ok: true, session });
+  api.generateSummaries.mockResolvedValue({
+    coaching: 'Regenerated coaching summary.',
+    fail: 'Regenerated fail summary.',
+    used_gemini: false,
+    used_fallback: true,
+    gemini_error: '',
+  });
   api.fillForm.mockResolvedValue({ ok: true, message: 'Filled' });
   api.finishSession.mockResolvedValue({ ok: true, message: 'Saved' });
   mockModal.alert.mockResolvedValue(true);
   mockModal.showModal.mockResolvedValue(true);
 
   await act(async () => {
-    root.render(<ReviewPage onNavigate={onNavigate} />);
+    root.render(<ReviewPage onNavigate={onNavigate} navigationState={navigationState} />);
     await flushPromises();
   });
 
@@ -137,6 +149,13 @@ test('override to fail updates final result and fill form payload', async () => 
     await flushPromises();
   });
   await act(async () => {
+    const explanation = view.container.querySelector('[data-testid="readiness-explanation"]');
+    setNativeValue(explanation, 'Evaluator observed repeated detail issues.');
+    explanation.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushPromises();
+    await flushPromises();
+  });
+  await act(async () => {
     view.container.querySelector('[data-testid="review-fill-form"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
@@ -145,8 +164,52 @@ test('override to fail updates final result and fill form payload', async () => 
   expect(api.fillForm).toHaveBeenCalledWith(
     expect.stringContaining('Evaluator Override Applied'),
     expect.stringContaining('Evaluator Override Applied'),
-    null
+    expect.objectContaining({
+      final_status: 'Fail',
+      finalReadinessJudgment: expect.objectContaining({
+        overrideApplied: true,
+        overrideResult: 'Fail',
+        primaryReason: 'Accuracy/detail concerns',
+        explanation: 'Evaluator observed repeated detail issues.',
+      }),
+    })
   );
+  expect(api.generateSummaries).toHaveBeenCalledWith(expect.objectContaining({
+    final_status: 'Fail',
+    finalReadinessJudgment: expect.objectContaining({
+      overrideResult: 'Fail',
+      primaryReason: 'Accuracy/detail concerns',
+      explanation: 'Evaluator observed repeated detail issues.',
+    }),
+  }));
+
+  await view.unmount();
+});
+
+test('final evaluator notes modal no longer appears before review', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    finalEvaluatorNotes: undefined,
+  });
+
+  expect(view.container.querySelector('.modal-overlay.open')).toBeNull();
+  expect(view.container.textContent).toContain('Final Readiness Judgment');
+
+  await view.unmount();
+});
+
+test('history session with legacy final notes still loads read-only review', async () => {
+  const historyRecord = {
+    ...passingSession,
+    finalEvaluatorNotes: {
+      notes: 'Legacy note saved before modal removal.',
+      completed: true,
+    },
+  };
+  const view = await renderReview(passingSession, { historyRecord });
+
+  expect(view.container.textContent).toContain('Final Readiness Judgment');
+  expect(view.container.textContent).toContain('Legacy note saved before modal removal.');
 
   await view.unmount();
 });
