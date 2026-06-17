@@ -813,6 +813,17 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
             <div className="help-card-eyebrow">Need Help Fast?</div>
             <h2>Quick Actions</h2>
           </div>
+          <label className="help-hero-search" htmlFor="help-hero-search">
+            <span>Search Help</span>
+            <input
+              id="help-hero-search"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search Basics, Discord, Review..."
+              data-testid="help-hero-search"
+            />
+          </label>
           <div className="help-hero-action-list">
             <button className="btn btn-primary" onClick={() => onReplayTutorial?.()} data-testid="help-quick-replay">
               Replay Tutorial

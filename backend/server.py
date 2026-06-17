@@ -4174,6 +4174,71 @@ def _candidate_row_active(row):
     return True
 
 
+def _parse_shared_candidate_datetime(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    candidates = [raw]
+    if raw.endswith("Z"):
+        candidates.append(f"{raw[:-1]}+00:00")
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            continue
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+    return None
+
+
+def _candidate_auto_archive_eligible(row, now=None, days=60):
+    if not row or _shared_truthy(row.get("archived")):
+        return False
+    status = str(row.get("status") or row.get("latest_status") or "").strip().upper()
+    if status not in {"PASS", "RESUMED-PASS", "WITHDREW FROM CERTIFICATION", "FAIL-FINAL ATTEMPT"}:
+        return False
+    closed_at = _parse_shared_candidate_datetime(
+        row.get("withdrawn_at") if status == "WITHDREW FROM CERTIFICATION" else None
+    ) or _parse_shared_candidate_datetime(row.get("completed_at")) or _parse_shared_candidate_datetime(row.get("last_session_date"))
+    if not closed_at:
+        return False
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return closed_at <= reference.astimezone(timezone.utc) - timedelta(days=days)
+
+
+def _auto_archive_candidate_rows(sheets_api, sheet_id, candidate_rows, now=None):
+    updated = 0
+    for row in candidate_rows:
+        if not _candidate_auto_archive_eligible(row, now=now):
+            continue
+        row["archived"] = "TRUE"
+        row["review_notes"] = "\n\n".join(part for part in [
+            row.get("review_notes") or "",
+            f"Auto-archived by SAM after 60 days closed at {datetime.now(timezone.utc).isoformat()}.",
+        ] if str(part or "").strip())
+        try:
+            _shared_update_existing_row(
+                sheets_api,
+                sheet_id,
+                SHARED_CANDIDATE_SESSIONS_TAB,
+                SHARED_CANDIDATE_SESSION_HEADERS,
+                row["_row_number"],
+                _shared_row_values(row, SHARED_CANDIDATE_SESSION_HEADERS),
+            )
+            updated += 1
+        except Exception as exc:
+            logger.warning("[SHARED] Auto-archive skipped for candidate row %s: %s", row.get("_row_number") or "unknown", exc)
+    return updated
+
+
 def _candidate_row_withdrawn(row):
     return _shared_truthy((row or {}).get("withdrawn")) or str((row or {}).get("status") or (row or {}).get("latest_status") or "").upper() == "WITHDREW FROM CERTIFICATION"
 
@@ -4238,6 +4303,7 @@ def _shared_admin_candidate_snapshot():
                 SHARED_PENDING_SUP_TRANSFER_HEADERS,
             )
         ]
+        auto_archived_count = _auto_archive_candidate_rows(sheets_api, sheet_id, candidate_rows)
     except Exception as exc:
         logger.exception("[SHARED] Failed to read admin candidate tracking rows: %s", exc)
         return {"ok": False, "error": f"Unable to read shared candidate tracking: {exc}", "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
@@ -4298,6 +4364,7 @@ def _shared_admin_candidate_snapshot():
     return {
         "ok": True,
         "setup": _shared_tracking_required_setup(),
+        "autoArchivedCount": auto_archived_count,
         "candidates": candidate_summaries + archived_summaries,
         "pending": pending_active,
         "views": {
@@ -4328,6 +4395,7 @@ def _shared_admin_candidate_action(payload):
         "grant_extra_attempt",
         "cancel_pending",
         "delete_candidate_history",
+        "archive_candidate",
         "mark_passed",
         "mark_failed",
         "mark_incomplete",
@@ -4528,6 +4596,12 @@ def _shared_admin_candidate_action(payload):
                 if str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION":
                     row["status"] = "INCOMPLETE"
                 row["review_notes"] = "\n\n".join(part for part in [row.get("review_notes") or "", f"Extra attempt granted. {reason}".strip()] if part)
+            elif action == "archive_candidate":
+                row["archived"] = "TRUE"
+                row["review_notes"] = append_note(
+                    row.get("review_notes"),
+                    f"Archived manually in SAM by {actor} at {now_iso}.{f' Reason: {reason}' if reason else ''}",
+                )
             elif action in {"mark_passed", "mark_failed", "mark_incomplete", "move_pending_sup_transfer", "remove_pending_sup_transfer"}:
                 previous_status = row.get("status") or ""
                 if action == "mark_passed":
@@ -4588,6 +4662,13 @@ def _shared_admin_candidate_action(payload):
                 row["completed_at"] = now_iso
                 row["completed_status"] = "cancelled"
                 row["notes"] = "\n\n".join(part for part in [row.get("notes") or "", "Admin cancelled pending supervisor transfer."] if part)
+            elif action == "archive_candidate":
+                previous_status = row.get("status") or ""
+                row["status"] = "archived"
+                row["completed_by"] = actor
+                row["completed_at"] = row.get("completed_at") or now_iso
+                row["completed_status"] = row.get("completed_status") or "archived"
+                row["notes"] = append_note(row.get("notes"), manual_note(previous_status, "archived", reason))
             elif action == "mark_passed":
                 previous_status = row.get("status") or ""
                 row["status"] = "completed"

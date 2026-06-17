@@ -130,6 +130,7 @@ test('help page renders current help topics and configured faq entries', async (
   expect(view.container.textContent).toContain('Final Readiness Judgment lets the evaluator keep the calculated result');
   expect(view.container.textContent).toContain('Optional tutorial videos are local files only');
   expect(view.container.textContent).toContain('Use Category to filter grouped templates or screenshots');
+  expect(view.container.querySelector('[data-testid="help-hero-search"]')).toBeTruthy();
   expect(view.container.textContent).toContain('Where is my data stored?');
   expect(view.container.textContent).toContain('In the local app database.');
   expect(view.container.textContent).toContain('support@example.com');
