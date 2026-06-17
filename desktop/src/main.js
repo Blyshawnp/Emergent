@@ -53,6 +53,24 @@ const store = new Store({
   name: isNotificationManagerMode ? 'sam-config' : 'mock-testing-suite-config',
 });
 
+const SINGLE_INSTANCE_MESSAGE = isNotificationManagerMode
+  ? 'Smart Alert Manager is already open.'
+  : 'Mock Testing Suite is already open.';
+const hasSingleInstanceLock = app.requestSingleInstanceLock({
+  appMode: isNotificationManagerMode ? 'notification-manager' : 'main',
+  appRuntimeId: APP_RUNTIME_ID,
+});
+
+if (!hasSingleInstanceLock) {
+  console.log(`[APP] ${SINGLE_INSTANCE_MESSAGE}`);
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    console.log(`[APP] ${SINGLE_INSTANCE_MESSAGE}`);
+    focusExistingWindow();
+  });
+}
+
 let mainWindow = null;
 let tray = null;
 let backendProcess = null;
@@ -935,6 +953,17 @@ function ensureBackendAvailable() {
 // ═══════════════════════════════════════════════════════════════
 // WINDOW
 // ═══════════════════════════════════════════════════════════════
+function focusExistingWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+  mainWindow.focus();
+}
+
 function createMainWindow() {
   const iconPath = getAppIconPath();
   const appIcon = nativeImage.createFromPath(iconPath);
@@ -2159,6 +2188,7 @@ process.on('unhandledRejection', (reason) => {
   console.error('[APP] Unhandled rejection:', reason);
 });
 
+if (hasSingleInstanceLock) {
 app.whenReady().then(async () => {
   console.log(`[APP] ${APP_DISPLAY_NAME} v${APP_VERSION} starting...`);
   if (process.platform === 'win32') {
@@ -2191,6 +2221,7 @@ app.whenReady().then(async () => {
     checkForUpdates({ promptUser: true });
   }, 5000);
 });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

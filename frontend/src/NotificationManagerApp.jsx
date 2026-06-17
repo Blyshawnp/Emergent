@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import './notification-manager.css';
 import api from './api';
-import { playSound } from './utils/sound';
+import { playSound, setSoundSettings } from './utils/sound';
 import {
   NOTIFICATION_CSV_COLUMNS,
   NOTIFICATION_MANAGER_STORAGE_KEY,
@@ -31,9 +31,74 @@ const BACKEND_READY_TIMEOUT_MS = 45000;
 const SAM_TUTORIAL_SEEN_KEY = 'sam:tutorial-seen';
 const SAM_HELP_DISMISSED_KEY = 'sam:help-dismissed';
 const SAM_ONBOARDING_STATE_KEY = 'sam:onboarding-state';
+const SAM_SETTINGS_KEY = 'sam:settings';
 const SAM_BACKEND_RETRY_LIMIT = 6;
 const SAM_BACKEND_RETRY_BASE_DELAY_MS = 2000;
 const SAM_BACKEND_RETRY_MAX_DELAY_MS = 12000;
+const DEFAULT_SAM_SETTINGS = {
+  soundVolume: 'medium',
+  statusBannerDurationSeconds: 60,
+  defaultCandidateView: 'pending',
+  includeArchivedInSearchDefault: false,
+};
+const SAM_SOUND_VOLUME_OPTIONS = [
+  { value: 'off', label: 'Off' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+const SAM_BANNER_DURATION_OPTIONS = [
+  { value: 30, label: '30 seconds' },
+  { value: 60, label: '60 seconds' },
+  { value: 120, label: '120 seconds' },
+];
+const SAM_HELP_SECTIONS = [
+  {
+    id: 'notifications',
+    title: 'Notifications',
+    body: 'Create, edit, enable, disable, import, export, and refresh alert rows from sam-notifications. Success and error feedback appears in the status banner and can play sounds when enabled.',
+  },
+  {
+    id: 'live-preview',
+    title: 'Live Preview',
+    body: 'Preview ticker, banner, and popup output for the selected notification before saving it to the sheet.',
+  },
+  {
+    id: 'candidate-tracking',
+    title: 'Candidate Tracking',
+    body: 'Review pending transfers, incomplete candidates, failed attempts, withdrawn candidates, passed certifications, archived candidates, and all active candidates. Use Archive for history cleanup and Delete only when a shared row must be removed.',
+  },
+  {
+    id: 'pending-sup-transfers',
+    title: 'Pending Sup Transfers',
+    body: 'Pending transfer rows show candidates whose mock calls were saved but whose supervisor transfer still needs completion or correction.',
+  },
+  {
+    id: 'import-export-csv',
+    title: 'Import/Export CSV',
+    body: 'Export a backup CSV before bulk edits. Import replaces the local draft list so it can be reviewed before rows are submitted.',
+  },
+  {
+    id: 'refresh-from-sheet',
+    title: 'Refresh from Sheet',
+    body: 'Refresh reloads the master sheet rows and candidate tracking state without restarting SAM.',
+  },
+  {
+    id: 'check-for-updates',
+    title: 'Check for Updates',
+    body: 'Check for Updates reads the SAM release metadata. Required updates must be installed before normal use continues.',
+  },
+  {
+    id: 'archiving-candidates',
+    title: 'Archiving Candidates',
+    body: 'Archived candidates move to Archived Candidates and stay out of active views. SAM auto-archives clearly closed Pass, Withdrawn, and Fail-Final Attempt records after 60 days when the closed date is clear.',
+  },
+  {
+    id: 'sounds-status-banners',
+    title: 'Sounds/status banners',
+    body: 'Success banners auto-dismiss based on the setting below. Errors stay visible longer, remain dismissible, and can play the SAM error sound.',
+  },
+];
 const SAM_TUTORIAL_STEPS = [
   {
     target: 'notification-list',
@@ -82,10 +147,41 @@ function getErrorMessage(error, fallback) {
   return error.message || fallback;
 }
 
+function normalizeSamSettings(settings = {}) {
+  const soundVolume = SAM_SOUND_VOLUME_OPTIONS.some((item) => item.value === settings.soundVolume)
+    ? settings.soundVolume
+    : DEFAULT_SAM_SETTINGS.soundVolume;
+  const statusBannerDurationSeconds = SAM_BANNER_DURATION_OPTIONS.some((item) => item.value === Number(settings.statusBannerDurationSeconds))
+    ? Number(settings.statusBannerDurationSeconds)
+    : DEFAULT_SAM_SETTINGS.statusBannerDurationSeconds;
+  const defaultCandidateView = Object.prototype.hasOwnProperty.call(CANDIDATE_VIEW_LABELS, settings.defaultCandidateView)
+    ? settings.defaultCandidateView
+    : DEFAULT_SAM_SETTINGS.defaultCandidateView;
+  return {
+    ...DEFAULT_SAM_SETTINGS,
+    soundVolume,
+    statusBannerDurationSeconds,
+    defaultCandidateView,
+    includeArchivedInSearchDefault: Boolean(settings.includeArchivedInSearchDefault),
+  };
+}
+
+function loadSamSettings() {
+  try {
+    return normalizeSamSettings(JSON.parse(localStorage.getItem(SAM_SETTINGS_KEY) || '{}'));
+  } catch (_error) {
+    return { ...DEFAULT_SAM_SETTINGS };
+  }
+}
+
 function sheetTruthy(value) {
   if (typeof value === 'boolean') return value;
   if (value === null || value === undefined) return false;
   return ['true', '1', 'yes', 'y', 'on', 'checked'].includes(String(value).trim().toLowerCase());
+}
+
+function isCandidateArchived(row) {
+  return sheetTruthy(row?.archived);
 }
 
 function PreviewBanner({ item }) {
@@ -152,7 +248,15 @@ function getAppVersion() {
   }
 }
 
-function HelpModal({ version, onClose, onReplayTutorial }) {
+function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutorial, onCheckForUpdates }) {
+  const sectionRefs = useRef({});
+  const updateSetting = (patch) => {
+    onSettingsChange?.(normalizeSamSettings({ ...settings, ...patch }));
+  };
+  const jumpToSection = (id) => {
+    sectionRefs.current[id]?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+  };
+
   return (
     <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="nm-help-modal" role="dialog" aria-modal="true" aria-labelledby="sam-help-title">
@@ -160,105 +264,67 @@ function HelpModal({ version, onClose, onReplayTutorial }) {
           <div>
             <div className="nm-overline">HELP / ABOUT</div>
             <h2 id="sam-help-title">{SAM_TITLE}</h2>
-            <p>Smart Alert Manager keeps live alert messages organized for Mock Testing Suite operators.</p>
+            <p>Smart Alert Manager keeps live alert messages and candidate administration organized for Mock Testing Suite operators.</p>
           </div>
           <button type="button" className="nm-modal-close" onClick={onClose} aria-label="Close help">×</button>
         </div>
+
+        <div className="nm-help-settings" id="sam-help-settings">
+          <div className="nm-help-settings-copy">
+            <div className="nm-overline">SAM SETTINGS</div>
+            <h3>Local preferences</h3>
+            <p>These settings apply on this device and take effect immediately.</p>
+            <p className="nm-meta">Version {version} - Powered by MTS</p>
+          </div>
+          <label className="nm-field">
+            <span>SAM sounds</span>
+            <select value={settings.soundVolume} onChange={(event) => updateSetting({ soundVolume: event.target.value })}>
+              {SAM_SOUND_VOLUME_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="nm-field">
+            <span>Success banner duration</span>
+            <select value={settings.statusBannerDurationSeconds} onChange={(event) => updateSetting({ statusBannerDurationSeconds: Number(event.target.value) })}>
+              {SAM_BANNER_DURATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="nm-field">
+            <span>Default candidate filter</span>
+            <select value={settings.defaultCandidateView} onChange={(event) => updateSetting({ defaultCandidateView: event.target.value })}>
+              {Object.entries(CANDIDATE_VIEW_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </select>
+          </label>
+          <label className="nm-checkbox nm-help-toggle">
+            <input
+              type="checkbox"
+              checked={settings.includeArchivedInSearchDefault}
+              onChange={(event) => updateSetting({ includeArchivedInSearchDefault: event.target.checked })}
+            />
+            Include archived candidates in search by default
+          </label>
+          <button type="button" className="nm-btn nm-btn-secondary" onClick={() => onCheckForUpdates?.()}>Check for Updates</button>
+        </div>
+
+        <div className="nm-help-toc" aria-label="SAM help sections">
+          {SAM_HELP_SECTIONS.map((section) => (
+            <button key={section.id} type="button" className="nm-help-toc-button" onClick={() => jumpToSection(section.id)}>
+              {section.title}
+            </button>
+          ))}
+        </div>
+
         <div className="nm-help-grid">
-          <div className="nm-help-card">
-            <h3>What SAM Is</h3>
-            <p><strong>SAM</strong> = Smart Alert Manager. It manages real-time alerts and candidate availability actions for the main testing workflow.</p>
-            <p>Powered by Mock Testing Suite.</p>
-            <p>Version {version}</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>First-Run Setup</h3>
-            <p>SAM requires an assigned name and PIN from the master Google Sheet before the dashboard opens. The setup checks the sam-authorized-users tab. Disabled users cannot complete setup, and PINs should not be shared.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Access Management</h3>
-            <p>Admins manage access in the master sheet sam-authorized-users tab. Add users, disable users, change PINs, and revoke access directly in that tab.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Central Sheet</h3>
-            <p>The master Google Sheet stores sam-notifications, Candidate Sessions, Pending Sup Transfers, sam-authorized-users, update-MTS, and update-SAM. Do not casually rename tabs or headers.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Notification Types</h3>
-            <p>Info, warning, and urgent levels control visual priority. Ticker, popup, banner, and persistent delivery options decide where the alert appears.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Ticker Alerts</h3>
-            <p>Ticker messages scroll in the main app. Warning and urgent ticker rows are automatically prefixed so operators can scan them quickly.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Popup Alerts</h3>
-            <p>Popup rows show as modal-style notifications. Optional action text and URLs create a clear follow-up action for the operator.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Scheduling</h3>
-            <p>Start and expiration times are interpreted in Eastern Time. AM/PM is respected, including midnight as AM. Empty expiration fields keep a notification live until it is disabled or removed.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Views</h3>
-            <p>The top section buttons are Notifications, Live Preview, Candidate Tracking, Pending Sup Transfers, and Settings/Help. Candidate categories such as Failed Final Attempts, Withdrawn, Extra Attempt Granted, Passed Certifications, and Archived Candidates are filters inside Candidate Tracking.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Create</h3>
-            <p>Use Add Notification to open the editor. New rows default to Ticker checked and Popup, Banner, and Persistent unchecked. Scroll inside the editor for delivery, schedule, and action options, then submit to the sheet.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Edit</h3>
-            <p>Select or edit a row from the table. The editor opens in a modal and updates the same Google Sheet columns as before.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Disable</h3>
-            <p>Disable makes a row inactive without deleting it. Disable, Enable, and Delete require confirmation and show a success status after the sheet updates.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Google Sheets Sync</h3>
-            <p>Refresh reads the master sam-notifications tab. Submit writes the selected notification back to that tab using the working schema and Google Sheets checkbox-compatible boolean fields. After success, the modal closes and MTS should update within about a minute.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Candidate Tracking</h3>
-            <p>SAM can be used by admins to review candidate availability signals from shared tracking. Filters include Pending Sup Transfers, Incomplete, Failed Not Final, Failed Final Attempts, Withdrawn, Extra Attempt Granted, Passed Certifications, Archived Candidates, and All Active Candidates. Use candidate-name search to narrow long lists.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Details</h3>
-            <p>Candidate rows stay compact by default. Notes show a preview. Use View Details to expand full notes, coaching, fail summary, Basics, call results, supervisor-transfer results, and attempt history. Admin candidate history remains searchable indefinitely, including records moved to the archive after 90 days.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Candidate Deletion</h3>
-            <p>Tester local History can be cleared in MTS without deleting SAM admin records. Shared candidate history can only be deleted from SAM by an admin after a confirmation. Delete one candidate row or select multiple rows and use Delete Selected. Rows manually deleted from the Google Sheet no longer appear in SAM or MTS lookup/autocomplete.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Pending Sup Transfers</h3>
-            <p>Pending supervisor-transfer rows represent candidates whose mock calls were saved but still need transfer completion. Completing or cancelling the pending work changes whether that candidate appears in the shared queue.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Attempts and Withdrawal</h3>
-            <p>Failed final attempts have their own filter and can receive an Extra Attempt after confirmation. Withdrawn candidates stay blocked in MTS until an admin restores the withdrawal or grants an extra attempt.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Admin Actions</h3>
-            <p>Withdraw, Restore/Revert Withdrawal, Extra Attempt, Pending Sup Transfer cancellation, and candidate-history deletion all require confirmation and refresh the shared candidate list after the Google Sheet update. Extra attempts and restored withdrawals can make a candidate eligible again in MTS.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Updates</h3>
-            <p>SAM checks the master Google Sheet update-SAM tab for update version, required version, installer URL, release date, title, and multiline release notes. Required updates must be installed before normal use continues.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Manual Update Check</h3>
-            <p>Use Check for Updates from SAM actions or Help to read the current update-SAM sheet row. Optional updates can be deferred; required updates only allow Update Now.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Local Fallback</h3>
-            <p>If the master sheet cannot be reached, SAM shows a non-blocking warning. If notifications do not save or candidate records do not update, check service account access, tab names, headers, and sheet sharing first.</p>
-          </div>
-          <div className="nm-help-card">
-            <h3>Attribution</h3>
-            <p>Developer/team: MTS Admin Team</p>
-          </div>
+          {SAM_HELP_SECTIONS.map((section) => (
+            <article
+              key={section.id}
+              id={`sam-help-${section.id}`}
+              className="nm-help-card"
+              ref={(node) => { sectionRefs.current[section.id] = node; }}
+            >
+              <h3>{section.title}</h3>
+              <p>{section.body}</p>
+            </article>
+          ))}
         </div>
         <div className="nm-help-actions">
           <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayTutorial}>Replay Tutorial</button>
@@ -597,12 +663,15 @@ const SECTION_NAV_ITEMS = [
   { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
 ];
 
-function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor }) {
+function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault }) {
   const [expanded, setExpanded] = useState({});
   const [selectedTargets, setSelectedTargets] = useState({});
+  const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
   const rows = data?.views?.[view] || [];
   const searchText = search.trim().toLowerCase();
-  const searchPool = searchText ? (data?.candidates || rows) : rows;
+  const searchPool = searchText
+    ? (data?.candidates || rows).filter((row) => view === 'archived' || includeArchivedSearch || !isCandidateArchived(row))
+    : rows;
   const visibleRows = searchText
     ? searchPool.filter((row) => String(row.candidate_name || '').toLowerCase().includes(searchText))
     : rows;
@@ -630,6 +699,10 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     .map(([tab, headers]) => `${tab}: ${Array.isArray(headers) ? headers.join(', ') : String(headers || '')}`)
     .join('\n');
 
+  useEffect(() => {
+    setIncludeArchivedSearch(Boolean(includeArchivedDefault));
+  }, [includeArchivedDefault]);
+
   const handleWithdraw = async (row) => {
     const confirmed = await onConfirm(`Mark ${row.candidate_name || 'this candidate'} as withdrew from certification?`, { kind: 'danger', confirmLabel: 'Withdraw' });
     if (!confirmed) return;
@@ -647,6 +720,29 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     if (!confirmed) return;
     const reason = '';
     await onAction({ action: 'grant_extra_attempt', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id, reason });
+  };
+
+  const handleArchive = async (row) => {
+    const confirmed = await onConfirm(
+      `Archive ${row.candidate_name || 'this candidate'}? This keeps the shared history but removes the candidate from active SAM views.`,
+      {
+        confirmLabel: 'Archive',
+        kind: 'warning',
+        collectNote: true,
+        noteLabel: 'Optional archive note',
+        notePlaceholder: 'Example: closed record older than retention window.',
+      },
+    );
+    if (!confirmed) return;
+    const reason = typeof confirmed === 'object' ? confirmed.note || '' : '';
+    await onAction({
+      action: 'archive_candidate',
+      candidate_name: row.candidate_name,
+      session_id: row.session_id || row.latest_session_id || row.original_session_id,
+      pending_id: row.pending_id,
+      reason,
+      actor,
+    });
   };
 
   const handleCancel = async (row) => {
@@ -767,6 +863,14 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Type a candidate name..."
         />
+        <label className="nm-checkbox nm-search-toggle">
+          <input
+            type="checkbox"
+            checked={includeArchivedSearch}
+            onChange={(event) => setIncludeArchivedSearch(event.target.checked)}
+          />
+          Include archived candidates
+        </label>
       </div>
       <div className="nm-table-wrap">
         <table className="nm-table nm-candidate-table">
@@ -804,6 +908,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
               const isPendingTransfer = view === 'pending' || Boolean(row.pending_id);
               const isIncomplete = view === 'incomplete' || statusUpper === 'INCOMPLETE';
               const isWithdrawn = sheetTruthy(row.withdrawn) || statusUpper === 'WITHDREW FROM CERTIFICATION';
+              const isArchived = isCandidateArchived(row);
               return (
                 <React.Fragment key={rowKey}>
                   <tr>
@@ -817,7 +922,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                     </td>
                     <td>
                       <div className="nm-row-title">{row.candidate_name || 'Unknown'}</div>
-                      <div className="nm-meta">{sheetTruthy(row.final_attempt) || sheetTruthy(row.final_attempt_risk) ? 'Final-attempt risk' : sheetTruthy(row.extra_attempt_granted) ? 'Extra attempt granted' : 'Active'}</div>
+                      <div className="nm-meta">{isArchived ? 'Archived' : sheetTruthy(row.final_attempt) || sheetTruthy(row.final_attempt_risk) ? 'Final-attempt risk' : sheetTruthy(row.extra_attempt_granted) ? 'Extra attempt granted' : 'Active'}</div>
                     </td>
                     <td>{row.status || row.latest_status || 'Unknown'}</td>
                     <td>{row.attempt_count ?? row.attempt_number ?? attempts.length ?? '0'}</td>
@@ -847,6 +952,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                         ) : null}
                         {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
                         <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
+                        {!isArchived ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleArchive(row)}>Archive</button> : null}
                         {isWithdrawn ? (
                           <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
                         ) : (
@@ -1269,7 +1375,8 @@ export default function NotificationManagerApp() {
   const [updateModal, setUpdateModal] = useState(null);
   const [updaterStatus, setUpdaterStatus] = useState(null);
   const [activeSection, setActiveSection] = useState('notifications');
-  const [candidateView, setCandidateView] = useState('pending');
+  const [samSettings, setSamSettings] = useState(() => loadSamSettings());
+  const [candidateView, setCandidateView] = useState(() => loadSamSettings().defaultCandidateView);
   const [candidateSearch, setCandidateSearch] = useState('');
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [candidateTracking, setCandidateTracking] = useState({ ok: true, views: {}, candidates: [], pending: [], error: '' });
@@ -1278,6 +1385,21 @@ export default function NotificationManagerApp() {
   const showStatusModal = useCallback((message, kind = 'info') => {
     setStatusModal({ message, kind });
   }, []);
+  const updateSamSettings = useCallback((nextSettings) => {
+    const normalized = normalizeSamSettings(nextSettings);
+    setSamSettings(normalized);
+    if (normalized.defaultCandidateView !== samSettings.defaultCandidateView) {
+      setCandidateView(normalized.defaultCandidateView);
+    }
+    localStorage.setItem(SAM_SETTINGS_KEY, JSON.stringify(normalized));
+  }, [samSettings.defaultCandidateView]);
+  const dismissStatusBanner = useCallback(() => {
+    setSheetState((current) => ({ ...current, statusKind: '', statusMessage: '' }));
+  }, []);
+  const playSamActionSound = useCallback((kind) => {
+    if (samSettings.soundVolume === 'off') return;
+    void playSound(kind === 'error' ? 'samError' : 'samSuccess');
+  }, [samSettings.soundVolume]);
   const requestConfirm = useCallback((message, options = {}) => new Promise((resolve) => {
     confirmResolverRef.current = resolve;
     setConfirmModal({
@@ -1300,7 +1422,7 @@ export default function NotificationManagerApp() {
   }, []);
   const handleViewInTracking = useCallback((candidate) => {
     setActiveSection('candidates');
-    setCandidateView('allActive');
+    setCandidateView(isCandidateArchived(candidate) ? 'archived' : 'allActive');
     setCandidateSearch(candidate.candidate_name || '');
   }, []);
   const closeEditor = useCallback(() => {
@@ -1524,6 +1646,7 @@ export default function NotificationManagerApp() {
       if (!result?.ok) {
         const message = result?.error || 'Candidate tracking update failed.';
         setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
+        playSamActionSound('error');
         showStatusModal(message, 'error');
         return;
       }
@@ -1533,6 +1656,7 @@ export default function NotificationManagerApp() {
         restore_withdrawal: 'Candidate restored in the shared Google Sheet. MTS should allow lookup again after refresh.',
         cancel_pending: 'Pending supervisor transfer cancelled in the shared Google Sheet.',
         delete_candidate_history: 'Candidate history deleted from the shared Google Sheet. It will no longer appear in SAM or MTS lookup/autocomplete after refresh.',
+        archive_candidate: 'Candidate archived in the shared Google Sheet. It now appears in Archived Candidates.',
         mark_passed: 'Candidate manually marked as passed in the shared Google Sheet.',
         mark_failed: 'Candidate manually marked as failed in the shared Google Sheet.',
         mark_incomplete: 'Candidate manually marked as incomplete in the shared Google Sheet.',
@@ -1544,6 +1668,7 @@ export default function NotificationManagerApp() {
         statusKind: 'success',
         statusMessage: actionLabels[payload?.action] || 'Candidate tracking updated in the shared Google Sheet.',
       }));
+      playSamActionSound('success');
       showStatusModal(actionLabels[payload?.action] || 'Candidate tracking updated in the shared Google Sheet.', 'success');
       await loadCandidateTracking({ silent: true });
     } catch (error) {
@@ -1553,9 +1678,10 @@ export default function NotificationManagerApp() {
         statusKind: 'error',
         statusMessage: message,
       }));
+      playSamActionSound('error');
       showStatusModal(message, 'error');
     }
-  }, [loadCandidateTracking, showStatusModal]);
+  }, [loadCandidateTracking, playSamActionSound, showStatusModal]);
 
   useEffect(() => {
     const root = document.getElementById('root');
@@ -1601,6 +1727,30 @@ export default function NotificationManagerApp() {
   useEffect(() => {
     localStorage.setItem(NOTIFICATION_MANAGER_STORAGE_KEY, JSON.stringify(items));
   }, [items]);
+
+  useEffect(() => {
+    localStorage.setItem(SAM_SETTINGS_KEY, JSON.stringify(samSettings));
+    setSoundSettings({
+      enable_sounds: samSettings.soundVolume !== 'off',
+      sound_volume: samSettings.soundVolume,
+    });
+  }, [samSettings]);
+
+  useEffect(() => {
+    if (!sheetState.statusMessage) return undefined;
+    const kind = sheetState.statusKind || 'info';
+    if (kind === 'error' || kind === 'warning') return undefined;
+    const duration = Math.max(5, Number(samSettings.statusBannerDurationSeconds) || 60) * 1000;
+    const timer = window.setTimeout(() => {
+      setSheetState((current) => {
+        if (current.statusMessage !== sheetState.statusMessage || current.statusKind !== sheetState.statusKind) {
+          return current;
+        }
+        return { ...current, statusKind: '', statusMessage: '' };
+      });
+    }, duration);
+    return () => window.clearTimeout(timer);
+  }, [samSettings.statusBannerDurationSeconds, sheetState.statusKind, sheetState.statusMessage]);
 
   useEffect(() => {
     if (!editorOpen) {
@@ -1986,6 +2136,7 @@ export default function NotificationManagerApp() {
           statusKind: 'error',
           statusMessage: message,
         }));
+        playSamActionSound('error');
         showStatusModal(message, 'error');
         return null;
       }
@@ -2010,6 +2161,7 @@ export default function NotificationManagerApp() {
         statusMessage: successMessage || 'Notification saved. MTS should update within about a minute.',
       }));
       await loadSheetItems({ silent: true });
+      playSamActionSound('success');
       showStatusModal(successMessage || 'Notification saved. MTS should update within about a minute.', 'success');
       return savedItem;
     } catch (error) {
@@ -2020,10 +2172,11 @@ export default function NotificationManagerApp() {
         statusKind: 'error',
         statusMessage: message,
       }));
+      playSamActionSound('error');
       showStatusModal(message, 'error');
       return null;
     }
-  }, [editorIndex, loadSheetItems, showStatusModal]);
+  }, [editorIndex, loadSheetItems, playSamActionSound, showStatusModal]);
 
   const updateSelected = (patch) => {
     setEditorDraft((currentDraft) => {
@@ -2104,6 +2257,7 @@ export default function NotificationManagerApp() {
           statusKind: 'error',
           statusMessage: message,
         }));
+        playSamActionSound('error');
         showStatusModal(message, 'error');
         return;
       }
@@ -2115,6 +2269,7 @@ export default function NotificationManagerApp() {
         statusKind: 'error',
         statusMessage: message,
       }));
+      playSamActionSound('error');
       showStatusModal(message, 'error');
       return;
     }
@@ -2140,6 +2295,7 @@ export default function NotificationManagerApp() {
       statusMessage: 'Notification deleted from sam-notifications. MTS should update within about a minute.',
     }));
     await loadSheetItems({ silent: true });
+    playSamActionSound('success');
     showStatusModal('Notification deleted.', 'success');
   };
 
@@ -2187,6 +2343,12 @@ export default function NotificationManagerApp() {
       };
     });
     downloadCsv('mock-testing-suite-notifications.csv', serializeNotificationsToCsv(normalizedItems));
+    setSheetState((current) => ({
+      ...current,
+      statusKind: 'success',
+      statusMessage: 'Notification backup CSV exported.',
+    }));
+    playSamActionSound('success');
   };
 
   const openSection = (item) => {
@@ -2229,6 +2391,7 @@ export default function NotificationManagerApp() {
         statusKind: 'error',
         statusMessage: editorValidation.errors[0],
       }));
+      playSamActionSound('error');
       showStatusModal(editorValidation.errors[0], 'error');
       return;
     }
@@ -2254,8 +2417,21 @@ export default function NotificationManagerApp() {
       setItems(sortManagerItems(parsed));
       setSelectedIndex(0);
       setImportError('');
+      setSheetState((current) => ({
+        ...current,
+        statusKind: 'success',
+        statusMessage: `Imported ${parsed.length} notification row${parsed.length === 1 ? '' : 's'} from CSV.`,
+      }));
+      playSamActionSound('success');
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : 'Unable to import the selected CSV.');
+      const message = error instanceof Error ? error.message : 'Unable to import the selected CSV.';
+      setImportError(message);
+      setSheetState((current) => ({
+        ...current,
+        statusKind: 'error',
+        statusMessage: message,
+      }));
+      playSamActionSound('error');
     } finally {
       event.target.value = '';
     }
@@ -2301,6 +2477,7 @@ export default function NotificationManagerApp() {
       statusMessage: `SAM setup complete${nextStatus.userName ? ` for ${nextStatus.userName}` : ''}.`,
       readError: '',
     }));
+    playSamActionSound('success');
     await loadSheetItems({ silent: false });
     await loadCandidateTracking({ silent: true });
   };
@@ -2390,8 +2567,11 @@ export default function NotificationManagerApp() {
 
         {sheetState.statusMessage ? (
           <section className={`nm-status-card is-${sheetState.statusKind || 'info'}`}>
-            <strong>{sheetState.statusKind === 'success' ? 'Success' : sheetState.statusKind === 'warning' ? 'Warning' : sheetState.statusKind === 'error' ? 'Status' : 'Starting'}</strong>
-            <span>{sheetState.statusMessage}</span>
+            <div className="nm-status-card-main">
+              <strong>{sheetState.statusKind === 'success' ? 'Success' : sheetState.statusKind === 'warning' ? 'Warning' : sheetState.statusKind === 'error' ? 'Status' : 'Starting'}</strong>
+              <span>{sheetState.statusMessage}</span>
+            </div>
+            <button type="button" className="nm-status-dismiss" onClick={dismissStatusBanner} aria-label="Dismiss status message">×</button>
             {!sheetState.backendReady && (sheetState.backendStatus === 'error' || sheetState.backendStatus === 'retrying' || sheetState.readError) ? (
               <div style={{ marginTop: 16 }}>
                 <button type="button" className="nm-btn nm-btn-primary" onClick={retryBackendStartup} disabled={sheetState.isSaving}>
@@ -2533,6 +2713,7 @@ export default function NotificationManagerApp() {
             search={candidateSearch}
             onSearchChange={setCandidateSearch}
             actor={samSetupStatus.userName || samSetupStatus.userRole || 'SAM'}
+            includeArchivedDefault={samSettings.includeArchivedInSearchDefault}
           />
         ) : null}
       </div>
@@ -2550,6 +2731,9 @@ export default function NotificationManagerApp() {
       {helpOpen ? (
         <HelpModal
           version={appVersion}
+          settings={samSettings}
+          onSettingsChange={updateSamSettings}
+          onCheckForUpdates={handleCheckForUpdates}
           onClose={() => {
             localStorage.setItem(SAM_HELP_DISMISSED_KEY, '1');
             setHelpOpen(false);
@@ -2575,6 +2759,7 @@ export default function NotificationManagerApp() {
         data={candidateTracking}
         onClose={() => setSearchModalOpen(false)}
         onViewInTracking={handleViewInTracking}
+        includeArchivedDefault={samSettings.includeArchivedInSearchDefault}
       />
       <UpdateModal
         updateInfo={updateModal}
@@ -2597,14 +2782,20 @@ export default function NotificationManagerApp() {
   );
 }
 
-function CandidateSearchModal({ open, data, onClose, onViewInTracking }) {
+function CandidateSearchModal({ open, data, onClose, onViewInTracking, includeArchivedDefault }) {
   const [search, setSearch] = useState('');
+  const [includeArchived, setIncludeArchived] = useState(Boolean(includeArchivedDefault));
+
+  useEffect(() => {
+    setIncludeArchived(Boolean(includeArchivedDefault));
+  }, [includeArchivedDefault, open]);
+
   if (!open) return null;
 
   const candidates = data?.candidates || [];
   const searchText = search.trim().toLowerCase();
   const visible = searchText
-    ? candidates.filter(c => String(c.candidate_name || '').toLowerCase().includes(searchText))
+    ? candidates.filter(c => (includeArchived || !isCandidateArchived(c)) && String(c.candidate_name || '').toLowerCase().includes(searchText))
     : [];
 
   return (
@@ -2626,6 +2817,14 @@ function CandidateSearchModal({ open, data, onClose, onViewInTracking }) {
               autoFocus
               style={{ width: '100%', padding: '8px 12px', fontSize: 14, borderRadius: 4, border: '1px solid var(--border-subtle)' }}
             />
+            <label className="nm-checkbox nm-search-toggle">
+              <input
+                type="checkbox"
+                checked={includeArchived}
+                onChange={(event) => setIncludeArchived(event.target.checked)}
+              />
+              Include archived candidates
+            </label>
           </div>
           <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
             {searchText === '' ? (
@@ -2641,6 +2840,7 @@ function CandidateSearchModal({ open, data, onClose, onViewInTracking }) {
                       <span className="nm-meta" style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
                         Status: {c.status || c.latest_status || 'Active'} | Tester: {c.original_tester_name || c.tester_name || 'N/A'}
                       </span>
+                      {isCandidateArchived(c) ? <span className="nm-archive-badge">Archived</span> : null}
                     </div>
                     <button
                       type="button"

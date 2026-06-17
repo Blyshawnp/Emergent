@@ -4,6 +4,8 @@ const SOUND_FILES = {
   success: 'chimes.mp3',
   setup: 'setup-welcome.mp3',
   notificationApp: 'notification-app.mp3',
+  samSuccess: 'success-sam.mp3',
+  samError: 'error-sam.mp3',
 };
 
 const DEFAULT_VOLUME = 0.26;
