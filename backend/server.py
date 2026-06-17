@@ -1520,7 +1520,7 @@ def _normalize_coaching(rows, include_ids, section_key="", source_label="coachin
             section_key or "coaching",
         )
         return fallback
-    return items
+    return _merge_required_coaching_defaults(section_key, items)
 
 
 def _normalize_approved_headsets(rows):
@@ -2208,6 +2208,58 @@ SUP_COACHING = [
     {"label": "Other"},
 ]
 
+REQUIRED_COACHING_DEFAULT_LABELS = {
+    "call_coaching": {
+        "search name for every call",
+        "do not volunteer information",
+    },
+    "sup_coaching": {
+        "search name for every call",
+        "do not volunteer information",
+    },
+}
+
+
+def _canonical_coaching_label(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _copy_coaching_item(item):
+    copied = {}
+    for key, value in (item or {}).items():
+        copied[key] = list(value) if isinstance(value, list) else value
+    return copied
+
+
+def _merge_required_coaching_defaults(section_key, items):
+    required = REQUIRED_COACHING_DEFAULT_LABELS.get(section_key)
+    if not required or not isinstance(items, list):
+        return items
+
+    defaults_by_label = {
+        _canonical_coaching_label(item.get("label")): item
+        for item in _coaching_fallback(section_key)
+        if _canonical_coaching_label(item.get("label")) in required
+    }
+    merged = [_copy_coaching_item(item) if isinstance(item, dict) else item for item in items]
+    existing_by_label = {}
+    for item in merged:
+        if not isinstance(item, dict):
+            continue
+        label = _canonical_coaching_label(item.get("label") or item.get("Label"))
+        if label and label not in existing_by_label:
+            existing_by_label[label] = item
+
+    for label, default_item in defaults_by_label.items():
+        existing = existing_by_label.get(label)
+        if existing is None:
+            merged.append(_copy_coaching_item(default_item))
+            continue
+        for field in ("id", "helper", "children"):
+            if field in default_item and not existing.get(field):
+                existing[field] = list(default_item[field]) if isinstance(default_item[field], list) else default_item[field]
+    return merged
+
 SUP_FAILS = [
     "Did not ask permission to transfer",
     "Did not minimize dead air",
@@ -2846,7 +2898,7 @@ def _sanitize_coaching_setting(key, value, source_label):
     if _values_match_other_section(labels, key):
         logger.warning("[CONTENT] %s %s setting looked like the wrong coaching section. Using defaults.", source_label, key)
         return DEFAULT_SETTINGS[key]
-    return value
+    return _merge_required_coaching_defaults(key, value)
 
 
 def _sanitize_discord_template_setting(value, source_label):

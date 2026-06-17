@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import SettingsPage from './SettingsPage';
 import CallsPage from './CallsPage';
 import SupTransferPage from './SupTransferPage';
+import BasicsPage from './BasicsPage';
 import api from '../api';
 
 const mockModal = {
@@ -387,4 +388,105 @@ test('supervisor transfer page renders custom coaching and fail reasons from sav
   expect(view.container.textContent).not.toContain('Default Supervisor Fail');
 
   await view.unmount();
+});
+
+test('basics headset search matches brand and model portions while preserving unapproved entries', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({
+    groups: [
+      { brand: 'Logitech', models: ['H390', 'Stereo H650e'] },
+      { brand: 'Plantronics', models: ['Blackwire 3220'] },
+    ],
+  });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  const input = view.container.querySelector('[data-testid="basics-brand"]');
+
+  await act(async () => {
+    setInputValue(input, 'H390');
+    await flushPromises();
+  });
+  expect(view.container.textContent).toContain('Logitech H390');
+
+  await act(async () => {
+    setInputValue(input, 'Logitech H650e');
+    await flushPromises();
+  });
+  expect(view.container.textContent).toContain('Logitech Stereo H650e');
+
+  await act(async () => {
+    setInputValue(input, 'h650e');
+    await flushPromises();
+  });
+  expect(view.container.textContent).toContain('Logitech Stereo H650e');
+
+  await act(async () => {
+    setInputValue(input, 'Not Approved 123');
+    await flushPromises();
+  });
+  expect(view.container.textContent).toContain('No matching approved headsets');
+  expect(view.container.textContent).not.toContain('Approved headset selected. USB and Noise Cancelling are marked Yes automatically.');
+
+  await view.unmount();
+});
+
+test('calls and supervisor coaching render backfilled default reasons and helper text', async () => {
+  const callCoaching = [
+    { id: 'custom', label: 'Custom Coaching', children: [] },
+    { id: 'c-search-name', label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
+    { id: 'c-no-volunteer', label: 'Do not volunteer information', helper: 'Do not verify details the member has not provided, such as an email address.' },
+  ];
+  const supCoaching = [
+    { label: 'Custom Supervisor Coaching', children: [] },
+    { label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
+    { label: 'Do not volunteer information', helper: 'Do not verify details the member has not provided, such as an email address.' },
+  ];
+
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      supervisor_only: true,
+      final_attempt: false,
+    },
+  });
+  api.getDefaults.mockResolvedValue({
+    call_types: ['New Donor - One Time Donation'],
+    shows: [['Show A', '$25', '$10', 'Gift']],
+    donors_new: [['Jamie', 'Doe', '1 Main', 'Austin', 'TX', '78701', '555-0100', 'jamie@example.com']],
+    donors_existing: [],
+    donors_increase: [],
+    sup_reasons: ['Default Sup Reason'],
+    call_coaching: [{ id: 'default', label: 'Default Coaching', children: [] }],
+    sup_coaching: [{ label: 'Default Supervisor Coaching', children: [] }],
+    call_fails: ['Default Fail'],
+    sup_fails: ['Default Supervisor Fail'],
+  });
+  api.getSettings.mockResolvedValue({
+    call_types: ['New Donor - One Time Donation'],
+    shows: [['Show A', '$25', '$10', 'Gift']],
+    donors_new: [['Jamie', 'Doe', '1 Main', 'Austin', 'TX', '78701', '555-0100', 'jamie@example.com']],
+    donors_existing: [],
+    donors_increase: [],
+    sup_reasons: ['Default Sup Reason'],
+    call_coaching: callCoaching,
+    sup_coaching: supCoaching,
+    call_fails: ['Test Fail Reason'],
+    sup_fails: ['Test Supervisor Fail'],
+  });
+
+  const callsView = await renderComponent(<CallsPage onNavigate={jest.fn()} />);
+  expect(callsView.container.textContent).toContain('Search name for every call');
+  expect(callsView.container.textContent).toContain('Do not volunteer information');
+  expect(callsView.container.textContent).toContain("Search the caller's name on every call to avoid duplicate member records.");
+  expect(callsView.container.textContent).toContain('Do not verify details the member has not provided, such as an email address.');
+  await callsView.unmount();
+
+  const supView = await renderComponent(<SupTransferPage onNavigate={jest.fn()} />);
+  expect(supView.container.textContent).toContain('Search name for every call');
+  expect(supView.container.textContent).toContain('Do not volunteer information');
+  expect(supView.container.textContent).toContain("Search the caller's name on every call to avoid duplicate member records.");
+  expect(supView.container.textContent).toContain('Do not verify details the member has not provided, such as an email address.');
+  await supView.unmount();
 });
