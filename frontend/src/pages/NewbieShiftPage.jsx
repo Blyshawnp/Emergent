@@ -80,7 +80,7 @@ export default function NewbieShiftPage({ onNavigate }) {
 
   const copyDiscordTemplate = useCallback(async () => {
     const templateTitle = 'Out of Time (Needs Sup)';
-    const label = 'Copy Out of Time (Needs Sup) Discord post';
+    const label = 'Discord Post: Out of Time (Needs Sup)';
     const message = findDiscordTemplateMessage(settings, defaults, templateTitle);
     if (!String(message || '').trim()) {
       await modal.warning('Discord Post Unavailable', `${label} is not available from Discord posts right now.`);
@@ -159,14 +159,13 @@ export default function NewbieShiftPage({ onNavigate }) {
       <div className="newbie-action-row">
         <button className="btn btn-primary" onClick={handleGcal} data-testid="newbie-gcal" title="Opens Google Calendar with a pre-filled event">Add to Google Calendar</button>
         <div className="inline-discord-copy">
-          <span>Copy Out of Time (Needs Sup) Discord post</span>
           <button
             type="button"
-            className={`discord-copy ${copiedDiscordTemplate === 'Out of Time (Needs Sup)' ? 'copied' : ''}`}
+            className={`discord-copy discord-post-copy-btn ${copiedDiscordTemplate === 'Out of Time (Needs Sup)' ? 'copied' : ''}`}
             onClick={copyDiscordTemplate}
             data-testid="newbie-discord-copy"
           >
-            {copiedDiscordTemplate === 'Out of Time (Needs Sup)' ? 'Copied' : 'Copy'}
+            {copiedDiscordTemplate === 'Out of Time (Needs Sup)' ? 'Copied: Out of Time (Needs Sup)' : 'Discord Post: Out of Time (Needs Sup)'}
           </button>
         </div>
       </div>

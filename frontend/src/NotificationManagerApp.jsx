@@ -35,11 +35,17 @@ const SAM_SETTINGS_KEY = 'sam:settings';
 const SAM_BACKEND_RETRY_LIMIT = 6;
 const SAM_BACKEND_RETRY_BASE_DELAY_MS = 2000;
 const SAM_BACKEND_RETRY_MAX_DELAY_MS = 12000;
+const SAM_TUTORIAL_VIDEO_CANDIDATES = [
+  '/assets/tutorial/sam-tutorial.mp4',
+  '/assets/tutorial/sam-intro.mp4',
+];
 const DEFAULT_SAM_SETTINGS = {
   soundVolume: 'medium',
   statusBannerDurationSeconds: 60,
   defaultCandidateView: 'pending',
   includeArchivedInSearchDefault: false,
+  tutorialVideoMode: 'before',
+  disableTutorialAfterVideo: false,
 };
 const SAM_SOUND_VOLUME_OPTIONS = [
   { value: 'off', label: 'Off' },
@@ -51,6 +57,12 @@ const SAM_BANNER_DURATION_OPTIONS = [
   { value: 30, label: '30 seconds' },
   { value: 60, label: '60 seconds' },
   { value: 120, label: '120 seconds' },
+];
+const SAM_TUTORIAL_VIDEO_MODE_OPTIONS = [
+  { value: 'before', label: 'Show video before tutorial' },
+  { value: 'after', label: 'Show video after tutorial' },
+  { value: 'instead', label: 'Use video instead of tutorial' },
+  { value: 'off', label: 'Disable tutorial video' },
 ];
 const SAM_HELP_SECTIONS = [
   {
@@ -157,13 +169,44 @@ function normalizeSamSettings(settings = {}) {
   const defaultCandidateView = Object.prototype.hasOwnProperty.call(CANDIDATE_VIEW_LABELS, settings.defaultCandidateView)
     ? settings.defaultCandidateView
     : DEFAULT_SAM_SETTINGS.defaultCandidateView;
+  const tutorialVideoMode = SAM_TUTORIAL_VIDEO_MODE_OPTIONS.some((item) => item.value === settings.tutorialVideoMode)
+    ? settings.tutorialVideoMode
+    : DEFAULT_SAM_SETTINGS.tutorialVideoMode;
   return {
     ...DEFAULT_SAM_SETTINGS,
     soundVolume,
     statusBannerDurationSeconds,
     defaultCandidateView,
     includeArchivedInSearchDefault: Boolean(settings.includeArchivedInSearchDefault),
+    tutorialVideoMode,
+    disableTutorialAfterVideo: Boolean(settings.disableTutorialAfterVideo),
   };
+}
+
+function getPublicAssetPath(path) {
+  const base = process.env.PUBLIC_URL || '';
+  const cleanPath = String(path || '').replace(/^\/+/, '');
+  if (!base) return `/${cleanPath}`;
+  return `${base.replace(/\/$/, '')}/${cleanPath}`;
+}
+
+async function findSamTutorialVideoUrl() {
+  if (typeof fetch !== 'function') return '';
+  for (const candidate of SAM_TUTORIAL_VIDEO_CANDIDATES) {
+    const url = getPublicAssetPath(candidate);
+    try {
+      const response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+      if (response.ok) return url;
+    } catch (_error) {
+      try {
+        const response = await fetch(url, { method: 'GET', cache: 'no-store', headers: { Range: 'bytes=0-0' } });
+        if (response.ok || response.status === 206) return url;
+      } catch (__error) {
+        // Missing optional tutorial video keeps the guided SAM tutorial as the fallback.
+      }
+    }
+  }
+  return '';
 }
 
 function loadSamSettings() {
@@ -248,7 +291,7 @@ function getAppVersion() {
   }
 }
 
-function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutorial, onCheckForUpdates }) {
+function HelpModal({ version, settings, tutorialVideoUrl, onSettingsChange, onClose, onReplayTutorial, onPlayTutorialVideo, onCheckForUpdates }) {
   const sectionRefs = useRef({});
   const updateSetting = (patch) => {
     onSettingsChange?.(normalizeSamSettings({ ...settings, ...patch }));
@@ -302,6 +345,20 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
             />
             Include archived candidates in search by default
           </label>
+          <label className="nm-field">
+            <span>SAM tutorial video</span>
+            <select value={settings.tutorialVideoMode} onChange={(event) => updateSetting({ tutorialVideoMode: event.target.value })}>
+              {SAM_TUTORIAL_VIDEO_MODE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="nm-checkbox nm-help-toggle">
+            <input
+              type="checkbox"
+              checked={settings.disableTutorialAfterVideo}
+              onChange={(event) => updateSetting({ disableTutorialAfterVideo: event.target.checked })}
+            />
+            Disable guided tutorial after video
+          </label>
           <button type="button" className="nm-btn nm-btn-secondary" onClick={() => onCheckForUpdates?.()}>Check for Updates</button>
         </div>
 
@@ -327,6 +384,9 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
           ))}
         </div>
         <div className="nm-help-actions">
+          {tutorialVideoUrl ? (
+            <button type="button" className="nm-btn nm-btn-secondary" onClick={onPlayTutorialVideo}>Watch Tutorial Video</button>
+          ) : null}
           <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayTutorial}>Replay Tutorial</button>
           <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>Done</button>
         </div>
@@ -1114,6 +1174,29 @@ function TutorialOverlay({ step, onNext, onBack, onClose }) {
   );
 }
 
+function SamTutorialVideoOverlay({ url, onEnded, onSkip }) {
+  if (!url) return null;
+  return (
+    <div className="nm-video-layer" role="dialog" aria-modal="true" aria-label="SAM tutorial video">
+      <div className="nm-video-card">
+        <div className="nm-video-header">
+          <div>
+            <div className="nm-overline">SAM TUTORIAL</div>
+            <h3>Watch Tutorial Video</h3>
+          </div>
+          <button type="button" className="nm-modal-close" onClick={onSkip} aria-label="Skip tutorial video">×</button>
+        </div>
+        <video className="nm-tutorial-video" src={url} controls autoPlay onEnded={onEnded}>
+          <track kind="captions" />
+        </video>
+        <div className="nm-video-actions">
+          <button type="button" className="nm-btn nm-btn-secondary" onClick={onSkip}>Skip Video</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModalPortal({ children }) {
   const [mountNode, setMountNode] = useState(null);
 
@@ -1371,6 +1454,11 @@ export default function NotificationManagerApp() {
   const [confirmModal, setConfirmModal] = useState(null);
   const confirmResolverRef = useRef(null);
   const [tutorialStep, setTutorialStep] = useState(null);
+  const [samTutorialVideoUrl, setSamTutorialVideoUrl] = useState('');
+  const [samTutorialVideoChecked, setSamTutorialVideoChecked] = useState(false);
+  const [samTutorialVideoOpen, setSamTutorialVideoOpen] = useState(false);
+  const [pendingVideoAfterTutorial, setPendingVideoAfterTutorial] = useState(false);
+  const [pendingTutorialAfterVideo, setPendingTutorialAfterVideo] = useState(false);
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
   const [updaterStatus, setUpdaterStatus] = useState(null);
@@ -1400,6 +1488,46 @@ export default function NotificationManagerApp() {
     if (samSettings.soundVolume === 'off') return;
     void playSound(kind === 'error' ? 'samError' : 'samSuccess');
   }, [samSettings.soundVolume]);
+  const startSamTutorial = useCallback(({ force = false } = {}) => {
+    if (!force && localStorage.getItem(SAM_TUTORIAL_SEEN_KEY) === '1') return;
+    const videoAvailable = Boolean(samTutorialVideoUrl);
+    const mode = samSettings.tutorialVideoMode;
+
+    localStorage.setItem(SAM_TUTORIAL_SEEN_KEY, '1');
+    localStorage.setItem(SAM_ONBOARDING_STATE_KEY, force ? 'replay' : 'seen');
+
+    if (videoAvailable && mode === 'before') {
+      setPendingTutorialAfterVideo(!samSettings.disableTutorialAfterVideo);
+      setSamTutorialVideoOpen(true);
+      return;
+    }
+
+    if (videoAvailable && mode === 'instead') {
+      setPendingTutorialAfterVideo(false);
+      setSamTutorialVideoOpen(true);
+      return;
+    }
+
+    setTutorialStep(0);
+    setPendingVideoAfterTutorial(videoAvailable && mode === 'after');
+  }, [samSettings.disableTutorialAfterVideo, samSettings.tutorialVideoMode, samTutorialVideoUrl]);
+  const finishSamTutorialVideo = useCallback(() => {
+    setSamTutorialVideoOpen(false);
+    if (pendingTutorialAfterVideo) {
+      setPendingTutorialAfterVideo(false);
+      setTutorialStep(0);
+    }
+  }, [pendingTutorialAfterVideo]);
+  const closeTutorial = useCallback(() => {
+    setTutorialStep(null);
+    setPendingVideoAfterTutorial(false);
+    localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'closed');
+  }, []);
+  const replayTutorial = useCallback(() => {
+    setHelpOpen(false);
+    setEditorOpen(false);
+    window.setTimeout(() => startSamTutorial({ force: true }), 160);
+  }, [startSamTutorial]);
   const requestConfirm = useCallback((message, options = {}) => new Promise((resolve) => {
     confirmResolverRef.current = resolve;
     setConfirmModal({
@@ -1796,15 +1924,32 @@ export default function NotificationManagerApp() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    findSamTutorialVideoUrl()
+      .then((url) => {
+        if (cancelled) return;
+        setSamTutorialVideoUrl(url || '');
+      })
+      .catch(() => {
+        if (!cancelled) setSamTutorialVideoUrl('');
+      })
+      .finally(() => {
+        if (!cancelled) setSamTutorialVideoChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!samSetupStatus.setupComplete) return undefined;
+    if (!samTutorialVideoChecked) return undefined;
     if (localStorage.getItem(SAM_TUTORIAL_SEEN_KEY) === '1') return;
     const timer = window.setTimeout(() => {
-      setTutorialStep(0);
-      localStorage.setItem(SAM_TUTORIAL_SEEN_KEY, '1');
-      localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'seen');
+      startSamTutorial();
     }, 1200);
     return () => window.clearTimeout(timer);
-  }, [samSetupStatus.setupComplete]);
+  }, [samSetupStatus.setupComplete, samTutorialVideoChecked, startSamTutorial]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1874,7 +2019,7 @@ export default function NotificationManagerApp() {
         }));
       }
     });
-  }, [handleCheckForUpdates]);
+  }, [handleCheckForUpdates, replayTutorial]);
 
   useEffect(() => {
     if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) {
@@ -2371,18 +2516,6 @@ export default function NotificationManagerApp() {
     }
   };
 
-  const closeTutorial = useCallback(() => {
-    setTutorialStep(null);
-    localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'closed');
-  }, []);
-  const replayTutorial = () => {
-    setHelpOpen(false);
-    setEditorOpen(false);
-    localStorage.setItem(SAM_TUTORIAL_SEEN_KEY, '1');
-    localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'replay');
-    window.setTimeout(() => setTutorialStep(0), 160);
-  };
-
   const handleSubmit = async () => {
     if (!editorDraft) return;
     if (editorValidation.errors.length > 0) {
@@ -2732,6 +2865,7 @@ export default function NotificationManagerApp() {
         <HelpModal
           version={appVersion}
           settings={samSettings}
+          tutorialVideoUrl={samTutorialVideoUrl}
           onSettingsChange={updateSamSettings}
           onCheckForUpdates={handleCheckForUpdates}
           onClose={() => {
@@ -2739,6 +2873,11 @@ export default function NotificationManagerApp() {
             setHelpOpen(false);
           }}
           onReplayTutorial={replayTutorial}
+          onPlayTutorialVideo={() => {
+            setHelpOpen(false);
+            setPendingTutorialAfterVideo(false);
+            setSamTutorialVideoOpen(true);
+          }}
         />
       ) : null}
       {tutorialStep !== null ? (
@@ -2748,10 +2887,24 @@ export default function NotificationManagerApp() {
           onNext={() => {
             setTutorialStep((current) => {
               const next = (current || 0) + 1;
-              return next >= SAM_TUTORIAL_STEPS.length ? null : next;
+              if (next >= SAM_TUTORIAL_STEPS.length) {
+                if (pendingVideoAfterTutorial) {
+                  setPendingVideoAfterTutorial(false);
+                  setSamTutorialVideoOpen(true);
+                }
+                return null;
+              }
+              return next;
             });
           }}
           onClose={closeTutorial}
+        />
+      ) : null}
+      {samTutorialVideoOpen ? (
+        <SamTutorialVideoOverlay
+          url={samTutorialVideoUrl}
+          onEnded={finishSamTutorialVideo}
+          onSkip={finishSamTutorialVideo}
         />
       ) : null}
       <CandidateSearchModal

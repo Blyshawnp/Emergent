@@ -1555,6 +1555,54 @@ body.notification-manager-body.nm-dialog-open {
   margin-top: 14px;
 }
 
+.nm-video-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(2, 6, 14, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.nm-video-card {
+  width: min(920px, calc(100vw - 48px));
+  max-height: min(88vh, 760px);
+  display: grid;
+  gap: 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  background: rgba(9, 19, 34, 0.98);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.52);
+  padding: 18px;
+}
+
+.nm-video-header,
+.nm-video-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.nm-video-header h3 {
+  margin: 4px 0 0;
+  font-size: 22px;
+}
+
+.nm-tutorial-video {
+  width: 100%;
+  max-height: min(62vh, 560px);
+  border-radius: 14px;
+  background: #020617;
+}
+
+.nm-video-actions {
+  justify-content: flex-end;
+}
+
 @media (max-width: 1200px) {
   .nm-grid,
   .nm-form-layout {

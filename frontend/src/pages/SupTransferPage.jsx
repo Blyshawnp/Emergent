@@ -593,14 +593,13 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
             <h3 style={{ color: 'var(--color-danger)' }}>Fail Reasons</h3>
             {transferNum === 1 && (
               <div className="inline-discord-copy">
-                <span>Copy Failed 1st Sup Transfer Discord post</span>
                 <button
                   type="button"
-                  className={`discord-copy ${copiedDiscordTemplate === 'Failed 1st Sup Transfer' ? 'copied' : ''}`}
-                  onClick={() => copyDiscordTemplate('Failed 1st Sup Transfer', 'Copy Failed 1st Sup Transfer Discord post')}
+                  className={`discord-copy discord-post-copy-btn ${copiedDiscordTemplate === 'Failed 1st Sup Transfer' ? 'copied' : ''}`}
+                  onClick={() => copyDiscordTemplate('Failed 1st Sup Transfer', 'Discord Post: Failed 1st Sup Transfer')}
                   data-testid="sup-fail-discord-copy"
                 >
-                  {copiedDiscordTemplate === 'Failed 1st Sup Transfer' ? 'Copied' : 'Copy'}
+                  {copiedDiscordTemplate === 'Failed 1st Sup Transfer' ? 'Copied: Failed 1st Sup Transfer' : 'Discord Post: Failed 1st Sup Transfer'}
                 </button>
               </div>
             )}

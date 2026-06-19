@@ -15,7 +15,12 @@ const READINESS_OVERRIDE_REASONS = [
   'Not ready for independent calls',
   'Other',
 ];
-const READINESS_OVERRIDE_RESULTS = ['Pass', 'Fail', READINESS_NEEDS_RETEST];
+const READINESS_OVERRIDE_RESULTS = ['Fail', READINESS_NEEDS_RETEST];
+const PASS_LIKE_READINESS_RESULTS = ['Pass', 'RESUMED-PASS'];
+
+function canOverrideReadinessResult(calculatedResult) {
+  return PASS_LIKE_READINESS_RESULTS.includes(calculatedResult);
+}
 
 function computeCalculatedStatus(session) {
   if (!session) return 'Fail';
@@ -68,14 +73,18 @@ function computeCalculatedStatus(session) {
 
 function normalizeFinalReadinessJudgment(judgment, calculatedResult) {
   const existing = judgment && typeof judgment === 'object' ? judgment : {};
-  const overrideApplied = Boolean(existing.overrideApplied);
+  const requestedOverride = Boolean(existing.overrideApplied);
+  const requestedResult = existing.overrideResult || '';
+  const overrideApplied = requestedOverride
+    && canOverrideReadinessResult(calculatedResult || existing.calculatedResult || '')
+    && (!requestedResult || READINESS_OVERRIDE_RESULTS.includes(requestedResult));
   return {
     useCalculatedResult: existing.useCalculatedResult !== false && !overrideApplied,
     calculatedResult: calculatedResult || existing.calculatedResult || '',
     overrideApplied,
-    overrideResult: existing.overrideResult || '',
-    primaryReason: existing.primaryReason || '',
-    explanation: existing.explanation || '',
+    overrideResult: overrideApplied ? requestedResult : '',
+    primaryReason: overrideApplied ? existing.primaryReason || '' : '',
+    explanation: overrideApplied ? existing.explanation || '' : '',
     createdAt: existing.createdAt || '',
     updatedAt: existing.updatedAt || '',
   };
@@ -111,6 +120,7 @@ function appendReadinessOverrideSummary(text, judgment) {
 
 function validateReadinessJudgment(judgment) {
   if (!judgment?.overrideApplied) return '';
+  if (!canOverrideReadinessResult(judgment.calculatedResult)) return 'Overrides are only available when the calculated result is Pass.';
   if (!READINESS_OVERRIDE_RESULTS.includes(judgment.overrideResult)) return 'Select an override result.';
   if (!judgment.primaryReason) return 'Select a primary reason for the override.';
   if (judgment.primaryReason === 'Other' && !String(judgment.explanation || '').trim()) {
@@ -164,7 +174,7 @@ function getFallbackFailSummary(session) {
   return 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
 }
 
-const SUMMARY_PENDING_MESSAGE = 'Generating summaries...';
+const SUMMARY_PENDING_MESSAGE = 'Generating AI summary...';
 const SUMMARY_TIMEOUT_MESSAGE = 'Summary generation timed out. You can continue reviewing the session or retry summary generation.';
 
 function isSummaryPlaceholder(text) {
@@ -338,7 +348,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         setFail(getFallbackFailSummary(resolvedSession));
         setLoading(false);
         setSummaryLoading(true);
-        setSummaryNotice('Generating summaries...');
+        setSummaryNotice(SUMMARY_PENDING_MESSAGE);
         reviewHydratedRef.current = true;
 
         api.generateSummaries(resolvedSession)
@@ -472,6 +482,19 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
 
   const handleReadinessUseCalculated = async (useCalculatedResult) => {
     const now = new Date().toISOString();
+    if (!useCalculatedResult && !canOverrideReadinessResult(calculatedStatus)) {
+      await saveReadinessJudgment({
+        ...finalReadinessJudgment,
+        useCalculatedResult: true,
+        calculatedResult: calculatedStatus,
+        overrideApplied: false,
+        overrideResult: '',
+        primaryReason: '',
+        explanation: '',
+        updatedAt: now,
+      });
+      return;
+    }
     if (useCalculatedResult) {
       await saveReadinessJudgment({
         ...finalReadinessJudgment,
@@ -490,7 +513,9 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       useCalculatedResult: false,
       calculatedResult: calculatedStatus,
       overrideApplied: true,
-      overrideResult: finalReadinessJudgment.overrideResult || '',
+      overrideResult: READINESS_OVERRIDE_RESULTS.includes(finalReadinessJudgment.overrideResult)
+        ? finalReadinessJudgment.overrideResult
+        : '',
       createdAt: finalReadinessJudgment.createdAt || now,
       updatedAt: now,
     });
@@ -665,7 +690,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const handleRetrySummaries = async () => {
     if (isHistoricalReview || summaryLoading || regenerating) return;
     setSummaryLoading(true);
-    setSummaryNotice('Generating summaries...');
+    setSummaryNotice(SUMMARY_PENDING_MESSAGE);
     try {
       const r = await api.generateSummaries(session);
       setSummaryDiagnostics(r);
@@ -815,7 +840,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   
   const getSummaryStatusText = () => {
     if (isHistoricalReview) return '';
-    if (summaryLoading) return SUMMARY_PENDING_MESSAGE;
+    if (summaryLoading) return `${SUMMARY_PENDING_MESSAGE} Please wait while summaries are prepared.`;
     
     if (coachingEdited || failEdited || manuallyEdited) {
       return 'Manually edited';
@@ -827,12 +852,12 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                       summaryNotice?.toLowerCase().includes('timed out');
                       
     if (isTimeout) {
-      return 'Gemini timed out, so a fallback summary was used. You can retry or regenerate with instructions.';
+      return 'AI unavailable. Using fallback summary. You can retry or regenerate with instructions.';
     }
 
     if (summaryDiagnostics?.gemini_error || summaryNotice) {
       const err = summaryDiagnostics?.gemini_error || summaryNotice;
-      return `Gemini unavailable: ${err}. Using fallback summaries.`;
+      return `AI unavailable. Using fallback summary. ${err}`;
     }
 
     if (summaryDiagnostics?.used_gemini) {
@@ -847,6 +872,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   };
 
   const summaryStatusText = getSummaryStatusText();
+  const overrideAllowed = canOverrideReadinessResult(calculatedStatus);
 
   return (
     <div className="page-with-sticky-actions" data-testid="review-page">
@@ -890,17 +916,22 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             />
             Yes, use calculated result
           </label>
-          <label className={`radio-label ${isHistoricalReview ? 'disabled' : ''}`}>
+          <label className={`radio-label ${isHistoricalReview || !overrideAllowed ? 'disabled' : ''}`}>
             <input
               type="radio"
               name="final-readiness-mode"
               checked={finalReadinessJudgment.overrideApplied}
-              disabled={isHistoricalReview}
+              disabled={isHistoricalReview || !overrideAllowed}
               onChange={() => handleReadinessUseCalculated(false)}
             />
             No, override result
           </label>
         </div>
+        {!overrideAllowed && (
+          <div className="text-xs text-muted" style={{ marginTop: 8 }}>
+            Overrides are only available when the calculated result is Pass. Fail and Incomplete results must use the calculated outcome.
+          </div>
+        )}
         {finalReadinessJudgment.overrideApplied && (
           <div className="final-readiness-override-grid">
             <label>

@@ -275,4 +275,5 @@ export const welcomeAudioInternals = {
   normalizeAudioKey,
   getWelcomeAudioKey,
   getWelcomeSoundUrls,
+  getSoundUrl,
 };

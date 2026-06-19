@@ -1683,6 +1683,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .discord-copy:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
 .discord-copy:disabled { opacity: 0.58; cursor: not-allowed; filter: grayscale(0.18); }
 .discord-copy.copied { background: var(--color-success); }
+.discord-post-copy-btn {
+  background: #5865f2;
+  box-shadow: 0 8px 18px rgba(88, 101, 242, 0.22);
+}
+.discord-post-copy-btn:hover { background: #4752c4; }
+.discord-post-copy-btn.copied { background: #3ba55d; }
 .fail-discord-copy-helper {
   margin-top: 14px;
   padding-top: 10px;

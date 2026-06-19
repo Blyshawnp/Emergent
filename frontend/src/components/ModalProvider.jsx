@@ -112,7 +112,7 @@ export function ModalProvider({ children }) {
     }
 
     if (modal.type === 'warning' || modal.type === 'error' || modal.type === 'danger') {
-      playSound('warning');
+      playSound('samError');
       return;
     }
 

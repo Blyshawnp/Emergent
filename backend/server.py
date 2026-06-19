@@ -3909,6 +3909,8 @@ def _shared_status(status):
 
 FINAL_READINESS_NEEDS_RETEST = "Needs Retest / Additional Coaching"
 FINAL_READINESS_ALLOWED_RESULTS = {"Pass", "RESUMED-PASS", "Fail", "FAIL-Final Attempt", "Incomplete", "NC/NS", FINAL_READINESS_NEEDS_RETEST}
+FINAL_READINESS_OVERRIDE_RESULTS = {"Fail", FINAL_READINESS_NEEDS_RETEST}
+FINAL_READINESS_OVERRIDE_CALCULATED_RESULTS = {"Pass", "RESUMED-PASS"}
 
 
 def _readiness_judgment(session):
@@ -3918,7 +3920,13 @@ def _readiness_judgment(session):
 
 def _readiness_override_applied(session):
     judgment = _readiness_judgment(session)
-    return bool(judgment.get("overrideApplied")) and str(judgment.get("overrideResult") or "").strip() in FINAL_READINESS_ALLOWED_RESULTS
+    calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
+    override_result = str(judgment.get("overrideResult") or "").strip()
+    return (
+        bool(judgment.get("overrideApplied"))
+        and calculated in FINAL_READINESS_OVERRIDE_CALCULATED_RESULTS
+        and override_result in FINAL_READINESS_OVERRIDE_RESULTS
+    )
 
 
 def _readiness_override_note(session):
@@ -3948,14 +3956,16 @@ def _append_readiness_override_note(text, session):
 
 
 def _readiness_context_text(session):
+    if not _readiness_override_applied(session):
+        return ""
     judgment = _readiness_judgment(session)
     calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
     final_result = compute_final_status(session)
     reason = str(judgment.get("primaryReason") or "").strip()
     explanation = str(judgment.get("explanation") or "").strip()
     parts = [
-        f"Final Readiness Judgment: calculated result is {calculated or 'N/A'}; final result is {final_result or 'N/A'}.",
-        f"Override applied: {'Yes' if _readiness_override_applied(session) else 'No'}.",
+        f"Final Readiness Judgment override: calculated result was {calculated or 'N/A'}; final result is {final_result or 'N/A'}.",
+        "Override applied: Yes.",
     ]
     if reason:
         parts.append(f"Override reason: {reason}.")

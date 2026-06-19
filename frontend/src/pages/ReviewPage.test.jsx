@@ -71,7 +71,7 @@ const passingSession = {
   fail_summary: 'N/A',
 };
 
-async function renderReview(session = passingSession, navigationState = null) {
+async function renderReview(session = passingSession, navigationState = null, options = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -80,13 +80,17 @@ async function renderReview(session = passingSession, navigationState = null) {
   api.getCurrentSession.mockResolvedValue({ session });
   api.getSettings.mockResolvedValue({});
   api.updateSession.mockResolvedValue({ ok: true, session });
-  api.generateSummaries.mockResolvedValue({
-    coaching: 'Regenerated coaching summary.',
-    fail: 'Regenerated fail summary.',
-    used_gemini: false,
-    used_fallback: true,
-    gemini_error: '',
-  });
+  if (options.generateSummaries) {
+    api.generateSummaries.mockImplementation(options.generateSummaries);
+  } else {
+    api.generateSummaries.mockResolvedValue({
+      coaching: 'Regenerated coaching summary.',
+      fail: 'Regenerated fail summary.',
+      used_gemini: false,
+      used_fallback: true,
+      gemini_error: '',
+    });
+  }
   api.fillForm.mockResolvedValue({ ok: true, message: 'Filled' });
   api.finishSession.mockResolvedValue({ ok: true, message: 'Saved' });
   mockModal.alert.mockResolvedValue(true);
@@ -233,6 +237,57 @@ test('override requires primary reason before fill form', async () => {
 
   expect(mockModal.warning).toHaveBeenCalledWith('Final Readiness Judgment Required', 'Select a primary reason for the override.');
   expect(api.fillForm).not.toHaveBeenCalled();
+
+  await view.unmount();
+});
+
+test('override to pass is not offered and fail calculated results cannot be overridden', async () => {
+  const failingSession = {
+    ...passingSession,
+    call_1: { result: 'Fail' },
+    call_2: { result: 'Fail' },
+    sup_transfer_1: {},
+    final_status: 'Fail',
+    coaching_summary: 'Fail coaching summary.',
+    fail_summary: 'Fail reason summary.',
+  };
+  const view = await renderReview(failingSession);
+  const overrideRadio = view.container.querySelectorAll('[name="final-readiness-mode"]')[1];
+
+  expect(view.container.textContent).toContain('Calculated result: Fail');
+  expect(overrideRadio.disabled).toBe(true);
+  expect(view.container.textContent).toContain('Overrides are only available when the calculated result is Pass.');
+  expect(view.container.textContent).not.toContain('Select result');
+
+  await view.unmount();
+});
+
+test('override result options exclude pass', async () => {
+  const view = await renderReview();
+
+  await act(async () => {
+    view.container.querySelectorAll('[name="final-readiness-mode"]')[1].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const options = Array.from(view.container.querySelector('[data-testid="readiness-override-result"]').options).map((option) => option.value);
+  expect(options).toEqual(['', 'Fail', 'Needs Retest / Additional Coaching']);
+
+  await view.unmount();
+});
+
+test('summary status shows inline AI generation message while summaries are pending', async () => {
+  const pendingSession = {
+    ...passingSession,
+    coaching_summary: '',
+    fail_summary: '',
+  };
+  const view = await renderReview(pendingSession, null, {
+    generateSummaries: () => new Promise(() => {}),
+  });
+
+  expect(view.container.querySelector('[data-testid="review-gemini-status"]').textContent).toContain('Generating AI summary...');
+  expect(view.container.querySelector('[data-testid="review-gemini-status"]').textContent).toContain('Please wait while summaries are prepared.');
 
   await view.unmount();
 });

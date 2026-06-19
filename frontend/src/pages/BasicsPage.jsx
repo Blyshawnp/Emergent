@@ -423,16 +423,17 @@ export default function BasicsPage({ onNavigate }) {
     }
   }, [defaults, modal, settings]);
 
-  const showFailDiscordModal = useCallback(async ({ title, body, templateTitle, helperText }) => {
+  const showFailDiscordModal = useCallback(async ({ title, body, templateTitle, helperText, buttonLabel }) => {
     let copied = false;
+    const discordButtonLabel = buttonLabel || `Discord Post: ${templateTitle}`;
     while (true) {
       const choice = await modal.showModal({
         type: 'confirm',
         title,
-        body: `${body}<div class="fail-discord-copy-helper"><b>${helperText}</b>${copied ? '<span>Copied to clipboard.</span>' : ''}</div>`,
+        body: `${body}<div class="fail-discord-copy-helper">${copied ? '<span>Discord post copied to clipboard.</span>' : ''}</div>`,
         graphic: 'warning',
         buttons: [
-          { label: copied ? 'Copied' : 'Copy', cls: 'discord-copy', value: 'copy-discord' },
+          { label: copied ? `Copied: ${discordButtonLabel.replace(/^Discord Post:\s*/, '')}` : discordButtonLabel, cls: 'discord-copy discord-post-copy-btn', value: 'copy-discord' },
           { label: 'Yes', cls: 'btn-primary', value: true },
           { label: 'No', cls: 'btn-muted', value: false },
         ],
@@ -723,6 +724,7 @@ export default function BasicsPage({ onNavigate }) {
         body: `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`,
         templateTitle: 'Wrong Headset',
         helperText: 'Headset Fail Discord Post',
+        buttonLabel: 'Discord Post: Headset Fail',
       });
       if (yes) {
         const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
@@ -739,6 +741,7 @@ export default function BasicsPage({ onNavigate }) {
         body: 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?',
         templateTitle: 'VPN Fail',
         helperText: 'VPN Fail Discord Post',
+        buttonLabel: 'Discord Post: VPN Fail',
       });
       if (yes) {
         const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };

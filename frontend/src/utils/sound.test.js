@@ -1,6 +1,6 @@
 import { welcomeAudioInternals } from './sound';
 
-const { getWelcomeAudioKey, getWelcomeSoundUrls, normalizeAudioKey } = welcomeAudioInternals;
+const { getSoundUrl, getWelcomeAudioKey, getWelcomeSoundUrls, normalizeAudioKey } = welcomeAudioInternals;
 
 test('normalizes welcome audio keys from display name or tester first name', () => {
   expect(normalizeAudioKey(' Debbie! ')).toBe('debbie');
@@ -36,4 +36,8 @@ test('orders male and female welcome audio fallbacks correctly', () => {
     './assets/sounds/welcome/welcome-debbie.mp3',
     './assets/sounds/welcome/welcome-default.mp3',
   ]);
+});
+
+test('routes warning modal sound to the SAM error asset when requested', () => {
+  expect(getSoundUrl('samError')).toBe('./assets/sounds/error-sam.mp3');
 });

@@ -27,6 +27,8 @@ test('SAM settings and help include real controls and streamlined sections', () 
   expect(appSource).toContain('SAM sounds');
   expect(appSource).toContain('Success banner duration');
   expect(appSource).toContain('Default candidate filter');
+  expect(appSource).toContain('SAM tutorial video');
+  expect(appSource).toContain('Disable guided tutorial after video');
   expect(appSource).toContain('SAM_HELP_SECTIONS');
   expect(appSource).toContain('Check for Updates');
 });
@@ -35,6 +37,15 @@ test('SAM success and error sound assets are used through the shared sound utili
   expect(soundSource).toContain("samSuccess: 'success-sam.mp3'");
   expect(soundSource).toContain("samError: 'error-sam.mp3'");
   expect(appSource).toContain("playSound(kind === 'error' ? 'samError' : 'samSuccess')");
+});
+
+test('SAM optional tutorial video support probes local assets and keeps guided fallback', () => {
+  expect(appSource).toContain("'/assets/tutorial/sam-tutorial.mp4'");
+  expect(appSource).toContain("'/assets/tutorial/sam-intro.mp4'");
+  expect(appSource).toContain('findSamTutorialVideoUrl');
+  expect(appSource).toContain('SAM_TUTORIAL_VIDEO_MODE_OPTIONS');
+  expect(appSource).toContain('SamTutorialVideoOverlay');
+  expect(appSource).toContain('Missing optional tutorial video keeps the guided SAM tutorial as the fallback.');
 });
 
 test('Electron main locks one instance per app mode while preserving app identities', () => {
