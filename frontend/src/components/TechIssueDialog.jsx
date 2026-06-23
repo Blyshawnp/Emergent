@@ -9,10 +9,10 @@ import techGraphic from '../assets/images/tech.png';
 */
 
 const TECH_ISSUES = [
-  { id: 'internet', label: 'Internet speed issues' },
-  { id: 'calls', label: 'Calls would not route' },
-  { id: 'script', label: 'No script pop' },
-  { id: 'discord', label: 'Discord issues' },
+  { id: 'internet', label: 'Internet Speed Issues' },
+  { id: 'calls', label: 'Calls Would Not Route' },
+  { id: 'script', label: 'No Script Pop' },
+  { id: 'discord', label: 'Discord Issues' },
   { id: 'other', label: 'Other' },
 ];
 
@@ -70,7 +70,7 @@ function SpeedInstructionStep({ onOk }) {
       <h3 className="ti-title">Speed Test Required</h3>
       <p className="ti-body">
         Please have the candidate go to the website{' '}
-        <a href="http://www.speedtest.net" target="_blank" rel="noreferrer">www.speedtest.net</a>
+        <a href="https://www.speedtest.net" target="_blank" rel="noreferrer">www.speedtest.net</a>
         {' '}to run a speed test.
       </p>
       <div className="ti-actions">
@@ -230,6 +230,24 @@ function BrowserResultStep({ onNo, onResolved }) {
   );
 }
 
+function DiscordTroubleshootingStep({ onDone }) {
+  return (
+    <div>
+      <h3 className="ti-title">Discord Troubleshooting</h3>
+      <p className="ti-body">Have the candidate complete these checks in Discord:</p>
+      <ol className="ti-steps">
+        <li>Open <strong>User Settings</strong>, then <strong>Voice &amp; Video</strong></li>
+        <li>Select the USB headset for both Input Device and Output Device</li>
+        <li>Run the microphone test and confirm the input level responds</li>
+        <li>Leave and rejoin the voice channel, then restart Discord if needed</li>
+      </ol>
+      <div className="ti-actions">
+        <button className="btn btn-primary" onClick={onDone} data-testid="discord-steps-done">Done, Check Result</button>
+      </div>
+    </div>
+  );
+}
+
 function BrowserFailFinalStep({ onGoToNewbie }) {
   return (
     <div>
@@ -259,6 +277,7 @@ function BrowserFailRescheduleStep({ onGoToNewbie }) {
 }
 
 function OtherNotesStep({ notes, onNotesChange, onNotResolved, onResolved }) {
+  const hasNotes = Boolean(notes.trim());
   return (
     <div>
       <h3 className="ti-title">Other Technical Issue</h3>
@@ -266,8 +285,8 @@ function OtherNotesStep({ notes, onNotesChange, onNotResolved, onResolved }) {
       <textarea className="ti-textarea" value={notes} onChange={e => onNotesChange(e.target.value)} placeholder="Describe the technical issue..." rows={4} data-testid="other-notes-input" />
       <p className="ti-subtitle" style={{ marginTop: 12 }}>Was the issue resolved?</p>
       <div className="ti-actions">
-        <button className="btn btn-danger" onClick={onNotResolved} data-testid="other-not-resolved">No</button>
-        <button className="btn btn-success" onClick={onResolved} data-testid="other-resolved">Yes, Resolved</button>
+        <button className="btn btn-danger" onClick={onNotResolved} disabled={!hasNotes} data-testid="other-not-resolved">No</button>
+        <button className="btn btn-success" onClick={onResolved} disabled={!hasNotes} data-testid="other-resolved">Yes, Resolved</button>
       </div>
     </div>
   );
@@ -348,9 +367,15 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
   }, [context, handleClose, onBeforeNavigate, onNavigate]);
   const goToNewbie = useCallback(async () => {
     if (onBeforeNavigate) await onBeforeNavigate();
+    const issueType = currentIssue === 'calls' ? 'Calls would not route' : 'No script pop';
+    await api.updateSession({
+      tech_issue: `${issueType} - unresolved after troubleshooting`,
+      tech_issue_ended_session: true,
+      tech_issue_summary_required: true,
+    }).catch(() => {});
     handleClose();
     onNavigate('newbieshift');
-  }, [handleClose, onBeforeNavigate, onNavigate]);
+  }, [currentIssue, handleClose, onBeforeNavigate, onNavigate]);
 
   useEffect(() => {
     if (open) {
@@ -364,9 +389,8 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
     if (currentIdx < checkedIds.length - 1) {
       const nextId = checkedIds[currentIdx + 1];
       setCurrentIssue(nextId);
-      const stepMap = { internet: 'speed-ask', calls: 'dte-ask', script: 'browser-ask', other: 'other-notes' };
+      const stepMap = { internet: 'speed-ask', calls: 'dte-ask', script: 'browser-ask', discord: 'discord-steps', other: 'other-notes' };
       if (stepMap[nextId]) { setStep(stepMap[nextId]); return; }
-      if (nextId === 'discord') { logIssue('Discord issues', true); }
     }
     handleClose();
   }, [selected, currentIssue, handleClose]);
@@ -376,17 +400,8 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
     if (checkedIds.length === 0) return;
     const firstId = checkedIds[0];
     setCurrentIssue(firstId);
-    const stepMap = { internet: 'speed-ask', calls: 'dte-ask', script: 'browser-ask', other: 'other-notes' };
+    const stepMap = { internet: 'speed-ask', calls: 'dte-ask', script: 'browser-ask', discord: 'discord-steps', other: 'other-notes' };
     if (stepMap[firstId]) { setStep(stepMap[firstId]); return; }
-    if (firstId === 'discord') {
-      logIssue('Discord issues', true);
-      // Check if more issues
-      if (checkedIds.length > 1) {
-        const nextId = checkedIds[1];
-        setCurrentIssue(nextId);
-        if (stepMap[nextId]) { setStep(stepMap[nextId]); return; }
-      }
-    }
     handleClose();
   }, [selected, handleClose]);
 
@@ -408,7 +423,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
         }} />;
       case 'speed-fail':
         return <SpeedFailStep speedDown={speedDown} speedUp={speedUp} isFinalAttempt={isFinalAttempt} onGoToReview={async () => {
-          await finalizeTechIssueToReview({ auto_fail_reason: 'Internet speed too low', final_status: 'Fail' }, 'Internet speed issues - failed speed test', false);
+          await finalizeTechIssueToReview({ auto_fail_reason: 'Internet speed too low', final_status: 'Fail', tech_issue_ended_session: true, tech_issue_summary_required: true }, 'Internet speed issues - failed speed test', false);
         }} />;
       case 'dte-ask':
         return <DteAskStep isSupervisorTransfer={isSupervisorTransfer} onNo={() => setStep('dte-fix')} onYes={() => setStep('browser-ask')} />;
@@ -440,10 +455,23 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
         return <BrowserFailFinalStep onGoToNewbie={goToNewbie} />;
       case 'browser-fail-reschedule':
         return <BrowserFailRescheduleStep onGoToNewbie={goToNewbie} />;
+      case 'discord-steps':
+        return <DiscordTroubleshootingStep onDone={() => setStep('discord-result')} />;
+      case 'discord-result':
+        return <BrowserResultStep onNo={async () => {
+          await logIssue('Discord issues - troubleshooting did not resolve the issue', false);
+          setStep('complete-ask');
+        }} onResolved={() => {
+          logIssue('Discord issues - resolved after Voice & Video troubleshooting', true);
+          continueToNextIssue();
+        }} />;
       case 'other-notes':
         return <OtherNotesStep notes={otherNotes} onNotesChange={setOtherNotes} onNotResolved={async () => { await logIssue(`Other: ${otherNotes}`, false); setStep('complete-ask'); }} onResolved={async () => { await logIssue(`Other: ${otherNotes}`, true); continueToNextIssue(); }} />;
       case 'complete-ask':
-        return <CompleteAskStep onEndSession={async () => { await finalizeTechIssueToReview({ auto_fail_reason: 'Technical issue unresolved', final_status: 'Fail', tech_issue: `Other: ${otherNotes || 'Unresolved technical issue'}` }, `Other: ${otherNotes || 'Unresolved technical issue'}`, false); }} onContinue={handleClose} />;
+        return <CompleteAskStep onEndSession={async () => {
+          const issue = currentIssue === 'discord' ? 'Discord issues - unresolved' : `Other: ${otherNotes || 'Unresolved technical issue'}`;
+          await finalizeTechIssueToReview({ auto_fail_reason: 'Technical issue unresolved', final_status: 'Fail', tech_issue: issue, tech_issue_ended_session: true, tech_issue_summary_required: true }, issue, false);
+        }} onContinue={handleClose} />;
       default:
         return null;
     }

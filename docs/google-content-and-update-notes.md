@@ -94,12 +94,17 @@ Update metadata is stored on the Google Sheet, not in a Google Doc. The `update-
 
 `headset-review-log`:
 
-- `headset_model`
-- `candidate_name`
-- `tester_name`
-- `entered_at`
-- `review_status`
-- `notes`
+- `Brand`
+- `Model`
+- `Status`
+- `Note`
+
+`headsets`:
+
+- `Brand`
+- `Model`
+- `Status`
+- `Note`
 
 `Candidate Sessions`:
 

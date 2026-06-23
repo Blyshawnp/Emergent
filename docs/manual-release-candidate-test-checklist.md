@@ -252,7 +252,7 @@ Steps:
 
 1. Mark headset as not USB or not noise cancelling.
 2. Confirm headset fail modal appears.
-3. Confirm the purple button says `Discord Post: Headset Fail`.
+3. Confirm the purple button says `Discord Post: Wrong Headset`.
 4. Click it and confirm the correct Discord template copies.
 
 Notes:

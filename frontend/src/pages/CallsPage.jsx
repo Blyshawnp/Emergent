@@ -295,11 +295,13 @@ export default function CallsPage({ onNavigate, navigationState }) {
   const [expandedFailDetails, setExpandedFailDetails] = useState({});
   const [failNotes, setFailNotes] = useState('');
   const [randFlags, setRandFlags] = useState({});
+  const [paymentSelection, setPaymentSelection] = useState({ cardId: 'default', eftId: 'default' });
   const [isFinal, setIsFinal] = useState(false);
   const [candidateName, setCandidateName] = useState('');
   const hydratedRef = useRef(false);
   const latestDraftPayloadRef = useRef(null);
   const sessionRef = useRef(null);
+  const callDraftsRef = useRef({});
 
   const rollRandom = useCallback(() => {
     setRandFlags(generateRandomFlags());
@@ -334,6 +336,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
         const shows = s.shows || d.shows || [];
         const requestedCallNum = Math.max(1, Math.min(3, Number(navigationState?.callNum) || 0));
         const savedDraft = session?.current_call_draft || null;
+        callDraftsRef.current = session?.call_drafts || {};
         const nextOpenCallIndex = [session?.call_1, session?.call_2, session?.call_3].findIndex((call) => !call?.result);
         const resolvedCallNum = requestedCallNum || savedDraft?.call_num || (nextOpenCallIndex >= 0 ? nextOpenCallIndex + 1 : 3);
         const normalizedCallNum = Math.max(1, Math.min(3, resolvedCallNum || 1));
@@ -346,7 +349,8 @@ export default function CallsPage({ onNavigate, navigationState }) {
           Object.values(savedDraft?.failReasonDetails || savedDraft?.fail_reason_details || {}).some((value) => String(value || '').trim()) ||
           String(savedDraft?.coach_notes || savedDraft?.fail_notes || '').trim()
         );
-        const hydrateSource = draftMatchesRequestedCall && (requestedCallNum || draftHasUserState) ? savedDraft : savedCall;
+        const savedCallDraft = callDraftsRef.current?.[normalizedCallNum] || callDraftsRef.current?.[String(normalizedCallNum)] || null;
+        const hydrateSource = savedCallDraft || (draftMatchesRequestedCall && (requestedCallNum || draftHasUserState) ? savedDraft : savedCall);
         setCallNum(normalizedCallNum);
 
         sessionRef.current = session || null;
@@ -372,6 +376,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
           ));
           setFailNotes(hydrateSource?.fail_notes || '');
           setRandFlags(hydrateSource?.rand_flags || generateRandomFlags());
+          setPaymentSelection(hydrateSource?.payment_selection || { cardId: 'default', eftId: 'default' });
         } else {
           if (types.length) setCallSetup(prev => ({ ...prev, type: types[0] }));
           if (shows.length) setCallSetup(prev => ({ ...prev, show: shows[0][0] }));
@@ -415,22 +420,26 @@ export default function CallsPage({ onNavigate, navigationState }) {
       return undefined;
     }
 
+    const draft = {
+      call_num: callNum,
+      result,
+      type: callSetup.type,
+      show: callSetup.show,
+      caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
+      donation: callSetup.donation || donations[0] || '',
+      coaching,
+      coach_notes: coachNotes,
+      fails,
+      failReasonDetails,
+      fail_notes: failNotes,
+      rand_flags: randFlags,
+      payment_selection: paymentSelection,
+    };
+    callDraftsRef.current = { ...callDraftsRef.current, [callNum]: draft };
     const payload = {
       current_call_num: callNum,
-      current_call_draft: {
-        call_num: callNum,
-        result,
-        type: callSetup.type,
-        show: callSetup.show,
-        caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
-        donation: callSetup.donation || donations[0] || '',
-        coaching,
-        coach_notes: coachNotes,
-        fails,
-        failReasonDetails,
-        fail_notes: failNotes,
-        rand_flags: randFlags,
-      },
+      current_call_draft: draft,
+      call_drafts: callDraftsRef.current,
     };
     latestDraftPayloadRef.current = payload;
 
@@ -439,7 +448,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [callNum, result, callSetup, currentCaller, donations, coaching, coachNotes, fails, failReasonDetails, failNotes, randFlags, candidateName]);
+  }, [callNum, result, callSetup, currentCaller, donations, coaching, coachNotes, fails, failReasonDetails, failNotes, randFlags, paymentSelection, candidateName]);
 
   useEffect(() => {
     return () => {
@@ -480,6 +489,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
     setFailReasonDetails({});
     setExpandedFailDetails({});
     setFailNotes('');
+    setPaymentSelection({ cardId: 'default', eftId: 'default' });
     rollRandom();
   }, [rollRandom]);
 
@@ -511,21 +521,45 @@ export default function CallsPage({ onNavigate, navigationState }) {
       caller: callSetup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
       donation: callSetup.donation || donations[0],
       coaching, coach_notes: coachNotes, fails, failReasonDetails, fail_notes: failNotes, rand_flags: randFlags,
+      payment_selection: paymentSelection,
     };
     latestDraftPayloadRef.current = null;
     await api.saveCall(callData);
-    await api.updateSession({ current_call_draft: null, current_call_num: null });
+    const nextDrafts = { ...callDraftsRef.current };
+    delete nextDrafts[callNum];
+    callDraftsRef.current = nextDrafts;
+    await api.updateSession({ current_call_draft: null, current_call_num: null, call_drafts: nextDrafts });
 
     const { session } = await api.getCurrentSession();
     const routeResult = await evaluateCallRouting(session, modal, onNavigate, api);
     if (routeResult === 'next') {
-      setCallNum(prev => prev + 1);
-      resetCall();
+      const nextCallNum = callNum + 1;
+      const nextDraft = callDraftsRef.current?.[nextCallNum] || callDraftsRef.current?.[String(nextCallNum)] || null;
+      setCallNum(nextCallNum);
+      if (nextDraft) {
+        setCallSetup({
+          type: nextDraft.type || '',
+          show: nextDraft.show || '',
+          caller: nextDraft.caller || '',
+          donation: nextDraft.donation || '',
+        });
+        setResult(nextDraft.result || null);
+        setCoaching(nextDraft.coaching || {});
+        setCoachNotes(nextDraft.coach_notes || '');
+        setFails(nextDraft.fails || {});
+        setFailReasonDetails(nextDraft.failReasonDetails || nextDraft.fail_reason_details || {});
+        setExpandedFailDetails(Object.fromEntries(Object.entries(nextDraft.failReasonDetails || nextDraft.fail_reason_details || {}).filter(([, value]) => String(value || '').trim()).map(([key]) => [key, true])));
+        setFailNotes(nextDraft.fail_notes || '');
+        setRandFlags(nextDraft.rand_flags || generateRandomFlags());
+        setPaymentSelection(nextDraft.payment_selection || { cardId: 'default', eftId: 'default' });
+      } else {
+        resetCall();
+      }
       // Scroll to top so tester sees they moved to next call
       const el = document.querySelector('[data-testid="page-content"]');
       if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [result, fails, failReasonDetails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, randFlags, modal, onNavigate, resetCall]);
+  }, [result, fails, failReasonDetails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, randFlags, paymentSelection, modal, onNavigate, resetCall]);
 
   const handleDiscardSession = useCallback(async () => {
     const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');
@@ -537,18 +571,9 @@ export default function CallsPage({ onNavigate, navigationState }) {
 
   const handleBack = useCallback(async () => {
     await saveCallDraftNow();
-    if (callNum > 2) {
-      try {
-        const { session } = await api.getCurrentSession();
-        for (let i = callNum - 1; i >= 2; i -= 1) {
-          if (session?.[`call_${i}`]?.result) {
-            onNavigate('calls', { callNum: i });
-            return;
-          }
-        }
-      } catch (_error) {
-        // Fall through to Basics if the latest session cannot be read.
-      }
+    if (callNum > 1) {
+      onNavigate('calls', { callNum: callNum - 1 });
+      return;
     }
     onNavigate('basics');
   }, [callNum, saveCallDraftNow, onNavigate]);
@@ -604,9 +629,13 @@ export default function CallsPage({ onNavigate, navigationState }) {
         <ScenarioCard currentCaller={currentCaller} callSetup={callSetup} randFlags={randFlags} donations={donations} onRegenerate={rollRandom} showData={showData} />
       </div>
 
-      <PaymentSimulation key={callNum} payment={settings.payment || defaults.payment || {}} />
-
       {currentCaller.length > 0 && <CallerDemographics caller={currentCaller} />}
+
+      <PaymentSimulation
+        payment={settings.payment || defaults.payment || {}}
+        selection={paymentSelection}
+        onSelectionChange={setPaymentSelection}
+      />
 
       <div className="card" style={{ marginBottom: 16 }} data-tour="calls-result">
         <h3 style={{ marginBottom: 8 }}>Call Result</h3>
@@ -683,10 +712,10 @@ export default function CallsPage({ onNavigate, navigationState }) {
 }
 
 // --- Extracted sub-components to reduce main component size ---
-function PaymentSimulation({ payment }) {
+function PaymentSimulation({ payment, selection, onSelectionChange }) {
   const options = useMemo(() => getPaymentOptionsFromSettings(payment), [payment]);
-  const [cardId, setCardId] = useState('default');
-  const [eftId, setEftId] = useState('default');
+  const cardId = selection?.cardId || 'default';
+  const eftId = selection?.eftId || 'default';
   const selectedCard = options.card.find((item) => item.id === cardId) || options.card[0];
   const selectedEft = options.eft.find((item) => item.id === eftId) || options.eft[0];
 
@@ -700,7 +729,7 @@ function PaymentSimulation({ payment }) {
             <div style={{ fontWeight: 700, fontSize: 12 }}>{selectedCard.type.toUpperCase()}</div>
             <label className="payment-option-select">
               <span>Card Option</span>
-              <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="call-card-option">
+              <select value={cardId} onChange={(event) => onSelectionChange((current) => ({ ...current, cardId: event.target.value }))} data-testid="call-card-option">
                 {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
               </select>
             </label>
@@ -713,7 +742,7 @@ function PaymentSimulation({ payment }) {
             <div style={{ fontWeight: 700, fontSize: 12 }}>EFT / BANK DRAFT</div>
             <label className="payment-option-select">
               <span>EFT Option</span>
-              <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="call-eft-option">
+              <select value={eftId} onChange={(event) => onSelectionChange((current) => ({ ...current, eftId: event.target.value }))} data-testid="call-eft-option">
                 {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
               </select>
             </label>

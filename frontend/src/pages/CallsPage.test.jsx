@@ -1,0 +1,136 @@
+import React from 'react';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import CallsPage from './CallsPage';
+import api from '../api';
+
+const mockModal = {
+  confirm: jest.fn(),
+  confirmDanger: jest.fn(),
+  warning: jest.fn(),
+  showModal: jest.fn(),
+};
+
+jest.mock('../api', () => ({
+  __esModule: true,
+  default: {
+    getCurrentSession: jest.fn(),
+    getDefaults: jest.fn(),
+    getSettings: jest.fn(),
+    updateSession: jest.fn(),
+    startSession: jest.fn(),
+    discardSession: jest.fn(),
+    saveCall: jest.fn(),
+  },
+}));
+
+jest.mock('../components/ModalProvider', () => ({ useModal: () => mockModal }));
+jest.mock('../components/TechIssueDialog', () => function TechIssueDialog() { return null; });
+jest.mock('../components/WorkflowProgress', () => ({
+  __esModule: true,
+  default: function WorkflowProgress() { return null; },
+  getWorkflowProgress: () => ({}),
+}));
+
+const defaults = {
+  call_types: ['New Donor - One Time'],
+  shows: [['Test Show', '25', '10', '', '']],
+  donors_new: [['Jamie', 'Caller', '1 Main St', '', 'Town', 'NC', '555-0100', 'jamie@example.test']],
+};
+
+function flushPromises() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+beforeAll(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  Element.prototype.scrollTo = jest.fn();
+});
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  api.getDefaults.mockResolvedValue(defaults);
+  api.getSettings.mockResolvedValue({});
+  api.updateSession.mockResolvedValue({ ok: true });
+  mockModal.confirmDanger.mockResolvedValue(false);
+});
+
+afterEach(() => {
+  document.body.innerHTML = '';
+});
+
+async function renderPage(callNum, sessionOverrides = {}) {
+  const session = {
+    candidate_name: 'Taylor Example',
+    final_attempt: false,
+    ...sessionOverrides,
+  };
+  api.getCurrentSession.mockResolvedValue({ session });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const onNavigate = jest.fn();
+  await act(async () => {
+    root.render(<CallsPage onNavigate={onNavigate} navigationState={{ callNum }} />);
+    await flushPromises();
+  });
+  return {
+    container,
+    onNavigate,
+    unmount: async () => {
+      await act(async () => root.unmount());
+      container.remove();
+    },
+  };
+}
+
+test('shows Caller Demographics before Payment Simulation', async () => {
+  const view = await renderPage(1);
+  const text = view.container.textContent;
+  expect(text.indexOf('Caller Demographics')).toBeGreaterThan(-1);
+  expect(text.indexOf('Caller Demographics')).toBeLessThan(text.indexOf('Payment Simulation'));
+  await view.unmount();
+});
+
+test.each([
+  [1, 'basics', null],
+  [2, 'calls', { callNum: 1 }],
+  [3, 'calls', { callNum: 2 }],
+])('Back from Call %i follows the required route', async (callNum, page, state) => {
+  const view = await renderPage(callNum);
+  await act(async () => {
+    view.container.querySelector('[data-testid="calls-back"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  if (state) expect(view.onNavigate).toHaveBeenCalledWith(page, state);
+  else expect(view.onNavigate).toHaveBeenCalledWith(page);
+  await view.unmount();
+});
+
+test('Back preserves the current call payment selection in keyed drafts', async () => {
+  const view = await renderPage(2, {
+    call_1: { result: 'Pass' },
+    call_drafts: {
+      2: {
+        call_num: 2,
+        type: 'New Donor - One Time',
+        show: 'Test Show',
+        caller: 'Jamie Caller',
+        donation: '25',
+        payment_selection: { cardId: 'additional_1', eftId: 'additional_2' },
+      },
+    },
+  });
+  expect(view.container.querySelector('[data-testid="call-card-option"]').value).toBe('additional_1');
+  expect(view.container.querySelector('[data-testid="call-eft-option"]').value).toBe('additional_2');
+  await act(async () => {
+    view.container.querySelector('[data-testid="calls-back"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    call_drafts: expect.objectContaining({
+      2: expect.objectContaining({ payment_selection: { cardId: 'additional_1', eftId: 'additional_2' } }),
+    }),
+  }));
+  await view.unmount();
+});

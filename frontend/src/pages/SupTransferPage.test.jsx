@@ -51,7 +51,7 @@ beforeAll(() => {
   window.scrollTo = jest.fn();
 });
 
-async function renderPage(sessionOverrides = {}) {
+async function renderPage(sessionOverrides = {}, navigationState = null, defaults = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -65,11 +65,11 @@ async function renderPage(sessionOverrides = {}) {
       ...sessionOverrides,
     },
   });
-  api.getDefaults.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue(defaults);
   api.getSettings.mockResolvedValue({});
 
   await act(async () => {
-    root.render(<SupTransferPage onNavigate={onNavigate} />);
+    root.render(<SupTransferPage onNavigate={onNavigate} navigationState={navigationState} />);
     await flushPromises();
   });
 
@@ -90,6 +90,7 @@ beforeEach(() => {
   mockModal.confirm.mockResolvedValue(true);
   mockModal.confirmDanger.mockResolvedValue(false);
   mockModal.warning.mockResolvedValue(true);
+  api.updateSession.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -165,5 +166,43 @@ test('supervisor-only Not Ready button confirms, saves auto-fail, and routes to 
   });
   expect(view.onNavigate).toHaveBeenCalledWith('review');
 
+  await view.unmount();
+});
+
+test('shows Caller Demographics before Payment Simulation', async () => {
+  const view = await renderPage({}, null, {
+    donors_new: [['Jamie', 'Caller', '1 Main St', '', 'Town', 'NC', '555-0100', 'jamie@example.test']],
+  });
+  const text = view.container.textContent;
+  expect(text.indexOf('Caller Demographics')).toBeGreaterThan(-1);
+  expect(text.indexOf('Caller Demographics')).toBeLessThan(text.indexOf('Payment Simulation'));
+  await view.unmount();
+});
+
+test('regular supervisor transfer Back returns to the last completed call', async () => {
+  const view = await renderPage({
+    call_1: { result: 'Pass' },
+    call_2: { result: 'Fail' },
+    call_3: { result: 'Pass' },
+    sup_transfer_1: { result: 'Fail' },
+  }, { transferNum: 2 });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="sup-back"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(view.onNavigate).toHaveBeenCalledWith('calls', { callNum: 3 });
+  expect(view.onNavigate).not.toHaveBeenCalledWith('suptransfer', { transferNum: 1 });
+  await view.unmount();
+});
+
+test('supervisor-only Back returns to Basics', async () => {
+  const view = await renderPage({ supervisor_only: true }, { transferNum: 1 });
+  await act(async () => {
+    view.container.querySelector('[data-testid="sup-back"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.onNavigate).toHaveBeenCalledWith('basics');
   await view.unmount();
 });

@@ -182,6 +182,8 @@ const api = {
   deleteManagedNotification: (id) => request('DELETE', `/notifications/manage/${encodeURIComponent(id)}`),
   getApprovedHeadsets: () => request('GET', '/headsets', null, 5000),
   logHeadsetReview: (payload) => request('POST', '/headsets/review-log', payload, 10000),
+  getHeadsetReviews: () => request('GET', '/headsets/reviews', null, 15000),
+  updateHeadsetReview: (payload) => request('POST', '/headsets/reviews/action', payload, 15000),
   getHelpContent: () => request('GET', '/help/content', null, 8000),
   generateSummaries: (session = null) => request('POST', '/gemini/summaries', session ? { session } : {}, 90000),
   regenerateSummary: (type, instructions = '', current_summary = '') => request('POST', '/gemini/regenerate', { type, instructions, current_summary }, 90000),
