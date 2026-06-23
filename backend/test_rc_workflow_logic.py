@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -116,6 +117,15 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             server._map_auto_fail_for_form("Wrong headset (not noise cancelling)"),
             "Wrong headset (not noise cancelling)",
         )
+
+    def test_gemini_prompt_source_logging_only_repeats_when_source_changes(self):
+        server._last_logged_gemini_prompt_sources.clear()
+        with mock.patch.object(server.logger, "info") as info:
+            server._log_gemini_prompt_source("coaching", "local")
+            server._log_gemini_prompt_source("coaching", "local")
+            self.assertEqual(info.call_count, 1)
+            server._log_gemini_prompt_source("coaching", "google_sheet_override")
+            self.assertEqual(info.call_count, 2)
 
     def test_screenshot_defaults_include_release_candidate_assets(self):
         content = server._load_local_defaults_content()

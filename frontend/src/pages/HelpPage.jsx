@@ -873,20 +873,6 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
         </div>
       </section>
 
-      <section className="help-search-card card">
-        <div>
-          <h2>Find Help</h2>
-          <p className="text-muted text-sm">Search current workflow topics or jump directly to a section.</p>
-        </div>
-        <input
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search Basics, Gemini, Fill Form, Discord..."
-          data-testid="help-search"
-        />
-      </section>
-
       <section className="help-anchor-nav card">
         <div className="help-anchor-title">
           <h2>Browse Topics</h2>

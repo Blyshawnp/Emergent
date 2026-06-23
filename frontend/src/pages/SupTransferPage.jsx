@@ -130,18 +130,6 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         const [{ session }, d, s] = await Promise.all([api.getCurrentSession(), api.getDefaults(), api.getSettings()]);
         if (cancelled) return;
         setDefaults(d); setSettings(s);
-        const source = d?._content_sources || {};
-        console.log('[SAM] Loading shows from Google Sheets...');
-        console.log(`[SAM] Active shows source: ${source.shows?.source || 'unknown'}${source.shows?.detail ? ` (${source.shows.detail})` : ''}`);
-        console.log(`[SAM] Loaded ${(s.shows || d.shows || []).length} shows`);
-        console.log(`[SAM] Loaded ${[
-          ...(s.donors_new || d.donors_new || []),
-          ...(s.donors_existing || d.donors_existing || []),
-          ...(s.donors_increase || d.donors_increase || []),
-        ].length} callers`);
-        if ((source.shows?.source || '').toLowerCase() !== 'google') {
-          console.log('[SAM] Falling back to CSV...');
-        }
         const initialSupReasons = s.sup_reasons || d.sup_reasons || DEFAULT_SUP_REASONS;
         sessionRef.current = session || null;
         transferDraftsRef.current = session?.sup_transfer_drafts || {};
@@ -701,8 +689,8 @@ function PaymentSimulation({ payment, selection, onSelectionChange }) {
               </select>
             </label>
           </div>
-          <div className="font-mono font-bold" style={{ fontSize: 15 }}>RTN: {selectedEft.routing}</div>
-          <div className="font-mono font-bold" style={{ fontSize: 15 }}>ACC: {selectedEft.account}</div>
+          <div className="font-mono font-bold payment-bank-number">RTN: {selectedEft.routing}</div>
+          <div className="font-mono font-bold payment-bank-number">ACC: {selectedEft.account}</div>
         </div>
       </div>
     </div>

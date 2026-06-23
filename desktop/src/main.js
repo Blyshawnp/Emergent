@@ -1085,25 +1085,6 @@ function createMainWindow() {
   });
 }
 
-async function ensureBackendAvailable() {
-  setBackendConnectionStatus('checking');
-  if (await probeBackend()) {
-    usingExternalBackend = true;
-    backendStartedByThisApp = false;
-    backendReadyRetryCount = 0;
-    backendRetryAttemptCount = 0;
-    setBackendConnectionStatus('connected');
-    console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
-    return;
-  }
-
-  usingExternalBackend = false;
-  startBackend();
-  await waitForBackend();
-  backendRetryAttemptCount = 0;
-  console.log('[APP] Backend is ready');
-}
-
 function clearNotificationBackendRetryTimer() {
   if (backendRetryTimer) {
     clearTimeout(backendRetryTimer);

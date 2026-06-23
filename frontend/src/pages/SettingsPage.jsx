@@ -128,18 +128,6 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
         if (cancelled) return;
         setS(settings);
         setDefaults(defs);
-        const source = defs?._content_sources || {};
-        console.log('[SAM] Loading shows from Google Sheets...');
-        console.log(`[SAM] Active shows source: ${source.shows?.source || 'unknown'}${source.shows?.detail ? ` (${source.shows.detail})` : ''}`);
-        console.log(`[SAM] Loaded ${(settings.shows || defs.shows || []).length} shows`);
-        console.log(`[SAM] Loaded ${[
-          ...(settings.donors_new || defs.donors_new || []),
-          ...(settings.donors_existing || defs.donors_existing || []),
-          ...(settings.donors_increase || defs.donors_increase || []),
-        ].length} callers`);
-        if ((source.shows?.source || '').toLowerCase() !== 'google') {
-          console.log('[SAM] Falling back to CSV...');
-        }
         savedSnapshotRef.current = JSON.stringify(settings);
       } catch (_err) {
         // Settings load failed
