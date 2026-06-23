@@ -22,7 +22,7 @@ echo This legacy script now delegates to:
 echo   %REBUILD_SCRIPT%
 echo.
 echo The maintained script builds MTS and SAM, copies runtime config,
-echo verifies service-account private_key_id without printing private keys,
+echo verifies packaged Apps Script API config without printing secret values,
 echo syncs production-ready, and writes hashes.
 echo.
 

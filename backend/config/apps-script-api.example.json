@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "base_url": "https://script.google.com/macros/s/DEPLOYMENT_ID/exec",
+  "token": "TOKEN"
+}

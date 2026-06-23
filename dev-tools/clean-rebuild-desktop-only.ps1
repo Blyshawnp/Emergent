@@ -196,16 +196,6 @@ function Read-JsonFile {
   Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
-function Verify-PrivateKeyId {
-  param([string]$Source, [string]$Destination, [string]$Label)
-  $src = Read-JsonFile $Source
-  $dst = Read-JsonFile $Destination
-  if (-not $src.private_key_id -or $src.private_key_id -ne $dst.private_key_id) {
-    Fail "service-account private_key_id mismatch for $Label."
-  }
-  Write-Log "Verified service-account private_key_id for $Label."
-}
-
 function Copy-FileChecked {
   param([string]$Source, [string]$Destination)
   if (-not (Test-Path -LiteralPath $Source)) {
@@ -221,15 +211,17 @@ function Copy-RuntimeConfig {
   param([string]$DestinationDir, [string]$Label)
   New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
   $runtimeSource = Join-Path $backendDir 'config\runtime_config.json'
-  $keySource = Join-Path $backendDir 'config\google-service-account.json'
+  $apiSource = Join-Path $backendDir 'config\apps-script-api.json'
   Copy-FileChecked $runtimeSource (Join-Path $DestinationDir 'runtime_config.json')
-  Copy-FileChecked $keySource (Join-Path $DestinationDir 'google-service-account.json')
-  $legacySource = Join-Path $backendDir 'config\service-account.json'
-  if (Test-Path -LiteralPath $legacySource) {
-    Copy-FileChecked $legacySource (Join-Path $DestinationDir 'service-account.json')
+  Copy-FileChecked $apiSource (Join-Path $DestinationDir 'apps-script-api.json')
+  $apiConfig = Read-JsonFile $apiSource
+  if ($apiConfig.enabled -ne $true -or -not $apiConfig.base_url -or -not $apiConfig.token) {
+    Fail "Apps Script API config is missing enabled, base_url, or token for $Label."
   }
-  Verify-PrivateKeyId $keySource (Join-Path $DestinationDir 'google-service-account.json') $Label
-  Write-Log "Runtime config verified for $Label."
+  if ([string]$apiConfig.base_url -notmatch '^https://script\.google\.com/macros/s/.+/exec$') {
+    Fail "Apps Script API base_url is invalid for $Label."
+  }
+  Write-Log "Runtime and Apps Script API config verified for $Label without logging secret values."
 }
 
 # ============================================================
