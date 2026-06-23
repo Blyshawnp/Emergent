@@ -159,6 +159,19 @@ function headsetIsApproved(value, approvedHeadsets) {
   });
 }
 
+function findDeniedHeadset(value, deniedHeadsets) {
+  const normalized = normalizeHeadsetSearchValue(value);
+  const compact = compactHeadsetSearchValue(value);
+  if (!normalized) return null;
+  return (deniedHeadsets || []).find((item) => {
+    const label = `${item?.brand || ''} ${item?.model || ''}`.trim();
+    return normalizeHeadsetSearchValue(label) === normalized
+      || normalizeHeadsetSearchValue(item?.model || '') === normalized
+      || compactHeadsetSearchValue(label) === compact
+      || compactHeadsetSearchValue(item?.model || '') === compact;
+  }) || null;
+}
+
 function hasBasicsDraft(form) {
   return Boolean(
     String(form.candidate_name || '').trim() ||
@@ -183,6 +196,7 @@ export default function BasicsPage({ onNavigate }) {
   const [headsetLookupOpen, setHeadsetLookupOpen] = useState(false);
   const [headsetQuery, setHeadsetQuery] = useState('');
   const [approvedHeadsets, setApprovedHeadsets] = useState([]);
+  const [deniedHeadsets, setDeniedHeadsets] = useState([]);
   const [headsetLookupError, setHeadsetLookupError] = useState('');
   const [headsetLookupLoading, setHeadsetLookupLoading] = useState(true);
   const [candidateLookup, setCandidateLookup] = useState({ loading: false, skipped: false, matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false });
@@ -239,6 +253,7 @@ export default function BasicsPage({ onNavigate }) {
         }));
 
         setApprovedHeadsets(headsetResponse.groups || []);
+        setDeniedHeadsets(headsetResponse.denied || []);
         setHeadsetLookupError(headsetResponse.error || '');
       } catch (_error) {
         if (cancelled) return;
@@ -429,10 +444,10 @@ export default function BasicsPage({ onNavigate }) {
       const choice = await modal.showModal({
         type: 'confirm',
         title,
-        body: `${body}<div class="fail-discord-copy-helper"><b>${helperText}</b>${copied ? '<span>Copied to clipboard.</span>' : ''}</div>`,
+        body: `${body}${copied ? '<div class="fail-discord-copy-helper"><span>Copied to clipboard.</span></div>' : ''}`,
         graphic: 'warning',
         buttons: [
-          { label: copied ? 'Copied' : 'Copy', cls: 'discord-copy', value: 'copy-discord' },
+          { label: copied ? `${helperText} - Copied` : helperText, cls: 'discord-copy', value: 'copy-discord' },
           { label: 'Yes', cls: 'btn-primary', value: true },
           { label: 'No', cls: 'btn-muted', value: false },
         ],
@@ -693,6 +708,7 @@ export default function BasicsPage({ onNavigate }) {
 
   const handleContinue = async () => {
     const headsetApproved = Boolean(String(form.headset_brand || '').trim()) && headsetIsApproved(form.headset_brand, approvedHeadsets);
+    const deniedHeadset = findDeniedHeadset(form.headset_brand, deniedHeadsets);
     const d = headsetApproved
       ? { ...form, headset_usb: true, noise_cancel: true }
       : form;
@@ -709,6 +725,35 @@ export default function BasicsPage({ onNavigate }) {
       if (!candidateBlockResult.allowed) return;
     }
     if (!d.headset_brand.trim()) { await modal.warning('Missing Info', 'Headset brand/model is required.'); return; }
+    if (deniedHeadset) {
+      const hasReplacement = await modal.showModal({
+        type: 'confirm',
+        title: 'Denied Headset',
+        body: `<b>${deniedHeadset.brand} ${deniedHeadset.model}</b> is denied and cannot be used for this session.${deniedHeadset.note ? `<br><br>${deniedHeadset.note}` : ''}<br><br>Does the candidate have another compliant USB headset with a noise cancelling microphone?`,
+        graphic: 'warning',
+        buttons: [
+          { label: 'Yes', cls: 'btn-primary', value: true },
+          { label: 'No', cls: 'btn-danger', value: false },
+        ],
+      });
+      if (hasReplacement) return;
+      const denialText = String(deniedHeadset.note || '').toLowerCase();
+      const deniedAutoFailReason = denialText.includes('usb')
+        ? 'Wrong headset (not USB)'
+        : denialText.includes('noise cancelling')
+          ? 'Wrong headset (not noise cancelling)'
+          : 'Not ready for session (denied headset)';
+      const failData = {
+        ...d,
+        supervisor_only: supervisorOnlyMode,
+        auto_fail_reason: deniedAutoFailReason,
+        final_status: 'Fail',
+      };
+      window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+      await api.startSession(failData);
+      onNavigate('review');
+      return;
+    }
     if (!headsetApproved && (d.headset_usb === null || d.noise_cancel === null)) { await modal.warning('Missing Info', 'USB and Noise Cancelling answers are required for headsets that are not on the approved list.'); return; }
     if (d.vpn_on === null) { await modal.warning('Missing Info', 'VPN question must be answered.'); return; }
     if (d.vpn_on && d.vpn_off === null) { await modal.warning('Missing Info', 'Please confirm if the candidate can turn off their VPN.'); return; }
@@ -722,7 +767,7 @@ export default function BasicsPage({ onNavigate }) {
         title: 'Headset Issue',
         body: `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`,
         templateTitle: 'Wrong Headset',
-        helperText: 'Headset Fail Discord Post',
+        helperText: 'Discord Post: Wrong Headset',
       });
       if (yes) {
         const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
@@ -738,7 +783,7 @@ export default function BasicsPage({ onNavigate }) {
         title: 'VPN Issue',
         body: 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?',
         templateTitle: 'VPN Fail',
-        helperText: 'VPN Fail Discord Post',
+        helperText: 'Discord Post: VPN Fail',
       });
       if (yes) {
         const failData = { ...d, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
@@ -794,6 +839,17 @@ export default function BasicsPage({ onNavigate }) {
     await api.startSession(startData);
     onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
   };
+
+  const saveBasicsForTechIssue = useCallback(async () => {
+    const prepared = { ...form, supervisor_only: supervisorOnlyMode, status: 'In Progress' };
+    const current = await api.getCurrentSession().catch(() => null);
+    if (current?.session?.candidate_name) {
+      await api.updateSession(prepared);
+    } else if (prepared.candidate_name.trim()) {
+      await api.startSession(prepared);
+    }
+    return prepared;
+  }, [form, supervisorOnlyMode]);
 
   const RadioGroup = ({ name, value, onChange, disabled = false }) => (
     <div className="radio-group">
@@ -1021,7 +1077,7 @@ export default function BasicsPage({ onNavigate }) {
         </div>
       </div>
 
-      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={form.final_attempt} onNavigate={onNavigate} />
+      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={form.final_attempt} onNavigate={onNavigate} onBeforeNavigate={saveBasicsForTechIssue} context="basics" />
 
       {headsetLookupOpen && (
         <div

@@ -658,6 +658,7 @@ const CANDIDATE_VIEW_LABELS = {
 const SECTION_NAV_ITEMS = [
   { key: 'notifications', label: 'Notifications', target: 'sam-notifications' },
   { key: 'preview', label: 'Live Preview', target: 'sam-live-preview' },
+  { key: 'headsets', label: 'Headset Review', target: 'sam-headset-review' },
   { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive' },
   { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending' },
   { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
@@ -1327,12 +1328,110 @@ function NotificationEditorModal({
   );
 }
 
+const HEADSET_DENIAL_REASONS = [
+  'Headset does not connect via USB',
+  'Headset does not have a noise cancelling microphone',
+  'Other',
+];
+
+function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) {
+  const [deferred, setDeferred] = useState({});
+  const [denial, setDenial] = useState(null);
+  const pending = (data?.pending || []).filter((item) => !deferred[`${item.brand}::${item.model}`]);
+
+  const lookUp = async (item) => {
+    const question = `Does the "${item.brand} ${item.model}" have a noise cancelling microphone and have a USB connection?`;
+    const url = `https://www.google.com/search?q=${encodeURIComponent(question)}`;
+    if (window.electronAPI?.openExternal) {
+      await window.electronAPI.openExternal(url);
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const decide = async (item, action, extra = {}) => {
+    const result = await onDecision({ action, brand: item.brand, model: item.model, ...extra });
+    if (result?.ok) {
+      setDeferred((current) => {
+        const next = { ...current };
+        delete next[`${item.brand}::${item.model}`];
+        return next;
+      });
+      setDenial(null);
+    }
+  };
+
+  const renderRows = (rows, kind) => (
+    <div className="nm-table-wrap">
+      <table className="nm-table">
+        <thead><tr><th>Brand</th><th>Model</th><th>Status</th><th>Note</th>{kind === 'pending' ? <th>Actions</th> : null}</tr></thead>
+        <tbody>
+          {rows.map((item, index) => (
+            <tr key={`${kind}-${item.brand}-${item.model}-${index}`}>
+              <td>{item.brand}</td><td>{item.model}</td><td><strong>{item.status || kind}</strong></td><td>{item.note || 'N/A'}</td>
+              {kind === 'pending' ? (
+                <td><div className="nm-row-actions">
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Look Up</button>
+                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={async () => {
+                    const result = await onDecision({ action: 'review_later', brand: item.brand, model: item.model });
+                    if (result?.ok) {
+                      setDeferred((current) => ({ ...current, [`${item.brand}::${item.model}`]: true }));
+                      onStatus('Headset left pending for later review.', 'info');
+                    }
+                  }}>Review Later</button>
+                </div></td>
+              ) : null}
+            </tr>
+          ))}
+          {!rows.length ? <tr><td colSpan={kind === 'pending' ? 5 : 4}><div className="nm-empty">No {kind} headsets.</div></td></tr> : null}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <section className="nm-panel" id="sam-headset-review">
+      <div className="nm-section-title">
+        <div><h2>Headset Review</h2><div className="nm-kicker">Review unknown headsets and keep MTS approval and denial behavior synchronized.</div></div>
+        <button type="button" className="nm-btn nm-btn-secondary" onClick={onRefresh} disabled={loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
+      </div>
+      <h3>Pending Review</h3>
+      {renderRows(pending, 'pending')}
+      <h3 style={{ marginTop: 24 }}>Approved</h3>
+      {renderRows(data?.approved || [], 'approved')}
+      <h3 style={{ marginTop: 24 }}>Denied</h3>
+      {renderRows(data?.denied || [], 'denied')}
+      {denial ? (
+        <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) setDenial(null); }}>
+          <div className="modal" style={{ width: 560, maxWidth: '92vw' }}>
+            <div className="modal-header"><h2>Deny Headset</h2><button className="modal-close" onClick={() => setDenial(null)}>&times;</button></div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <strong>{denial.item.brand} {denial.item.model}</strong>
+              {HEADSET_DENIAL_REASONS.map((reason) => (
+                <label key={reason} className="nm-checkbox"><input type="radio" name="headset-denial-reason" checked={denial.reason === reason} onChange={() => setDenial((current) => ({ ...current, reason }))} /> {reason}</label>
+              ))}
+              {denial.reason === 'Other' ? <textarea rows={3} value={denial.note} onChange={(event) => setDenial((current) => ({ ...current, note: event.target.value }))} placeholder="Denial note is required" /> : null}
+              <div className="nm-row-actions">
+                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setDenial(null)}>Cancel</button>
+                <button type="button" className="nm-btn nm-btn-danger" disabled={!denial.reason || (denial.reason === 'Other' && !denial.note.trim())} onClick={() => decide(denial.item, 'deny', { reason: denial.reason, note: denial.note })}>Deny</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export default function NotificationManagerApp() {
   const fileInputRef = useRef(null);
   const backendStartupRetryRef = useRef({ attempt: 0, timer: null });
   const retryBackendStartupRef = useRef(null);
   const startupUpdateCheckRef = useRef(false);
   const manualUpdateCheckRef = useRef(false);
+  const headsetPendingNoticeShownRef = useRef(false);
   const [items, setItems] = useState(() => {
     try {
       const stored = localStorage.getItem(NOTIFICATION_MANAGER_STORAGE_KEY);
@@ -1381,6 +1480,9 @@ export default function NotificationManagerApp() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [candidateTracking, setCandidateTracking] = useState({ ok: true, views: {}, candidates: [], pending: [], error: '' });
   const [candidateTrackingLoading, setCandidateTrackingLoading] = useState(false);
+  const [headsetReviews, setHeadsetReviews] = useState({ ok: true, pending: [], approved: [], denied: [], error: '' });
+  const [headsetReviewsLoading, setHeadsetReviewsLoading] = useState(false);
+  const [headsetReviewNoticeOpen, setHeadsetReviewNoticeOpen] = useState(false);
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
   const showStatusModal = useCallback((message, kind = 'info') => {
     setStatusModal({ message, kind });
@@ -1640,6 +1742,59 @@ export default function NotificationManagerApp() {
     }
   }, []);
 
+  const loadHeadsetReviews = useCallback(async ({ silent = false, showPendingNotice = false } = {}) => {
+    if (!silent) setHeadsetReviewsLoading(true);
+    try {
+      const result = await api.getHeadsetReviews();
+      const next = {
+        ok: result?.ok !== false,
+        pending: result?.pending || [],
+        approved: result?.approved || [],
+        denied: result?.denied || [],
+        error: result?.error || '',
+      };
+      setHeadsetReviews(next);
+      if (showPendingNotice && next.pending.length > 0 && !headsetPendingNoticeShownRef.current) {
+        headsetPendingNoticeShownRef.current = true;
+        setHeadsetReviewNoticeOpen(true);
+      }
+      return next;
+    } catch (error) {
+      const message = getErrorMessage(error, 'Unable to load headset reviews.');
+      setHeadsetReviews((current) => ({ ...current, ok: false, error: message }));
+      return null;
+    } finally {
+      setHeadsetReviewsLoading(false);
+    }
+  }, []);
+
+  const runHeadsetDecision = useCallback(async (payload) => {
+    try {
+      const result = await api.updateHeadsetReview(payload);
+      if (!result?.ok) {
+        const message = result?.error || 'Unable to save the headset review decision.';
+        setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
+        playSamActionSound('error');
+        showStatusModal(message, 'error');
+        return result;
+      }
+      const reviewLater = payload.action === 'review_later';
+      const message = payload.action === 'approve' ? 'Headset approved.' : payload.action === 'deny' ? 'Headset denied.' : 'Headset left pending for later review.';
+      setSheetState((current) => ({ ...current, statusKind: reviewLater ? 'info' : 'success', statusMessage: message }));
+      if (!reviewLater) {
+        playSamActionSound('success');
+        await loadHeadsetReviews({ silent: true });
+      }
+      return result;
+    } catch (error) {
+      const message = getErrorMessage(error, 'Unable to save the headset review decision.');
+      setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
+      playSamActionSound('error');
+      showStatusModal(message, 'error');
+      return { ok: false, error: message };
+    }
+  }, [loadHeadsetReviews, playSamActionSound, showStatusModal]);
+
   const runCandidateAction = useCallback(async (payload) => {
     try {
       const result = await api.updateSharedAdminCandidate(payload);
@@ -1883,6 +2038,11 @@ export default function NotificationManagerApp() {
     // Do not show update status on normal startup
     // void runStartupUpdateCheck();
   }, [runStartupUpdateCheck, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
+
+  useEffect(() => {
+    if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) return;
+    void loadHeadsetReviews({ silent: true, showPendingNotice: true });
+  }, [loadHeadsetReviews, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
 
   const selectedItem = items[selectedIndex] || items[0];
   const editorValidation = useMemo(() => {
@@ -2503,6 +2663,7 @@ export default function NotificationManagerApp() {
                 <div className="nm-actions">
                   <button type="button" className="nm-btn nm-btn-primary" onClick={handleAdd} data-sam-tour="add-notification">Add Notification</button>
                   <button type="button" className="nm-btn nm-btn-secondary" onClick={() => { setActiveSection('candidates'); setCandidateView('allActive'); setCandidateSearch(''); }} data-sam-tour="candidate-tracking-btn">Candidate Tracking</button>
+                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setActiveSection('headsets')} data-testid="sam-headset-review-button">Headset Review</button>
                   <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setSearchModalOpen(true)} data-sam-tour="candidate-search-btn">Candidate Search</button>
                   <button type="button" className="nm-btn nm-btn-secondary" onClick={() => openEditor(selectedIndex)} disabled={!selectedItem}>Edit Selected</button>
                   <button type="button" className="nm-btn nm-btn-secondary" onClick={handleDuplicate} disabled={!selectedItem}>Duplicate Selected</button>
@@ -2716,6 +2877,15 @@ export default function NotificationManagerApp() {
             includeArchivedDefault={samSettings.includeArchivedInSearchDefault}
           />
         ) : null}
+        {activeSection === 'headsets' ? (
+          <HeadsetReviewPanel
+            data={headsetReviews}
+            loading={headsetReviewsLoading}
+            onRefresh={() => loadHeadsetReviews()}
+            onDecision={runHeadsetDecision}
+            onStatus={(message, kind = 'info') => setSheetState((current) => ({ ...current, statusKind: kind, statusMessage: message }))}
+          />
+        ) : null}
       </div>
       <NotificationEditorModal
         open={editorOpen}
@@ -2778,6 +2948,20 @@ export default function NotificationManagerApp() {
         onConfirm={(value) => resolveConfirm(value)}
         onCancel={() => resolveConfirm(false)}
       />
+      {headsetReviewNoticeOpen ? (
+        <div className="modal-overlay open">
+          <div className="modal" style={{ width: 500, maxWidth: '92vw' }}>
+            <div className="modal-header"><h2>Headset Review</h2></div>
+            <div className="modal-body">
+              <p>New headsets are ready to review.</p>
+              <div className="nm-row-actions" style={{ marginTop: 18 }}>
+                <button type="button" className="nm-btn nm-btn-primary" onClick={() => { setActiveSection('headsets'); setHeadsetReviewNoticeOpen(false); }}>Review Now</button>
+                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setHeadsetReviewNoticeOpen(false)}>OK</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -616,6 +616,7 @@ TRACKED_CONTENT_KEYS = (
     "discord_templates",
     "discord_screenshots",
     "approved_headsets",
+    "denied_headsets",
     "help_markdown",
     "faq_markdown",
     "admin_setup_markdown",
@@ -1532,7 +1533,10 @@ def _normalize_approved_headsets(rows):
         row = row or {}
         brand = str(row.get("Brand") or "").strip()
         model = str(row.get("Model") or "").strip()
+        status = str(row.get("Status") or "approved").strip().lower()
         if not brand or brand.lower() in ignored_brands or not model:
+            continue
+        if status == "denied":
             continue
         if brand not in grouped:
             grouped[brand] = []
@@ -1540,6 +1544,23 @@ def _normalize_approved_headsets(rows):
         if model not in grouped[brand]:
             grouped[brand].append(model)
     return [{"brand": brand, "models": grouped[brand]} for brand in order if grouped[brand]]
+
+
+def _normalize_denied_headsets(rows):
+    denied = []
+    for row in rows or []:
+        row = row or {}
+        brand = str(row.get("Brand") or "").strip()
+        model = str(row.get("Model") or "").strip()
+        status = str(row.get("Status") or "").strip().lower()
+        if brand and model and status == "denied":
+            denied.append({
+                "brand": brand,
+                "model": model,
+                "status": "denied",
+                "note": str(row.get("Note") or "").strip(),
+            })
+    return denied
 
 
 def _load_local_defaults_content():
@@ -1595,6 +1616,17 @@ def _load_local_defaults_content():
             text = path.read_text(encoding="cp1252")
         return _read_csv_rows(text)
 
+    def read_headsets_csv_file():
+        # The admin content package can contain only source notes for this tab.
+        # Prefer the bundled runtime CSV so offline headset lookup remains usable.
+        for label, directory in source_dirs:
+            if label != "backend/defaults":
+                continue
+            path = directory / DEFAULTS_FILE_MAP["approved_headsets"]
+            if path.is_file():
+                return _read_csv_rows(path.read_text(encoding="utf-8-sig"))
+        return read_csv_file(DEFAULTS_FILE_MAP["approved_headsets"]) or []
+
     def read_text_file(filename):
         path = find_local_file(filename, required=True)
         if not path:
@@ -1616,6 +1648,7 @@ def _load_local_defaults_content():
     except Exception as exc:
         logger.warning("[CONTENT] Failed to parse local callers defaults: %s", exc)
 
+    headset_rows = read_headsets_csv_file()
     local_csv_loaders = {
         "shows": lambda: _normalize_shows(read_csv_file(DEFAULTS_FILE_MAP["shows"]) or []),
         "call_types": lambda: _normalize_text_list(read_csv_file(DEFAULTS_FILE_MAP["call_types"]) or []),
@@ -1626,7 +1659,8 @@ def _load_local_defaults_content():
         "sup_fails": lambda: _normalize_fail_reasons(read_csv_file(DEFAULTS_FILE_MAP["sup_fails"]) or [], "sup_fails", "local sup-fail-reasons.csv", use_builtin_fallback=True),
         "discord_templates": lambda: _normalize_discord_posts(read_csv_file(DEFAULTS_FILE_MAP["discord_templates"]) or []),
         "discord_screenshots": lambda: _normalize_screenshots(read_csv_file(DEFAULTS_FILE_MAP["discord_screenshots"]) or []),
-        "approved_headsets": lambda: _normalize_approved_headsets(read_csv_file(DEFAULTS_FILE_MAP["approved_headsets"]) or []),
+        "approved_headsets": lambda: _normalize_approved_headsets(headset_rows),
+        "denied_headsets": lambda: _normalize_denied_headsets(headset_rows),
     }
 
     for key, loader in local_csv_loaders.items():
@@ -1702,7 +1736,10 @@ CONTENT_SHEET_PARSERS = {
     "sup_fails": lambda csv_text: {"sup_fails": _normalize_fail_reasons(_read_csv_rows(csv_text), "sup_fails", "Google Sheet tab sup-fail-reasons")},
     "discord_templates": lambda csv_text: {"discord_templates": _normalize_discord_posts(_read_csv_rows(csv_text))},
     "discord_screenshots": lambda csv_text: {"discord_screenshots": _normalize_screenshots(_read_csv_rows(csv_text))},
-    "approved_headsets": lambda csv_text: {"approved_headsets": _normalize_approved_headsets(_read_csv_rows(csv_text))},
+    "approved_headsets": lambda csv_text: {
+        "approved_headsets": _normalize_approved_headsets(_read_csv_rows(csv_text)),
+        "denied_headsets": _normalize_denied_headsets(_read_csv_rows(csv_text)),
+    },
 }
 
 
@@ -1906,11 +1943,9 @@ async def _background_remote_content_task():
         logger.info("[CONTENT] background Google content refresh started")
         runtime_config = _load_backend_runtime_config()
         remote_pipeline_failures = []
-        try:
-            local_content = _load_local_defaults_content()
-        except Exception as exc:
-            logger.warning("[CONTENT] Local defaults load failed in background task: %s", exc)
-            local_content = {}
+        # Local defaults were loaded synchronously before the server became ready.
+        # Reuse that snapshot instead of rescanning every bundled CSV/markdown file.
+        local_content = dict(EXTERNAL_CONTENT)
 
         try:
             sheet_content = await asyncio.to_thread(_load_google_sheet_content, runtime_config, local_content)
@@ -2046,9 +2081,9 @@ async def _background_remote_content_task():
         
         if shared_sheet_status.get("ok"):
             logger.info(
-                "[STARTUP] Master shared sheet setup verified. spreadsheet=%s service_account=%s",
+                "[STARTUP] Master shared sheet setup verified. spreadsheet=%s service_account_configured=%s",
                 _mask_config_value(shared_sheet_status.get("spreadsheetId")),
-                shared_sheet_status.get("serviceAccountEmail") or "unknown",
+                bool(shared_sheet_status.get("serviceAccountEmail")),
             )
         else:
             logger.error(
@@ -2765,11 +2800,11 @@ def _log_startup_runtime_diagnostics():
         notification.get("sheetIdMasked"),
     )
     logger.info(
-        "[RUNTIME] google_service_account exists=%s path=%s client_email=%s private_key_id=%s",
+        "[RUNTIME] google_service_account exists=%s path=%s client_email_configured=%s private_key_id_configured=%s",
         credential.get("exists"),
         credential.get("path"),
-        credential.get("client_email") or "unknown",
-        credential.get("private_key_id") or "unknown",
+        bool(credential.get("client_email")),
+        bool(credential.get("private_key_id")),
     )
     logger.info("[RUNTIME] content_source_summary=%s", compact_sources)
     return diagnostics
@@ -3057,6 +3092,8 @@ def empty_session():
         "status": "In Progress",
         "auto_fail_reason": None,
         "tech_issue": "N/A",
+        "tech_issue_ended_session": False,
+        "tech_issue_summary_required": False,
         "headset_usb": None,
         "headset_brand": "",
         "noise_cancel": None,
@@ -3087,6 +3124,7 @@ SHARED_PENDING_SUP_TRANSFERS_TAB = "Pending Sup Transfers"
 SAM_AUTHORIZED_USERS_TAB = "sam-authorized-users"
 SAM_NOTIFICATIONS_TAB = "sam-notifications"
 HEADSET_REVIEW_LOG_TAB = "headset-review-log"
+HEADSETS_TAB = "headsets"
 
 SAM_AUTHORIZED_USER_HEADERS = [
     "name",
@@ -3100,13 +3138,16 @@ SAM_AUTHORIZED_USER_HEADERS = [
 ]
 
 HEADSET_REVIEW_LOG_HEADERS = [
-    "headset_model",
-    "candidate_name",
-    "tester_name",
-    "entered_at",
-    "review_status",
-    "notes",
+    "Brand",
+    "Model",
+    "Status",
+    "Note",
 ]
+
+LEGACY_HEADSET_REVIEW_LOG_HEADERS = [
+    "headset_model", "candidate_name", "tester_name", "entered_at", "review_status", "notes",
+]
+HEADSETS_HEADERS = ["Brand", "Model", "Status", "Note"]
 
 SHARED_CANDIDATE_SESSION_HEADERS = [
     "session_id",
@@ -3223,6 +3264,7 @@ def _shared_tracking_required_setup():
         SHARED_CANDIDATE_SESSIONS_TAB: SHARED_CANDIDATE_SESSION_HEADERS,
         SHARED_PENDING_SUP_TRANSFERS_TAB: SHARED_PENDING_SUP_TRANSFER_HEADERS,
         HEADSET_REVIEW_LOG_TAB: HEADSET_REVIEW_LOG_HEADERS,
+        HEADSETS_TAB: HEADSETS_HEADERS,
     }
 
 
@@ -3534,9 +3576,9 @@ def _verify_master_shared_sheets():
     }
 
     logger.info(
-        "[SHEETS] Verifying master shared sheet=%s with service_account=%s. Legacy notification sheet fallback=%s gid=%s.",
+        "[SHEETS] Verifying master shared sheet=%s with service_account_configured=%s. Legacy notification sheet fallback=%s gid=%s.",
         _mask_config_value(sheet_id),
-        service_account_email or "unknown",
+        bool(service_account_email),
         _mask_config_value(notification_config.get("sheet_id")),
         notification_config.get("gid") or "0",
     )
@@ -3556,7 +3598,12 @@ def _verify_master_shared_sheets():
 
         for title, headers in _shared_tracking_required_setup().items():
             try:
-                status = _verify_header_tab(sheets_api, sheet_id, title, headers, "shared_candidate_tracking", tabs)
+                if title == HEADSET_REVIEW_LOG_TAB:
+                    status = _ensure_headset_review_log_tab(sheets_api, sheet_id)
+                elif title == HEADSETS_TAB:
+                    status = _ensure_headsets_tab(sheets_api, sheet_id)
+                else:
+                    status = _verify_header_tab(sheets_api, sheet_id, title, headers, "shared_candidate_tracking", tabs)
             except Exception as exc:
                 status = _tab_error_status(title, "shared_candidate_tracking", exc, exists=title in tabs)
             result["tabs"].append(status)
@@ -3644,9 +3691,9 @@ def _get_shared_tracking_sheet_service():
     service_account_email = _get_service_account_email()
     _record_google_sheet_auth_status("shared_service_resolved", ok=bool(creds_path), path=creds_path, error="" if creds_path else "No service account credentials found.")
     logger.info(
-        "[SHARED] Master MTS content/candidate sheet config spreadsheet_id=%s service_account=%s credentials_path=%s",
-        sheet_id or "",
-        service_account_email or "unknown",
+        "[SHARED] Master MTS content/candidate sheet config spreadsheet_id=%s service_account_configured=%s credentials_path=%s",
+        _mask_config_value(sheet_id),
+        bool(service_account_email),
         creds_path or "",
     )
     if not creds_path:
@@ -3719,9 +3766,9 @@ def _ensure_shared_tracking_tabs(service, sheet_id, service_account_email=""):
                     if status.get("action") == "create_pending"
                 ]
                 logger.error(
-                    "[SHARED] Failed to create shared tracking tabs. reason=%s service_account=%s spreadsheet=%s missing_tabs=%s error=%s",
+                    "[SHARED] Failed to create shared tracking tabs. reason=%s service_account_configured=%s spreadsheet=%s missing_tabs=%s error=%s",
                     reason,
-                    service_account_email or "unknown",
+                    bool(service_account_email),
                     _mask_config_value(sheet_id),
                     missing_tabs,
                     exc,
@@ -3730,7 +3777,7 @@ def _ensure_shared_tracking_tabs(service, sheet_id, service_account_email=""):
                     "ok": False,
                     "error": (
                         "Missing shared tracking tabs could not be created. "
-                        f"Reason: {reason}. Service account requiring Editor access: {service_account_email or 'unknown'}."
+                        f"Reason: {reason}. The configured service account requires Editor access."
                     ),
                     "reason": reason,
                     "sheetId": sheet_id,
@@ -3745,6 +3792,18 @@ def _ensure_shared_tracking_tabs(service, sheet_id, service_account_email=""):
             }
 
         for title, headers in _shared_tracking_required_setup().items():
+            if title == HEADSET_REVIEW_LOG_TAB:
+                status = _ensure_headset_review_log_tab(sheets_api, sheet_id)
+                if not status.get("ok"):
+                    return {"ok": False, "error": status.get("error"), "sheetId": sheet_id, "serviceAccountEmail": service_account_email, "statuses": statuses, "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+                statuses.append({"tab": title, "headers": status.get("headerStatus") or "verified", "schema": status.get("schema") or "review"})
+                continue
+            if title == HEADSETS_TAB:
+                status = _ensure_headsets_tab(sheets_api, sheet_id)
+                if not status.get("ok"):
+                    return {"ok": False, "error": status.get("error"), "sheetId": sheet_id, "serviceAccountEmail": service_account_email, "statuses": statuses, "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+                statuses.append({"tab": title, "headers": status.get("headerStatus") or "verified"})
+                continue
             if title not in tabs:
                 logger.error("[SHARED] Required shared tracking tab is still missing after setup attempt: %s", title)
                 return {
@@ -3805,9 +3864,9 @@ def _ensure_shared_tracking_tabs(service, sheet_id, service_account_email=""):
     except Exception as exc:
         reason = _shared_permission_hint(exc)
         logger.error(
-            "[SHARED] Unable to verify shared tracking tabs. reason=%s service_account=%s spreadsheet=%s error=%s",
+            "[SHARED] Unable to verify shared tracking tabs. reason=%s service_account_configured=%s spreadsheet=%s error=%s",
             reason,
-            service_account_email or "unknown",
+            bool(service_account_email),
             _mask_config_value(sheet_id),
             exc,
         )
@@ -4031,7 +4090,7 @@ def _shared_update_or_append_row(sheets_api, sheet_id, tab_name, headers, key_na
     if target:
         logger.info(
             "[SHARED] Operation=update spreadsheet_id=%s tab=%s row=%s key=%s",
-            sheet_id,
+            _mask_config_value(sheet_id),
             tab_name,
             target["_row_number"],
             key_name,
@@ -4045,7 +4104,7 @@ def _shared_update_or_append_row(sheets_api, sheet_id, tab_name, headers, key_na
         return "updated"
     logger.info(
         "[SHARED] Operation=append spreadsheet_id=%s tab=%s key=%s",
-        sheet_id,
+        _mask_config_value(sheet_id),
         tab_name,
         key_name,
     )
@@ -4064,7 +4123,7 @@ def _shared_update_existing_row(sheets_api, sheet_id, tab_name, headers, row_num
     last_col = _column_letter(len(headers))
     logger.info(
         "[SHARED] Operation=update spreadsheet_id=%s tab=%s row=%s",
-        sheet_id,
+        _mask_config_value(sheet_id),
         tab_name,
         row_number,
     )
@@ -4100,18 +4159,113 @@ def _ensure_headset_review_log_tab(sheets_api, sheet_id):
         ((sheet.get("properties") or {}).get("title") or ""): sheet
         for sheet in metadata.get("sheets", [])
     }
-    return _verify_header_tab(
-        sheets_api,
-        sheet_id,
-        HEADSET_REVIEW_LOG_TAB,
-        HEADSET_REVIEW_LOG_HEADERS,
-        "headset_review_log",
-        tabs,
+    _ensure_sheet_tab(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, tabs)
+    current = _read_header_row(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, len(LEGACY_HEADSET_REVIEW_LOG_HEADERS))
+    normalized = [str(value or "").strip() for value in current]
+    if normalized[:len(HEADSET_REVIEW_LOG_HEADERS)] == HEADSET_REVIEW_LOG_HEADERS:
+        return {"ok": True, "schema": "review", "headerStatus": "verified"}
+    if normalized[:len(LEGACY_HEADSET_REVIEW_LOG_HEADERS)] == LEGACY_HEADSET_REVIEW_LOG_HEADERS:
+        return {"ok": True, "schema": "legacy", "headerStatus": "legacy-compatible"}
+    if not any(normalized):
+        quoted = _quote_sheet_title_for_a1(HEADSET_REVIEW_LOG_TAB)
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A1:D1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [HEADSET_REVIEW_LOG_HEADERS]},
+        ).execute()
+        return {"ok": True, "schema": "review", "headerStatus": "written"}
+    return {"ok": False, "schema": "unknown", "error": "Headset review log headers do not match the supported review schema."}
+
+
+def _ensure_headsets_tab(sheets_api, sheet_id):
+    metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+    tabs = {
+        ((sheet.get("properties") or {}).get("title") or ""): sheet
+        for sheet in metadata.get("sheets", [])
+    }
+    _created, sheet = _ensure_sheet_tab(sheets_api, sheet_id, HEADSETS_TAB, tabs)
+    current = _read_header_row(sheets_api, sheet_id, HEADSETS_TAB, len(HEADSETS_HEADERS))
+    normalized = [str(value or "").strip() for value in current]
+    if normalized[:len(HEADSETS_HEADERS)] == HEADSETS_HEADERS:
+        return {"ok": True, "headerStatus": "verified"}
+    quoted = _quote_sheet_title_for_a1(HEADSETS_TAB)
+    if not any(normalized):
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A1:D1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [HEADSETS_HEADERS]},
+        ).execute()
+        return {"ok": True, "headerStatus": "written"}
+    if normalized[:3] == ["Brand", "Model", "Note"]:
+        sheet_gid = ((sheet or {}).get("properties") or {}).get("sheetId")
+        if sheet_gid is None:
+            return {"ok": False, "error": "Unable to identify the headsets tab for schema migration."}
+        sheets_api.batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"requests": [{"insertDimension": {"range": {
+                "sheetId": sheet_gid,
+                "dimension": "COLUMNS",
+                "startIndex": 2,
+                "endIndex": 3,
+            }, "inheritFromBefore": True}}]},
+        ).execute()
+        sheets_api.values().update(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A1:D1",
+            valueInputOption="USER_ENTERED",
+            body={"values": [HEADSETS_HEADERS]},
+        ).execute()
+        rows = sheets_api.values().get(
+            spreadsheetId=sheet_id,
+            range=f"{quoted}!A2:B",
+        ).execute().get("values", [])
+        statuses = [["approved"] for row in rows if any(str(cell or "").strip() for cell in row)]
+        if statuses:
+            sheets_api.values().update(
+                spreadsheetId=sheet_id,
+                range=f"{quoted}!C2:C{len(statuses) + 1}",
+                valueInputOption="USER_ENTERED",
+                body={"values": statuses},
+            ).execute()
+        return {"ok": True, "headerStatus": "migrated-status-column"}
+    return {"ok": False, "error": "Headsets headers do not match Brand, Model, Status, Note."}
+
+
+def _split_headset_brand_model(value, brand="", model=""):
+    brand = re.sub(r"\s+", " ", str(brand or "").strip())
+    model = re.sub(r"\s+", " ", str(model or "").strip())
+    combined = re.sub(r"\s+", " ", str(value or "").strip())
+    if brand and model:
+        return brand, model
+    known_brands = sorted(
+        [str((group or {}).get("brand") or "").strip() for group in EXTERNAL_CONTENT.get("approved_headsets") or []],
+        key=len,
+        reverse=True,
     )
+    lowered = combined.lower()
+    for known_brand in known_brands:
+        if lowered == known_brand.lower() or lowered.startswith(f"{known_brand.lower()} "):
+            return known_brand, combined[len(known_brand):].strip() or combined
+    parts = combined.split(" ", 1)
+    return (parts[0] if parts else ""), (parts[1] if len(parts) > 1 else combined)
+
+
+def _headset_review_schema_from_context(context):
+    statuses = ((context or {}).get("setupStatus") or {}).get("statuses") or []
+    match = next((status for status in statuses if status.get("tab") == HEADSET_REVIEW_LOG_TAB), {})
+    return match.get("schema") or "review"
 
 
 def _append_headset_review_log(payload):
     headset_model = str((payload or {}).get("headset_model") or "").strip()
+    brand, model = _split_headset_brand_model(
+        headset_model,
+        (payload or {}).get("brand"),
+        (payload or {}).get("model"),
+    )
+    headset_model = f"{brand} {model}".strip()
     normalized_model = _normalize_headset_review_key(headset_model)
     if not normalized_model:
         return {"ok": True, "skipped": True, "reason": "blank_headset"}
@@ -4126,38 +4280,206 @@ def _append_headset_review_log(payload):
 
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
-        status = _ensure_headset_review_log_tab(sheets_api, sheet_id)
-        if not status.get("ok"):
-            logger.warning("[HEADSET-REVIEW] Unable to verify %s tab: %s", HEADSET_REVIEW_LOG_TAB, status.get("error"))
-            return {"ok": False, "skipped": True, "reason": "tab_unavailable", "error": status.get("error") or ""}
-
-        rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, HEADSET_REVIEW_LOG_HEADERS)
+        schema = _headset_review_schema_from_context(context)
+        headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
+        rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers)
         for row in rows:
-            existing_model = _normalize_headset_review_key(row.get("headset_model"))
-            existing_status = str(row.get("review_status") or "").strip().lower()
+            existing_label = row.get("headset_model") if schema == "legacy" else f"{row.get('Brand', '')} {row.get('Model', '')}".strip()
+            existing_model = _normalize_headset_review_key(existing_label)
+            existing_status = str(row.get("review_status") if schema == "legacy" else row.get("Status") or "").strip().lower()
             if existing_model == normalized_model and existing_status in {"", "pending"}:
                 return {"ok": True, "skipped": True, "reason": "duplicate_pending"}
 
         quoted = _quote_sheet_title_for_a1(HEADSET_REVIEW_LOG_TAB)
+        row_values = ([
+            headset_model,
+            str((payload or {}).get("candidate_name") or "").strip(),
+            str((payload or {}).get("tester_name") or "").strip(),
+            datetime.now(timezone.utc).isoformat(),
+            "pending",
+            "",
+        ] if schema == "legacy" else [brand, model, "pending", ""])
         sheets_api.values().append(
             spreadsheetId=sheet_id,
             range=f"{quoted}!A2",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
-            body={"values": [[
-                headset_model,
-                str((payload or {}).get("candidate_name") or "").strip(),
-                str((payload or {}).get("tester_name") or "").strip(),
-                datetime.now(timezone.utc).isoformat(),
-                "pending",
-                "",
-            ]]},
+            body={"values": [row_values]},
         ).execute()
         logger.info("[HEADSET-REVIEW] Logged unknown headset model for admin review: %s", headset_model)
         return {"ok": True, "logged": True}
     except Exception as exc:
         logger.warning("[HEADSET-REVIEW] Failed to log unknown headset model; continuing workflow: %s", exc)
         return {"ok": False, "skipped": True, "reason": "write_failed", "error": str(exc)}
+
+
+def _normalize_headset_review_row(row, schema):
+    if schema == "legacy":
+        brand, model = _split_headset_brand_model(row.get("headset_model"))
+        status = str(row.get("review_status") or "pending").strip().lower() or "pending"
+        note = str(row.get("notes") or "").strip()
+    else:
+        brand = str(row.get("Brand") or "").strip()
+        model = str(row.get("Model") or "").strip()
+        status = str(row.get("Status") or "pending").strip().lower() or "pending"
+        note = str(row.get("Note") or "").strip()
+    return {
+        "brand": brand,
+        "model": model,
+        "status": status,
+        "note": note,
+        "_row_number": row.get("_row_number"),
+        "_schema": schema,
+        "_raw": row,
+    }
+
+
+def _read_headsets_rows(sheets_api, sheet_id):
+    return [
+        {
+            "brand": str(row.get("Brand") or "").strip(),
+            "model": str(row.get("Model") or "").strip(),
+            "status": str(row.get("Status") or "approved").strip().lower() or "approved",
+            "note": str(row.get("Note") or "").strip(),
+            "_row_number": row.get("_row_number"),
+        }
+        for row in _shared_read_rows(sheets_api, sheet_id, HEADSETS_TAB, HEADSETS_HEADERS)
+        if str(row.get("Brand") or "").strip() and str(row.get("Model") or "").strip()
+    ]
+
+
+def _sync_headset_content_cache(rows):
+    csv_rows = [
+        {"Brand": row.get("brand"), "Model": row.get("model"), "Status": row.get("status"), "Note": row.get("note")}
+        for row in rows or []
+    ]
+    approved = _normalize_approved_headsets(csv_rows)
+    denied = _normalize_denied_headsets(csv_rows)
+    EXTERNAL_CONTENT["approved_headsets"] = approved
+    EXTERNAL_CONTENT["denied_headsets"] = denied
+    _headset_cache["groups"] = approved
+    _headset_cache["denied"] = denied
+    _headset_cache["last_fetch"] = time.time()
+
+
+def _headset_review_snapshot():
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "pending": [], "approved": [], "denied": [], "error": context.get("error") or "Headset review sheet is unavailable."}
+    try:
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        schema = _headset_review_schema_from_context(context)
+        headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
+        review_rows = [
+            _normalize_headset_review_row(row, schema)
+            for row in _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers)
+        ]
+        headset_rows = _read_headsets_rows(sheets_api, sheet_id)
+        _sync_headset_content_cache(headset_rows)
+        public_row = lambda row: {
+            "brand": row.get("brand") or "",
+            "model": row.get("model") or "",
+            "status": row.get("status") or "",
+            "note": row.get("note") or "",
+        }
+        return {
+            "ok": True,
+            "pending": [public_row(row) for row in review_rows if row.get("brand") and row.get("model") and row.get("status") in {"", "pending"}],
+            "approved": [public_row(row) for row in headset_rows if row.get("status") == "approved"],
+            "denied": [public_row(row) for row in headset_rows if row.get("status") == "denied"],
+            "error": "",
+        }
+    except Exception as exc:
+        logger.exception("[HEADSET-REVIEW] Failed to load headset review data: %s", exc)
+        return {"ok": False, "pending": [], "approved": [], "denied": [], "error": "Unable to load headset review data."}
+
+
+def _headset_review_action(payload):
+    action = str((payload or {}).get("action") or "").strip().lower()
+    if action == "review_later":
+        return {"ok": True, "action": action}
+    if action not in {"approve", "deny"}:
+        return {"ok": False, "error": "Select Approve, Deny, or Review Later."}
+
+    brand = str((payload or {}).get("brand") or "").strip()
+    model = str((payload or {}).get("model") or "").strip()
+    if not brand or not model:
+        return {"ok": False, "error": "Brand and Model are required."}
+
+    reason = str((payload or {}).get("reason") or "").strip()
+    other_note = str((payload or {}).get("note") or "").strip()
+    allowed_denials = {
+        "Headset does not connect via USB",
+        "Headset does not have a noise cancelling microphone",
+        "Other",
+    }
+    if action == "deny" and reason not in allowed_denials:
+        return {"ok": False, "error": "Select a denial reason."}
+    if action == "deny" and reason == "Other" and not other_note:
+        return {"ok": False, "error": "A note is required when the denial reason is Other."}
+    decision_note = other_note if action == "deny" and reason == "Other" else (reason if action == "deny" else other_note)
+    decision_status = "approved" if action == "approve" else "denied"
+
+    try:
+        context = _shared_sheet_context()
+        if not context.get("ok"):
+            return {"ok": False, "error": context.get("error") or "Headset review sheet is unavailable."}
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        schema = _headset_review_schema_from_context(context)
+        review_headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
+        review_rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers)
+        target_key = _normalize_headset_review_key(f"{brand} {model}")
+        for row in review_rows:
+            normalized = _normalize_headset_review_row(row, schema)
+            if _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}") != target_key:
+                continue
+            if schema == "legacy":
+                next_row = dict(row)
+                next_row["review_status"] = decision_status
+                next_row["notes"] = decision_note
+                row_values = _shared_row_values(next_row, LEGACY_HEADSET_REVIEW_LOG_HEADERS)
+            else:
+                row_values = [brand, model, decision_status, decision_note]
+            _shared_update_existing_row(
+                sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers,
+                row.get("_row_number"), row_values,
+            )
+            break
+
+        headset_rows = _read_headsets_rows(sheets_api, sheet_id)
+        existing = next((row for row in headset_rows if _normalize_headset_review_key(f"{row['brand']} {row['model']}") == target_key), None)
+        row_values = [brand, model, decision_status, decision_note]
+        quoted = _quote_sheet_title_for_a1(HEADSETS_TAB)
+        if existing:
+            _shared_update_existing_row(
+                sheets_api, sheet_id, HEADSETS_TAB, HEADSETS_HEADERS,
+                existing.get("_row_number"), row_values,
+            )
+        else:
+            sheets_api.values().append(
+                spreadsheetId=sheet_id,
+                range=f"{quoted}!A2",
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [row_values]},
+            ).execute()
+
+        updated_rows = _read_headsets_rows(sheets_api, sheet_id)
+        sorted_rows = sorted(updated_rows, key=lambda row: (row.get("brand", "").lower(), row.get("model", "").lower()))
+        if sorted_rows:
+            sheets_api.values().update(
+                spreadsheetId=sheet_id,
+                range=f"{quoted}!A2:D{len(sorted_rows) + 1}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [[row["brand"], row["model"], row["status"], row["note"]] for row in sorted_rows]},
+            ).execute()
+        _sync_headset_content_cache(sorted_rows)
+        return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
+    except Exception as exc:
+        logger.exception("[HEADSET-REVIEW] Failed to apply headset decision: %s", exc)
+        return {"ok": False, "error": "Unable to save the headset review decision."}
 
 
 def _shared_row_values(row, headers):
@@ -5720,37 +6042,21 @@ def _has_tech_issue(session):
     return bool(val and val not in {"N/A", "No", "None"})
 
 
+def _tech_issue_ended_session(session):
+    return _shared_truthy((session or {}).get("tech_issue_ended_session"))
+
+
 def _is_fail_na(session):
-    """Fail Summary is only for session-level failures, not coaching/incomplete outcomes.
-    But it must not be only N/A when fail reasons, failed calls, stopped responding, tech issue, or evaluator notes exist.
-    """
+    """Return True unless the final session outcome requires a fail summary."""
     final_status = compute_final_status(session)
-    if final_status in {"Pass", "RESUMED-PASS"}:
-        return True
-    if final_status == FINAL_READINESS_NEEDS_RETEST:
+    if final_status in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
         return False
-
-    if session.get("auto_fail_reason"):
+    if _tech_issue_ended_session(session):
         return False
-    if _has_tech_issue(session) or session.get("stopped_responding"):
-        return False
-
-    # Check failed calls/transfers
-    for i in range(1, 4):
-        if (session.get(f"call_{i}") or {}).get("result") == "Fail":
-            return False
     for i in range(1, 3):
         if (session.get(f"sup_transfer_{i}") or {}).get("result") == "Fail":
             return False
-
-    # Check evaluator notes
-    notes = session.get("finalEvaluatorNotes") or {}
-    has_notes = bool(notes.get("needsCoaching", "").strip() or notes.get("other", "").strip() or notes.get("strengths", "").strip() or notes.get("notes", "").strip())
-    include_notes = notes.get("includeInFailSummary", True) and not notes.get("historyOnly", False)
-    if has_notes and include_notes:
-        return False
-
-    return final_status not in {"Fail", "FAIL-Final Attempt", "NC/NS"}
+    return True
 
 
 def compute_calculated_status(session):
@@ -6161,6 +6467,11 @@ def build_clean_fail(session):
             "Session Auto-Fail - Fail - "
             f"Recorded auto-fail reason: {_sentence_case(auto_fail)}."
         )
+    elif _tech_issue_ended_session(session) and compute_final_status(session) not in {
+        "Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST,
+    }:
+        issue = str(session.get("tech_issue") or "Technical issue unresolved").strip()
+        base_fail = f"Session ended due to Technical Issues - {_sentence_case(issue)}."
     else:
         lines = []
         if session.get("supervisor_only", False):
@@ -6923,14 +7234,6 @@ def _map_tech_issue_for_form(session):
     return {"choice": "N/A", "other_text": ""}
 
 
-def _is_form_fail_session(session):
-    if session.get("auto_fail_reason"):
-        return False
-    if session.get("supervisor_only", False):
-        return _count_results(session, "sup_transfer", 2, "Fail") >= 2
-    return _count_results(session, "call", 3, "Fail") >= 2
-
-
 def build_form_fill_payload(session, settings, coaching_summary="", fail_summary=""):
     sup_only = session.get("supervisor_only", False)
     tech_issue = _map_tech_issue_for_form(session)
@@ -6938,8 +7241,7 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
     completion_flags = _completion_flags_for_form(session)
 
     fail_reason = "N/A"
-    final_status = compute_final_status(session)
-    if session.get("auto_fail_reason") or _is_form_fail_session(session) or final_status in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
+    if not _is_fail_na(session):
         fail_reason = (fail_summary or "").strip() or summaries["fail"]
 
     return {
@@ -7646,7 +7948,7 @@ NOTIFICATION_CACHE_TTL_SECONDS = 25
 NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS = 4
 
 _ticker_cache = {"messages": None, "last_fetch": 0, "using_fallback": False}
-_headset_cache = {"groups": None, "last_fetch": 0}
+_headset_cache = {"groups": None, "denied": None, "last_fetch": 0}
 _notification_cache = {"groups": None, "last_fetch": 0, "url": ""}
 
 _default_managed_notifications = [
@@ -8277,9 +8579,9 @@ def _get_notification_sheet_write_status():
         }
     client_email = _read_service_account_client_email(creds_path)
     logger.info(
-        "[SHEETS] Active Google service account file=%s client_email=%s",
+        "[SHEETS] Active Google service account file=%s client_email_configured=%s",
         creds_path,
-        client_email or "unknown",
+        bool(client_email),
     )
     return {"ready": True, "credentials_path": str(creds_path), "client_email": client_email}
 
@@ -8423,10 +8725,10 @@ def _run_google_sheet_permission_check():
             "permissionNeeded": permission_needed or _sheet_permission_needed(operation),
         })
         logger.exception(
-            "[SHEETS-DIAG] Operation failed. operation=%s spreadsheet_id=%s service_account=%s reason=%s error=%s",
+            "[SHEETS-DIAG] Operation failed. operation=%s spreadsheet_id=%s service_account_configured=%s reason=%s error=%s",
             operation,
-            result.get("spreadsheetId") or "",
-            result.get("serviceAccountEmail") or "unknown",
+            _mask_config_value(result.get("spreadsheetId")),
+            bool(result.get("serviceAccountEmail")),
             reason,
             message,
         )
@@ -8442,10 +8744,10 @@ def _run_google_sheet_permission_check():
         return result
 
     logger.info(
-        "[SHEETS-DIAG] Starting permission check. master_spreadsheet_id=%s notification_spreadsheet_id=%s service_account=%s",
-        master_sheet_id or "",
-        notification_config.get("sheet_id") or "",
-        result["activeServiceAccountEmail"] or "unknown",
+        "[SHEETS-DIAG] Starting permission check. master_spreadsheet_id=%s notification_spreadsheet_id=%s service_account_configured=%s",
+        _mask_config_value(master_sheet_id),
+        _mask_config_value(notification_config.get("sheet_id")),
+        bool(result["activeServiceAccountEmail"]),
     )
 
     if not master_sheet_id:
@@ -8506,7 +8808,7 @@ def _run_google_sheet_permission_check():
     tabs = {}
 
     try:
-        logger.info("[SHEETS-DIAG] Operation=read_spreadsheet_metadata spreadsheet_id=%s", master_sheet_id)
+        logger.info("[SHEETS-DIAG] Operation=read_spreadsheet_metadata spreadsheet_id=%s", _mask_config_value(master_sheet_id))
         metadata = sheets_api.get(spreadsheetId=master_sheet_id).execute()
         record_success("read_spreadsheet_metadata", title=((metadata.get("properties") or {}).get("title") or ""))
     except Exception as exc:
@@ -8514,7 +8816,7 @@ def _run_google_sheet_permission_check():
         return result
 
     try:
-        logger.info("[SHEETS-DIAG] Operation=list_tabs spreadsheet_id=%s", master_sheet_id)
+        logger.info("[SHEETS-DIAG] Operation=list_tabs spreadsheet_id=%s", _mask_config_value(master_sheet_id))
         tabs = {
             ((sheet.get("properties") or {}).get("title") or ""): sheet
             for sheet in metadata.get("sheets", [])
@@ -8526,7 +8828,7 @@ def _run_google_sheet_permission_check():
 
     try:
         if test_tab_title not in tabs:
-            logger.info("[SHEETS-DIAG] Operation=create_or_verify_test_tab spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+            logger.info("[SHEETS-DIAG] Operation=create_or_verify_test_tab spreadsheet_id=%s tab=%s", _mask_config_value(master_sheet_id), test_tab_title)
             sheets_api.batchUpdate(
                 spreadsheetId=master_sheet_id,
                 body={"requests": [{"addSheet": {"properties": {"title": test_tab_title}}}]},
@@ -8540,7 +8842,7 @@ def _run_google_sheet_permission_check():
 
     quoted_test_tab = _quote_sheet_title_for_a1(test_tab_title)
     try:
-        logger.info("[SHEETS-DIAG] Operation=read_test_tab spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+        logger.info("[SHEETS-DIAG] Operation=read_test_tab spreadsheet_id=%s tab=%s", _mask_config_value(master_sheet_id), test_tab_title)
         sheets_api.values().get(
             spreadsheetId=master_sheet_id,
             range=f"{quoted_test_tab}!A1:B2",
@@ -8551,7 +8853,7 @@ def _run_google_sheet_permission_check():
         return result
 
     try:
-        logger.info("[SHEETS-DIAG] Operation=write_test_cell spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+        logger.info("[SHEETS-DIAG] Operation=write_test_cell spreadsheet_id=%s tab=%s", _mask_config_value(master_sheet_id), test_tab_title)
         sheets_api.values().update(
             spreadsheetId=master_sheet_id,
             range=f"{quoted_test_tab}!A1:B1",
@@ -8564,7 +8866,7 @@ def _run_google_sheet_permission_check():
         return result
 
     try:
-        logger.info("[SHEETS-DIAG] Operation=append_test_row spreadsheet_id=%s tab=%s", master_sheet_id, test_tab_title)
+        logger.info("[SHEETS-DIAG] Operation=append_test_row spreadsheet_id=%s tab=%s", _mask_config_value(master_sheet_id), test_tab_title)
         sheets_api.values().append(
             spreadsheetId=master_sheet_id,
             range=f"{quoted_test_tab}!A2",
@@ -8586,9 +8888,9 @@ def _run_google_sheet_permission_check():
         "permissionNeeded": "Current active service account has the read/write access required for the tested master sheet operations.",
     })
     logger.info(
-        "[SHEETS-DIAG] Permission check passed. master_spreadsheet_id=%s service_account=%s",
-        master_sheet_id,
-        result["activeServiceAccountEmail"] or "unknown",
+        "[SHEETS-DIAG] Permission check passed. master_spreadsheet_id=%s service_account_configured=%s",
+        _mask_config_value(master_sheet_id),
+        bool(result["activeServiceAccountEmail"]),
     )
     return result
 
@@ -8768,10 +9070,10 @@ def _save_notification_to_google_sheet(item):
 
         current_operation = "ensure_master_notification_tab"
         logger.info(
-            "[NOTIFICATIONS] Operation=ensure_master_notification_tab spreadsheet_id=%s tab=%s service_account=%s",
-            sheet_id,
+            "[NOTIFICATIONS] Operation=ensure_master_notification_tab spreadsheet_id=%s tab=%s service_account_configured=%s",
+            _mask_config_value(sheet_id),
             SAM_NOTIFICATIONS_TAB,
-            client_email,
+            bool(client_email),
         )
         tab_status = _ensure_sam_notifications_sheet(sheets_api, sheet_id)
         if not tab_status.get("ok"):
@@ -8801,7 +9103,7 @@ def _save_notification_to_google_sheet(item):
 
         if not header_has_data:
             current_operation = "header_write"
-            logger.info("[NOTIFICATIONS] Operation=header_write spreadsheet_id=%s tab=%s", sheet_id, sheet_title)
+            logger.info("[NOTIFICATIONS] Operation=header_write spreadsheet_id=%s tab=%s", _mask_config_value(sheet_id), sheet_title)
             sheets_api.values().update(
                 spreadsheetId=sheet_id,
                 range=header_range,
@@ -8811,7 +9113,7 @@ def _save_notification_to_google_sheet(item):
 
         data_range = f"{quoted_title}!A2:{last_column}"
         current_operation = "read_rows"
-        logger.info("[NOTIFICATIONS] Operation=read_rows spreadsheet_id=%s tab=%s", sheet_id, sheet_title)
+        logger.info("[NOTIFICATIONS] Operation=read_rows spreadsheet_id=%s tab=%s", _mask_config_value(sheet_id), sheet_title)
         existing_rows = sheets_api.values().get(
             spreadsheetId=sheet_id,
             range=data_range,
@@ -8831,7 +9133,7 @@ def _save_notification_to_google_sheet(item):
 
         if target_row_number is not None:
             current_operation = "update"
-            logger.info("[NOTIFICATIONS] Operation=update spreadsheet_id=%s tab=%s row=%s", sheet_id, sheet_title, target_row_number)
+            logger.info("[NOTIFICATIONS] Operation=update spreadsheet_id=%s tab=%s row=%s", _mask_config_value(sheet_id), sheet_title, target_row_number)
             sheets_api.values().update(
                 spreadsheetId=sheet_id,
                 range=f"{quoted_title}!A{target_row_number}:{last_column}{target_row_number}",
@@ -8841,7 +9143,7 @@ def _save_notification_to_google_sheet(item):
             action = "updated"
         else:
             current_operation = "append"
-            logger.info("[NOTIFICATIONS] Operation=append spreadsheet_id=%s tab=%s", sheet_id, sheet_title)
+            logger.info("[NOTIFICATIONS] Operation=append spreadsheet_id=%s tab=%s", _mask_config_value(sheet_id), sheet_title)
             sheets_api.values().append(
                 spreadsheetId=sheet_id,
                 range=f"{quoted_title}!A2",
@@ -9371,14 +9673,16 @@ async def _fetch_approved_headsets():
 
     now = time.time()
     if _headset_cache["groups"] and (now - _headset_cache["last_fetch"]) < 300:
-        return _headset_cache["groups"], ""
+        return _headset_cache["groups"], _headset_cache.get("denied") or [], ""
 
     sheet_groups = EXTERNAL_CONTENT.get("approved_headsets")
+    denied = EXTERNAL_CONTENT.get("denied_headsets") or []
     if isinstance(sheet_groups, list) and sheet_groups:
         _headset_cache["groups"] = sheet_groups
+        _headset_cache["denied"] = denied
         _headset_cache["last_fetch"] = now
-        return sheet_groups, ""
-    return _headset_cache["groups"] or [], "Unable to load the approved headset list right now."
+        return sheet_groups, denied, ""
+    return _headset_cache["groups"] or [], _headset_cache.get("denied") or [], "Unable to load the approved headset list right now."
 
 
 def _resolve_screenshot_path(filename: str) -> Path:
@@ -9422,35 +9726,39 @@ def _resolve_screenshot_path(filename: str) -> Path:
 
 @api_router.get("/screenshot-assets/{filename}")
 async def get_screenshot_asset(filename: str):
-    logger.info("[SCREENSHOT] Request received for filename: %s", filename)
     resolved_path = _resolve_screenshot_path(filename)
     exists = resolved_path.exists() and resolved_path.is_file()
-    
-    logger.info(
-        "[SCREENSHOT] Lookup details - Requested: %s | Resolved path: %s | Exists: %s",
-        filename,
-        str(resolved_path),
-        exists
-    )
+    logger.debug("[SCREENSHOT] Asset lookup filename=%s exists=%s", filename, exists)
     
     if not exists:
         logger.error("[SCREENSHOT] File not found: %s (tried: %s)", filename, str(resolved_path))
         raise HTTPException(status_code=404, detail=f"Screenshot file '{filename}' not found.")
         
-    logger.info("[SCREENSHOT] Returning 200 FileResponse for: %s", str(resolved_path))
     from fastapi.responses import FileResponse
     return FileResponse(resolved_path, media_type="image/png")
 
 
 @api_router.get("/headsets")
 async def get_approved_headsets():
-    groups, error = await _fetch_approved_headsets()
-    return {"groups": groups, "error": error}
+    groups, denied, error = await _fetch_approved_headsets()
+    return {"groups": groups, "denied": denied, "error": error}
 
 
 @api_router.post("/headsets/review-log")
 async def log_headset_review(payload: dict):
     return _append_headset_review_log(payload or {})
+
+
+@api_router.get("/headsets/reviews")
+async def get_headset_reviews(request: Request):
+    _require_admin_token(request)
+    return await asyncio.to_thread(_headset_review_snapshot)
+
+
+@api_router.post("/headsets/reviews/action")
+async def post_headset_review_action(payload: dict, request: Request):
+    _require_admin_token(request)
+    return await asyncio.to_thread(_headset_review_action, payload or {})
 
 
 # ══════════════════════════════════════════════════════════════════

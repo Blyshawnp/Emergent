@@ -115,6 +115,7 @@ const HELP_TOPICS = [
       'If the headset is confirmed USB with a noise-cancelling microphone, type it manually in the field.',
       'Manually entered headset models that are not on the approved list may be logged to the headset-review-log tab for admin review.',
       'Approved but unlisted headsets are reviewed and added to the approved list every 7-10 days.',
+      'A denied model shows a Denied Headset popup. If the candidate has no replacement headset, the session auto-fails.',
     ],
   },
   {
@@ -135,13 +136,14 @@ const HELP_TOPICS = [
     summary: 'Use Tech Issue when a real technical problem is interrupting the session, before deciding to end it.',
     bullets: [
       'Open Tech Issue from Basics or any session screen where it is available.',
-      'Choose the issue type: internet, DTE, browser, routing, or Other.',
+      'Choose Internet Speed Issues, Calls Would Not Route, No Script Pop, Discord Issues, or Other.',
       'Follow the prompts to continue the session, route to Review, or schedule a Newbie Shift if the candidate cannot finish today.',
       'A Tech Issue does not automatically fail the candidate; it just guides the next step.',
       'For internet speed issues, have the candidate run www.speedtest.net first, then enter upload and download speeds when prompted.',
       'If the speed test is below the required threshold, the flow records the low speed result and routes to Review.',
       'If Other is unresolved and the session cannot continue, Review still opens with the active candidate/session data instead of No Active Session.',
       'If an unresolved technical issue ends the session, Review preserves the current candidate and session data.',
+      'Resolved technical issues stay in history but do not populate Reason for Fail Summary.',
     ],
   },
   {

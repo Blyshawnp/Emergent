@@ -117,9 +117,11 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   const [copied, setCopied] = useState(false);
   const [copiedDiscordTemplate, setCopiedDiscordTemplate] = useState('');
   const [candidateName, setCandidateName] = useState('');
+  const [paymentSelection, setPaymentSelection] = useState({ cardId: 'default', eftId: 'default' });
   const hydratedRef = useRef(false);
   const latestDraftPayloadRef = useRef(null);
   const sessionRef = useRef(null);
+  const transferDraftsRef = useRef({});
 
   useEffect(() => {
     let cancelled = false;
@@ -142,6 +144,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         }
         const initialSupReasons = s.sup_reasons || d.sup_reasons || DEFAULT_SUP_REASONS;
         sessionRef.current = session || null;
+        transferDraftsRef.current = session?.sup_transfer_drafts || {};
         const requestedTransferNum = Math.max(1, Math.min(2, Number(navigationState?.transferNum) || 0));
         const savedDraft = session?.current_sup_transfer_draft || null;
         const resolvedTransferNum = requestedTransferNum || savedDraft?.transfer_num || (session?.sup_transfer_1?.result ? 2 : 1);
@@ -155,7 +158,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
           Object.values(savedDraft?.failReasonDetails || savedDraft?.fail_reason_details || {}).some((value) => String(value || '').trim()) ||
           String(savedDraft?.coach_notes || savedDraft?.fail_notes || '').trim()
         );
-        const hydrateSource = draftMatchesRequestedTransfer && (requestedTransferNum || draftHasUserState) ? savedDraft : savedTransfer;
+        const savedTransferDraft = transferDraftsRef.current?.[normalizedTransferNum] || transferDraftsRef.current?.[String(normalizedTransferNum)] || null;
+        const hydrateSource = savedTransferDraft || (draftMatchesRequestedTransfer && (requestedTransferNum || draftHasUserState) ? savedDraft : savedTransfer);
         setSetup({
           caller: hydrateSource?.caller || '',
           show: hydrateSource?.show || '',
@@ -178,6 +182,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
               .map(([key]) => [key, true])
           ));
           setFailNotes(hydrateSource?.fail_notes || '');
+          setPaymentSelection(hydrateSource?.payment_selection || { cardId: 'default', eftId: 'default' });
           setSupRandFlags(hydrateSource?.rand_flags || {
             phone: ['Mobile', 'Landline'][Math.floor(Math.random() * 2)],
             sms: ['Yes', 'No'][Math.floor(Math.random() * 2)],
@@ -277,21 +282,25 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       return undefined;
     }
 
+    const draft = {
+      transfer_num: transferNum,
+      result,
+      caller: setup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
+      show: setup.show || (shows[0]?.[0] || ''),
+      reason: setup.reason,
+      coaching,
+      coach_notes: coachNotes,
+      fails,
+      failReasonDetails,
+      fail_notes: failNotes,
+      rand_flags: supRandFlags,
+      payment_selection: paymentSelection,
+    };
+    transferDraftsRef.current = { ...transferDraftsRef.current, [transferNum]: draft };
     const payload = {
       current_sup_transfer_num: transferNum,
-      current_sup_transfer_draft: {
-        transfer_num: transferNum,
-        result,
-        caller: setup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
-        show: setup.show || (shows[0]?.[0] || ''),
-        reason: setup.reason,
-        coaching,
-        coach_notes: coachNotes,
-        fails,
-        failReasonDetails,
-        fail_notes: failNotes,
-        rand_flags: supRandFlags,
-      },
+      current_sup_transfer_draft: draft,
+      sup_transfer_drafts: transferDraftsRef.current,
     };
     latestDraftPayloadRef.current = payload;
 
@@ -300,7 +309,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [transferNum, result, setup, currentCaller, shows, coaching, coachNotes, fails, failReasonDetails, failNotes, supRandFlags, candidateName]);
+  }, [transferNum, result, setup, currentCaller, shows, coaching, coachNotes, fails, failReasonDetails, failNotes, supRandFlags, paymentSelection, candidateName]);
 
   useEffect(() => {
     return () => {
@@ -342,6 +351,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
     setFailReasonDetails({});
     setExpandedFailDetails({});
     setFailNotes('');
+    setPaymentSelection({ cardId: 'default', eftId: 'default' });
   };
 
   const handleContinue = async () => {
@@ -368,10 +378,14 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       caller: setup.caller || (currentCaller.length ? `${currentCaller[0]} ${currentCaller[1]}` : ''),
       show: setup.show || (shows.length ? shows[0][0] : ''), reason: setup.reason,
       coaching, coach_notes: coachNotes, fails, failReasonDetails, fail_notes: failNotes,
+      rand_flags: supRandFlags, payment_selection: paymentSelection,
     };
     latestDraftPayloadRef.current = null;
     await api.saveSupTransfer(data);
-    await api.updateSession({ current_sup_transfer_draft: null, current_sup_transfer_num: null });
+    const nextDrafts = { ...transferDraftsRef.current };
+    delete nextDrafts[transferNum];
+    transferDraftsRef.current = nextDrafts;
+    await api.updateSession({ current_sup_transfer_draft: null, current_sup_transfer_num: null, sup_transfer_drafts: nextDrafts });
 
     if (transferNum === 1) {
       if (result === 'Pass') { onNavigate('review'); }
@@ -455,10 +469,6 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
 
   const handleBack = useCallback(async () => {
     await saveTransferDraftNow();
-    if (transferNum > 1) {
-      onNavigate('suptransfer', { transferNum: 1 });
-      return;
-    }
     if (isSupervisorOnly) {
       onNavigate('basics');
       return;
@@ -470,7 +480,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       // Use the last hydrated session if the refresh fails.
     }
     onNavigate('calls', { callNum: getLastCompletedCallNum(sessionRef.current) });
-  }, [transferNum, saveTransferDraftNow, isSupervisorOnly, onNavigate]);
+  }, [saveTransferDraftNow, isSupervisorOnly, onNavigate]);
 
   const toggle = (key, setter) => setter(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -542,8 +552,6 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         </div>
       </div>
 
-      <PaymentSimulation key={transferNum} payment={settings.payment || defaults.payment || {}} />
-
       {currentCaller.length > 0 && (
         <div className="card" style={{ margin: '16px 0' }}>
           <h3 style={{ marginBottom: 8 }}>Caller Demographics</h3>
@@ -554,6 +562,12 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
           </div>
         </div>
       )}
+
+      <PaymentSimulation
+        payment={settings.payment || defaults.payment || {}}
+        selection={paymentSelection}
+        onSelectionChange={setPaymentSelection}
+      />
 
       <div className="card" style={{ marginBottom: 16 }} data-tour="sup-result">
         <h3>Transfer Result</h3>
@@ -652,10 +666,10 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   );
 }
 
-function PaymentSimulation({ payment }) {
+function PaymentSimulation({ payment, selection, onSelectionChange }) {
   const options = useMemo(() => getPaymentOptionsFromSettings(payment), [payment]);
-  const [cardId, setCardId] = useState('default');
-  const [eftId, setEftId] = useState('default');
+  const cardId = selection?.cardId || 'default';
+  const eftId = selection?.eftId || 'default';
   const selectedCard = options.card.find((item) => item.id === cardId) || options.card[0];
   const selectedEft = options.eft.find((item) => item.id === eftId) || options.eft[0];
 
@@ -669,7 +683,7 @@ function PaymentSimulation({ payment }) {
             <div style={{ fontWeight: 700, fontSize: 12 }}>{selectedCard.type.toUpperCase()}</div>
             <label className="payment-option-select">
               <span>Card Option</span>
-              <select value={cardId} onChange={(event) => setCardId(event.target.value)} data-testid="sup-card-option">
+              <select value={cardId} onChange={(event) => onSelectionChange((current) => ({ ...current, cardId: event.target.value }))} data-testid="sup-card-option">
                 {options.card.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
               </select>
             </label>
@@ -682,7 +696,7 @@ function PaymentSimulation({ payment }) {
             <div style={{ fontWeight: 700, fontSize: 12 }}>EFT / BANK DRAFT</div>
             <label className="payment-option-select">
               <span>EFT Option</span>
-              <select value={eftId} onChange={(event) => setEftId(event.target.value)} data-testid="sup-eft-option">
+              <select value={eftId} onChange={(event) => onSelectionChange((current) => ({ ...current, eftId: event.target.value }))} data-testid="sup-eft-option">
                 {options.eft.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
               </select>
             </label>

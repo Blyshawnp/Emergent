@@ -61,9 +61,9 @@ Use this checklist after building packaged MTS and SAM from the integration bran
 - Select an approved headset and confirm USB and Noise Cancelling auto-mark Yes.
 - Type an unlisted headset and confirm USB and Noise Cancelling require answers.
 - Trigger Headset Issue fail popup.
-- Confirm Headset Fail Discord Post copy button appears and copies `Wrong Headset`.
+- Confirm the purple `Discord Post: Wrong Headset` button appears and copies `Wrong Headset`.
 - Trigger VPN Issue fail popup.
-- Confirm VPN Fail Discord Post copy button appears and copies `VPN Fail`.
+- Confirm the purple `Discord Post: VPN Fail` button appears and copies `VPN Fail`.
 - Confirm unavailable templates show a friendly message instead of copying labels.
 
 ## Workflow Copy Buttons
