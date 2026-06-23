@@ -86,6 +86,37 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("note is required", result["error"])
 
+    def test_legacy_headset_review_rows_keep_submission_metadata(self):
+        row = server._normalize_headset_review_row({
+            "headset_model": "Acme USB 100",
+            "tester_name": "Tester One",
+            "entered_at": "2026-06-23T12:00:00+00:00",
+            "review_status": "pending",
+            "notes": "Candidate entry",
+            "_row_number": 2,
+        }, "legacy")
+        self.assertEqual(row["brand"], "Acme")
+        self.assertEqual(row["model"], "USB 100")
+        self.assertEqual(row["tester"], "Tester One")
+        self.assertEqual(row["submitted_date"], "2026-06-23T12:00:00+00:00")
+
+    def test_other_denied_headset_note_is_included_in_fail_summary(self):
+        summaries = server._auto_fail_review_summaries({
+            "candidate_name": "Candidate",
+            "auto_fail_reason": "Wrong headset (Other: Ear cups are damaged)",
+        })
+        self.assertIn("Headset review note: Ear cups are damaged.", summaries["fail"])
+
+    def test_denied_headset_form_reasons_map_to_supported_choices(self):
+        self.assertEqual(
+            server._map_auto_fail_for_form("Wrong headset (not USB)"),
+            "Wrong headset (not USB)",
+        )
+        self.assertEqual(
+            server._map_auto_fail_for_form("Wrong headset (not noise cancelling)"),
+            "Wrong headset (not noise cancelling)",
+        )
+
     def test_screenshot_defaults_include_release_candidate_assets(self):
         content = server._load_local_defaults_content()
         titles = {item.get("title") for item in content.get("discord_screenshots") or []}
