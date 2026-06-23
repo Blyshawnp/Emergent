@@ -205,18 +205,6 @@ function Read-JsonFile {
   Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
-function Verify-PrivateKeyId {
-  param([string]$Source, [string]$Destination, [string]$Label)
-  $src = Read-JsonFile $Source
-  $dst = Read-JsonFile $Destination
-  if (-not $src.private_key_id -or $src.private_key_id -ne $dst.private_key_id) {
-    Write-Log "Source: $Source"
-    Write-Log "Destination: $Destination"
-    Fail "service-account private_key_id mismatch for $Label."
-  }
-  Write-Log "Verified service-account private_key_id for $Label."
-}
-
 function Copy-FileChecked {
   param([string]$Source, [string]$Destination)
   if (-not (Test-Path -LiteralPath $Source)) {
@@ -232,15 +220,24 @@ function Copy-RuntimeConfig {
   param([string]$DestinationDir, [string]$Label)
   New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
   $runtimeSource = Join-Path $backendDir 'config\runtime_config.json'
-  $keySource = Join-Path $backendDir 'config\google-service-account.json'
+  $apiSource = Join-Path $backendDir 'config\apps-script-api.json'
   Copy-FileChecked $runtimeSource (Join-Path $DestinationDir 'runtime_config.json')
-  Copy-FileChecked $keySource (Join-Path $DestinationDir 'google-service-account.json')
-  $legacySource = Join-Path $backendDir 'config\service-account.json'
-  if (Test-Path -LiteralPath $legacySource) {
-    Copy-FileChecked $legacySource (Join-Path $DestinationDir 'service-account.json')
+  Copy-FileChecked $apiSource (Join-Path $DestinationDir 'apps-script-api.json')
+  foreach ($legacyName in @('google-service-account.json', 'service-account.json')) {
+    $legacyPath = Join-Path $DestinationDir $legacyName
+    if (Test-Path -LiteralPath $legacyPath) {
+      Remove-Item -LiteralPath $legacyPath -Force
+      Write-Log "Removed obsolete packaged credential file from $Label."
+    }
   }
-  Verify-PrivateKeyId $keySource (Join-Path $DestinationDir 'google-service-account.json') $Label
-  Write-Log "Runtime config verified for $Label."
+  $apiConfig = Read-JsonFile $apiSource
+  if ($apiConfig.enabled -ne $true -or -not $apiConfig.base_url -or -not $apiConfig.token) {
+    Fail "Apps Script API config is missing enabled, base_url, or token for $Label."
+  }
+  if ([string]$apiConfig.base_url -notmatch '^https://script\.google\.com/macros/s/.+/exec$') {
+    Fail "Apps Script API base_url is invalid for $Label."
+  }
+  Write-Log "Runtime and Apps Script API config verified for $Label without logging secret values."
 }
 
 function Sync-Dir {
@@ -253,8 +250,8 @@ function Sync-Dir {
   }
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
   Write-Log "Syncing directory: $Source -> $Destination"
-  Write-Log 'Excluding protected runtime credential files from mirror; current runtime config is copied immediately after sync.'
-  & robocopy $Source $Destination /MIR /XD '.git' '.pytest_cache' 'node_modules' 'production-ready-backups' 'logs' 'tmp' 'temp' /XF 'google-service-account.json' 'service-account.json' '*.tmp' '*.temp' /R:2 /W:2 /NFL /NDL /NP /NJH /NJS 2>&1 |
+  Write-Log 'Excluding build-local API config from mirror; the current config is copied immediately after sync.'
+  & robocopy $Source $Destination /MIR /XD '.git' '.pytest_cache' 'node_modules' 'production-ready-backups' 'logs' 'tmp' 'temp' /XF 'apps-script-api.json' 'google-service-account.json' 'service-account.json' '*.tmp' '*.temp' /R:2 /W:2 /NFL /NDL /NP /NJH /NJS 2>&1 |
     ForEach-Object { Write-Log ([string]$_) }
   $rc = $LASTEXITCODE
   if ($rc -ge 8) {
@@ -330,7 +327,7 @@ if ($Mode -eq 'dry-run') {
   Verify-Path (Join-Path $backendDir 'server.py') 'Backend server.py'
   Verify-Path (Join-Path $backendDir 'packaged_backend.py') 'Backend packaged entry'
   Verify-Path (Join-Path $backendDir 'config\runtime_config.json') 'Runtime config'
-  Verify-Path (Join-Path $backendDir 'config\google-service-account.json') 'Google service account'
+  Verify-Path (Join-Path $backendDir 'config\apps-script-api.json') 'Apps Script API config'
   Verify-Path (Join-Path $desktopDir 'package.json') 'Desktop package.json'
   Verify-Path (Join-Path $desktopDir 'notification-manager-builder.json') 'SAM builder config'
   Section 'DRY RUN SUCCESS'

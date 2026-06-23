@@ -1424,7 +1424,7 @@ function AdminTab() {
         errorType: error?.name || 'RequestError',
         errorMessage: error?.message || 'Unable to run Google Sheet diagnostics.',
         spreadsheetId: '',
-        serviceAccountEmail: '',
+        appsScriptApi: {},
         appAdminAuth: {
           ok: false,
           errorMessage: data?.errorMessage || data?.error || error?.message || '',
@@ -1489,8 +1489,8 @@ function AdminTab() {
               <strong>{result.spreadsheetId || result.activeSpreadsheetId || 'Unknown'}</strong>
             </div>
             <div className="full">
-              <span>Service Account</span>
-              <strong>{result.serviceAccountEmail || result.activeServiceAccountEmail || 'Unknown'}</strong>
+              <span>Apps Script API</span>
+              <strong>{result.appsScriptApi?.status || (result.ok ? 'ready' : 'unavailable')}</strong>
             </div>
           </div>
           <pre className="settings-diagnostics-json">{JSON.stringify(result, null, 2)}</pre>

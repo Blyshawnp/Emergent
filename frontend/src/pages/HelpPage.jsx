@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import api from '../api';
+import { useModal } from '../components/ModalProvider';
 
 const APP_VERSION_FALLBACK = '1.0.1';
 export const TUTORIAL_VIDEO_CANDIDATES = [
@@ -700,8 +701,22 @@ function mergeHelpTopics(liveSections) {
 }
 
 export default function HelpPage({ appVersion, onNavigate, settings, onReplayTutorial }) {
+  const modal = useModal();
   const version = appVersion || APP_VERSION_FALLBACK;
   const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
+
+  const handleRequestSupport = async () => {
+    const url = settings?.support_form_url || 'https://forms.gle/h3L8BZcFqpZ8RZf39';
+    if (!url || !url.trim()) {
+      modal.warning('Support', 'Support form is not configured yet.');
+      return;
+    }
+    if (window.electronAPI?.openExternal) {
+      await window.electronAPI.openExternal(url);
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
   const [helpContent, setHelpContent] = useState(null);
   const [helpLoadError, setHelpLoadError] = useState('');
   const [query, setQuery] = useState('');
@@ -979,6 +994,14 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
               >
                 Message on Discord
               </a>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleRequestSupport}
+                data-testid="support-request-btn"
+              >
+                Request App Support
+              </button>
             </div>
             <div className="help-about-block">
               <p><strong>Version:</strong> {version}</p>

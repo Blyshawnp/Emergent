@@ -18,6 +18,7 @@ desktop/preload.js
 .env.*
 backend/config/google-service-account.json
 backend/config/service-account.json
+backend/config/apps-script-api.json
 **/backend/config/google-service-account.json
 **/backend/config/service-account.json
 **/*service-account*.json

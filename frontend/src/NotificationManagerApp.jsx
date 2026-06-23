@@ -98,6 +98,11 @@ const SAM_HELP_SECTIONS = [
     title: 'Sounds/status banners',
     body: 'Success banners auto-dismiss based on the setting below. Errors stay visible longer, remain dismissible, and can play the SAM error sound.',
   },
+  {
+    id: 'support',
+    title: 'Support',
+    body: 'For application assistance, please use the Request App Support form. Do not submit headset appeals or headset review requests here.',
+  },
 ];
 const SAM_TUTORIAL_STEPS = [
   {
@@ -250,6 +255,42 @@ function getAppVersion() {
 
 function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutorial, onCheckForUpdates }) {
   const sectionRefs = useRef({});
+  const [supportFormUrl, setSupportFormUrl] = useState('https://forms.gle/h3L8BZcFqpZ8RZf39');
+  const [supportError, setSupportError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    api.getSettings()
+      .then((appSettings) => {
+        if (active) {
+          const url = appSettings?.support_form_url;
+          if (url !== undefined) {
+            setSupportFormUrl(url || '');
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load support form URL:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleRequestSupport = async () => {
+    setSupportError('');
+    if (!supportFormUrl || !supportFormUrl.trim()) {
+      setSupportError('Support form is not configured yet.');
+      alert('Support form is not configured yet.');
+      return;
+    }
+    if (window.electronAPI?.openExternal) {
+      await window.electronAPI.openExternal(supportFormUrl);
+    } else {
+      window.open(supportFormUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   const updateSetting = (patch) => {
     onSettingsChange?.(normalizeSamSettings({ ...settings, ...patch }));
   };
@@ -323,6 +364,19 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
             >
               <h3>{section.title}</h3>
               <p>{section.body}</p>
+              {section.id === 'support' && (
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    type="button"
+                    className="nm-btn nm-btn-secondary"
+                    onClick={handleRequestSupport}
+                    data-testid="support-request-btn"
+                  >
+                    Request App Support
+                  </button>
+                  {supportError && <p className="nm-meta" style={{ color: '#ff4d4d', marginTop: 8 }}>{supportError}</p>}
+                </div>
+              )}
             </article>
           ))}
         </div>

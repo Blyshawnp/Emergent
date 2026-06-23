@@ -864,6 +864,28 @@ def _record_google_sheet_content_error(content_key, tab_name, error):
 
 
 def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
+    from services.apps_script_api import create_apps_script_sheet_service
+    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
+    if apps_script_res.get("ok"):
+        try:
+            service = apps_script_res["service"]
+            result = service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=f"'{tab_name}'!A:Z",
+            ).execute()
+            values = result.get("values") or []
+            if not values:
+                return ""
+            output = io.StringIO()
+            writer = csv.writer(output, lineterminator="\n")
+            for row in values:
+                writer.writerow(row)
+            logger.info("[CONTENT] Loaded Google Sheet tab '%s' through Apps Script API", tab_name)
+            return output.getvalue()
+        except Exception as exc:
+            logger.info("[CONTENT] Apps Script Google Sheet read failed for '%s': %s", tab_name, exc)
+            return ""
+
     creds_path = _early_service_account_file()
     if not creds_path:
         _record_google_sheet_auth_status("missing_credentials", ok=False, tab_name=tab_name, error="No service account credentials found.")
@@ -2810,6 +2832,9 @@ def _log_startup_runtime_diagnostics():
     return diagnostics
 
 
+DEFAULT_SUPPORT_FORM_URL = "https://forms.gle/h3L8BZcFqpZ8RZf39"
+
+
 DEFAULT_SETTINGS = {
     "setup_complete": False,
     "sam_setup_complete": False,
@@ -2821,6 +2846,7 @@ DEFAULT_SETTINGS = {
     "form_fill_browser": "auto",
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
+    "support_form_url": DEFAULT_SUPPORT_FORM_URL,
     "ticker_speed": "normal",
     "enable_sounds": True,
     "sound_volume": "medium",
@@ -2859,6 +2885,7 @@ PRESERVED_SETTINGS_KEYS_ON_RESTORE = {
     "display_name",
     "form_url",
     "cert_sheet_url",
+    "support_form_url",
     GEMINI_API_KEY_SETTING,
     "enable_gemini",
 }
@@ -3685,6 +3712,17 @@ def _get_shared_tracking_sheet_service():
             "ok": False,
             "error": "No admin content Google Sheet is configured for shared candidate tracking.",
             "setup": _shared_tracking_manual_setup(),
+        }
+
+    from services.apps_script_api import create_apps_script_sheet_service
+    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
+    if apps_script_res.get("ok"):
+        return {
+            "ok": True,
+            "service": apps_script_res["service"],
+            "sheet_id": sheet_id,
+            "serviceAccountEmail": "apps-script-api-endpoint",
+            "setup": {"ok": True, "activeSheetId": sheet_id, "activeClientEmail": "apps-script-api-endpoint", "tabStatus": []}
         }
 
     creds_path = _resolve_notification_service_account_file()
@@ -8594,6 +8632,11 @@ def _get_notification_sheet_write_status():
 
 
 def _get_notification_sheet_service():
+    from services.apps_script_api import create_apps_script_sheet_service
+    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
+    if apps_script_res.get("ok"):
+        return {"ok": True, "service": apps_script_res["service"], "client_email": "apps-script-api-endpoint"}
+
     status = _get_notification_sheet_write_status()
     if not status.get("ready"):
         return {"ok": False, "error": status.get("error") or "Notification sheet credentials are not configured."}
@@ -8640,6 +8683,58 @@ def _sheet_permission_needed(operation):
 
 
 def _run_google_sheet_permission_check():
+    from services.apps_script_api import create_apps_script_sheet_service
+    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
+    if apps_script_res.get("ok"):
+        client = apps_script_res["client"]
+        apps_script_status = apps_script_res["status"]
+        ping_ok = False
+        ping_error = ""
+        try:
+            client.ping()
+            ping_ok = True
+        except Exception as e:
+            ping_error = str(e)
+            
+        result = {
+            "ok": ping_ok,
+            "failedOperation": "" if ping_ok else "apps_script_ping",
+            "errorType": "" if ping_ok else "AppsScriptError",
+            "errorMessage": "" if ping_ok else ping_error,
+            "error": "" if ping_ok else ping_error,
+            "spreadsheetId": _shared_tracking_sheet_id() or "",
+            "activeSpreadsheetId": _shared_tracking_sheet_id() or "",
+            "serviceAccountEmail": "apps-script-api-endpoint",
+            "activeServiceAccountEmail": "apps-script-api-endpoint",
+            "credentialFiles": {},
+            "appsScriptApi": {
+                "enabled": True,
+                "status": "ready" if ping_ok else "error",
+                "message": "Apps Script API is online." if ping_ok else f"Apps Script ping failed: {ping_error}",
+                "path": apps_script_status.get("path") or "",
+            },
+            "masterMtsContentCandidateSheetConfig": {
+                "spreadsheetId": _shared_tracking_sheet_id() or "",
+                "purpose": "Master MTS content, shared candidate tracking, Gemini prompt overrides, and update metadata.",
+            },
+            "notificationSheetConfig": {
+                "spreadsheetId": _shared_tracking_sheet_id() or "",
+                "gid": "0",
+                "configured": True,
+                "usingDefault": False,
+                "purpose": "SAM notification rows/ticker/banner/popup only.",
+            },
+            "operations": [
+                {
+                    "operation": "apps_script_ping",
+                    "ok": ping_ok,
+                    "errorMessage": ping_error,
+                }
+            ],
+            "permissionNeeded": "",
+        }
+        return result
+
     runtime_config = {}
     notification_config = {}
     master_sheet_id = ""
