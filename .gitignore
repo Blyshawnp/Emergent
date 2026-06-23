@@ -1,51 +1,117 @@
+# ============================================================
 # Node / Electron
+# ============================================================
+
 node_modules/
 dist/
-desktop/dist-notification-manager/
-desktop/dist-regression-mts/
-LOCAL-ONLY-UPDATER-TEST-v1.0.0-DO-NOT-DISTRIBUTE/
 build/
 out/
 release/
-production-ready-backups/
+
+desktop/dist/
+desktop/dist-notification-manager/
+desktop/dist-regression-mts/
+
+LOCAL-ONLY-UPDATER-TEST-v1.0.0-DO-NOT-DISTRIBUTE/
+
 desktop/preload.js
 
+# ============================================================
 # Logs
-*.log
+# ============================================================
 
-# Env files
+*.log
+logs/
+
+# ============================================================
+# Environment / Secrets
+# ============================================================
+
 .env
 .env.*
+.env.local
+
 backend/config/google-service-account.json
 backend/config/service-account.json
 backend/config/apps-script-api.json
+
 **/backend/config/google-service-account.json
 **/backend/config/service-account.json
 **/*service-account*.json
+
 !**/*service-account*.example.json
 !**/*service-account*.sample.json
 
+# ============================================================
 # Python
+# ============================================================
+
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# OS junk
+# Virtual environments
+
+.venv/
+.venv-*/
+.venv-backend-build/
+
+venv/
+venv-*/
+
+# Pytest
+
+.pytest_cache/
+
+# ============================================================
+# OS Junk
+# ============================================================
+
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# Electron build artifacts
+# ============================================================
+# Electron Build Artifacts
+# ============================================================
+
 *.exe
 *.zip
 *.blockmap
 
-# Local browser driver executables used for packaged backend builds
+# ============================================================
+# Browser Drivers
+# ============================================================
+
 backend/drivers/*.exe
 !backend/drivers/README.txt
 
-# Frontend build (optional if you rebuild each time)
+# ============================================================
+# Frontend Build Output
+# ============================================================
+
 frontend/build/
 
-# Production-ready generated artifacts
+# ============================================================
+# Database / Runtime Data
+# ============================================================
+
+*.sqlite
+*.sqlite3
+
+backend/data/
+data/
+
+# ============================================================
+# Production Builds / Generated Output
+# ============================================================
+
+production-ready/
+production-ready-backups/
+
+# Legacy exclusions (kept for safety)
+
 production-ready/**/resources/frontend/static/
 production-ready/**/resources/frontend/*.png
 production-ready/**/resources/frontend/*.js
@@ -55,6 +121,31 @@ production-ready/**/*.asar
 production-ready/**/*HASH.txt
 production-ready/**/*Setup*.exe
 production-ready/**/*Setup*.blockmap
+
 production-ready/**/BUILD-ADMIN-NOTIFICATION-MANAGER-PACKAGE_FIXED.bat
+
 production-ready/ADMIN
 production-ready/Mock
+
+# ============================================================
+# Temporary / Scratch
+# ============================================================
+
+scratch/
+temp/
+tmp/
+
+# ============================================================
+# IDE Files
+# ============================================================
+
+.vscode/
+.idea/
+
+# ============================================================
+# Misc Generated Files
+# ============================================================
+
+*.bak
+*.tmp
+*.cache
