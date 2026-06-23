@@ -4170,11 +4170,11 @@ def _ensure_headset_review_log_tab(sheets_api, sheet_id):
         quoted = _quote_sheet_title_for_a1(HEADSET_REVIEW_LOG_TAB)
         sheets_api.values().update(
             spreadsheetId=sheet_id,
-            range=f"{quoted}!A1:D1",
+            range=f"{quoted}!A1:F1",
             valueInputOption="USER_ENTERED",
-            body={"values": [HEADSET_REVIEW_LOG_HEADERS]},
+            body={"values": [LEGACY_HEADSET_REVIEW_LOG_HEADERS]},
         ).execute()
-        return {"ok": True, "schema": "review", "headerStatus": "written"}
+        return {"ok": True, "schema": "legacy", "headerStatus": "written"}
     return {"ok": False, "schema": "unknown", "error": "Headset review log headers do not match the supported review schema."}
 
 
@@ -4328,6 +4328,8 @@ def _normalize_headset_review_row(row, schema):
         "model": model,
         "status": status,
         "note": note,
+        "submitted_date": str(row.get("entered_at") or "").strip() if schema == "legacy" else "",
+        "tester": str(row.get("tester_name") or "").strip() if schema == "legacy" else "",
         "_row_number": row.get("_row_number"),
         "_schema": schema,
         "_raw": row,
@@ -4382,6 +4384,8 @@ def _headset_review_snapshot():
             "model": row.get("model") or "",
             "status": row.get("status") or "",
             "note": row.get("note") or "",
+            "submitted_date": row.get("submitted_date") or "",
+            "tester": row.get("tester") or "",
         }
         return {
             "ok": True,
@@ -4467,14 +4471,10 @@ def _headset_review_action(payload):
             ).execute()
 
         updated_rows = _read_headsets_rows(sheets_api, sheet_id)
+        # Keep the in-memory display deterministic without rewriting the whole tab.
+        # Existing rows are updated in place and new rows are appended so unrelated
+        # sheet content is never shifted, deleted, or overwritten for sorting alone.
         sorted_rows = sorted(updated_rows, key=lambda row: (row.get("brand", "").lower(), row.get("model", "").lower()))
-        if sorted_rows:
-            sheets_api.values().update(
-                spreadsheetId=sheet_id,
-                range=f"{quoted}!A2:D{len(sorted_rows) + 1}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[row["brand"], row["model"], row["status"], row["note"]] for row in sorted_rows]},
-            ).execute()
         _sync_headset_content_cache(sorted_rows)
         return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
     except Exception as exc:
@@ -7189,9 +7189,14 @@ def _auto_fail_review_summaries(session):
     if auto_fail_type == "not_ready":
         return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(f"{name} was not ready or prepared for the session.", session)}
     if auto_fail_type == "headset":
+        other_match = re.search(r"\bother\s*:\s*(.+?)\)?$", str(auto_fail_reason or ""), flags=re.IGNORECASE)
+        denial_detail = other_match.group(1).strip() if other_match else ""
+        fail_text = f"{name} was not using an approved USB headset with a noise-cancelling microphone."
+        if denial_detail:
+            fail_text = f"{fail_text} Headset review note: {denial_detail}."
         return {
             "coaching": _append_readiness_override_note(f"{name} was informed that a USB headset with a noise-cancelling microphone is required to contract with ACD.", session),
-            "fail": _append_readiness_override_note(f"{name} was not using an approved USB headset with a noise-cancelling microphone.", session),
+            "fail": _append_readiness_override_note(fail_text, session),
         }
     if auto_fail_type == "vpn":
         return {

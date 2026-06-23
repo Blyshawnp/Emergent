@@ -1334,9 +1334,17 @@ const HEADSET_DENIAL_REASONS = [
   'Other',
 ];
 
-function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) {
+function formatHeadsetSubmittedDate(value) {
+  if (!value) return 'N/A';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+}
+
+export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) {
   const [deferred, setDeferred] = useState({});
   const [denial, setDenial] = useState(null);
+  const [lookupReview, setLookupReview] = useState(null);
+  const [activeTab, setActiveTab] = useState('pending');
   const pending = (data?.pending || []).filter((item) => !deferred[`${item.brand}::${item.model}`]);
 
   const lookUp = async (item) => {
@@ -1347,6 +1355,7 @@ function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) 
     } else {
       window.open(url, '_blank', 'noopener,noreferrer');
     }
+    setLookupReview(item);
   };
 
   const decide = async (item, action, extra = {}) => {
@@ -1358,34 +1367,44 @@ function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) 
         return next;
       });
       setDenial(null);
+      setLookupReview(null);
+    }
+  };
+
+  const reviewLater = async (item) => {
+    const result = await onDecision({ action: 'review_later', brand: item.brand, model: item.model });
+    if (result?.ok) {
+      setDeferred((current) => ({ ...current, [`${item.brand}::${item.model}`]: true }));
+      setLookupReview(null);
+      onStatus('Headset left pending for later review.', 'info');
     }
   };
 
   const renderRows = (rows, kind) => (
     <div className="nm-table-wrap">
       <table className="nm-table">
-        <thead><tr><th>Brand</th><th>Model</th><th>Status</th><th>Note</th>{kind === 'pending' ? <th>Actions</th> : null}</tr></thead>
+        <thead><tr><th>Brand</th><th>Model</th>{kind === 'pending' ? <><th>Submitted</th><th>Tester</th></> : <th>Status</th>}<th>Note</th><th>Actions</th></tr></thead>
         <tbody>
           {rows.map((item, index) => (
             <tr key={`${kind}-${item.brand}-${item.model}-${index}`}>
-              <td>{item.brand}</td><td>{item.model}</td><td><strong>{item.status || kind}</strong></td><td>{item.note || 'N/A'}</td>
+              <td>{item.brand}</td><td>{item.model}</td>
+              {kind === 'pending' ? <><td>{formatHeadsetSubmittedDate(item.submitted_date)}</td><td>{item.tester || 'N/A'}</td></> : <td><strong>{item.status || kind}</strong></td>}
+              <td>{item.note || 'N/A'}</td>
               {kind === 'pending' ? (
                 <td><div className="nm-row-actions">
                   <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Look Up</button>
                   <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
                   <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
-                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={async () => {
-                    const result = await onDecision({ action: 'review_later', brand: item.brand, model: item.model });
-                    if (result?.ok) {
-                      setDeferred((current) => ({ ...current, [`${item.brand}::${item.model}`]: true }));
-                      onStatus('Headset left pending for later review.', 'info');
-                    }
-                  }}>Review Later</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
                 </div></td>
-              ) : null}
+              ) : kind === 'approved' ? (
+                <td><button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button></td>
+              ) : (
+                <td><button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button></td>
+              )}
             </tr>
           ))}
-          {!rows.length ? <tr><td colSpan={kind === 'pending' ? 5 : 4}><div className="nm-empty">No {kind} headsets.</div></td></tr> : null}
+          {!rows.length ? <tr><td colSpan={6}><div className="nm-empty">No {kind} headsets.</div></td></tr> : null}
         </tbody>
       </table>
     </div>
@@ -1397,12 +1416,35 @@ function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) 
         <div><h2>Headset Review</h2><div className="nm-kicker">Review unknown headsets and keep MTS approval and denial behavior synchronized.</div></div>
         <button type="button" className="nm-btn nm-btn-secondary" onClick={onRefresh} disabled={loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
       </div>
-      <h3>Pending Review</h3>
-      {renderRows(pending, 'pending')}
-      <h3 style={{ marginTop: 24 }}>Approved</h3>
-      {renderRows(data?.approved || [], 'approved')}
-      <h3 style={{ marginTop: 24 }}>Denied</h3>
-      {renderRows(data?.denied || [], 'denied')}
+      {!data?.ok && data?.error ? <div className="nm-status-card is-warning"><strong>Headset review unavailable</strong><span>{data.error}</span></div> : null}
+      <div className="nm-view-tabs" role="tablist" aria-label="Headset review views">
+        {[
+          ['pending', `Pending Review (${pending.length})`],
+          ['approved', `Approved Headsets (${(data?.approved || []).length})`],
+          ['denied', `Denied Headsets (${(data?.denied || []).length})`],
+        ].map(([key, label]) => (
+          <button key={key} type="button" role="tab" aria-selected={activeTab === key} className={`nm-view-tab ${activeTab === key ? 'is-active' : ''}`} onClick={() => setActiveTab(key)}>{label}</button>
+        ))}
+      </div>
+      {activeTab === 'pending' ? renderRows(pending, 'pending') : null}
+      {activeTab === 'approved' ? renderRows(data?.approved || [], 'approved') : null}
+      {activeTab === 'denied' ? renderRows(data?.denied || [], 'denied') : null}
+      {lookupReview ? (
+        <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) setLookupReview(null); }}>
+          <div className="modal" style={{ width: 560, maxWidth: '92vw' }} role="dialog" aria-modal="true" aria-label="Headset lookup decision">
+            <div className="modal-header"><h2>Review Headset</h2><button className="modal-close" onClick={() => setLookupReview(null)}>&times;</button></div>
+            <div className="modal-body">
+              <p>Use the search results to decide whether <strong>{lookupReview.brand} {lookupReview.model}</strong> meets both headset requirements.</p>
+              <div className="nm-row-actions" style={{ marginTop: 18 }}>
+                <button type="button" className="nm-btn nm-btn-primary" onClick={() => decide(lookupReview, 'approve')}>Approve Headset</button>
+                <button type="button" className="nm-btn nm-btn-danger" onClick={() => { setDenial({ item: lookupReview, reason: '', note: '' }); setLookupReview(null); }}>Deny Headset</button>
+                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => reviewLater(lookupReview)}>Review Later</button>
+                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setLookupReview(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {denial ? (
         <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) setDenial(null); }}>
           <div className="modal" style={{ width: 560, maxWidth: '92vw' }}>
@@ -2954,6 +2996,7 @@ export default function NotificationManagerApp() {
             <div className="modal-header"><h2>Headset Review</h2></div>
             <div className="modal-body">
               <p>New headsets are ready to review.</p>
+              <p className="text-muted">You can review pending headsets at anytime by clicking Headset Review on the dashboard.</p>
               <div className="nm-row-actions" style={{ marginTop: 18 }}>
                 <button type="button" className="nm-btn nm-btn-primary" onClick={() => { setActiveSection('headsets'); setHeadsetReviewNoticeOpen(false); }}>Review Now</button>
                 <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setHeadsetReviewNoticeOpen(false)}>OK</button>

@@ -25,6 +25,9 @@ jest.mock('../api', () => ({
     resetSettingsSection: jest.fn(),
     getCurrentSession: jest.fn(),
     getApprovedHeadsets: jest.fn(),
+    lookupSharedCandidate: jest.fn(),
+    logHeadsetReview: jest.fn(),
+    startSession: jest.fn(),
     updateSession: jest.fn(() => Promise.resolve({})),
     saveCall: jest.fn(),
     saveSupTransfer: jest.fn(),
@@ -102,6 +105,9 @@ beforeEach(() => {
   mockModal.warning.mockResolvedValue(true);
   mockModal.error.mockResolvedValue(true);
   api.updateSession.mockResolvedValue({});
+  api.lookupSharedCandidate.mockResolvedValue({ ok: true, matches: [] });
+  api.logHeadsetReview.mockResolvedValue({ ok: true });
+  api.startSession.mockResolvedValue({ ok: true });
   window.electronAPI = {
     setUnsavedChanges: jest.fn().mockResolvedValue(undefined),
   };
@@ -429,6 +435,43 @@ test('basics headset search matches brand and model portions while preserving un
   expect(view.container.textContent).toContain('No matching approved headsets');
   expect(view.container.textContent).not.toContain('Approved headset selected. USB and Noise Cancelling are marked Yes automatically.');
 
+  await view.unmount();
+});
+
+test('denied headset auto-fails with the Wrong Headset Discord action and preserves Other notes', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Tester',
+    discord_templates: [{ category: 'Failure Outcomes', title: 'Wrong Headset', message: 'Wrong headset post' }],
+  });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({
+    groups: [{ brand: 'Allowed', models: ['A1'] }],
+    denied: [{ brand: 'Blocked', model: 'B1', status: 'denied', note: 'Other fit issue' }],
+  });
+  mockModal.showModal.mockResolvedValue(false);
+  const onNavigate = jest.fn();
+  const view = await renderComponent(<BasicsPage onNavigate={onNavigate} />);
+
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="basics-candidate"]'), 'Candidate Example');
+    setInputValue(view.container.querySelector('[data-testid="basics-brand"]'), 'Blocked B1');
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="basics-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const deniedModal = mockModal.showModal.mock.calls[0][0];
+  expect(deniedModal.body).toContain('This headset has been reviewed and marked as unacceptable for contracting with ACD.');
+  expect(deniedModal.body).toContain('Other fit issue');
+  expect(deniedModal.buttons.map((button) => button.label)).toContain('Discord Post: Wrong Headset');
+  expect(api.startSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_status: 'Fail',
+    auto_fail_reason: 'Wrong headset (Other: Other fit issue)',
+  }));
+  expect(onNavigate).toHaveBeenCalledWith('review');
   await view.unmount();
 });
 

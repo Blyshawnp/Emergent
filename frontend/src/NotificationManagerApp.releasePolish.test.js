@@ -37,6 +37,13 @@ test('SAM success and error sound assets are used through the shared sound utili
   expect(appSource).toContain("playSound(kind === 'error' ? 'samError' : 'samSuccess')");
 });
 
+test('SAM headset startup notice includes the required actions and dashboard helper text', () => {
+  expect(appSource).toContain('New headsets are ready to review.');
+  expect(appSource).toContain('Review Now');
+  expect(appSource).toContain('You can review pending headsets at anytime by clicking Headset Review on the dashboard.');
+  expect(appSource).toContain('showPendingNotice: true');
+});
+
 test('Electron main locks one instance per app mode while preserving app identities', () => {
   expect(electronMain).toContain('app.requestSingleInstanceLock');
   expect(electronMain).toContain('Mock Testing Suite is already open.');

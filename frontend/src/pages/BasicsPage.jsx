@@ -726,25 +726,26 @@ export default function BasicsPage({ onNavigate }) {
     }
     if (!d.headset_brand.trim()) { await modal.warning('Missing Info', 'Headset brand/model is required.'); return; }
     if (deniedHeadset) {
-      const hasReplacement = await modal.showModal({
-        type: 'confirm',
+      const denialNote = String(deniedHeadset.note || '').trim();
+      const hasReplacement = await showFailDiscordModal({
         title: 'Denied Headset',
-        body: `<b>${deniedHeadset.brand} ${deniedHeadset.model}</b> is denied and cannot be used for this session.${deniedHeadset.note ? `<br><br>${deniedHeadset.note}` : ''}<br><br>Does the candidate have another compliant USB headset with a noise cancelling microphone?`,
-        graphic: 'warning',
-        buttons: [
-          { label: 'Yes', cls: 'btn-primary', value: true },
-          { label: 'No', cls: 'btn-danger', value: false },
-        ],
+        body: `This headset has been reviewed and marked as unacceptable for contracting with ACD.${denialNote ? `<br><br><b>Reason:</b> ${denialNote}` : ''}<br><br>Does the candidate have another headset that has a noise cancelling microphone and connects via USB?`,
+        templateTitle: 'Wrong Headset',
+        helperText: 'Discord Post: Wrong Headset',
       });
       if (hasReplacement) return;
-      const denialText = String(deniedHeadset.note || '').toLowerCase();
-      const deniedAutoFailReason = denialText.includes('usb')
+      const denialText = denialNote.toLowerCase();
+      const deniedForUsb = denialText.includes('usb');
+      const deniedForNoiseCancelling = denialText.includes('noise cancelling');
+      const deniedAutoFailReason = deniedForUsb
         ? 'Wrong headset (not USB)'
-        : denialText.includes('noise cancelling')
+        : deniedForNoiseCancelling
           ? 'Wrong headset (not noise cancelling)'
-          : 'Not ready for session (denied headset)';
+          : `Wrong headset (Other${denialNote ? `: ${denialNote}` : ''})`;
       const failData = {
         ...d,
+        headset_usb: deniedForUsb ? false : d.headset_usb,
+        noise_cancel: deniedForNoiseCancelling ? false : d.noise_cancel,
         supervisor_only: supervisorOnlyMode,
         auto_fail_reason: deniedAutoFailReason,
         final_status: 'Fail',
