@@ -51,4 +51,5 @@ test('Electron main locks one instance per app mode while preserving app identit
   expect(electronMain).toContain('com.acddirect.mocktestingsuite.notificationmanager');
   expect(electronMain).toContain('com.acddirect.mocktestingsuite');
   expect(electronMain).toContain('focusExistingWindow');
+  expect((electronMain.match(/function ensureBackendAvailable\s*\(/g) || [])).toHaveLength(1);
 });

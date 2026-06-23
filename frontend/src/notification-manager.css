@@ -316,6 +316,7 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-status-card {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 12px;
   padding: 16px 18px;
@@ -344,6 +345,7 @@ body.notification-manager-body.nm-dialog-open {
   color: #e5f0ff;
   line-height: 1.6;
   font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 .nm-status-card.is-success {
@@ -460,6 +462,13 @@ body.notification-manager-body.nm-dialog-open {
   font-size: 20px;
 }
 
+.nm-section-title-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .nm-kicker {
   color: var(--nm-muted);
   font-size: 13px;
@@ -478,6 +487,7 @@ body.notification-manager-body.nm-dialog-open {
   overflow-x: auto;
   border-radius: 18px;
   width: 100%;
+  scrollbar-gutter: stable;
 }
 
 .nm-view-tabs {
@@ -600,7 +610,8 @@ body.notification-manager-body.nm-dialog-open {
   padding-left: 0 !important;
 }
 
-.nm-candidate-panel {
+.nm-candidate-panel,
+.nm-headset-panel {
   background: var(--nm-surface);
   border: 1px solid var(--nm-border);
   border-radius: 24px;
@@ -614,9 +625,14 @@ body.notification-manager-body.nm-dialog-open {
   overflow-y: auto;
 }
 
+.nm-headset-panel .nm-table-wrap {
+  max-height: min(62vh, 680px);
+  border-radius: 14px;
+}
+
 .nm-candidate-table {
   table-layout: auto;
-  min-width: 1450px;
+  min-width: 1320px;
 }
 
 .nm-candidate-table th,
@@ -632,8 +648,35 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-candidate-table .nm-actions-column,
 .nm-candidate-table td:last-child {
-  width: 560px !important;
-  min-width: 560px;
+  width: 460px !important;
+  min-width: 460px;
+}
+
+.nm-candidate-table .nm-row-actions {
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.nm-headset-table {
+  table-layout: auto;
+  min-width: 940px;
+}
+
+.nm-headset-table th,
+.nm-headset-table td {
+  width: auto !important;
+}
+
+.nm-headset-table .nm-headset-note-column,
+.nm-headset-table .nm-headset-note-cell {
+  min-width: 210px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.nm-headset-table .nm-actions-column {
+  width: 380px !important;
+  min-width: 380px;
 }
 
 .nm-notes-cell {

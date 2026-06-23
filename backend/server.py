@@ -6635,8 +6635,15 @@ def _get_gemini_prompt_details(settings, prompt_type):
     return fallback, "builtin"
 
 
+_last_logged_gemini_prompt_sources = {}
+
+
 def _log_gemini_prompt_source(prompt_type, source):
     prompt_name = "fail" if prompt_type == "fail" else "coaching"
+    source_key = str(source or "builtin")
+    if _last_logged_gemini_prompt_sources.get(prompt_name) == source_key:
+        return
+    _last_logged_gemini_prompt_sources[prompt_name] = source_key
     if source == "google_sheet_override":
         logger.info("[Gemini] Google Sheet %s override active", prompt_name)
     elif source == "local":
@@ -6883,11 +6890,6 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
     fail_prompt, fail_prompt_source = _get_gemini_prompt_details(settings, "fail")
     _log_gemini_prompt_source("coaching", coaching_prompt_source)
     _log_gemini_prompt_source("fail", fail_prompt_source)
-    logger.info(
-        "[Gemini] Override source active: coaching=%s fail=%s",
-        coaching_prompt_source,
-        fail_prompt_source,
-    )
     diagnostics = {
         "used_gemini": False,
         "used_fallback": True,

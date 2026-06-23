@@ -600,30 +600,6 @@ a { color: var(--color-primary); text-decoration: none; }
   display: grid;
   gap: 16px;
 }
-.help-search-card {
-  display: grid;
-  grid-template-columns: minmax(0, 0.7fr) minmax(260px, 1fr);
-  gap: 18px;
-  align-items: center;
-}
-.help-search-card h2 {
-  margin: 0 0 6px;
-}
-.help-search-card input {
-  width: 100%;
-  min-height: 48px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-input);
-  color: var(--text-primary);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-.help-search-card input:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-.help-search-card input::placeholder {
-  color: var(--text-tertiary);
-}
 .help-anchor-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -676,6 +652,8 @@ a { color: var(--color-primary); text-decoration: none; }
 .help-doc-card {
   scroll-margin-top: 24px;
   border-left: 3px solid rgba(56, 189, 248, 0.38);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
 }
 .help-card-header {
   display: flex;
@@ -786,9 +764,6 @@ a { color: var(--color-primary); text-decoration: none; }
 
 @media (max-width: 980px) {
   .help-hero {
-    grid-template-columns: 1fr;
-  }
-  .help-search-card {
     grid-template-columns: 1fr;
   }
   .help-doc-grid {
@@ -981,7 +956,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .payment-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-md); margin-bottom: 6px; }
 .payment-option-select { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-xs); flex: 0 0 auto; margin-left: auto; font-size: var(--font-size-xs); font-weight: 700; color: var(--text-secondary); white-space: nowrap; }
 .payment-option-select select { width: auto; min-width: 132px; max-width: 180px; padding: 6px 28px 6px 10px; font-size: var(--font-size-xs); }
-.payment-card-number { font-size: 15px; }
+.payment-card-number,
+.payment-bank-number {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.075em;
+  overflow-wrap: anywhere;
+}
 
 /* Result Buttons */
 .result-btns { display: flex; gap: var(--space-md); justify-content: center; padding: var(--space-md) 0; }

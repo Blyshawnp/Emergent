@@ -824,17 +824,19 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           <h2>Candidate Tracking</h2>
           <div className="nm-kicker">Shared admin queue from Candidate Sessions and Pending Sup Transfers.</div>
         </div>
-        <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={onRefresh} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
-        <button
-          type="button"
-          className="nm-btn nm-btn-danger nm-btn-table"
-          onClick={() => handleDeleteTargets(selectedList, `${selectedCount} selected candidate record${selectedCount === 1 ? '' : 's'}`)}
-          disabled={!selectedCount || loading}
-        >
-          Delete Selected
-        </button>
+        <div className="nm-section-title-actions">
+          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={onRefresh} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+          <button
+            type="button"
+            className="nm-btn nm-btn-danger nm-btn-table"
+            onClick={() => handleDeleteTargets(selectedList, `${selectedCount} selected candidate record${selectedCount === 1 ? '' : 's'}`)}
+            disabled={!selectedCount || loading}
+          >
+            Delete Selected
+          </button>
+        </div>
       </div>
       {!data?.ok && data?.error ? (
         <div className="nm-status-card is-warning">
@@ -1145,7 +1147,6 @@ function NotificationEditorModal({
 }) {
   useEffect(() => {
     if (!open) return undefined;
-    console.log('[SAM] Rendering NEW modal');
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') onClose();
     };
@@ -1382,36 +1383,36 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
 
   const renderRows = (rows, kind) => (
     <div className="nm-table-wrap">
-      <table className="nm-table">
-        <thead><tr><th>Brand</th><th>Model</th>{kind === 'pending' ? <><th>Submitted</th><th>Tester</th></> : <th>Status</th>}<th>Note</th><th>Actions</th></tr></thead>
+      <table className="nm-table nm-headset-table">
+        <thead><tr><th>Brand</th><th>Model</th>{kind === 'pending' ? <><th>Submitted</th><th>Tester</th></> : <th>Status</th>}<th className="nm-headset-note-column">Note</th><th className="nm-actions-column">Actions</th></tr></thead>
         <tbody>
           {rows.map((item, index) => (
             <tr key={`${kind}-${item.brand}-${item.model}-${index}`}>
               <td>{item.brand}</td><td>{item.model}</td>
               {kind === 'pending' ? <><td>{formatHeadsetSubmittedDate(item.submitted_date)}</td><td>{item.tester || 'N/A'}</td></> : <td><strong>{item.status || kind}</strong></td>}
-              <td>{item.note || 'N/A'}</td>
+              <td className="nm-headset-note-cell">{item.note || 'N/A'}</td>
               {kind === 'pending' ? (
-                <td><div className="nm-row-actions">
+                <td className="nm-actions-column"><div className="nm-row-actions">
                   <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Look Up</button>
                   <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
                   <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
                   <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
                 </div></td>
               ) : kind === 'approved' ? (
-                <td><button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button></td>
+                <td className="nm-actions-column"><button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button></td>
               ) : (
-                <td><button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button></td>
+                <td className="nm-actions-column"><button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button></td>
               )}
             </tr>
           ))}
-          {!rows.length ? <tr><td colSpan={6}><div className="nm-empty">No {kind} headsets.</div></td></tr> : null}
+          {!rows.length ? <tr><td colSpan={kind === 'pending' ? 6 : 5}><div className="nm-empty">No {kind} headsets.</div></td></tr> : null}
         </tbody>
       </table>
     </div>
   );
 
   return (
-    <section className="nm-panel" id="sam-headset-review">
+    <section className="nm-panel nm-headset-panel" id="sam-headset-review">
       <div className="nm-section-title">
         <div><h2>Headset Review</h2><div className="nm-kicker">Review unknown headsets and keep MTS approval and denial behavior synchronized.</div></div>
         <button type="button" className="nm-btn nm-btn-secondary" onClick={onRefresh} disabled={loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
@@ -1954,18 +1955,8 @@ export default function NotificationManagerApp() {
       document.body.classList.remove('nm-dialog-open');
       return undefined;
     }
-    console.log('[SAM] Portal editor state open');
     document.body.classList.add('nm-dialog-open');
     return () => document.body.classList.remove('nm-dialog-open');
-  }, [editorOpen]);
-
-  useEffect(() => {
-    if (!editorOpen) return undefined;
-    const legacyEditor = document.querySelector('.nm-form-card.is-editor-modal, .nm-editor-backdrop');
-    if (legacyEditor) {
-      console.log('[SAM] Rendering OLD editor');
-    }
-    return undefined;
   }, [editorOpen]);
 
   useEffect(() => {
