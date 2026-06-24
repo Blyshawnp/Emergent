@@ -572,7 +572,7 @@ function startBackend() {
     console.log(`[BACKEND] cwd: ${backendCwd}`);
     console.log(`[BACKEND] runtimeConfig: ${backendRuntimeConfigPath}`);
     console.log(`[BACKEND] defaultsDir: ${backendDefaultsDir}`);
-    console.log(`[BACKEND] googleServiceAccount: ${fs.existsSync(googleServiceAccountPath) ? googleServiceAccountPath : 'not bundled'}`);
+    console.log(`[BACKEND] appsScriptApiConfig: ${fs.existsSync(appsScriptApiConfigPath) ? appsScriptApiConfigPath : 'not bundled; local defaults will be used'}`);
 
     try {
       backendProcess = spawn(backendPath, [], {
