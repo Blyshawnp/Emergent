@@ -57,6 +57,21 @@ Supported actions:
 - `approveHeadset`
 - `denyHeadset`
 - `updateCandidateTracking`
+- `getSamAdmins` / `getAdminPins` (`sam-authorized-users`)
+- `getTickerMessages` / `getAlerts` (`sam-notifications`)
+- `getSharedCandidates` (`Candidate Sessions` and `Pending Sup Transfers`)
+- `getSheetMetadata`
+- `getSheetRange`
+- `batchGetSheetRanges`
+- `updateSheetRange`
+- `appendSheetRows`
+- `batchUpdateSheetRanges`
+- `batchUpdateSpreadsheet`
+
+The compatibility actions are allowlisted in
+[`apps-script-api-web-app.gs`](./apps-script-api-web-app.gs). The desktop/backend
+adapter translates Google Sheets client calls to these names; it never sends
+`spreadsheets.get` or `spreadsheets.values.*` to Apps Script.
 
 Successful read responses should use a `rows` array:
 
@@ -89,6 +104,23 @@ The shared transport covers:
 - headset approval and denial updates
 - Candidate Sessions and Pending Sup Transfers tracking
 - SAM authorized-user and notification sheet operations used by the existing shared-sheet workflows
+
+## Deploying the Apps Script server
+
+1. Copy `docs/apps-script-api-web-app.gs` into the Apps Script project attached
+   to the controlled deployment.
+2. Add Script Property `API_TOKEN` with the same secret used by the ignored
+   build-local config. Never place the value in source or logs.
+3. Add Script Property `MASTER_SPREADSHEET_ID` with the configured master Google
+   Sheet ID.
+4. Deploy a new version of the existing Web app deployment. Updating the
+   existing deployment keeps the packaged `/exec` URL stable.
+5. Verify `ping`, `getSheetMetadata`, `getSamAdmins`, `getTickerMessages`,
+   `getCandidateTracking`, and the existing content actions before rebuilding.
+
+The real tabs are `sam-authorized-users`, `sam-notifications`, `Candidate
+Sessions`, and `Pending Sup Transfers`; the deployment must not substitute a
+new `candidate-tracking` tab.
 
 Selenium certification-form filling is independent of this transport and remains unchanged.
 
@@ -126,5 +158,9 @@ If the config is missing, disabled, malformed, uses a placeholder, has a non-HTT
 - MTS/SAM continue using packaged CSV/Markdown and built-in notification defaults where available;
 - remote write operations return a controlled error instead of crashing;
 - users are not prompted to enter configuration in Settings.
+
+If the config is enabled and reachable but the deployment returns `Unknown
+action` for a required route, the app reports a deployment-route error instead
+of silently treating local defaults as live Google Sheet data.
 
 Correct the build-local config or Apps Script deployment, rebuild if necessary, and restart the application to restore remote synchronization.
