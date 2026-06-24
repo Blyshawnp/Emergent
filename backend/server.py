@@ -863,11 +863,46 @@ def _record_google_sheet_content_error(content_key, tab_name, error):
         del _google_sheet_content_errors[:-50]
 
 
+APPS_SCRIPT_CONTENT_ACTIONS = {
+    "headsets": "getHeadsets",
+    "screenshots": "getScreenshots",
+    "discord-posts": "getDiscordPosts",
+}
+
+
+def _apps_script_rows(client, action, params=None):
+    result = client.get(action, params or {})
+    rows = result.get("rows") if isinstance(result, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"Apps Script action {action} returned no rows array.")
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _apps_script_rows_to_csv(rows):
+    if not rows:
+        return ""
+    headers = []
+    for row in rows:
+        for key in row.keys():
+            if key not in headers:
+                headers.append(key)
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=headers, lineterminator="\n", extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return output.getvalue()
+
+
 def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
     from services.apps_script_api import create_apps_script_sheet_service
     apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
     if apps_script_res.get("ok"):
         try:
+            named_action = APPS_SCRIPT_CONTENT_ACTIONS.get(str(tab_name or "").strip().lower())
+            if named_action:
+                rows = _apps_script_rows(apps_script_res["client"], named_action)
+                logger.info("[CONTENT] Loaded Google Sheet tab '%s' through Apps Script action %s", tab_name, named_action)
+                return _apps_script_rows_to_csv(rows)
             service = apps_script_res["service"]
             result = service.spreadsheets().values().get(
                 spreadsheetId=sheet_id,
@@ -3720,6 +3755,7 @@ def _get_shared_tracking_sheet_service():
         return {
             "ok": True,
             "service": apps_script_res["service"],
+            "appsScriptClient": apps_script_res["client"],
             "sheet_id": sheet_id,
             "serviceAccountEmail": "apps-script-api-endpoint",
             "setup": {"ok": True, "activeSheetId": sheet_id, "activeClientEmail": "apps-script-api-endpoint", "tabStatus": []}
@@ -3923,6 +3959,14 @@ def _shared_sheet_context():
     service_result = _get_shared_tracking_sheet_service()
     if not service_result.get("ok"):
         return service_result
+    if service_result.get("appsScriptClient"):
+        return {
+            **service_result,
+            "setupStatus": {
+                "ok": True,
+                "statuses": [{"tab": HEADSET_REVIEW_LOG_TAB, "schema": "review", "ok": True}],
+            },
+        }
     ensure_result = _ensure_shared_tracking_tabs(
         service_result["service"],
         service_result["sheet_id"],
@@ -4318,6 +4362,16 @@ def _append_headset_review_log(payload):
 
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            result = apps_script_client.post("submitHeadsetReview", {
+                "brand": brand,
+                "model": model,
+                "headset_model": headset_model,
+                "candidate_name": str((payload or {}).get("candidate_name") or "").strip(),
+                "tester_name": str((payload or {}).get("tester_name") or "").strip(),
+            })
+            return {"ok": True, "logged": True, **(result if isinstance(result, dict) else {})}
         schema = _headset_review_schema_from_context(context)
         headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
         rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers)
@@ -4407,6 +4461,52 @@ def _headset_review_snapshot():
     if not context.get("ok"):
         return {"ok": False, "pending": [], "approved": [], "denied": [], "error": context.get("error") or "Headset review sheet is unavailable."}
     try:
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            raw_reviews = _apps_script_rows(apps_script_client, "getHeadsetReviewLog")
+            raw_headsets = _apps_script_rows(apps_script_client, "getHeadsets")
+            review_rows = []
+            for row in raw_reviews:
+                brand, model = _split_headset_brand_model(
+                    row.get("headset_model"),
+                    row.get("Brand") or row.get("brand"),
+                    row.get("Model") or row.get("model"),
+                )
+                review_rows.append({
+                    "brand": brand,
+                    "model": model,
+                    "status": str(row.get("Status") or row.get("review_status") or "pending").strip().lower() or "pending",
+                    "note": str(row.get("Note") or row.get("ReviewNotes") or row.get("Notes") or row.get("notes") or "").strip(),
+                    "submitted_date": str(row.get("Timestamp") or row.get("entered_at") or "").strip(),
+                    "tester": str(row.get("SubmittedBy") or row.get("tester_name") or "").strip(),
+                })
+            headset_rows = [
+                {
+                    "brand": str(row.get("Brand") or row.get("brand") or "").strip(),
+                    "model": str(row.get("Model") or row.get("model") or "").strip(),
+                    "status": str(row.get("Status") or row.get("status") or "approved").strip().lower() or "approved",
+                    "note": str(row.get("Note") or row.get("note") or "").strip(),
+                }
+                for row in raw_headsets
+                if str(row.get("Brand") or row.get("brand") or "").strip()
+                and str(row.get("Model") or row.get("model") or "").strip()
+            ]
+            _sync_headset_content_cache(headset_rows)
+            public_row = lambda row: {
+                "brand": row.get("brand") or "",
+                "model": row.get("model") or "",
+                "status": row.get("status") or "",
+                "note": row.get("note") or "",
+                "submitted_date": row.get("submitted_date") or "",
+                "tester": row.get("tester") or "",
+            }
+            return {
+                "ok": True,
+                "pending": [public_row(row) for row in review_rows if row.get("brand") and row.get("model") and row.get("status") in {"", "pending"}],
+                "approved": [public_row(row) for row in headset_rows if row.get("status") == "approved"],
+                "denied": [public_row(row) for row in headset_rows if row.get("status") == "denied"],
+                "error": "",
+            }
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         schema = _headset_review_schema_from_context(context)
@@ -4467,6 +4567,33 @@ def _headset_review_action(payload):
         context = _shared_sheet_context()
         if not context.get("ok"):
             return {"ok": False, "error": context.get("error") or "Headset review sheet is unavailable."}
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            post_action = "approveHeadset" if action == "approve" else "denyHeadset"
+            result = apps_script_client.post(post_action, {
+                "brand": brand,
+                "model": model,
+                "reason": reason,
+                "note": decision_note,
+            })
+            refreshed = _apps_script_rows(apps_script_client, "getHeadsets")
+            _sync_headset_content_cache([
+                {
+                    "brand": str(row.get("Brand") or row.get("brand") or "").strip(),
+                    "model": str(row.get("Model") or row.get("model") or "").strip(),
+                    "status": str(row.get("Status") or row.get("status") or "approved").strip().lower() or "approved",
+                    "note": str(row.get("Note") or row.get("note") or "").strip(),
+                }
+                for row in refreshed
+            ])
+            return {
+                "ok": True,
+                "action": action,
+                "status": decision_status,
+                "brand": brand,
+                "model": model,
+                **(result if isinstance(result, dict) else {}),
+            }
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         schema = _headset_review_schema_from_context(context)
@@ -4643,6 +4770,60 @@ def _shared_admin_candidate_snapshot():
         return {"ok": False, "error": context.get("error"), "setup": context.get("setup"), "candidates": [], "pending": []}
 
     try:
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            raw_rows = _apps_script_rows(apps_script_client, "getCandidateTracking")
+            candidates = []
+            for index, row in enumerate(raw_rows, start=1):
+                candidate_name = str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip()
+                status = str(row.get("status") or row.get("Status") or "").strip()
+                timestamp = str(row.get("completed_at") or row.get("Timestamp") or row.get("created_at") or "").strip()
+                notes = str(row.get("notes") or row.get("Notes") or row.get("review_notes") or "").strip()
+                updated_by = str(row.get("tester_name") or row.get("UpdatedBy") or row.get("updated_by") or "").strip()
+                candidate = {
+                    **{
+                        key: value
+                        for key, value in row.items()
+                        if str(key).lower() == str(key)
+                    },
+                    "session_id": str(row.get("session_id") or f"apps-script-{index}"),
+                    "candidate_name": candidate_name,
+                    "status": status,
+                    "latest_status": status,
+                    "completed_at": timestamp,
+                    "last_session_date": timestamp,
+                    "notes": notes,
+                    "review_notes": notes,
+                    "tester_name": updated_by,
+                    "attempt_count": row.get("attempt_count") or row.get("attempt_number") or 1,
+                }
+                candidate["attempts"] = [dict(candidate)]
+                candidates.append(candidate)
+            active = [row for row in candidates if str(row.get("status") or "").strip().upper() not in {"ARCHIVED"}]
+            archived = [row for row in candidates if str(row.get("status") or "").strip().upper() == "ARCHIVED"]
+            withdrawn = [row for row in active if str(row.get("status") or "").strip().upper() == "WITHDREW FROM CERTIFICATION"]
+            passed = [row for row in active if str(row.get("status") or "").strip().upper() in {"PASS", "PASSED", "RESUMED-PASS"}]
+            failed_final = [row for row in active if str(row.get("status") or "").strip().upper() == "FAIL-FINAL ATTEMPT"]
+            failed = [row for row in active if str(row.get("status") or "").strip().upper() in {"FAIL", "FAILED"}]
+            incomplete = [row for row in active if str(row.get("status") or "").strip().upper() == "INCOMPLETE"]
+            return {
+                "ok": True,
+                "setup": _shared_tracking_required_setup(),
+                "autoArchivedCount": 0,
+                "candidates": candidates,
+                "pending": [],
+                "views": {
+                    "pending": [],
+                    "failedNotFinal": failed,
+                    "failedFinalAttempts": failed_final,
+                    "incomplete": incomplete,
+                    "withdrawn": withdrawn,
+                    "extraAttemptGranted": [row for row in active if _shared_truthy(row.get("extra_attempt_granted"))],
+                    "passedCertifications": passed,
+                    "archived": archived,
+                    "allActive": active,
+                },
+            }
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         candidate_rows = [
@@ -4776,6 +4957,10 @@ def _shared_admin_candidate_action(payload):
         return {"ok": False, "error": context.get("error"), "setup": context.get("setup")}
 
     try:
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            result = apps_script_client.post("updateCandidateTracking", dict(payload or {}))
+            return {"ok": True, "action": action, **(result if isinstance(result, dict) else {})}
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         candidate_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
@@ -5504,6 +5689,17 @@ def _sync_shared_candidate_tracking(session):
 
     current_operation = "initialize"
     try:
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            status = _shared_status(compute_final_status(session))
+            result = apps_script_client.post("updateCandidateTracking", {
+                "candidateName": str(session.get("candidate_name") or session.get("candidate") or "").strip(),
+                "status": status,
+                "notes": str(session.get("review_notes") or session.get("fail_summary") or session.get("coaching_summary") or "").strip(),
+                "updatedBy": str(session.get("tester_name") or "MTS").strip() or "MTS",
+                "timestamp": str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()),
+            })
+            return {"ok": True, "candidateAction": "updated", "pendingAction": "", **(result if isinstance(result, dict) else {})}
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         current_operation = "read_candidate_rows"
@@ -5644,8 +5840,21 @@ def _lookup_shared_candidate_sessions(candidate_name):
         context = _shared_sheet_context()
         if not context.get("ok"):
             return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
-        sheets_api = context["service"].spreadsheets()
-        rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            rows = [
+                {
+                    "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip(),
+                    "status": str(row.get("status") or row.get("Status") or "").strip(),
+                    "created_at": str(row.get("created_at") or row.get("Timestamp") or "").strip(),
+                    "review_notes": str(row.get("review_notes") or row.get("Notes") or "").strip(),
+                    "tester_name": str(row.get("tester_name") or row.get("UpdatedBy") or "").strip(),
+                }
+                for row in _apps_script_rows(apps_script_client, "getCandidateTracking")
+            ]
+        else:
+            sheets_api = context["service"].spreadsheets()
+            rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
     except Exception as exc:
         logger.warning("[SHARED] Candidate lookup unavailable; continuing local workflow: %s", exc)
         return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
@@ -5686,6 +5895,8 @@ def _get_shared_pending_sup_transfers():
         context = _shared_sheet_context()
         if not context.get("ok"):
             return {"ok": False, "items": [], "error": context.get("error"), "setup": context.get("setup")}
+        if context.get("appsScriptClient"):
+            return {"ok": True, "items": []}
         sheets_api = context["service"].spreadsheets()
         rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
     except Exception as exc:

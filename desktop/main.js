@@ -509,7 +509,7 @@ function startBackend() {
     const backendConfigDir = path.join(process.resourcesPath, 'backend', 'config');
     const backendRuntimeConfigPath = path.join(backendConfigDir, 'runtime_config.json');
     const backendDefaultsDir = path.join(process.resourcesPath, 'backend', 'defaults');
-    const googleServiceAccountPath = path.join(backendConfigDir, 'google-service-account.json');
+    const appsScriptApiConfigPath = path.join(backendConfigDir, 'apps-script-api.json');
     const packagedBackendLogDir = initializePackagedBackendLogStreams();
     requireRuntimePath(backendPath, 'Bundled backend executable');
     // Bundled drivers are optional. If absent, create the directory and a README
@@ -536,7 +536,7 @@ function startBackend() {
     console.log(`[BACKEND] cwd: ${backendCwd}`);
     console.log(`[BACKEND] runtimeConfig: ${backendRuntimeConfigPath}`);
     console.log(`[BACKEND] defaultsDir: ${backendDefaultsDir}`);
-    console.log(`[BACKEND] googleServiceAccount: ${fs.existsSync(googleServiceAccountPath) ? googleServiceAccountPath : 'not bundled'}`);
+    console.log(`[BACKEND] appsScriptApiConfig: ${fs.existsSync(appsScriptApiConfigPath) ? appsScriptApiConfigPath : 'not bundled; local defaults will be used'}`);
 
     try {
       backendProcess = spawn(backendPath, [], {
@@ -551,7 +551,7 @@ function startBackend() {
           BROWSER_DRIVER_DIR: driverDir,
           APP_VERSION,
           APP_RESOURCES_PATH: process.resourcesPath,
-          GOOGLE_SERVICE_ACCOUNT_FILE: googleServiceAccountPath,
+          APPS_SCRIPT_API_CONFIG_FILE: appsScriptApiConfigPath,
           MTS_ADMIN_TOKEN: getSharedAdminToken(),
           MTS_DEV_MODE: isDev ? '1' : '0',
         },

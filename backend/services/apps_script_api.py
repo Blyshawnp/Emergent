@@ -7,6 +7,7 @@ logs, exception messages, and object representations.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from urllib.request import Request, urlopen
 
 CONFIG_FILENAME = "apps-script-api.json"
 PLACEHOLDER_TOKENS = {"TOKEN", "REPLACE_ME", "CHANGE_ME"}
+logger = logging.getLogger(__name__)
 
 
 class AppsScriptApiError(RuntimeError):
@@ -71,6 +73,22 @@ def _valid_endpoint(value: str):
     )
 
 
+def _endpoint_host_path(value: str):
+    parsed = urlparse(value or "")
+    return f"{parsed.netloc}{parsed.path}" if parsed.netloc else ""
+
+
+def _log_config_status(path, *, enabled, endpoint="", token_present=False, status=""):
+    logger.info(
+        "[APPS-SCRIPT] config_path=%s enabled=%s base_url_host_path=%s token_present=%s status=%s",
+        str(path or ""),
+        bool(enabled),
+        _endpoint_host_path(endpoint),
+        bool(token_present),
+        str(status or ""),
+    )
+
+
 def load_apps_script_api_config(root_dir: Path):
     """Return (config, public status) without exposing endpoint or token."""
     existing_path = next(
@@ -78,6 +96,7 @@ def load_apps_script_api_config(root_dir: Path):
         None,
     )
     if not existing_path:
+        _log_config_status("", enabled=False, status="missing")
         return None, {
             "ok": False,
             "enabled": False,
@@ -89,6 +108,7 @@ def load_apps_script_api_config(root_dir: Path):
     try:
         payload = json.loads(existing_path.read_text(encoding="utf-8"))
     except Exception:
+        _log_config_status(existing_path, enabled=False, status="invalid")
         return None, {
             "ok": False,
             "enabled": False,
@@ -103,6 +123,7 @@ def load_apps_script_api_config(root_dir: Path):
     endpoint = str(payload.get("base_url") or "").strip()
     token = str(payload.get("token") or "").strip()
     if not enabled:
+        _log_config_status(existing_path, enabled=False, endpoint=endpoint, token_present=bool(token), status="disabled")
         return None, {
             "ok": False,
             "enabled": False,
@@ -111,6 +132,7 @@ def load_apps_script_api_config(root_dir: Path):
             "message": "Apps Script API is disabled; using packaged local defaults.",
         }
     if not _valid_endpoint(endpoint) or not token or token.upper() in PLACEHOLDER_TOKENS:
+        _log_config_status(existing_path, enabled=True, endpoint=endpoint, token_present=bool(token), status="invalid")
         return None, {
             "ok": False,
             "enabled": True,
@@ -120,6 +142,7 @@ def load_apps_script_api_config(root_dir: Path):
         }
 
     config = AppsScriptApiConfig(True, endpoint, token, existing_path)
+    _log_config_status(existing_path, enabled=True, endpoint=endpoint, token_present=True, status="ready")
     return config, config.public_status()
 
 
@@ -153,8 +176,9 @@ class AppsScriptApiClient:
         return text
 
     def request(self, action: str, params: Optional[dict] = None):
+        action = str(action or "").strip()
         body = json.dumps({
-            "action": str(action or "").strip(),
+            "action": action,
             "token": self._config.token,
             "params": params or {},
         }).encode("utf-8")
@@ -169,15 +193,19 @@ class AppsScriptApiClient:
                 raw = response.read().decode("utf-8-sig")
             payload = json.loads(raw)
         except Exception as exc:
+            logger.warning("[APPS-SCRIPT] action=%s response=error error=%s", action, self._redact(exc))
             raise AppsScriptApiError(
                 f"Apps Script API request failed: {self._redact(exc)}"
             ) from exc
 
         if not isinstance(payload, dict):
+            logger.warning("[APPS-SCRIPT] action=%s response=error error=invalid_response", action)
             raise AppsScriptApiError("Apps Script API returned an invalid response.")
         if payload.get("ok") is False:
             message = self._redact(payload.get("error") or payload.get("message") or "Request rejected.")
+            logger.warning("[APPS-SCRIPT] action=%s response=error error=%s", action, message)
             raise AppsScriptApiError(f"Apps Script API rejected the request: {message}")
+        logger.info("[APPS-SCRIPT] action=%s response=ok", action)
         if "result" in payload:
             return payload.get("result") or {}
         if "data" in payload:
@@ -188,17 +216,19 @@ class AppsScriptApiClient:
         return self.get("ping")
 
     def get(self, action: str, params: Optional[dict] = None):
-        query = {"action": str(action or "").strip(), "token": self._config.token}
+        action = str(action or "").strip()
+        query = {"action": action, "token": self._config.token}
         for key, value in (params or {}).items():
             if value is not None:
                 query[str(key)] = value
         request_url = f"{self._config.base_url}?{urlencode(query)}"
         request = Request(request_url, method="GET")
-        return self._read_response(request)
+        return self._read_response(request, action)
 
     def post(self, action: str, payload: Optional[dict] = None):
+        action = str(action or "").strip()
         body_payload = dict(payload or {})
-        body_payload["action"] = str(action or "").strip()
+        body_payload["action"] = action
         body_payload["token"] = self._config.token
         body = json.dumps(body_payload).encode("utf-8")
         request = Request(
@@ -207,23 +237,27 @@ class AppsScriptApiClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        return self._read_response(request)
+        return self._read_response(request, action)
 
-    def _read_response(self, request: Request):
+    def _read_response(self, request: Request, action: str):
         try:
             with self._opener(request, timeout=self._timeout) as response:
                 raw = response.read().decode("utf-8-sig")
             payload = json.loads(raw)
         except Exception as exc:
+            logger.warning("[APPS-SCRIPT] action=%s response=error error=%s", action, self._redact(exc))
             raise AppsScriptApiError(
                 f"Apps Script API request failed: {self._redact(exc)}"
             ) from exc
 
         if not isinstance(payload, dict):
+            logger.warning("[APPS-SCRIPT] action=%s response=error error=invalid_response", action)
             raise AppsScriptApiError("Apps Script API returned an invalid response.")
         if payload.get("ok") is False:
             message = self._redact(payload.get("error") or payload.get("message") or "Request rejected.")
+            logger.warning("[APPS-SCRIPT] action=%s response=error error=%s", action, message)
             raise AppsScriptApiError(f"Apps Script API rejected the request: {message}")
+        logger.info("[APPS-SCRIPT] action=%s response=ok", action)
         if "result" in payload:
             return payload.get("result") or {}
         if "data" in payload:

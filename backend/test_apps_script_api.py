@@ -1,8 +1,10 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from unittest import mock
 
 from backend.services.apps_script_api import (
     AppsScriptApiError,
@@ -80,6 +82,52 @@ class AppsScriptApiTests(unittest.TestCase):
             self.assertEqual(seen["token"], secret)
             self.assertEqual(seen["action"], "spreadsheets.values.get")
             self.assertNotIn(secret, str(caught.exception))
+
+    def test_config_diagnostics_expose_only_safe_metadata(self):
+        secret = "unit-test-diagnostic-secret"
+        with tempfile.TemporaryDirectory() as root:
+            self._write_config(root, {
+                "enabled": True,
+                "base_url": "https://script.google.com/macros/s/test-deployment/exec",
+                "token": secret,
+            })
+            with self.assertLogs("backend.services.apps_script_api", level="INFO") as captured:
+                config, status = load_apps_script_api_config(Path(root))
+
+        combined = "\n".join(captured.output)
+        self.assertIsNotNone(config)
+        self.assertTrue(status["ok"])
+        self.assertIn("enabled=True", combined)
+        self.assertIn("base_url_host_path=script.google.com/macros/s/test-deployment/exec", combined)
+        self.assertIn("token_present=True", combined)
+        self.assertNotIn(secret, combined)
+
+    def test_explicit_and_packaged_config_paths_precede_development_fallback(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as resources:
+            explicit = Path(root) / "explicit.json"
+            packaged = Path(resources) / "backend" / "config" / "apps-script-api.json"
+            packaged.parent.mkdir(parents=True)
+            payload = {
+                "enabled": True,
+                "base_url": "https://script.google.com/macros/s/test-deployment/exec",
+                "token": "safe-test-token",
+            }
+            explicit.write_text(json.dumps(payload), encoding="utf-8")
+            packaged.write_text(json.dumps(payload), encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {
+                "APPS_SCRIPT_API_CONFIG_FILE": str(explicit),
+                "APP_RESOURCES_PATH": str(resources),
+            }, clear=False):
+                config, _status = load_apps_script_api_config(Path(root))
+                self.assertEqual(config.path, explicit)
+
+            with mock.patch.dict(os.environ, {
+                "APPS_SCRIPT_API_CONFIG_FILE": "",
+                "APP_RESOURCES_PATH": str(resources),
+            }, clear=False):
+                config, _status = load_apps_script_api_config(Path(root))
+                self.assertEqual(config.path, packaged)
 
     def test_adapter_returns_google_compatible_result(self):
         def opener(_request, timeout):
@@ -167,7 +215,14 @@ class AppsScriptApiTests(unittest.TestCase):
                 "token": "safe-test-token",
             })
             result = create_apps_script_sheet_service(Path(root), opener=opener)
-            get_result = result["client"].get("getHeadsets")
+            read_actions = [
+                "getHeadsets",
+                "getScreenshots",
+                "getDiscordPosts",
+                "getHeadsetReviewLog",
+                "getCandidateTracking",
+            ]
+            get_results = [result["client"].get(action) for action in read_actions]
             post_result = result["client"].post("approveHeadset", {
                 "action": "must-not-override",
                 "token": "must-not-override",
@@ -175,13 +230,13 @@ class AppsScriptApiTests(unittest.TestCase):
                 "model": "H1",
             })
 
-        self.assertEqual(len(get_result["rows"]), 1)
+        self.assertTrue(all(len(response["rows"]) == 1 for response in get_results))
         self.assertTrue(post_result["updated"])
-        self.assertEqual(requests[0][0], "GET")
-        self.assertEqual(requests[0][1]["action"], "getHeadsets")
-        self.assertEqual(requests[1][0], "POST")
-        self.assertEqual(requests[1][1]["action"], "approveHeadset")
-        self.assertEqual(requests[1][1]["token"], "safe-test-token")
+        self.assertEqual([request[1]["action"] for request in requests[:5]], read_actions)
+        self.assertTrue(all(request[0] == "GET" for request in requests[:5]))
+        self.assertEqual(requests[5][0], "POST")
+        self.assertEqual(requests[5][1]["action"], "approveHeadset")
+        self.assertEqual(requests[5][1]["token"], "safe-test-token")
 
 
 if __name__ == "__main__":
