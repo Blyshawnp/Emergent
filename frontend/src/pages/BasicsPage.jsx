@@ -24,8 +24,7 @@ function normalizeName(value) {
 
 function isStrongCandidateLookupQuery(value) {
   const normalized = normalizeName(value);
-  const parts = normalized.split(' ').filter(Boolean);
-  return parts.length >= 2 && normalized.length >= 5 && (parts[1].length >= 1 || normalized.length >= 7);
+  return normalized.length >= 3;
 }
 
 function getCandidateDate(record) {
@@ -866,9 +865,90 @@ export default function BasicsPage({ onNavigate }) {
       <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }}>
         <h3 style={{ marginBottom: 8 }}>Session Information</h3>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
             <label className="text-sm font-bold" style={{ minWidth: 130 }}>Candidate Name</label>
-            <input type="text" value={form.candidate_name} onChange={e => set('candidate_name', e.target.value)} placeholder="Required" style={{ flex: 1 }} data-testid="basics-candidate" />
+            <div style={{ position: 'relative', flex: 1 }}>
+              <input 
+                type="text" 
+                value={form.candidate_name} 
+                onChange={e => set('candidate_name', e.target.value)} 
+                placeholder="Required" 
+                style={{ width: '100%' }} 
+                data-testid="basics-candidate" 
+              />
+              {candidateLookup.matches.length > 0 && (
+                <div 
+                  className="dropdown-menu candidate-suggestions-dropdown" 
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    backgroundColor: 'var(--bg-card)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: '4px',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                    zIndex: 1000,
+                    maxHeight: '250px',
+                    overflowY: 'auto',
+                    marginTop: '4px'
+                  }}
+                  data-testid="candidate-suggestions-dropdown"
+                >
+                  {candidateLookup.matches.map((match, idx) => {
+                    const dateStr = getCandidateDate(match);
+                    const displayDate = dateStr ? new Date(dateStr).toLocaleDateString() : 'N/A';
+                    const isExactMatch = candidateLookup.matches.length === 1 && 
+                      (match.matchConfidence >= 75 || 
+                       match.candidate_name.toLowerCase() === form.candidate_name.trim().toLowerCase());
+                    return (
+                      <div
+                        key={match.session_id || idx}
+                        className="suggestion-item"
+                        style={{
+                          padding: '10px 14px',
+                          borderBottom: idx < candidateLookup.matches.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '13px',
+                          borderLeft: isExactMatch ? '4px solid var(--color-primary, #3b82f6)' : 'none',
+                          backgroundColor: isExactMatch ? 'rgba(59, 130, 246, 0.05)' : 'transparent'
+                        }}
+                        onClick={async () => {
+                          await startConfirmedCandidate(match);
+                          setCandidateLookup(curr => ({ ...curr, matches: [] }));
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isExactMatch ? 'rgba(59, 130, 246, 0.05)' : 'transparent'}
+                      >
+                        <div style={{ textAlign: 'left' }}>
+                          <div style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                            {match.candidate_name} {isExactMatch ? <span className="text-xs" style={{ marginLeft: 6, color: '#3b82f6' }}>(Best Match)</span> : ''}
+                          </div>
+                          <div style={{ color: 'var(--text-secondary)', fontSize: '11px', marginTop: '2px' }}>
+                            Date: {displayDate} | Tester: {match.tester_name || 'N/A'} | Campaign: {match.session_type || 'N/A'}
+                          </div>
+                        </div>
+                        <span 
+                          className="badge"
+                          style={{
+                            fontSize: '11px',
+                            padding: '2px 6px',
+                            borderRadius: '3px',
+                            backgroundColor: String(match.status || '').toLowerCase().includes('pass') ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                            color: String(match.status || '').toLowerCase().includes('pass') ? '#10b981' : '#ef4444'
+                          }}
+                        >
+                          {match.status || 'Active'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} data-tour="basics-final-attempt">
             <label className="text-sm font-bold" style={{ minWidth: 130, color: 'var(--color-danger)', fontWeight: 800 }}>Final Attempt</label>
@@ -881,37 +961,18 @@ export default function BasicsPage({ onNavigate }) {
         {candidateLookup.loading && (
           <div className="text-xs text-muted" style={{ marginTop: 10 }}>Checking shared candidate records...</div>
         )}
-        {candidateLookup.skipped && (
+        {form.candidate_name.trim().length > 0 && form.candidate_name.trim().length < 3 && (
+          <div className="text-xs text-muted" style={{ marginTop: 10 }} data-testid="keep-typing-indicator">
+            Keep typing...
+          </div>
+        )}
+        {form.candidate_name.trim().length >= 3 && candidateLookup.skipped && (
           <div className="text-xs text-muted" style={{ marginTop: 10 }}>
-            Shared lookup starts after a stronger candidate name is entered, such as first name plus part of last name.
+            Shared lookup starts after a stronger candidate name is entered.
           </div>
         )}
         {candidateLookup.error && (
           <div className="text-xs" style={{ marginTop: 10, color: 'var(--color-warning)' }}>{candidateLookup.error}</div>
-        )}
-        {candidateLookup.matches.length > 0 && (
-          <div className="card" style={{ marginTop: 12, padding: 14, background: 'var(--bg-card-hover)' }} data-testid="candidate-lookup-prompt">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <div>
-                <div style={{ fontWeight: 800 }}>Previous session found for this candidate.</div>
-                <div className="text-xs text-muted">
-                  Candidate: <b>{mostRecentPreviousSession?.candidate_name || form.candidate_name}</b> - Tester: {mostRecentPreviousSession?.tester_name || 'Unknown tester'} - Status: {mostRecentPreviousSession?.status || 'Unknown'} - Date: {getCandidateDate(mostRecentPreviousSession)}
-                </div>
-                <div className="text-xs text-muted" style={{ marginTop: 4 }}>
-                  Attempt: {mostRecentPreviousSession?.attempt_number || mostRecentPreviousSession?.attempt_count || 'Unknown'}
-                  {candidateLookup.finalAttempt ? ' - final attempt now' : ''}
-                  {candidateLookup.finalAttemptUsed || candidateHasFinalAttemptUsed(mostRecentPreviousSession) ? ' - final attempt already used' : ''}
-                  {candidateLookup.extraAttemptGranted ? ' - extra attempt granted' : ''}
-                  {candidateLookup.withdrawn ? ' - withdrew from certification' : ''}
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                <button type="button" className="btn btn-muted btn-sm" onClick={() => setPreviousSessionOpen(true)}>Review Previous Session</button>
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => startConfirmedCandidate(mostRecentPreviousSession)}>Correct Candidate</button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCandidateLookup((current) => ({ ...current, matches: [] }))}>Ignore</button>
-              </div>
-            </div>
-          </div>
         )}
         {confirmedCandidateMatch && candidateLookup.finalAttempt && (
           <div className="banner banner-fail" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>

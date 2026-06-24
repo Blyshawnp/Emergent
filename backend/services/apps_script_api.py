@@ -220,7 +220,7 @@ class AppsScriptApiClient:
         query = {"action": action, "token": self._config.token}
         for key, value in (params or {}).items():
             if value is not None:
-                query[str(key)] = value
+                query[str(key)] = json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)) else value
         request_url = f"{self._config.base_url}?{urlencode(query)}"
         request = Request(request_url, method="GET")
         return self._read_response(request, action)
@@ -266,13 +266,50 @@ class AppsScriptApiClient:
 
 
 class _ExecuteCall:
-    def __init__(self, client: AppsScriptApiClient, action: str, params: dict):
+    def __init__(self, client: AppsScriptApiClient, action: str, params: dict, method: str):
         self._client = client
         self._action = action
         self._params = params
+        self._method = method
 
     def execute(self):
-        return self._client.request(self._action, self._params)
+        if self._method == "GET":
+            res = self._client.get(self._action, self._params)
+        elif self._method == "POST":
+            res = self._client.post(self._action, self._params)
+        else:
+            raise AppsScriptApiError(
+                f"Apps Script compatibility route is unavailable for method {self._method}."
+            )
+        if self._action in ("getSettings", "getNotificationRecipients"):
+            if isinstance(res, dict) and "rows" in res:
+                rows = res["rows"]
+                if not isinstance(rows, list):
+                    rows = []
+                values = []
+                if rows:
+                    headers = list(rows[0].keys())
+                    values.append(headers)
+                    for r in rows:
+                        values.append([r.get(h, "") for h in headers])
+                res["values"] = values
+        return res
+
+
+def _without_spreadsheet_id(params: dict):
+    return {
+        key: value
+        for key, value in (params or {}).items()
+        if key != "spreadsheetId"
+    }
+
+
+def _write_payload(params: dict):
+    payload = _without_spreadsheet_id(params)
+    body = payload.pop("body", None)
+    if isinstance(body, dict):
+        payload.update(body)
+    return payload
 
 
 class _ValuesResource:
@@ -280,13 +317,24 @@ class _ValuesResource:
         self._client = client
 
     def get(self, **params):
-        return _ExecuteCall(self._client, "spreadsheets.values.get", params)
+        r = str(params.get("range") or "").strip().replace("'", "").replace('"', "")
+        if r.startswith("settings") or "settings" in r.lower():
+            return _ExecuteCall(self._client, "getSettings", _without_spreadsheet_id(params), "GET")
+        if r.startswith("notification-recipients") or "notification-recipients" in r.lower():
+            return _ExecuteCall(self._client, "getNotificationRecipients", _without_spreadsheet_id(params), "GET")
+        return _ExecuteCall(self._client, "getSheetRange", _without_spreadsheet_id(params), "GET")
 
     def update(self, **params):
-        return _ExecuteCall(self._client, "spreadsheets.values.update", params)
+        return _ExecuteCall(self._client, "updateSheetRange", _write_payload(params), "POST")
 
     def append(self, **params):
-        return _ExecuteCall(self._client, "spreadsheets.values.append", params)
+        return _ExecuteCall(self._client, "appendSheetRows", _write_payload(params), "POST")
+
+    def batchGet(self, **params):
+        return _ExecuteCall(self._client, "batchGetSheetRanges", _without_spreadsheet_id(params), "GET")
+
+    def batchUpdate(self, **params):
+        return _ExecuteCall(self._client, "batchUpdateSheetRanges", _write_payload(params), "POST")
 
 
 class _SpreadsheetsResource:
@@ -294,10 +342,10 @@ class _SpreadsheetsResource:
         self._client = client
 
     def get(self, **params):
-        return _ExecuteCall(self._client, "spreadsheets.get", params)
+        return _ExecuteCall(self._client, "getSheetMetadata", _without_spreadsheet_id(params), "GET")
 
     def batchUpdate(self, **params):
-        return _ExecuteCall(self._client, "spreadsheets.batchUpdate", params)
+        return _ExecuteCall(self._client, "batchUpdateSpreadsheet", _write_payload(params), "POST")
 
     def values(self):
         return _ValuesResource(self._client)

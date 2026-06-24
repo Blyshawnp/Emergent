@@ -867,7 +867,14 @@ APPS_SCRIPT_CONTENT_ACTIONS = {
     "headsets": "getHeadsets",
     "screenshots": "getScreenshots",
     "discord-posts": "getDiscordPosts",
+    "settings": "getSettings",
+    "notification-recipients": "getNotificationRecipients",
 }
+
+
+def _is_missing_apps_script_route_error(error):
+    text = str(error or "").casefold()
+    return "unknown action" in text or "compatibility route is unavailable" in text
 
 
 def _apps_script_rows(client, action, params=None):
@@ -919,6 +926,13 @@ def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
             return output.getvalue()
         except Exception as exc:
             logger.info("[CONTENT] Apps Script Google Sheet read failed for '%s': %s", tab_name, exc)
+            if _is_missing_apps_script_route_error(exc):
+                if tab_name in {"settings", "notification-recipients"}:
+                    logger.warning("[CONTENT] Optional tab '%s' not supported by Apps Script. Skipping without fallback.", tab_name)
+                    return ""
+                raise RuntimeError(
+                    f"Apps Script deployment is missing the required route for tab '{tab_name}'."
+                ) from exc
             return ""
 
     creds_path = _early_service_account_file()
@@ -1593,7 +1607,7 @@ def _normalize_approved_headsets(rows):
         status = str(row.get("Status") or "approved").strip().lower()
         if not brand or brand.lower() in ignored_brands or not model:
             continue
-        if status == "denied":
+        if status not in {"approved", "active", "allowed"}:
             continue
         if brand not in grouped:
             grouped[brand] = []
@@ -1610,7 +1624,7 @@ def _normalize_denied_headsets(rows):
         brand = str(row.get("Brand") or "").strip()
         model = str(row.get("Model") or "").strip()
         status = str(row.get("Status") or "").strip().lower()
-        if brand and model and status == "denied":
+        if brand and model and status in {"denied", "rejected"}:
             denied.append({
                 "brand": brand,
                 "model": model,
@@ -2018,26 +2032,15 @@ async def _background_remote_content_task():
             remote_pipeline_failures.append(f"docs: {exc}")
             doc_content = {}
 
-        if sheet_content.get("discord_screenshots") and local_content.get("discord_screenshots"):
-            existing = {
-                (
-                    str(item.get("title") or "").strip().lower(),
-                    str(item.get("image_url") or "").strip().lower(),
-                )
-                for item in sheet_content.get("discord_screenshots") or []
-            }
-            additions = [
-                item for item in local_content.get("discord_screenshots") or []
-                if (
-                    str(item.get("title") or "").strip().lower(),
-                    str(item.get("image_url") or "").strip().lower(),
-                ) not in existing
-            ]
-            if additions:
-                sheet_content["discord_screenshots"] = [*sheet_content["discord_screenshots"], *additions]
+        live_screenshots_ok = False
+        if sheet_content.get("discord_screenshots"):
+            live_screenshots_ok = True
+
+        if not live_screenshots_ok:
+            if local_content.get("discord_screenshots"):
+                sheet_content["discord_screenshots"] = local_content.get("discord_screenshots")
                 logger.info(
-                    "[CONTENT] Added %d packaged screenshot default(s) not present in Google Sheet",
-                    len(additions),
+                    "[CONTENT] Live screenshots empty, disabled, or failed. Using packaged default screenshots."
                 )
 
         # Merge sheet content
@@ -4772,9 +4775,14 @@ def _shared_admin_candidate_snapshot():
     try:
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
-            raw_rows = _apps_script_rows(apps_script_client, "getCandidateTracking")
+            tracking_result = apps_script_client.get("getCandidateTracking", {})
+            raw_rows = tracking_result.get("rows") if isinstance(tracking_result, dict) else []
+            if not isinstance(raw_rows, list):
+                raw_rows = []
             candidates = []
             for index, row in enumerate(raw_rows, start=1):
+                if not isinstance(row, dict):
+                    continue
                 candidate_name = str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip()
                 status = str(row.get("status") or row.get("Status") or "").strip()
                 timestamp = str(row.get("completed_at") or row.get("Timestamp") or row.get("created_at") or "").strip()
@@ -4806,14 +4814,32 @@ def _shared_admin_candidate_snapshot():
             failed_final = [row for row in active if str(row.get("status") or "").strip().upper() == "FAIL-FINAL ATTEMPT"]
             failed = [row for row in active if str(row.get("status") or "").strip().upper() in {"FAIL", "FAILED"}]
             incomplete = [row for row in active if str(row.get("status") or "").strip().upper() == "INCOMPLETE"]
+
+            raw_pending = tracking_result.get("pendingRows") if isinstance(tracking_result, dict) else []
+            pending = [
+                {
+                    **{key: value for key, value in row.items() if str(key).lower() == str(key)},
+                    "pending_id": str(row.get("pending_id") or row.get("PendingId") or "").strip(),
+                    "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or "").strip(),
+                    "status": str(row.get("status") or row.get("Status") or "pending").strip(),
+                    "created_at": str(row.get("created_at") or row.get("Timestamp") or "").strip(),
+                }
+                for row in (raw_pending or [])
+                if isinstance(row, dict)
+            ]
+            pending_active = [
+                row for row in pending
+                if str(row.get("status") or "").strip().lower() in {"pending", "resumed"}
+            ]
+
             return {
                 "ok": True,
                 "setup": _shared_tracking_required_setup(),
                 "autoArchivedCount": 0,
                 "candidates": candidates,
-                "pending": [],
+                "pending": pending_active,
                 "views": {
-                    "pending": [],
+                    "pending": pending_active,
                     "failedNotFinal": failed,
                     "failedFinalAttempts": failed_final,
                     "incomplete": incomplete,
@@ -5790,9 +5816,9 @@ def _shared_candidate_match_score(query, candidate):
             return 90 if len(query_parts[-1]) >= 2 else 75
         if all(any(part.startswith(qp) for part in candidate_parts) for qp in query_parts):
             return 80
-    if candidate.startswith(query) and len(query) >= 5:
+    if candidate.startswith(query) and len(query) >= 3:
         return 65
-    if query in candidate and len(query) >= 5:
+    if query in candidate and len(query) >= 3:
         return 50
     return 0
 
@@ -5849,6 +5875,13 @@ def _lookup_shared_candidate_sessions(candidate_name):
                     "created_at": str(row.get("created_at") or row.get("Timestamp") or "").strip(),
                     "review_notes": str(row.get("review_notes") or row.get("Notes") or "").strip(),
                     "tester_name": str(row.get("tester_name") or row.get("UpdatedBy") or "").strip(),
+                    "session_type": str(row.get("session_type") or row.get("SessionType") or row.get("Session Type") or "").strip(),
+                    "attempt_number": str(row.get("attempt_number") or row.get("AttemptNumber") or row.get("Attempt Number") or "").strip(),
+                    "final_attempt": str(row.get("final_attempt") or row.get("FinalAttempt") or row.get("Final Attempt") or "").strip(),
+                    "completed_at": str(row.get("completed_at") or row.get("CompletedAt") or row.get("Completed At") or "").strip(),
+                    "withdrawn": str(row.get("withdrawn") or row.get("Withdrawn") or "").strip(),
+                    "extra_attempt_granted": str(row.get("extra_attempt_granted") or row.get("ExtraAttemptGranted") or row.get("Extra Attempt Granted") or "").strip(),
+                    "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
                 }
                 for row in _apps_script_rows(apps_script_client, "getCandidateTracking")
             ]
@@ -8201,7 +8234,7 @@ async def delete_history_session(history_id: str, request: Request):
 # TICKER / NOTIFICATIONS (fetches from admin-configured Google Sheet, falls back to cache/defaults)
 # ══════════════════════════════════════════════════════════════════
 NOTIFICATION_CACHE_TTL_SECONDS = 25
-NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS = 4
+NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS = 15
 
 _ticker_cache = {"messages": None, "last_fetch": 0, "using_fallback": False}
 _headset_cache = {"groups": None, "denied": None, "last_fetch": 0}
