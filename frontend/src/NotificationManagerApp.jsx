@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './notification-manager.css';
+import warningTriangle from './assets/images/warning-triangle.png';
+import questionGraphic from './assets/images/question.png';
 import api from './api';
 import { playSound, setSoundSettings } from './utils/sound';
 import {
@@ -575,40 +577,67 @@ function ConfirmModal({ state, onConfirm, onCancel }) {
     setNote(state?.initialNote || '');
   }, [state]);
   if (!state?.message) return null;
+  const graphicSrc = state.kind === 'danger' ? warningTriangle : questionGraphic;
   return (
-    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
-      <section className="nm-help-modal nm-status-modal" role="dialog" aria-modal="true">
-        <div className="nm-help-header">
-          <div>
-            <div className="nm-overline">{state.kind === 'danger' ? 'CONFIRM ACTION' : 'CONFIRM'}</div>
-            <h2>{state.title || 'Confirm'}</h2>
-            <p>{state.message}</p>
-          </div>
-          <button type="button" className="nm-modal-close" onClick={onCancel} aria-label="Cancel">×</button>
+    <div className="cmodal-overlay open" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <div className="cmodal" style={{ maxWidth: '600px', width: '90%', padding: '30px 24px' }}>
+        <img
+          className="cmodal-graphic"
+          src={graphicSrc}
+          alt=""
+          style={{ height: '60px', objectFit: 'contain', margin: '0 auto 18px' }}
+        />
+        <div className="cmodal-title" style={{ fontSize: '1.4rem', marginBottom: '8px' }}>
+          {state.title || 'Confirm'}
         </div>
-        {state.collectNote ? (
-          <div className="nm-confirm-note">
-            <label htmlFor="nm-confirm-note-input">{state.noteLabel || 'Optional note'}</label>
-            <textarea
-              id="nm-confirm-note-input"
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-              placeholder={state.notePlaceholder || 'Add a reason for the audit trail...'}
-              rows={3}
-            />
-          </div>
-        ) : null}
-        <div className="nm-help-actions">
-          <button type="button" className="nm-btn nm-btn-secondary" onClick={onCancel}>{state.cancelLabel || 'Cancel'}</button>
+        <div className="cmodal-body" style={{ width: '100%', textAlign: 'center', fontSize: '0.95rem', marginBottom: '16px' }}>
+          <p>{state.message}</p>
+          {state.collectNote ? (
+            <div className="nm-confirm-note" style={{ marginTop: '16px', textAlign: 'left' }}>
+              <label htmlFor="nm-confirm-note-input" style={{ display: 'block', color: '#cfe4fb', fontSize: '13px', fontWeight: '800', marginBottom: '6px' }}>
+                {state.noteLabel || 'Optional note'}
+              </label>
+              <textarea
+                id="nm-confirm-note-input"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder={state.notePlaceholder || 'Add a reason for the audit trail...'}
+                rows={3}
+                style={{
+                  width: '100%',
+                  minHeight: '86px',
+                  resize: 'vertical',
+                  padding: '10px 12px',
+                  borderRadius: '12px',
+                  border: '1px solid rgba(148, 163, 184, 0.22)',
+                  background: 'rgba(3, 10, 20, 0.58)',
+                  color: 'var(--nm-text)',
+                  font: 'inherit',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+        <div className="cmodal-btns" style={{ display: 'flex', gap: '10px', justifyContent: 'center', width: '100%', borderTop: '1px solid var(--nm-border)', paddingTop: '16px' }}>
           <button
             type="button"
-            className={`nm-btn ${state.kind === 'danger' ? 'nm-btn-danger' : 'nm-btn-primary'}`}
+            className="btn btn-muted"
+            onClick={onCancel}
+            style={{ minWidth: '116px' }}
+          >
+            {state.cancelLabel || 'Cancel'}
+          </button>
+          <button
+            type="button"
+            className={`btn ${state.kind === 'danger' ? 'btn-danger' : 'btn-primary'}`}
             onClick={() => onConfirm(state.collectNote ? { confirmed: true, note } : true)}
+            style={{ minWidth: '116px' }}
           >
             {state.confirmLabel || 'OK'}
           </button>
         </div>
-      </section>
+      </div>
     </div>
   );
 }
@@ -1395,7 +1424,7 @@ function formatHeadsetSubmittedDate(value) {
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
 }
 
-export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) {
+export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus, onConfirm }) {
   const [deferred, setDeferred] = useState({});
   const [denial, setDenial] = useState(null);
   const [lookupReview, setLookupReview] = useState(null);
@@ -1435,6 +1464,48 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
     }
   };
 
+  const archiveReview = async (item) => {
+    if (onConfirm) {
+      const confirmed = await onConfirm(`Are you sure you want to archive the review for "${item.brand} ${item.model}"?`, {
+        confirmLabel: 'Archive',
+        kind: 'info'
+      });
+      if (!confirmed) return;
+    }
+    const result = await onDecision({ action: 'archive', brand: item.brand, model: item.model });
+    if (result?.ok) {
+      setDeferred((current) => {
+        const next = { ...current };
+        delete next[`${item.brand}::${item.model}`];
+        return next;
+      });
+      setLookupReview(null);
+      setDenial(null);
+      onStatus('Headset review archived successfully.', 'success');
+    }
+  };
+
+  const deleteReview = async (item) => {
+    if (onConfirm) {
+      const confirmed = await onConfirm(`Are you sure you want to permanently delete the review and any headset database entries for "${item.brand} ${item.model}"?`, {
+        confirmLabel: 'Delete',
+        kind: 'danger'
+      });
+      if (!confirmed) return;
+    }
+    const result = await onDecision({ action: 'delete', brand: item.brand, model: item.model });
+    if (result?.ok) {
+      setDeferred((current) => {
+        const next = { ...current };
+        delete next[`${item.brand}::${item.model}`];
+        return next;
+      });
+      setLookupReview(null);
+      setDenial(null);
+      onStatus('Headset review deleted successfully.', 'success');
+    }
+  };
+
   const renderRows = (rows, kind) => (
     <div className="nm-table-wrap">
       <table className="nm-table nm-headset-table">
@@ -1451,11 +1522,25 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
                   <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
                   <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
                   <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
                 </div></td>
               ) : kind === 'approved' ? (
-                <td className="nm-actions-column"><button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button></td>
+                <td className="nm-actions-column">
+                  <div className="nm-row-actions">
+                    <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button>
+                    <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
+                    <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+                  </div>
+                </td>
               ) : (
-                <td className="nm-actions-column"><button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button></td>
+                <td className="nm-actions-column">
+                  <div className="nm-row-actions">
+                    <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
+                    <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
+                    <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+                  </div>
+                </td>
               )}
             </tr>
           ))}
@@ -1876,7 +1961,16 @@ export default function NotificationManagerApp() {
         return result;
       }
       const reviewLater = payload.action === 'review_later';
-      const message = payload.action === 'approve' ? 'Headset approved.' : payload.action === 'deny' ? 'Headset denied.' : 'Headset left pending for later review.';
+      let message = 'Headset left pending for later review.';
+      if (payload.action === 'approve') {
+        message = 'Headset approved.';
+      } else if (payload.action === 'deny') {
+        message = 'Headset denied.';
+      } else if (payload.action === 'archive') {
+        message = 'Headset review archived.';
+      } else if (payload.action === 'delete') {
+        message = 'Headset review deleted.';
+      }
       setSheetState((current) => ({ ...current, statusKind: reviewLater ? 'info' : 'success', statusMessage: message }));
       if (!reviewLater) {
         playSamActionSound('success');
@@ -2971,6 +3065,7 @@ export default function NotificationManagerApp() {
             onRefresh={() => loadHeadsetReviews()}
             onDecision={runHeadsetDecision}
             onStatus={(message, kind = 'info') => setSheetState((current) => ({ ...current, statusKind: kind, statusMessage: message }))}
+            onConfirm={requestConfirm}
           />
         ) : null}
       </div>

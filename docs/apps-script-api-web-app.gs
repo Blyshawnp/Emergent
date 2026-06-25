@@ -118,6 +118,18 @@ function dispatchPost_(action, body) {
       return decideHeadset_(body, 'approved');
     case 'denyHeadset':
       return decideHeadset_(body, 'denied');
+    case 'archiveHeadsetReview':
+      return archiveHeadsetReview_(body);
+    case 'deleteHeadsetReview':
+      return deleteHeadsetReview_(body);
+    case 'addNotification':
+      return saveNotification_(body, 'appended');
+    case 'updateNotification':
+      return saveNotification_(body, 'updated');
+    case 'disableNotification':
+      return disableNotification_(body);
+    case 'deleteNotification':
+      return deleteNotification_(body);
     case 'updateCandidateTracking':
       return updateCandidateTracking_(body);
     case 'updateSheetRange':
@@ -289,6 +301,65 @@ function decideHeadset_(body, status) {
   upsertObject_('headsets', ['Brand', 'Model'], { Brand: brand, Model: model, Status: status, Note: note });
   upsertObject_('headset-review-log', ['Brand', 'Model'], { Brand: brand, Model: model, Status: status, Note: note });
   return { updated: true, status: status };
+}
+
+function archiveHeadsetReview_(body) {
+  const brand = required_(body.brand, 'brand');
+  const model = required_(body.model, 'model');
+  const note = String(body.note || body.reason || '').trim();
+  upsertObject_('headset-review-log', ['Brand', 'Model'], { Brand: brand, Model: model, Status: 'archived', Note: note });
+  return { updated: true, status: 'archived' };
+}
+
+function deleteHeadsetReview_(body) {
+  const brand = required_(body.brand, 'brand');
+  const model = required_(body.model, 'model');
+  const logDeleted = deleteMatchingRows_('headset-review-log', (row) =>
+    normalize_(row.Brand) === normalize_(brand) && normalize_(row.Model) === normalize_(model));
+  const headsetsDeleted = deleteMatchingRows_('headsets', (row) =>
+    normalize_(row.Brand) === normalize_(brand) && normalize_(row.Model) === normalize_(model));
+  return { updated: true, deletedLog: logDeleted, deletedHeadsets: headsetsDeleted };
+}
+
+function saveNotification_(body, defaultAction) {
+  const sheet = allowedSheet_('sam-notifications');
+  const headers = headerMap_(sheet);
+  
+  const id = required_(body.ID || body.id, 'ID');
+  const rowObj = {
+    Enabled: String(body.Enabled !== undefined ? body.Enabled : (body.enabled !== undefined ? body.enabled : 'TRUE')).toUpperCase(),
+    ID: id,
+    Type: String(body.Type || body.type || 'info').toLowerCase(),
+    Title: String(body.Title || body.title || '').trim(),
+    Message: String(body.Message || body.message || '').trim(),
+    ShowTicker: String(body.ShowTicker !== undefined ? body.ShowTicker : (body.showTicker !== undefined ? body.showTicker : 'FALSE')).toUpperCase(),
+    ShowPopup: String(body.ShowPopup !== undefined ? body.ShowPopup : (body.showPopup !== undefined ? body.showPopup : 'FALSE')).toUpperCase(),
+    ShowBanner: String(body.ShowBanner !== undefined ? body.ShowBanner : (body.showBanner !== undefined ? body.showBanner : 'FALSE')).toUpperCase(),
+    Persistent: String(body.Persistent !== undefined ? body.Persistent : (body.persistent !== undefined ? body.persistent : 'FALSE')).toUpperCase(),
+    StartDate: String(body.StartDate || body.startDate || '').trim(),
+    StartTime: String(body.StartTime || body.startTime || '').trim(),
+    EndDate: String(body.EndDate || body.endDate || '').trim(),
+    EndTime: String(body.EndTime || body.endTime || '').trim(),
+    ActionText: String(body.ActionText || body.actionText || '').trim(),
+    ActionURL: String(body.ActionURL || body.actionURL || '').trim(),
+    CreatedAt: String(body.CreatedAt || body.createdAt || new Date().toISOString()),
+    UpdatedAt: new Date().toISOString(),
+  };
+
+  upsertObject_('sam-notifications', ['ID'], rowObj);
+  return { ok: true, action: defaultAction, item: rowObj };
+}
+
+function disableNotification_(body) {
+  const id = required_(body.ID || body.id, 'ID');
+  updateMatchingRows_('sam-notifications', (row) => String(row.ID || '') === id, { Enabled: 'FALSE', UpdatedAt: new Date().toISOString() });
+  return { ok: true, action: 'disabled', id: id };
+}
+
+function deleteNotification_(body) {
+  const id = required_(body.ID || body.id || body.notification_id, 'ID');
+  const deleted = deleteMatchingRows_('sam-notifications', (row) => String(row.ID || '') === id);
+  return { ok: true, action: 'deleted', id: id, deleted: deleted };
 }
 
 function updateCandidateTracking_(body) {

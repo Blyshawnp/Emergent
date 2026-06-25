@@ -4544,8 +4544,8 @@ def _headset_review_action(payload):
     action = str((payload or {}).get("action") or "").strip().lower()
     if action == "review_later":
         return {"ok": True, "action": action}
-    if action not in {"approve", "deny"}:
-        return {"ok": False, "error": "Select Approve, Deny, or Review Later."}
+    if action not in {"approve", "deny", "archive", "delete"}:
+        return {"ok": False, "error": "Select Approve, Deny, Archive, Delete, or Review Later."}
 
     brand = str((payload or {}).get("brand") or "").strip()
     model = str((payload or {}).get("model") or "").strip()
@@ -4554,17 +4554,26 @@ def _headset_review_action(payload):
 
     reason = str((payload or {}).get("reason") or "").strip()
     other_note = str((payload or {}).get("note") or "").strip()
-    allowed_denials = {
-        "Headset does not connect via USB",
-        "Headset does not have a noise cancelling microphone",
-        "Other",
-    }
-    if action == "deny" and reason not in allowed_denials:
-        return {"ok": False, "error": "Select a denial reason."}
-    if action == "deny" and reason == "Other" and not other_note:
-        return {"ok": False, "error": "A note is required when the denial reason is Other."}
+    if action == "deny":
+        allowed_denials = {
+            "Headset does not connect via USB",
+            "Headset does not have a noise cancelling microphone",
+            "Other",
+        }
+        if reason not in allowed_denials:
+            return {"ok": False, "error": "Select a denial reason."}
+        if reason == "Other" and not other_note:
+            return {"ok": False, "error": "A note is required when the denial reason is Other."}
+
     decision_note = other_note if action == "deny" and reason == "Other" else (reason if action == "deny" else other_note)
-    decision_status = "approved" if action == "approve" else "denied"
+    if action == "approve":
+        decision_status = "approved"
+    elif action == "deny":
+        decision_status = "denied"
+    elif action == "archive":
+        decision_status = "archived"
+    else:
+        decision_status = "deleted"
 
     try:
         context = _shared_sheet_context()
@@ -4572,7 +4581,15 @@ def _headset_review_action(payload):
             return {"ok": False, "error": context.get("error") or "Headset review sheet is unavailable."}
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
-            post_action = "approveHeadset" if action == "approve" else "denyHeadset"
+            if action == "approve":
+                post_action = "approveHeadset"
+            elif action == "deny":
+                post_action = "denyHeadset"
+            elif action == "archive":
+                post_action = "archiveHeadsetReview"
+            else:
+                post_action = "deleteHeadsetReview"
+
             result = apps_script_client.post(post_action, {
                 "brand": brand,
                 "model": model,
@@ -4603,51 +4620,99 @@ def _headset_review_action(payload):
         review_headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
         review_rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers)
         target_key = _normalize_headset_review_key(f"{brand} {model}")
-        for row in review_rows:
-            normalized = _normalize_headset_review_row(row, schema)
-            if _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}") != target_key:
-                continue
-            if schema == "legacy":
-                next_row = dict(row)
-                next_row["review_status"] = decision_status
-                next_row["notes"] = decision_note
-                row_values = _shared_row_values(next_row, LEGACY_HEADSET_REVIEW_LOG_HEADERS)
-            else:
-                row_values = [brand, model, decision_status, decision_note]
-            _shared_update_existing_row(
-                sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers,
-                row.get("_row_number"), row_values,
-            )
-            break
 
-        headset_rows = _read_headsets_rows(sheets_api, sheet_id)
-        existing = next((row for row in headset_rows if _normalize_headset_review_key(f"{row['brand']} {row['model']}") == target_key), None)
-        row_values = [brand, model, decision_status, decision_note]
-        quoted = _quote_sheet_title_for_a1(HEADSETS_TAB)
-        if existing:
-            _shared_update_existing_row(
-                sheets_api, sheet_id, HEADSETS_TAB, HEADSETS_HEADERS,
-                existing.get("_row_number"), row_values,
-            )
+        if action == "delete":
+            log_gid = _shared_sheet_gid(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB)
+            for row in review_rows:
+                normalized = _normalize_headset_review_row(row, schema)
+                if _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}") == target_key:
+                    row_number = row.get("_row_number")
+                    if row_number and row_number > 1:
+                        sheets_api.batchUpdate(
+                            spreadsheetId=sheet_id,
+                            body={
+                                "requests": [
+                                    {
+                                        "deleteDimension": {
+                                            "range": {
+                                                "sheetId": log_gid,
+                                                "dimension": "ROWS",
+                                                "startIndex": row_number - 1,
+                                                "endIndex": row_number,
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        ).execute()
+                    break
+
+            headsets_gid = _shared_sheet_gid(sheets_api, sheet_id, HEADSETS_TAB)
+            headset_rows = _read_headsets_rows(sheets_api, sheet_id)
+            existing = next((row for row in headset_rows if _normalize_headset_review_key(f"{row['brand']} {row['model']}") == target_key), None)
+            if existing:
+                row_number = existing.get("_row_number")
+                if row_number and row_number > 1:
+                    sheets_api.batchUpdate(
+                        spreadsheetId=sheet_id,
+                        body={
+                            "requests": [
+                                {
+                                    "deleteDimension": {
+                                        "range": {
+                                            "sheetId": headsets_gid,
+                                            "dimension": "ROWS",
+                                            "startIndex": row_number - 1,
+                                            "endIndex": row_number,
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ).execute()
         else:
-            sheets_api.values().append(
-                spreadsheetId=sheet_id,
-                range=f"{quoted}!A2",
-                valueInputOption="USER_ENTERED",
-                insertDataOption="INSERT_ROWS",
-                body={"values": [row_values]},
-            ).execute()
+            for row in review_rows:
+                normalized = _normalize_headset_review_row(row, schema)
+                if _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}") != target_key:
+                    continue
+                if schema == "legacy":
+                    next_row = dict(row)
+                    next_row["review_status"] = decision_status
+                    next_row["notes"] = decision_note
+                    row_values = _shared_row_values(next_row, LEGACY_HEADSET_REVIEW_LOG_HEADERS)
+                else:
+                    row_values = [brand, model, decision_status, decision_note]
+                _shared_update_existing_row(
+                    sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers,
+                    row.get("_row_number"), row_values,
+                )
+                break
+
+            headset_rows = _read_headsets_rows(sheets_api, sheet_id)
+            existing = next((row for row in headset_rows if _normalize_headset_review_key(f"{row['brand']} {row['model']}") == target_key), None)
+            row_values = [brand, model, decision_status, decision_note]
+            quoted = _quote_sheet_title_for_a1(HEADSETS_TAB)
+            if existing:
+                _shared_update_existing_row(
+                    sheets_api, sheet_id, HEADSETS_TAB, HEADSETS_HEADERS,
+                    existing.get("_row_number"), row_values,
+                )
+            else:
+                sheets_api.values().append(
+                    spreadsheetId=sheet_id,
+                    range=f"{quoted}!A2",
+                    valueInputOption="USER_ENTERED",
+                    insertDataOption="INSERT_ROWS",
+                    body={"values": [row_values]},
+                ).execute()
 
         updated_rows = _read_headsets_rows(sheets_api, sheet_id)
-        # Keep the in-memory display deterministic without rewriting the whole tab.
-        # Existing rows are updated in place and new rows are appended so unrelated
-        # sheet content is never shifted, deleted, or overwritten for sorting alone.
         sorted_rows = sorted(updated_rows, key=lambda row: (row.get("brand", "").lower(), row.get("model", "").lower()))
         _sync_headset_content_cache(sorted_rows)
         return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
     except Exception as exc:
         logger.exception("[HEADSET-REVIEW] Failed to apply headset decision: %s", exc)
-        return {"ok": False, "error": "Unable to save the headset review decision."}
+        return {"ok": False, "error": f"Unable to save the headset review decision: {exc}"}
 
 
 def _shared_row_values(row, headers):
@@ -4985,7 +5050,12 @@ def _shared_admin_candidate_action(payload):
     try:
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
-            result = apps_script_client.post("updateCandidateTracking", dict(payload or {}))
+            payload_copy = dict(payload or {})
+            if "operation" not in payload_copy:
+                payload_copy["operation"] = action
+            result = apps_script_client.post("updateCandidateTracking", payload_copy)
+            if isinstance(result, dict) and not result.get("ok", True):
+                return {"ok": False, "error": result.get("error") or "Apps Script operation failed."}
             return {"ok": True, "action": action, **(result if isinstance(result, dict) else {})}
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
@@ -5300,6 +5370,7 @@ def _sam_master_sheet_context():
         "ok": True,
         "service": service_result["service"],
         "sheet_id": service_result["sheet_id"],
+        "appsScriptClient": service_result.get("appsScriptClient"),
         "serviceAccountEmail": service_result.get("serviceAccountEmail") or _get_service_account_email(),
     }
 
@@ -8422,6 +8493,9 @@ def _normalize_notification_date(value, end_of_day=False):
     if not text:
         return None
 
+    if "T" in text:
+        text = text.split("T")[0]
+
     parsed = None
     if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
         try:
@@ -8448,6 +8522,18 @@ def _normalize_notification_time(value):
     text = _normalize_notification_text(value).upper().replace(".", "").strip()
     if not text:
         return None
+
+    if "T" in text:
+        text = text.split("T")[1]
+
+    if text.endswith("Z"):
+        text = text[:-1]
+    text = re.split(r"[+-]\d{2}:?\d{2}", text)[0]
+
+    if "." in text:
+        text = text.split(".")[0]
+
+    text = text.strip()
 
     for fmt in ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S"):
         try:
@@ -9401,6 +9487,23 @@ def _save_notification_to_google_sheet(item):
     if not context.get("ok"):
         return {"ok": False, "error": context.get("error") or "SAM master Google Sheet is not configured."}
 
+    apps_script_client = context.get("appsScriptClient")
+    if apps_script_client:
+        try:
+            result = apps_script_client.post("updateNotification", normalized)
+            _clear_notification_caches()
+            return {
+                "ok": True,
+                "action": result.get("action") or "updated",
+                "item": _normalize_notification_manager_item(result.get("item") or normalized),
+                "sheetTitle": SAM_NOTIFICATIONS_TAB,
+                "sheetId": context["sheet_id"],
+                "source": "master",
+            }
+        except Exception as exc:
+            logger.warning("[NOTIFICATIONS] Apps Script notification save failed: %s", exc)
+            return {"ok": False, "error": f"Apps Script notification save failed: {exc}"}
+
     sheet_id = context["sheet_id"]
     service = context["service"]
     client_email = context.get("serviceAccountEmail") or _get_service_account_email() or "unknown"
@@ -9539,6 +9642,23 @@ def _delete_notification_from_google_sheet(notification_id):
     context = _sam_master_sheet_context()
     if not context.get("ok"):
         return {"ok": False, "error": context.get("error") or "SAM master Google Sheet is not configured."}
+
+    apps_script_client = context.get("appsScriptClient")
+    if apps_script_client:
+        try:
+            result = apps_script_client.post("deleteNotification", {"ID": target_id})
+            _clear_notification_caches()
+            return {
+                "ok": True,
+                "action": "deleted",
+                "id": target_id,
+                "sheetTitle": SAM_NOTIFICATIONS_TAB,
+                "sheetId": context["sheet_id"],
+                "source": "master",
+            }
+        except Exception as exc:
+            logger.warning("[NOTIFICATIONS] Apps Script notification delete failed: %s", exc)
+            return {"ok": False, "error": f"Apps Script notification delete failed: {exc}"}
 
     sheet_id = context["sheet_id"]
     service = context["service"]

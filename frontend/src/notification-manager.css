@@ -597,7 +597,7 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-table th.nm-actions-column,
 .nm-table td.nm-actions-column {
-  width: 228px;
+  width: 280px;
   padding-left: 0 !important;
   text-align: left !important;
 }
@@ -858,10 +858,10 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-row-actions {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start !important;
-  width: max-content;
+  width: auto;
   gap: 8px;
   margin-left: 0 !important;
   margin: 0;
@@ -1376,16 +1376,17 @@ body.notification-manager-body.nm-dialog-open {
   text-align: center;
 }
 
+.modal-overlay,
 .nm-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 1400;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(2, 6, 14, 0.42);
-  backdrop-filter: blur(3px);
+  background: rgba(4, 9, 20, 0.88);
+  backdrop-filter: blur(2px);
 }
 
 .nm-help-modal {
@@ -1522,9 +1523,28 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-help-card {
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(3, 10, 20, 0.48);
-  padding: 16px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  background: linear-gradient(135deg, rgba(8, 20, 36, 0.9) 0%, rgba(5, 12, 24, 0.95) 100%);
+  padding: 18px;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+.nm-help-card:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(56, 189, 248, 0.08);
+}
+
+.nm-help-card .nm-btn-secondary,
+.nm-btn-support {
+  background: rgba(56, 189, 248, 0.12) !important;
+  border-color: rgba(56, 189, 248, 0.4) !important;
+  color: #38bdf8 !important;
+}
+.nm-help-card .nm-btn-secondary:hover,
+.nm-btn-support:hover {
+  background: rgba(56, 189, 248, 0.22) !important;
+  border-color: rgba(56, 189, 248, 0.7) !important;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.3) !important;
 }
 
 .nm-help-card h3 {
@@ -1695,4 +1715,34 @@ body.notification-manager-body.nm-dialog-open {
     display: block;
     overflow-x: auto;
   }
+}
+
+/* Custom scrollbars */
+.nm-table-wrap::-webkit-scrollbar,
+.nm-panel::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar,
+.nm-help-modal::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.nm-table-wrap::-webkit-scrollbar-track,
+.nm-panel::-webkit-scrollbar-track,
+.modal-body::-webkit-scrollbar-track,
+.nm-help-modal::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.72);
+  border-radius: 999px;
+}
+.nm-table-wrap::-webkit-scrollbar-thumb,
+.nm-panel::-webkit-scrollbar-thumb,
+.modal-body::-webkit-scrollbar-thumb,
+.nm-help-modal::-webkit-scrollbar-thumb {
+  background: rgba(125, 211, 252, 0.48);
+  border: 2px solid rgba(15, 23, 42, 0.72);
+  border-radius: 999px;
+}
+.nm-table-wrap::-webkit-scrollbar-thumb:hover,
+.nm-panel::-webkit-scrollbar-thumb:hover,
+.modal-body::-webkit-scrollbar-thumb:hover,
+.nm-help-modal::-webkit-scrollbar-thumb:hover {
+  background: rgba(125, 211, 252, 0.68);
 }
