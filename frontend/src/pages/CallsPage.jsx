@@ -4,7 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
-import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
+import { formatDonationAmountLabel, getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
   { id: 'c-dontask', label: "Don't Ask, Just Verify Address and Phone Number", helper: 'Existing member already provided address and phone number' },
@@ -597,7 +597,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
           </div>
           <div className="form-row"><label>Donation</label>
             <select value={callSetup.donation} onChange={e => setCallSetup(p => ({ ...p, donation: e.target.value }))} data-testid="call-donation">
-              {donations.map(d => <option key={d}>{d}</option>)}
+              {donations.map(d => <option key={d} value={d}>{formatDonationAmountLabel(d)}</option>)}
             </select>
           </div>
         </div>

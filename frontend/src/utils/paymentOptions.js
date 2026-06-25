@@ -157,6 +157,23 @@ export function getPaymentOptionsFromSettings(payment = {}) {
   };
 }
 
+export function formatDonationAmountLabel(value) {
+  const text = String(value ?? '').trim();
+  if (!text || /^other$/i.test(text)) return text || 'Other';
+
+  const withoutCurrency = text.replace(/^\$/, '').replace(/,/g, '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(withoutCurrency)) return text;
+
+  const amount = Number(withoutCurrency);
+  if (!Number.isFinite(amount)) return text;
+
+  const hasCents = withoutCurrency.includes('.') && Number(withoutCurrency.split('.')[1] || 0) > 0;
+  return `$${amount.toLocaleString('en-US', {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: hasCents ? 2 : 0,
+  })}`;
+}
+
 export function syncLegacyPaymentFields(payment = {}) {
   const card = normalizePaymentOptionList(payment.card_options, 'card');
   const eft = normalizePaymentOptionList(payment.eft_options, 'eft');

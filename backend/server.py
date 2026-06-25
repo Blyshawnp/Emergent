@@ -2265,13 +2265,14 @@ DEFAULT_FORM_URL = "https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeY
 DISCORD_SCREENSHOTS = [
     {"title": "Welcome New Agent", "image_url": "/welcome-new-agent.png"},
     {"title": "Welcome to Stars", "image_url": "/welcome-to-stars.png"},
+    {"category": "Headset Connections", "title": "USB Connection", "image_url": "/usb.png"},
+    {"category": "Headset Connections", "title": "3.5 mm connections", "image_url": "/3.5mm.png"},
 ]
 
 CALL_COACHING = [
     {"id": "c-show-app", "label": "Show appreciation", "children": ["For Current/Existing Donors", "After donation amount is given"]},
     {"id": "c-dontask", "label": "Don't Ask, Just Verify Address and Phone Number", "helper": "Existing member already provided address and phone number"},
-    {"id": "c-verify", "label": "Verification", "children": ["Name", "Address", "Phone", "Email", "Card/EFT", "Phonetics for Sound Alike Letters"]},
-    {"id": "c-phonetics", "label": "Phonetics table provided to candidate"},
+    {"id": "c-verify", "label": "Verification", "children": ["Name", "Address", "Phone", "Email", "Card/EFT"]},
     {"id": "c-verbatim", "label": "Read script verbatim", "helper": "No adlibbing or skipping sections"},
     {"id": "c-nav", "label": "Use effective script navigation", "children": ["Scroll down to avoid missing parts of the script", "Use the Back and Next buttons and not the Icons"]},
     {"id": "c-search-name", "label": "Search name for every call", "helper": "Search the caller's name on every call to avoid duplicate member records."},
@@ -2294,7 +2295,7 @@ SUP_COACHING = [
     {"label": "Minimize dead air", "helper": "Maintain engagement throughout hold and transfer"},
     {"label": "Queue Not Changed", "helper": "Did not change queue to ACD Direct Supervisor"},
     {"label": "Caller Placed On Hold"},
-    {"label": "Verification", "children": ["Name", "Address", "Phone", "Email", "Card/EFT", "Phonetics for Sound Alike Letters"]},
+    {"label": "Verification", "children": ["Name", "Address", "Phone", "Email", "Card/EFT"]},
     {"label": "Discord permission", "helper": "Ask explicit permission to transfer via Discord"},
     {"label": "Did not notify caller of transfer", "helper": "Notify caller before transferring"},
     {"label": "Screenshots/Discord Chat", "helper": "Coached with standard instructions and screenshots"},

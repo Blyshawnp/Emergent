@@ -92,6 +92,37 @@ test('shows Caller Demographics before Payment Simulation', async () => {
   await view.unmount();
 });
 
+test('formats donation dropdown labels as currency without changing option values', async () => {
+  api.getDefaults.mockResolvedValue({
+    ...defaults,
+    shows: [
+      ['Whole Dollar Show', '16', '25', '', ''],
+      ['Cents Show', '12.50', '100', '', ''],
+    ],
+  });
+
+  const view = await renderPage(1);
+  const donationSelect = view.container.querySelector('[data-testid="call-donation"]');
+  const optionLabels = Array.from(donationSelect.options).map((option) => option.textContent);
+  const optionValues = Array.from(donationSelect.options).map((option) => option.value);
+
+  expect(optionLabels).toEqual(['$16', 'Other']);
+  expect(optionValues).toEqual(['16', 'Other']);
+
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    setter.call(view.container.querySelector('[data-testid="call-show"]'), 'Cents Show');
+    view.container.querySelector('[data-testid="call-show"]').dispatchEvent(new Event('change', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const updatedDonationSelect = view.container.querySelector('[data-testid="call-donation"]');
+  expect(Array.from(updatedDonationSelect.options).map((option) => option.textContent)).toEqual(['$12.50', 'Other']);
+  expect(Array.from(updatedDonationSelect.options).map((option) => option.value)).toEqual(['12.50', 'Other']);
+
+  await view.unmount();
+});
+
 test.each([
   [1, 'basics', null],
   [2, 'calls', { callNum: 1 }],

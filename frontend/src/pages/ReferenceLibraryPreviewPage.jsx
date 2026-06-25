@@ -12,6 +12,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import PhoneticsTableButton from '../components/PhoneticsTableButton';
+import { resolveScreenshotUrl } from '../utils/screenshotAssets';
 
 const HEADSET_CARDS = [
   { brand: 'Logitech', model: 'H390', status: 'Approved', connection: 'USB-A', notes: 'Noise-cancelling boom mic' },
@@ -82,7 +83,7 @@ export default function ReferenceLibraryPreviewPage({ settings = {}, defaults = 
       { section: 'Phonetics', title: 'Letter-to-word reference', body: NATO_PHONETICS.flat().join(' ') },
       ...discordTemplates.slice(0, 12).map((item) => ({ section: 'Discord', title: item.title, body: `${item.category} ${item.body}` })),
       ...['Wrong headset', 'VPN', 'Screen share', 'Audio issues'].map((title) => ({ section: 'Discord', title, body: 'Discord posting example placeholder' })),
-      ...screenshots.slice(0, 18).map((item) => ({ section: 'Screenshots', title: item.title, body: item.category })),
+      ...screenshots.slice(0, 24).map((item) => ({ section: 'Screenshots', title: item.title, body: item.category, imageUrl: item.imageUrl })),
       ...['Browser cache', 'Discord audio', 'Screen share', 'Internet', 'VPN', 'Browser', 'System requirements'].map((title) => ({ section: 'Troubleshooting', title, body: 'Troubleshooting checklist placeholder' })),
       ...['Pass', 'Fail', 'Sup Transfer', 'Incomplete', 'Technical Issue', 'Readiness Judgment'].map((title) => ({ section: 'Policies', title, body: 'Policy summary placeholder' })),
       ...['Can they use AirPods?', 'What if Discord audio fails?', 'What if script does not load?', 'What if candidate leaves?', 'Can they retest?', 'What internet is acceptable?'].map((title) => ({ section: 'FAQ', title, body: 'FAQ answer placeholder' })),
@@ -184,7 +185,14 @@ export default function ReferenceLibraryPreviewPage({ settings = {}, defaults = 
             <div className="reference-card-grid">
               {cards.length ? cards.map((card) => (
                 <LibraryCard key={`${card.section}-${card.title}`} icon={section === 'Screenshots' ? Image : section === 'FAQ' ? HelpCircle : section === 'Policies' ? CheckCircle2 : section === 'Troubleshooting' ? AlertTriangle : MessageSquareText} title={card.title}>
-                  {card.body || 'Prototype placeholder for future approved content.'}
+                  {section === 'Screenshots' && card.imageUrl ? (
+                    <div className="reference-screenshot-preview">
+                      <img src={resolveScreenshotUrl(card.imageUrl)} alt={card.title} />
+                      <span>{card.body || 'Screenshots'}</span>
+                    </div>
+                  ) : (
+                    card.body || 'Prototype placeholder for future approved content.'
+                  )}
                 </LibraryCard>
               )) : <div className="reference-empty"><XCircle size={18} /> No {section.toLowerCase()} cards match this search.</div>}
             </div>

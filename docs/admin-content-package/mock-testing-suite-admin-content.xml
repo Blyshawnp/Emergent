@@ -52,11 +52,30 @@ Then disposition in Call Corp.</Data></Cell></Row>
   <Worksheet ss:Name="Screenshots">
     <Table>
       <Row>
+        <Cell ss:StyleID="Header"><Data ss:Type="String">Category</Data></Cell>
         <Cell ss:StyleID="Header"><Data ss:Type="String">Title</Data></Cell>
         <Cell ss:StyleID="Header"><Data ss:Type="String">ImagePath</Data></Cell>
       </Row>
-      <Row><Cell><Data ss:Type="String">Welcome New Agent</Data></Cell><Cell><Data ss:Type="String">/welcome-new-agent.png</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Welcome to Stars</Data></Cell><Cell><Data ss:Type="String">/welcome-to-stars.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Welcome New Agent</Data></Cell><Cell><Data ss:Type="String">/welcome-new-agent.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Welcome to Stars</Data></Cell><Cell><Data ss:Type="String">/welcome-to-stars.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Discord Audio</Data></Cell><Cell><Data ss:Type="String">/Discord-Audio.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Discord Input</Data></Cell><Cell><Data ss:Type="String">/Discord-Input.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Discord Output</Data></Cell><Cell><Data ss:Type="String">/Discord-Output.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Discord Share #1</Data></Cell><Cell><Data ss:Type="String">/Discord-Share-1.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Discord Share #2</Data></Cell><Cell><Data ss:Type="String">/Discord-Share-2.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Discord Share #3</Data></Cell><Cell><Data ss:Type="String">/Discord-Share-3.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Discord Instructions</Data></Cell><Cell><Data ss:Type="String">/Discord-Instructions.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">DTE Disposition</Data></Cell><Cell><Data ss:Type="String">/DTE-Disposition.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Phonetics Table</Data></Cell><Cell><Data ss:Type="String">/Phonetics.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">DTE Disposition Box</Data></Cell><Cell><Data ss:Type="String">/DTE-Disposition-Box.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Script Disposition</Data></Cell><Cell><Data ss:Type="String">/script-disposition.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Click Transfer</Data></Cell><Cell><Data ss:Type="String">/click-transfer.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Queue</Data></Cell><Cell><Data ss:Type="String">/queue.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Transfer</Data></Cell><Cell><Data ss:Type="String">/Transfer.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Station Settings</Data></Cell><Cell><Data ss:Type="String">/station-settings.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Station Settings 2</Data></Cell><Cell><Data ss:Type="String">/station-settings-2.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Headset Connections</Data></Cell><Cell><Data ss:Type="String">USB Connection</Data></Cell><Cell><Data ss:Type="String">/usb.png</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Headset Connections</Data></Cell><Cell><Data ss:Type="String">3.5 mm connections</Data></Cell><Cell><Data ss:Type="String">/3.5mm.png</Data></Cell></Row>
     </Table>
   </Worksheet>
   <Worksheet ss:Name="Call Coaching">
@@ -68,11 +87,12 @@ Then disposition in Call Corp.</Data></Cell></Row>
         <Cell ss:StyleID="Header"><Data ss:Type="String">ChildrenPipeDelimited</Data></Cell>
       </Row>
       <Row><Cell><Data ss:Type="String">c-show-app</Data></Cell><Cell><Data ss:Type="String">Show appreciation</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">For Current/Existing Donors|After donation amount is given</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">c-phonetics</Data></Cell><Cell><Data ss:Type="String">Phonetics table provided to candidate</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">c-dontask</Data></Cell><Cell><Data ss:Type="String">Don't Ask, Just Verify Address and Phone Number</Data></Cell><Cell><Data ss:Type="String">Existing member already provided address and phone number</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">c-verify</Data></Cell><Cell><Data ss:Type="String">Verification</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Name|Address|Phone|Email|Card/EFT</Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">c-verbatim</Data></Cell><Cell><Data ss:Type="String">Read script verbatim</Data></Cell><Cell><Data ss:Type="String">No adlibbing or skipping sections</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">c-nav</Data></Cell><Cell><Data ss:Type="String">Use effective script navigation</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String">Scroll down to avoid missing parts of the script|Use the Back and Next buttons and not the Icons</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-search-name</Data></Cell><Cell><Data ss:Type="String">Search name for every call</Data></Cell><Cell><Data ss:Type="String">Search the caller's name on every call to avoid duplicate member records.</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">c-no-volunteer</Data></Cell><Cell><Data ss:Type="String">Do not volunteer information</Data></Cell><Cell><Data ss:Type="String">Do not verify details the member has not provided, such as an email address.</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">c-other</Data></Cell><Cell><Data ss:Type="String">Other</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
     </Table>
   </Worksheet>
@@ -192,6 +212,8 @@ Then disposition in Call Corp.</Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Discord permission</Data></Cell><Cell><Data ss:Type="String">Ask explicit permission to transfer via Discord</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Did not notify caller of transfer</Data></Cell><Cell><Data ss:Type="String">Notify caller before transferring</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Screenshots/Discord Chat</Data></Cell><Cell><Data ss:Type="String">Coached with standard instructions and screenshots</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Search name for every call</Data></Cell><Cell><Data ss:Type="String">Search the caller's name on every call to avoid duplicate member records.</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Do not volunteer information</Data></Cell><Cell><Data ss:Type="String">Do not verify details the member has not provided, such as an email address.</Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Other</Data></Cell><Cell><Data ss:Type="String"></Data></Cell><Cell><Data ss:Type="String"></Data></Cell></Row>
     </Table>
   </Worksheet>

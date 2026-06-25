@@ -2182,6 +2182,26 @@ body, .sidebar, .content-area, .card, .footer-bar, input, select, textarea, butt
   font-size: var(--font-size-sm);
 }
 
+.reference-screenshot-preview {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.reference-screenshot-preview img {
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.reference-screenshot-preview span {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+}
+
 .reference-card-icon,
 .headset-picture {
   display: inline-flex;
