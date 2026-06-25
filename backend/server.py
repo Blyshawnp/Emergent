@@ -4220,6 +4220,40 @@ def _shared_update_existing_row(sheets_api, sheet_id, tab_name, headers, row_num
     ).execute()
 
 
+def _shared_delete_existing_row(sheets_api, sheet_id, tab_name, row_number):
+    if not row_number or int(row_number) <= 1:
+        raise ValueError("A data row number is required for deletion.")
+    metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+    sheet = next((
+        item for item in metadata.get("sheets", [])
+        if ((item.get("properties") or {}).get("title") or "") == tab_name
+    ), None)
+    sheet_gid = (sheet.get("properties") or {}).get("sheetId") if sheet else None
+    if sheet_gid is None:
+        raise ValueError(f"Sheet not found: {tab_name}")
+    logger.info(
+        "[SHARED] Operation=delete_row spreadsheet_id=%s tab=%s row=%s",
+        _mask_config_value(sheet_id),
+        tab_name,
+        row_number,
+    )
+    sheets_api.batchUpdate(
+        spreadsheetId=sheet_id,
+        body={
+            "requests": [{
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_gid,
+                        "dimension": "ROWS",
+                        "startIndex": int(row_number) - 1,
+                        "endIndex": int(row_number),
+                    },
+                },
+            }],
+        },
+    ).execute()
+
+
 def _normalize_headset_review_key(value):
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
@@ -4527,6 +4561,7 @@ def _headset_review_snapshot():
             "note": row.get("note") or "",
             "submitted_date": row.get("submitted_date") or "",
             "tester": row.get("tester") or "",
+            "review_id": row.get("review_id") or row.get("id") or "",
         }
         return {
             "ok": True,
@@ -4544,8 +4579,8 @@ def _headset_review_action(payload):
     action = str((payload or {}).get("action") or "").strip().lower()
     if action == "review_later":
         return {"ok": True, "action": action}
-    if action not in {"approve", "deny"}:
-        return {"ok": False, "error": "Select Approve, Deny, or Review Later."}
+    if action not in {"approve", "deny", "archive", "delete"}:
+        return {"ok": False, "error": "Select Approve, Deny, Archive, Delete, or Review Later."}
 
     brand = str((payload or {}).get("brand") or "").strip()
     model = str((payload or {}).get("model") or "").strip()
@@ -4564,7 +4599,7 @@ def _headset_review_action(payload):
     if action == "deny" and reason == "Other" and not other_note:
         return {"ok": False, "error": "A note is required when the denial reason is Other."}
     decision_note = other_note if action == "deny" and reason == "Other" else (reason if action == "deny" else other_note)
-    decision_status = "approved" if action == "approve" else "denied"
+    decision_status = "approved" if action == "approve" else "denied" if action == "deny" else "archived"
 
     try:
         context = _shared_sheet_context()
@@ -4572,12 +4607,20 @@ def _headset_review_action(payload):
             return {"ok": False, "error": context.get("error") or "Headset review sheet is unavailable."}
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
-            post_action = "approveHeadset" if action == "approve" else "denyHeadset"
+            post_action = {
+                "approve": "approveHeadset",
+                "deny": "denyHeadset",
+                "archive": "archiveHeadsetReview",
+                "delete": "deleteHeadsetReview",
+            }[action]
             result = apps_script_client.post(post_action, {
                 "brand": brand,
                 "model": model,
                 "reason": reason,
                 "note": decision_note,
+                "review_id": str((payload or {}).get("review_id") or "").strip(),
+                "submitted_date": str((payload or {}).get("submitted_date") or "").strip(),
+                "tester": str((payload or {}).get("tester") or "").strip(),
             })
             refreshed = _apps_script_rows(apps_script_client, "getHeadsets")
             _sync_headset_content_cache([
@@ -4607,6 +4650,9 @@ def _headset_review_action(payload):
             normalized = _normalize_headset_review_row(row, schema)
             if _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}") != target_key:
                 continue
+            if action == "delete":
+                _shared_delete_existing_row(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, row.get("_row_number"))
+                return {"ok": True, "action": action, "brand": brand, "model": model}
             if schema == "legacy":
                 next_row = dict(row)
                 next_row["review_status"] = decision_status
@@ -4619,6 +4665,9 @@ def _headset_review_action(payload):
                 row.get("_row_number"), row_values,
             )
             break
+
+        if action == "archive":
+            return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
 
         headset_rows = _read_headsets_rows(sheets_api, sheet_id)
         existing = next((row for row in headset_rows if _normalize_headset_review_key(f"{row['brand']} {row['model']}") == target_key), None)
@@ -4985,7 +5034,10 @@ def _shared_admin_candidate_action(payload):
     try:
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
-            result = apps_script_client.post("updateCandidateTracking", dict(payload or {}))
+            apps_script_payload = dict(payload or {})
+            apps_script_payload["operation"] = action
+            apps_script_payload.pop("action", None)
+            result = apps_script_client.post("updateCandidateTracking", apps_script_payload)
             return {"ok": True, "action": action, **(result if isinstance(result, dict) else {})}
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
@@ -5299,6 +5351,7 @@ def _sam_master_sheet_context():
     return {
         "ok": True,
         "service": service_result["service"],
+        "appsScriptClient": service_result.get("appsScriptClient"),
         "sheet_id": service_result["sheet_id"],
         "serviceAccountEmail": service_result.get("serviceAccountEmail") or _get_service_account_email(),
     }
@@ -9329,6 +9382,16 @@ def _read_sam_notification_items(sheets_api, sheet_id):
     return {"ok": True, "items": items, "sheetTitle": SAM_NOTIFICATIONS_TAB, "sheetId": sheet_id, "source": "master"}
 
 
+def _read_sam_notification_items_via_apps_script(client, sheet_id=""):
+    rows = _apps_script_rows(client, "getTickerMessages")
+    items = []
+    for index, row in enumerate(rows, start=1):
+        item = _notification_item_from_row(row, fallback_index=index)
+        if item is not None:
+            items.append(item)
+    return {"ok": True, "items": items, "sheetTitle": SAM_NOTIFICATIONS_TAB, "sheetId": sheet_id, "source": "master"}
+
+
 def _migrate_legacy_notifications_to_master(sheets_api, sheet_id):
     existing_rows = _shared_read_rows(sheets_api, sheet_id, SAM_NOTIFICATIONS_TAB, NOTIFICATION_SHEET_COLUMNS)
     existing_ids = {
@@ -9362,6 +9425,10 @@ def _load_notification_items_from_google_sheets_api():
     context = _sam_master_sheet_context()
     if context.get("ok"):
         try:
+            if context.get("appsScriptClient"):
+                read_result = _read_sam_notification_items_via_apps_script(context["appsScriptClient"], context.get("sheet_id") or "")
+                logger.info("[NOTIFICATIONS] Active source=APPS_SCRIPT tab=%s rows=%d", SAM_NOTIFICATIONS_TAB, len(read_result.get("items") or []))
+                return read_result
             sheets_api = context["service"].spreadsheets()
             read_result = _read_sam_notification_items(sheets_api, context["sheet_id"])
             if read_result.get("ok") and not read_result.get("items"):
@@ -9400,6 +9467,25 @@ def _save_notification_to_google_sheet(item):
     context = _sam_master_sheet_context()
     if not context.get("ok"):
         return {"ok": False, "error": context.get("error") or "SAM master Google Sheet is not configured."}
+
+    apps_script_client = context.get("appsScriptClient")
+    if apps_script_client:
+        try:
+            action = "updateNotification" if normalized.get("ID") else "addNotification"
+            result = apps_script_client.post(action, {"item": normalized})
+            _clear_notification_caches()
+            return {
+                "ok": True,
+                "action": result.get("action") if isinstance(result, dict) and result.get("action") else "updated",
+                "item": normalized,
+                "sheetTitle": SAM_NOTIFICATIONS_TAB,
+                "sheetId": context.get("sheet_id") or "",
+                "source": "apps-script",
+                **(result if isinstance(result, dict) else {}),
+            }
+        except Exception as exc:
+            logger.exception("[NOTIFICATIONS] Apps Script notification write failed: %s", exc)
+            return {"ok": False, "error": f"Apps Script notification write failed: {exc}"}
 
     sheet_id = context["sheet_id"]
     service = context["service"]
@@ -9539,6 +9625,24 @@ def _delete_notification_from_google_sheet(notification_id):
     context = _sam_master_sheet_context()
     if not context.get("ok"):
         return {"ok": False, "error": context.get("error") or "SAM master Google Sheet is not configured."}
+
+    apps_script_client = context.get("appsScriptClient")
+    if apps_script_client:
+        try:
+            result = apps_script_client.post("deleteNotification", {"id": target_id})
+            _clear_notification_caches()
+            return {
+                "ok": True,
+                "action": "deleted",
+                "id": target_id,
+                "sheetTitle": SAM_NOTIFICATIONS_TAB,
+                "sheetId": context.get("sheet_id") or "",
+                "source": "apps-script",
+                **(result if isinstance(result, dict) else {}),
+            }
+        except Exception as exc:
+            logger.exception("[NOTIFICATIONS] Apps Script notification delete failed: %s", exc)
+            return {"ok": False, "error": f"Apps Script notification delete failed: {exc}"}
 
     sheet_id = context["sheet_id"]
     service = context["service"]
@@ -9959,7 +10063,14 @@ async def get_notifications_manage(request: Request):
     authenticated = {"ok": False, "items": [], "error": master_context.get("error") or "SAM master Google Sheet is not configured."}
     if master_context.get("ok"):
         try:
-            authenticated = await asyncio.to_thread(_read_sam_notification_items, master_context["service"].spreadsheets(), master_context["sheet_id"])
+            if master_context.get("appsScriptClient"):
+                authenticated = await asyncio.to_thread(
+                    _read_sam_notification_items_via_apps_script,
+                    master_context["appsScriptClient"],
+                    master_context.get("sheet_id") or "",
+                )
+            else:
+                authenticated = await asyncio.to_thread(_read_sam_notification_items, master_context["service"].spreadsheets(), master_context["sheet_id"])
         except Exception as exc:
             logger.exception("[NOTIFICATIONS] Failed to read master sam-notifications for SAM manager: %s", exc)
             authenticated = {"ok": False, "items": [], "error": f"Unable to read master sam-notifications tab: {exc}"}

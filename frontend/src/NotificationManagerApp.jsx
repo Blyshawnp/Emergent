@@ -1395,7 +1395,7 @@ function formatHeadsetSubmittedDate(value) {
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
 }
 
-export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus }) {
+export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus, onConfirm }) {
   const [deferred, setDeferred] = useState({});
   const [denial, setDenial] = useState(null);
   const [lookupReview, setLookupReview] = useState(null);
@@ -1413,8 +1413,18 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
     setLookupReview(item);
   };
 
+  const buildDecisionPayload = (item, action, extra = {}) => ({
+    action,
+    brand: item.brand,
+    model: item.model,
+    review_id: item.review_id || '',
+    submitted_date: item.submitted_date || '',
+    tester: item.tester || '',
+    ...extra,
+  });
+
   const decide = async (item, action, extra = {}) => {
-    const result = await onDecision({ action, brand: item.brand, model: item.model, ...extra });
+    const result = await onDecision(buildDecisionPayload(item, action, extra));
     if (result?.ok) {
       setDeferred((current) => {
         const next = { ...current };
@@ -1427,12 +1437,30 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
   };
 
   const reviewLater = async (item) => {
-    const result = await onDecision({ action: 'review_later', brand: item.brand, model: item.model });
+    const result = await onDecision(buildDecisionPayload(item, 'review_later'));
     if (result?.ok) {
       setDeferred((current) => ({ ...current, [`${item.brand}::${item.model}`]: true }));
       setLookupReview(null);
       onStatus('Headset left pending for later review.', 'info');
     }
+  };
+
+  const archiveReview = async (item) => {
+    const confirmed = await onConfirm?.(
+      `Archive headset review for ${item.brand} ${item.model}? This keeps the row as archived instead of removing it.`,
+      { kind: 'warning', confirmLabel: 'Archive' },
+    );
+    if (!confirmed) return;
+    await decide(item, 'archive');
+  };
+
+  const deleteReview = async (item) => {
+    const confirmed = await onConfirm?.(
+      `Delete headset review for ${item.brand} ${item.model}? Use Delete only for mistakes.`,
+      { kind: 'danger', confirmLabel: 'Delete' },
+    );
+    if (!confirmed) return;
+    await decide(item, 'delete');
   };
 
   const renderRows = (rows, kind) => (
@@ -1451,11 +1479,21 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
                   <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
                   <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
                   <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
                 </div></td>
               ) : kind === 'approved' ? (
-                <td className="nm-actions-column"><button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button></td>
+                <td className="nm-actions-column"><div className="nm-row-actions">
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+                </div></td>
               ) : (
-                <td className="nm-actions-column"><button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button></td>
+                <td className="nm-actions-column"><div className="nm-row-actions">
+                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+                </div></td>
               )}
             </tr>
           ))}
@@ -1876,7 +1914,15 @@ export default function NotificationManagerApp() {
         return result;
       }
       const reviewLater = payload.action === 'review_later';
-      const message = payload.action === 'approve' ? 'Headset approved.' : payload.action === 'deny' ? 'Headset denied.' : 'Headset left pending for later review.';
+      const message = payload.action === 'approve'
+        ? 'Headset approved.'
+        : payload.action === 'deny'
+          ? 'Headset denied.'
+          : payload.action === 'archive'
+            ? 'Headset review archived.'
+            : payload.action === 'delete'
+              ? 'Headset review deleted.'
+              : 'Headset left pending for later review.';
       setSheetState((current) => ({ ...current, statusKind: reviewLater ? 'info' : 'success', statusMessage: message }));
       if (!reviewLater) {
         playSamActionSound('success');
@@ -2965,11 +3011,12 @@ export default function NotificationManagerApp() {
           />
         ) : null}
         {activeSection === 'headsets' ? (
-          <HeadsetReviewPanel
+      <HeadsetReviewPanel
             data={headsetReviews}
             loading={headsetReviewsLoading}
             onRefresh={() => loadHeadsetReviews()}
             onDecision={runHeadsetDecision}
+            onConfirm={requestConfirm}
             onStatus={(message, kind = 'info') => setSheetState((current) => ({ ...current, statusKind: kind, statusMessage: message }))}
           />
         ) : null}

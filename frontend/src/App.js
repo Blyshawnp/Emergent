@@ -11,6 +11,7 @@ import SupTransferPage from './pages/SupTransferPage';
 import NewbieShiftPage from './pages/NewbieShiftPage';
 import ReviewPage from './pages/ReviewPage';
 import HistoryPage from './pages/HistoryPage';
+import ReferenceLibraryPreviewPage from './pages/ReferenceLibraryPreviewPage';
 import SettingsPage from './pages/SettingsPage';
 import HelpPage from './pages/HelpPage';
 import { setSoundSettings, unlockSounds } from './utils/sound';
@@ -25,6 +26,7 @@ import {
   FileCheck2,
   History,
   Home,
+  Library,
   MessageSquareText,
   PanelLeftClose,
   PanelLeftOpen,
@@ -84,6 +86,7 @@ const NAV_ITEMS = [
   { key: 'suptransfer', label: 'Sup Transfer', icon: RefreshCw },
   { key: 'review', label: 'Review', icon: FileCheck2 },
   { key: 'history', label: 'History', icon: History },
+  { key: 'reference-library', label: 'Reference Library Preview', icon: Library },
   { key: 'settings', label: 'Settings', icon: Settings },
   { key: 'help', label: 'Help', icon: CircleHelp },
 ];
@@ -206,6 +209,7 @@ function PageRouter({ page, navigate, navigationState, updateState, refreshUpdat
     case 'newbieshift': return <NewbieShiftPage {...props} />;
     case 'review': return <ReviewPage {...props} />;
     case 'history': return <HistoryPage {...props} />;
+    case 'reference-library': return <ReferenceLibraryPreviewPage {...props} />;
     case 'settings': return <SettingsPage {...props} />;
     case 'help': return <HelpPage {...props} />;
     default: return <HomePage {...props} />;

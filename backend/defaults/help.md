@@ -249,7 +249,7 @@ The Discord panel keeps reusable Discord messages and screenshot images close at
 - Template rows show the category above the blue post title, with the full message beside it.
 - Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.
 - Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.
-- Use the Phonetics Table button on Calls or Supervisor Transfer screens to open Phonetics.png and copy it for Discord when supported.
+- Use Screenshots -> Discord Posts or Reference Library Preview to open the centralized Phonetics.png reference when supported.
 - Templates and screenshots are managed in Settings.
 
 ## 25. Ticker and Notifications
@@ -272,7 +272,7 @@ Update checks and app version info live in the app menu and Settings.
 ## 27. Troubleshooting
 Use the built-in troubleshooting paths before ending a session for technical reasons.
 - Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.
-- Use Phonetics Table on Call or Supervisor Transfer coaching screens to preview and copy the phonetics image for Discord.
+- Use Reference Library Preview or the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.
 - Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.
 - If the app itself is misbehaving, restart it. Active session drafts are saved automatically.
 - When reporting an app issue, include the screen name, the action you took, and any visible error text.

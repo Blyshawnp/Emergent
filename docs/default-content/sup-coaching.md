@@ -20,7 +20,6 @@ Master source:
    - `Phone`
    - `Email`
    - `Card/EFT`
-   - `Phonetics for Sound Alike Letters`
 5. `Discord permission`
    Helper:
    - `Ask explicit permission to transfer via Discord`

@@ -118,8 +118,20 @@ function dispatchPost_(action, body) {
       return decideHeadset_(body, 'approved');
     case 'denyHeadset':
       return decideHeadset_(body, 'denied');
+    case 'archiveHeadsetReview':
+      return archiveHeadsetReview_(body);
+    case 'deleteHeadsetReview':
+      return deleteHeadsetReview_(body);
     case 'updateCandidateTracking':
       return updateCandidateTracking_(body);
+    case 'addNotification':
+      return upsertNotification_(body);
+    case 'updateNotification':
+      return upsertNotification_(body);
+    case 'disableNotification':
+      return disableNotification_(body);
+    case 'deleteNotification':
+      return deleteNotification_(body);
     case 'updateSheetRange':
       return updateRange_(body);
     case 'appendSheetRows':
@@ -289,6 +301,74 @@ function decideHeadset_(body, status) {
   upsertObject_('headsets', ['Brand', 'Model'], { Brand: brand, Model: model, Status: status, Note: note });
   upsertObject_('headset-review-log', ['Brand', 'Model'], { Brand: brand, Model: model, Status: status, Note: note });
   return { updated: true, status: status };
+}
+
+function archiveHeadsetReview_(body) {
+  const brand = required_(body.brand, 'brand');
+  const model = required_(body.model, 'model');
+  const note = String(body.note || body.reason || 'Archived from SAM').trim();
+  return updateMatchingRows_('headset-review-log', (row) =>
+    normalize_(row.Brand) === normalize_(brand) &&
+    normalize_(row.Model) === normalize_(model),
+    { Status: 'archived', Note: note });
+}
+
+function deleteHeadsetReview_(body) {
+  const brand = required_(body.brand, 'brand');
+  const model = required_(body.model, 'model');
+  const deletedRows = deleteMatchingRows_('headset-review-log', (row) =>
+    normalize_(row.Brand) === normalize_(brand) &&
+    normalize_(row.Model) === normalize_(model));
+  return { updated: true, deletedRows: deletedRows };
+}
+
+function upsertNotification_(body) {
+  const item = normalizeNotification_(body.item && typeof body.item === 'object' ? body.item : body);
+  const action = upsertObject_('sam-notifications', ['ID'], item);
+  return { updated: true, action: action, item: item };
+}
+
+function disableNotification_(body) {
+  const id = required_(body.id || (body.item || {}).ID, 'id');
+  return updateMatchingRows_('sam-notifications', (row) => String(row.ID || '') === String(id), { Enabled: 'FALSE' });
+}
+
+function deleteNotification_(body) {
+  const id = required_(body.id || (body.item || {}).ID, 'id');
+  const deletedRows = deleteMatchingRows_('sam-notifications', (row) => String(row.ID || '') === String(id));
+  return { updated: true, deletedRows: deletedRows, id: id };
+}
+
+function normalizeNotification_(item) {
+  const now = new Date().toISOString();
+  const id = String(item.ID || item.id || '').trim() || ('notification-' + now.replace(/[^0-9A-Za-z]+/g, '-'));
+  const type = String(item.Type || item.type || 'info').trim().toLowerCase();
+  return {
+    Enabled: boolText_(item.Enabled),
+    ID: id,
+    Type: ['info', 'warning', 'urgent'].indexOf(type) === -1 ? 'info' : type,
+    Title: String(item.Title || item.title || '').trim(),
+    Message: String(item.Message || item.message || '').trim(),
+    ShowTicker: boolText_(item.ShowTicker),
+    ShowPopup: boolText_(item.ShowPopup),
+    ShowBanner: boolText_(item.ShowBanner),
+    Persistent: boolText_(item.Persistent),
+    StartDate: String(item.StartDate || '').trim(),
+    StartTime: String(item.StartTime || '').trim(),
+    EndDate: String(item.EndDate || '').trim(),
+    EndTime: String(item.EndTime || '').trim(),
+    ActionText: String(item.ActionText || '').trim(),
+    ActionURL: String(item.ActionURL || '').trim(),
+    CreatedAt: String(item.CreatedAt || now).trim(),
+    UpdatedAt: now,
+  };
+}
+
+function boolText_(value) {
+  if (value === true) return 'TRUE';
+  if (value === false) return 'FALSE';
+  const text = String(value || '').trim().toLowerCase();
+  return ['true', 'yes', '1', 'y', 'enabled'].indexOf(text) !== -1 ? 'TRUE' : 'FALSE';
 }
 
 function updateCandidateTracking_(body) {
