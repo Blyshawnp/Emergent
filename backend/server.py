@@ -549,8 +549,8 @@ _google_sheet_auth_status = {
     "ok": False,
     "status": "not_attempted",
     "path": "",
-    "client_email": "",
-    "private_key_id": "",
+    "client_email_configured": False,
+    "private_key_id_configured": False,
     "last_tab": "",
     "last_error": "",
     "timestamp": "",
@@ -784,30 +784,44 @@ def _fetch_google_sheet_tab_csv(sheet_id, tab_name):
     authenticated_text = _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name)
     if authenticated_text:
         return authenticated_text
-    encoded_tab_name = quote(tab_name, safe="")
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_tab_name}"
-    with urlopen(url, timeout=10) as response:
-        return response.read().decode("utf-8-sig")
+    logger.warning(
+        "[CONTENT] Google service account read returned no rows for tab '%s'. Local fallback content will be used.",
+        tab_name,
+    )
+    return ""
 
 
-def _early_service_account_file():
+def _google_service_account_candidates():
     resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
     resource_config_dir = Path(resources_root) / "backend" / "config" if resources_root else None
+    repo_root = ROOT_DIR.parent
     candidates = [
-        os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"),
         os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+        repo_root / "google-service-account.json",
+        ROOT_DIR / "google-service-account.json",
         str(resource_config_dir / "google-service-account.json") if resource_config_dir else "",
         str(resource_config_dir / "service-account.json") if resource_config_dir else "",
         str(Path(sys.executable).resolve().parent / "config" / "google-service-account.json") if getattr(sys, "frozen", False) else "",
         str(Path(sys.executable).resolve().parent / "config" / "service-account.json") if getattr(sys, "frozen", False) else "",
-        str(ROOT_DIR / "config" / "google-service-account.json"),
-        str(ROOT_DIR / "config" / "service-account.json"),
+        os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"),
+        ROOT_DIR / "config" / "google-service-account.json",
+        ROOT_DIR / "config" / "service-account.json",
     ]
+    seen = set()
     for candidate in candidates:
         path_text = str(candidate or "").strip()
         if not path_text:
             continue
         path = Path(path_text).expanduser()
+        key = str(path.resolve(strict=False)).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        yield path
+
+
+def _early_service_account_file():
+    for path in _google_service_account_candidates():
         if path.is_file():
             return path
     return None
@@ -817,8 +831,8 @@ def _read_service_account_public_info(path):
     info = {
         "exists": False,
         "path": str(path or ""),
-        "client_email": "",
-        "private_key_id": "",
+        "client_email_configured": False,
+        "private_key_id_configured": False,
         "error": "",
     }
     if not path:
@@ -831,8 +845,8 @@ def _read_service_account_public_info(path):
             return info
         with resolved.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        info["client_email"] = str(data.get("client_email") or "")
-        info["private_key_id"] = str(data.get("private_key_id") or "")
+        info["client_email_configured"] = bool(data.get("client_email"))
+        info["private_key_id_configured"] = bool(data.get("private_key_id"))
     except Exception as exc:
         info["error"] = str(exc)
     return info
@@ -844,8 +858,8 @@ def _record_google_sheet_auth_status(status, *, ok=False, path=None, tab_name=""
         "ok": bool(ok),
         "status": str(status or ""),
         "path": str(path or public_info.get("path") or ""),
-        "client_email": public_info.get("client_email") or _google_sheet_auth_status.get("client_email") or "",
-        "private_key_id": public_info.get("private_key_id") or _google_sheet_auth_status.get("private_key_id") or "",
+        "client_email_configured": bool(public_info.get("client_email_configured") or _google_sheet_auth_status.get("client_email_configured")),
+        "private_key_id_configured": bool(public_info.get("private_key_id_configured") or _google_sheet_auth_status.get("private_key_id_configured")),
         "last_tab": str(tab_name or ""),
         "last_error": str(error or public_info.get("error") or ""),
         "timestamp": _status_timestamp(),
@@ -901,44 +915,11 @@ def _apps_script_rows_to_csv(rows):
 
 
 def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
-    from services.apps_script_api import create_apps_script_sheet_service
-    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-    if apps_script_res.get("ok"):
-        try:
-            named_action = APPS_SCRIPT_CONTENT_ACTIONS.get(str(tab_name or "").strip().lower())
-            if named_action:
-                rows = _apps_script_rows(apps_script_res["client"], named_action)
-                logger.info("[CONTENT] Loaded Google Sheet tab '%s' through Apps Script action %s", tab_name, named_action)
-                return _apps_script_rows_to_csv(rows)
-            service = apps_script_res["service"]
-            result = service.spreadsheets().values().get(
-                spreadsheetId=sheet_id,
-                range=f"'{tab_name}'!A:Z",
-            ).execute()
-            values = result.get("values") or []
-            if not values:
-                return ""
-            output = io.StringIO()
-            writer = csv.writer(output, lineterminator="\n")
-            for row in values:
-                writer.writerow(row)
-            logger.info("[CONTENT] Loaded Google Sheet tab '%s' through Apps Script API", tab_name)
-            return output.getvalue()
-        except Exception as exc:
-            logger.info("[CONTENT] Apps Script Google Sheet read failed for '%s': %s", tab_name, exc)
-            if _is_missing_apps_script_route_error(exc):
-                if tab_name in {"settings", "notification-recipients"}:
-                    logger.warning("[CONTENT] Optional tab '%s' not supported by Apps Script. Skipping without fallback.", tab_name)
-                    return ""
-                raise RuntimeError(
-                    f"Apps Script deployment is missing the required route for tab '{tab_name}'."
-                ) from exc
-            return ""
-
     creds_path = _early_service_account_file()
     if not creds_path:
-        _record_google_sheet_auth_status("missing_credentials", ok=False, tab_name=tab_name, error="No service account credentials found.")
-        logger.info("[CONTENT] Authenticated Google Sheet read unavailable for '%s': no service account credentials", tab_name)
+        message = "Google service account file was not found. Google Sheet access is unavailable."
+        _record_google_sheet_auth_status("missing_credentials", ok=False, tab_name=tab_name, error=message)
+        logger.warning("[CONTENT] %s tab=%s", message, tab_name)
         return ""
     try:
         from google.oauth2 import service_account
@@ -962,7 +943,7 @@ def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
         return output.getvalue()
     except Exception as exc:
         _record_google_sheet_auth_status("authenticated_read_failed", ok=False, path=creds_path, tab_name=tab_name, error=exc)
-        logger.info("[CONTENT] Authenticated Google Sheet read failed for '%s'; trying public CSV export: %s", tab_name, exc)
+        logger.warning("[CONTENT] Service-account Google Sheet read failed for '%s': %s", tab_name, exc)
         return ""
 
 
@@ -2798,20 +2779,12 @@ def _runtime_diagnostics_payload():
         },
         "googleServiceAccount": {
             "candidates": [
-                str(path)
-                for path in [
-                    Path((os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE") or "").strip()).expanduser()
-                    if (os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE") or "").strip() else None,
-                    Path(resources_root) / "backend" / "config" / "google-service-account.json" if resources_root else None,
-                    Path(sys.executable).resolve().parent / "config" / "google-service-account.json" if getattr(sys, "frozen", False) else None,
-                    ROOT_DIR / "config" / "google-service-account.json",
-                ]
-                if path
+                str(path) for path in _google_service_account_candidates()
             ],
             "path": credential_info.get("path") or "",
             "exists": bool(credential_info.get("exists")),
-            "client_email": credential_info.get("client_email") or "",
-            "private_key_id": credential_info.get("private_key_id") or "",
+            "client_email_configured": bool(credential_info.get("client_email_configured")),
+            "private_key_id_configured": bool(credential_info.get("private_key_id_configured")),
             "error": credential_info.get("error") or "",
         },
         "spreadsheetId": master_spreadsheet_id,
@@ -2864,8 +2837,8 @@ def _log_startup_runtime_diagnostics():
         "[RUNTIME] google_service_account exists=%s path=%s client_email_configured=%s private_key_id_configured=%s",
         credential.get("exists"),
         credential.get("path"),
-        bool(credential.get("client_email")),
-        bool(credential.get("private_key_id")),
+        bool(credential.get("client_email_configured")),
+        bool(credential.get("private_key_id_configured")),
     )
     logger.info("[RUNTIME] content_source_summary=%s", compact_sources)
     return diagnostics
@@ -3753,18 +3726,6 @@ def _get_shared_tracking_sheet_service():
             "setup": _shared_tracking_manual_setup(),
         }
 
-    from services.apps_script_api import create_apps_script_sheet_service
-    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-    if apps_script_res.get("ok"):
-        return {
-            "ok": True,
-            "service": apps_script_res["service"],
-            "appsScriptClient": apps_script_res["client"],
-            "sheet_id": sheet_id,
-            "serviceAccountEmail": "apps-script-api-endpoint",
-            "setup": {"ok": True, "activeSheetId": sheet_id, "activeClientEmail": "apps-script-api-endpoint", "tabStatus": []}
-        }
-
     creds_path = _resolve_notification_service_account_file()
     service_account_email = _get_service_account_email()
     _record_google_sheet_auth_status("shared_service_resolved", ok=bool(creds_path), path=creds_path, error="" if creds_path else "No service account credentials found.")
@@ -3963,14 +3924,6 @@ def _shared_sheet_context():
     service_result = _get_shared_tracking_sheet_service()
     if not service_result.get("ok"):
         return service_result
-    if service_result.get("appsScriptClient"):
-        return {
-            **service_result,
-            "setupStatus": {
-                "ok": True,
-                "statuses": [{"tab": HEADSET_REVIEW_LOG_TAB, "schema": "review", "ok": True}],
-            },
-        }
     ensure_result = _ensure_shared_tracking_tabs(
         service_result["service"],
         service_result["sheet_id"],
@@ -4600,7 +4553,7 @@ def _headset_review_action(payload):
     if action == "deny" and reason == "Other" and not other_note:
         return {"ok": False, "error": "A note is required when the denial reason is Other."}
     decision_note = other_note if action == "deny" and reason == "Other" else (reason if action == "deny" else other_note)
-    decision_status = "approved" if action == "approve" else "denied" if action == "deny" else "archived"
+    decision_status = "approved" if action == "approve" else "denied" if action == "deny" else "deleted" if action == "delete" else "archived"
 
     try:
         context = _shared_sheet_context()
@@ -4647,13 +4600,15 @@ def _headset_review_action(payload):
         review_headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
         review_rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers)
         target_key = _normalize_headset_review_key(f"{brand} {model}")
+        matched_review_row = False
         for row in review_rows:
             normalized = _normalize_headset_review_row(row, schema)
             if _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}") != target_key:
                 continue
+            matched_review_row = True
             if action == "delete":
                 _shared_delete_existing_row(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, row.get("_row_number"))
-                return {"ok": True, "action": action, "brand": brand, "model": model}
+                continue
             if schema == "legacy":
                 next_row = dict(row)
                 next_row["review_status"] = decision_status
@@ -4668,10 +4623,21 @@ def _headset_review_action(payload):
             break
 
         if action == "archive":
+            if not matched_review_row:
+                return {"ok": False, "error": "No matching headset review row was found to archive."}
             return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
 
         headset_rows = _read_headsets_rows(sheets_api, sheet_id)
         existing = next((row for row in headset_rows if _normalize_headset_review_key(f"{row['brand']} {row['model']}") == target_key), None)
+        if action == "delete":
+            if existing:
+                _shared_delete_existing_row(sheets_api, sheet_id, HEADSETS_TAB, existing.get("_row_number"))
+            if not matched_review_row and not existing:
+                return {"ok": False, "error": "No matching headset row was found to delete."}
+            updated_rows = _read_headsets_rows(sheets_api, sheet_id)
+            _sync_headset_content_cache(updated_rows)
+            return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
+
         row_values = [brand, model, decision_status, decision_note]
         quoted = _quote_sheet_title_for_a1(HEADSETS_TAB)
         if existing:
@@ -8799,23 +8765,7 @@ def _get_admin_notification_sheet_config():
 
 
 def _resolve_notification_service_account_file():
-    resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
-    resource_config_dir = Path(resources_root) / "backend" / "config" if resources_root else None
-    candidates = [
-        os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"),
-        os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-        str(resource_config_dir / "google-service-account.json") if resource_config_dir else "",
-        str(resource_config_dir / "service-account.json") if resource_config_dir else "",
-        str(Path(sys.executable).resolve().parent / "config" / "google-service-account.json") if getattr(sys, "frozen", False) else "",
-        str(Path(sys.executable).resolve().parent / "config" / "service-account.json") if getattr(sys, "frozen", False) else "",
-        str(ROOT_DIR / "config" / "google-service-account.json"),
-        str(ROOT_DIR / "config" / "service-account.json"),
-    ]
-    for candidate in candidates:
-        path_text = str(candidate or "").strip()
-        if not path_text:
-            continue
-        path = Path(path_text).expanduser()
+    for path in _google_service_account_candidates():
         if path.is_file():
             return path
     return None
@@ -8854,6 +8804,8 @@ def _service_account_file_diagnostics():
     ])
 
     dev_candidates = [
+        ROOT_DIR.parent / "google-service-account.json",
+        ROOT_DIR / "google-service-account.json",
         ROOT_DIR / "config" / "google-service-account.json",
         ROOT_DIR / "config" / "service-account.json",
     ]
@@ -8871,7 +8823,7 @@ def _service_account_file_diagnostics():
         {
             "path": str(Path(candidate)),
             "exists": Path(candidate).is_file(),
-            "clientEmail": _read_service_account_client_email(Path(candidate)) if Path(candidate).is_file() else "",
+            "clientEmailConfigured": bool(_read_service_account_client_email(Path(candidate))) if Path(candidate).is_file() else False,
         }
         for candidate in packaged_candidates
     ]
@@ -8883,12 +8835,12 @@ def _service_account_file_diagnostics():
 
     return {
         "activePath": str(active_path or ""),
-        "activeClientEmail": active_email,
+        "activeClientEmailConfigured": bool(active_email),
         "packagedPath": str(packaged_path or ""),
-        "packagedClientEmail": packaged_email,
+        "packagedClientEmailConfigured": bool(packaged_email),
         "packagedFiles": packaged_files,
         "devPath": str(dev_path or ""),
-        "devClientEmail": dev_email,
+        "devClientEmailConfigured": bool(dev_email),
         "packagedAndDevSamePath": same_path,
         "packagedAndDevSameClientEmail": same_email,
         "appResourcesPath": resources_root,
@@ -8914,9 +8866,9 @@ def _get_notification_sheet_write_status():
         return {
             "ready": False,
             "error": (
-                "Direct Google Sheets write is not configured. Missing Google service account JSON. "
-                "Set GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_APPLICATION_CREDENTIALS, or place the key at "
-                "backend/config/google-service-account.json."
+                "Google service account file was not found. Google Sheet access is unavailable. "
+                "Set GOOGLE_APPLICATION_CREDENTIALS, place google-service-account.json in the repo root, "
+                "or package it under backend/config/google-service-account.json."
                 f"{packaged_hint}"
             ),
         }
@@ -8930,11 +8882,6 @@ def _get_notification_sheet_write_status():
 
 
 def _get_notification_sheet_service():
-    from services.apps_script_api import create_apps_script_sheet_service
-    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-    if apps_script_res.get("ok"):
-        return {"ok": True, "service": apps_script_res["service"], "client_email": "apps-script-api-endpoint"}
-
     status = _get_notification_sheet_write_status()
     if not status.get("ready"):
         return {"ok": False, "error": status.get("error") or "Notification sheet credentials are not configured."}
@@ -8981,58 +8928,6 @@ def _sheet_permission_needed(operation):
 
 
 def _run_google_sheet_permission_check():
-    from services.apps_script_api import create_apps_script_sheet_service
-    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-    if apps_script_res.get("ok"):
-        client = apps_script_res["client"]
-        apps_script_status = apps_script_res["status"]
-        ping_ok = False
-        ping_error = ""
-        try:
-            client.ping()
-            ping_ok = True
-        except Exception as e:
-            ping_error = str(e)
-            
-        result = {
-            "ok": ping_ok,
-            "failedOperation": "" if ping_ok else "apps_script_ping",
-            "errorType": "" if ping_ok else "AppsScriptError",
-            "errorMessage": "" if ping_ok else ping_error,
-            "error": "" if ping_ok else ping_error,
-            "spreadsheetId": _shared_tracking_sheet_id() or "",
-            "activeSpreadsheetId": _shared_tracking_sheet_id() or "",
-            "serviceAccountEmail": "apps-script-api-endpoint",
-            "activeServiceAccountEmail": "apps-script-api-endpoint",
-            "credentialFiles": {},
-            "appsScriptApi": {
-                "enabled": True,
-                "status": "ready" if ping_ok else "error",
-                "message": "Apps Script API is online." if ping_ok else f"Apps Script ping failed: {ping_error}",
-                "path": apps_script_status.get("path") or "",
-            },
-            "masterMtsContentCandidateSheetConfig": {
-                "spreadsheetId": _shared_tracking_sheet_id() or "",
-                "purpose": "Master MTS content, shared candidate tracking, Gemini prompt overrides, and update metadata.",
-            },
-            "notificationSheetConfig": {
-                "spreadsheetId": _shared_tracking_sheet_id() or "",
-                "gid": "0",
-                "configured": True,
-                "usingDefault": False,
-                "purpose": "SAM notification rows/ticker/banner/popup only.",
-            },
-            "operations": [
-                {
-                    "operation": "apps_script_ping",
-                    "ok": ping_ok,
-                    "errorMessage": ping_error,
-                }
-            ],
-            "permissionNeeded": "",
-        }
-        return result
-
     runtime_config = {}
     notification_config = {}
     master_sheet_id = ""
@@ -9074,7 +8969,7 @@ def _run_google_sheet_permission_check():
         result["spreadsheetId"] = master_sheet_id or result.get("spreadsheetId") or ""
         result["activeSpreadsheetId"] = result["spreadsheetId"]
         result["serviceAccountEmail"] = (
-            (credential_info or {}).get("activeClientEmail")
+            "configured" if (credential_info or {}).get("activeClientEmailConfigured") else ""
             or result.get("serviceAccountEmail")
             or ""
         )
@@ -9863,73 +9758,23 @@ async def _fetch_notifications_from_sheet():
         )
         return _notification_cache["groups"]
 
-    try:
+    if authenticated.get("ok") and authenticated.get("source") == "legacy_fallback":
+        groups = _group_notification_manager_items(authenticated.get("items", []))
+        _notification_cache["groups"] = groups
+        _notification_cache["last_fetch"] = now
+        _notification_cache["url"] = sheet_url
         logger.info(
-            "[NOTIFICATIONS] Loading legacy notification sheet from %s URL %s",
-            config.get("source") or "unknown",
-            _mask_config_value(config.get("url")),
+            "[NOTIFICATIONS] Source=LEGACY loaded %s ticker, %s banner, %s popup items from fallback notification sheet via authenticated Sheets API",
+            len(groups["tickerMessages"]),
+            len(groups["banners"]),
+            len(groups["popups"]),
         )
-        if authenticated.get("ok"):
-            if authenticated.get("source") == "legacy_fallback":
-                groups = _group_notification_manager_items(authenticated.get("items", []))
-                _notification_cache["groups"] = groups
-                _notification_cache["last_fetch"] = now
-                _notification_cache["url"] = sheet_url
-                logger.info(
-                    "[NOTIFICATIONS] Source=LEGACY loaded %s ticker, %s banner, %s popup items from fallback notification sheet via authenticated Sheets API",
-                    len(groups["tickerMessages"]),
-                    len(groups["banners"]),
-                    len(groups["popups"]),
-                )
-                _set_ticker_fetch_status("google", "legacy fallback authenticated Sheets API read succeeded", len(groups["tickerMessages"]))
-                return groups
-        else:
-            logger.warning("[NOTIFICATIONS] %s", authenticated.get("error") or "Authenticated Google Sheets read failed.")
+        _set_ticker_fetch_status("google", "legacy fallback authenticated Sheets API read succeeded", len(groups["tickerMessages"]))
+        return groups
 
-        async with httpx.AsyncClient(timeout=NOTIFICATION_REMOTE_FETCH_TIMEOUT_SECONDS) as client:
-            resp = await client.get(sheet_url, follow_redirects=True)
-            if resp.status_code == 200:
-                content_type = (resp.headers.get("content-type") or "").lower()
-                body_preview = (resp.text or "")[:512].lstrip().lower()
-                looks_like_html = (
-                    "text/html" in content_type
-                    or body_preview.startswith("<!doctype html")
-                    or body_preview.startswith("<html")
-                )
-                if looks_like_html:
-                    creds_path = _resolve_notification_service_account_file()
-                    reason = (
-                        "public CSV request returned an HTML page (sheet is private and no Google service account is configured)"
-                        if not creds_path
-                        else "public CSV request returned an HTML page (sheet is private; service account is configured but authenticated read did not succeed)"
-                    )
-                    logger.warning(
-                        "[NOTIFICATIONS] Source=FALLBACK %s. URL=%s",
-                        reason,
-                        _mask_config_value(sheet_url),
-                    )
-                    _set_ticker_fetch_status("fallback", reason, 0)
-                else:
-                    groups = _parse_notification_csv(resp.text)
-                    _notification_cache["groups"] = groups
-                    _notification_cache["last_fetch"] = now
-                    _notification_cache["url"] = sheet_url
-                    logger.info(
-                        "[NOTIFICATIONS] Source=GOOGLE loaded %s ticker, %s banner, %s popup items from admin sheet public CSV tab gid=%s",
-                        len(groups["tickerMessages"]),
-                        len(groups["banners"]),
-                        len(groups["popups"]),
-                        config.get("gid") or "0",
-                    )
-                    _set_ticker_fetch_status("google", "public CSV read succeeded", len(groups["tickerMessages"]))
-                    return groups
-            else:
-                reason = f"public CSV request returned status {resp.status_code}"
-                logger.warning("[NOTIFICATIONS] Notification sheet request returned status %s. Using cached/default notifications.", resp.status_code)
-                _set_ticker_fetch_status("fallback", reason, 0)
-    except Exception as exc:
-        logger.warning("[NOTIFICATIONS] Failed to fetch notification sheet: %s", exc)
-        _set_ticker_fetch_status("fallback", f"Google notification fetch failed: {exc}", 0)
+    reason = authenticated.get("error") or "Service-account notification sheet read failed."
+    logger.warning("[NOTIFICATIONS] Source=FALLBACK %s Public CSV/API-key-only reads are disabled.", reason)
+    _set_ticker_fetch_status("fallback", reason, 0)
 
     if _notification_cache["groups"] is not None:
         logger.info("[NOTIFICATIONS] Source=CACHE reusing last cached notification payload after fetch failure.")
@@ -10035,12 +9880,19 @@ async def get_config_status():
         "legacyNotificationSheetConfigured": bool(config.get("configured")),
         "googleCredentialsFound": bool(credentials_path),
         "googleCredentialsPath": str(credentials_path or ""),
+        "google_auth_mode": "service_account" if credentials_path else "missing",
+        "google_service_account_found": bool(credentials_path),
+        "google_sheet_connected": bool(_google_sheet_auth_status.get("ok")),
+        "google_api_key_mode_used_for_sheets": False,
         "tickerSource": _ticker_fetch_status.get("source") or "builtin",
+        "ticker_remote_count": active_ticker_count,
         "lastTickerFetchStatus": _ticker_fetch_status.get("status") or "",
         "lastTickerFetchTimestamp": _ticker_fetch_status.get("timestamp") or "",
         "activeTickerMessages": active_ticker_count,
         "displayedTickerMessages": displayed_ticker_count,
         "tickerFallbackInUse": bool(_ticker_cache.get("using_fallback")),
+        "fallback_used": bool(_ticker_cache.get("using_fallback")),
+        "sam_headset_pending_count": None,
         "notificationCacheAgeSeconds": notification_cache_age,
         "notificationCacheTtlSeconds": NOTIFICATION_CACHE_TTL_SECONDS,
         "sections": sections,

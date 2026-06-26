@@ -33,6 +33,9 @@ logs/
 
 backend/config/google-service-account.json
 backend/config/service-account.json
+google-service-account.json
+**/google-service-account.json
+*.service-account.json
 backend/config/apps-script-api.json
 
 **/backend/config/google-service-account.json

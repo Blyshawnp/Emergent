@@ -63,7 +63,16 @@
         "to": "backend/config",
         "filter": [
           "runtime_config.json",
-          "apps-script-api.json"
+          "apps-script-api.json",
+          "google-service-account.json",
+          "service-account.json"
+        ]
+      },
+      {
+        "from": "..",
+        "to": "backend/config",
+        "filter": [
+          "google-service-account.json"
         ]
       },
       {

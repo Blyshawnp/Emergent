@@ -1926,7 +1926,30 @@ export default function NotificationManagerApp() {
       setSheetState((current) => ({ ...current, statusKind: reviewLater ? 'info' : 'success', statusMessage: message }));
       if (!reviewLater) {
         playSamActionSound('success');
-        await loadHeadsetReviews({ silent: true });
+        const targetKey = `${payload?.brand || ''}::${payload?.model || ''}`.toLowerCase();
+        setHeadsetReviews((current) => {
+          const removeTarget = (rows = []) => rows.filter((row) => `${row.brand || ''}::${row.model || ''}`.toLowerCase() !== targetKey);
+          const base = {
+            ...current,
+            pending: removeTarget(current.pending),
+            approved: removeTarget(current.approved),
+            denied: removeTarget(current.denied),
+          };
+          const row = {
+            brand: payload?.brand || '',
+            model: payload?.model || '',
+            note: payload?.note || payload?.reason || '',
+            submitted_date: payload?.submitted_date || '',
+            tester: payload?.tester || '',
+          };
+          if (payload.action === 'approve') {
+            base.approved = [...base.approved, { ...row, status: 'approved' }];
+          } else if (payload.action === 'deny') {
+            base.denied = [...base.denied, { ...row, status: 'denied' }];
+          }
+          return base;
+        });
+        void loadHeadsetReviews({ silent: true });
       }
       return result;
     } catch (error) {
