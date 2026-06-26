@@ -16,6 +16,7 @@ import hmac
 import time
 import uuid
 import secrets
+import ipaddress
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
@@ -901,40 +902,6 @@ def _apps_script_rows_to_csv(rows):
 
 
 def _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name):
-    from services.apps_script_api import create_apps_script_sheet_service
-    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-    if apps_script_res.get("ok"):
-        try:
-            named_action = APPS_SCRIPT_CONTENT_ACTIONS.get(str(tab_name or "").strip().lower())
-            if named_action:
-                rows = _apps_script_rows(apps_script_res["client"], named_action)
-                logger.info("[CONTENT] Loaded Google Sheet tab '%s' through Apps Script action %s", tab_name, named_action)
-                return _apps_script_rows_to_csv(rows)
-            service = apps_script_res["service"]
-            result = service.spreadsheets().values().get(
-                spreadsheetId=sheet_id,
-                range=f"'{tab_name}'!A:Z",
-            ).execute()
-            values = result.get("values") or []
-            if not values:
-                return ""
-            output = io.StringIO()
-            writer = csv.writer(output, lineterminator="\n")
-            for row in values:
-                writer.writerow(row)
-            logger.info("[CONTENT] Loaded Google Sheet tab '%s' through Apps Script API", tab_name)
-            return output.getvalue()
-        except Exception as exc:
-            logger.info("[CONTENT] Apps Script Google Sheet read failed for '%s': %s", tab_name, exc)
-            if _is_missing_apps_script_route_error(exc):
-                if tab_name in {"settings", "notification-recipients"}:
-                    logger.warning("[CONTENT] Optional tab '%s' not supported by Apps Script. Skipping without fallback.", tab_name)
-                    return ""
-                raise RuntimeError(
-                    f"Apps Script deployment is missing the required route for tab '{tab_name}'."
-                ) from exc
-            return ""
-
     creds_path = _early_service_account_file()
     if not creds_path:
         _record_google_sheet_auth_status("missing_credentials", ok=False, tab_name=tab_name, error="No service account credentials found.")
@@ -3751,18 +3718,6 @@ def _get_shared_tracking_sheet_service():
             "ok": False,
             "error": "No admin content Google Sheet is configured for shared candidate tracking.",
             "setup": _shared_tracking_manual_setup(),
-        }
-
-    from services.apps_script_api import create_apps_script_sheet_service
-    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-    if apps_script_res.get("ok"):
-        return {
-            "ok": True,
-            "service": apps_script_res["service"],
-            "appsScriptClient": apps_script_res["client"],
-            "sheet_id": sheet_id,
-            "serviceAccountEmail": "apps-script-api-endpoint",
-            "setup": {"ok": True, "activeSheetId": sheet_id, "activeClientEmail": "apps-script-api-endpoint", "tabStatus": []}
         }
 
     creds_path = _resolve_notification_service_account_file()
@@ -8000,6 +7955,444 @@ async def get_shared_pending_sup_transfers():
     return await asyncio.to_thread(_get_shared_pending_sup_transfers)
 
 
+RESIDENTIAL_USAGE_MARKERS = (
+    "residential",
+    "fixed line",
+    "fixed-line",
+    "fixed_line",
+    "cable",
+    "fiber",
+    "fibre",
+    "dsl",
+    "isp",
+)
+
+RISK_USAGE_MARKERS = (
+    "vpn",
+    "proxy",
+    "hosting",
+    "datacenter",
+    "data center",
+    "tor",
+    "residential proxy",
+)
+
+
+class IpIntelligenceProvider:
+    name = "provider"
+    requires_key = False
+    env_key = ""
+    enabled_env = ""
+    default_enabled = True
+    reputation_capable = True
+
+    def enabled(self):
+        configured = os.getenv(self.enabled_env or "")
+        enabled_value = str(configured if configured != "" else self.default_enabled).strip().lower()
+        if enabled_value in {"0", "false", "no", "off", "disabled"}:
+            return False, "disabled"
+        if self.requires_key and not self.api_key():
+            return False, "missing_api_key"
+        return True, ""
+
+    def api_key(self):
+        return (os.getenv(self.env_key or "") or "").strip()
+
+    async def lookup(self, ip_value):
+        raise NotImplementedError
+
+
+def _empty_ip_provider_result(provider, status="unavailable", notes="", reputation_capable=True):
+    return {
+        "provider": provider,
+        "status": status,
+        "vpnProxy": "Unknown",
+        "lastSeen": "",
+        "isp": "",
+        "asn": "",
+        "usageType": "",
+        "country": "",
+        "region": "",
+        "city": "",
+        "connectionType": "",
+        "confidence": "Unknown",
+        "notes": notes,
+        "reputationCapable": reputation_capable,
+        "flags": {
+            "vpn": False,
+            "proxy": False,
+            "hosting": False,
+            "datacenter": False,
+            "tor": False,
+            "residential_proxy": False,
+            "active": False,
+            "historical": False,
+            "residential": False,
+        },
+    }
+
+
+def _ip_safe_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _contains_any(value, markers):
+    text = str(value or "").strip().lower()
+    return any(marker in text for marker in markers)
+
+
+def _parse_ip_last_seen(value):
+    if not value:
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _last_seen_older_than(value, hours):
+    parsed = _parse_ip_last_seen(value)
+    if not parsed:
+        return False
+    return datetime.now(timezone.utc) - parsed > timedelta(hours=hours)
+
+
+def _normalize_ip_provider_result(result):
+    flags = result.get("flags") or {}
+    usage_type = result.get("usageType") or ""
+    connection = result.get("connectionType") or ""
+    isp = result.get("isp") or ""
+    note_text = result.get("notes") or ""
+    combined = " ".join([str(usage_type), str(connection), str(isp), str(note_text)])
+    risk_from_usage = _contains_any(combined, RISK_USAGE_MARKERS)
+    residential = bool(flags.get("residential")) or _contains_any(" ".join([str(usage_type), str(connection), str(isp)]), RESIDENTIAL_USAGE_MARKERS)
+    risk_flags = {
+        "vpn": bool(flags.get("vpn")),
+        "proxy": bool(flags.get("proxy")),
+        "hosting": bool(flags.get("hosting")),
+        "datacenter": bool(flags.get("datacenter")),
+        "tor": bool(flags.get("tor")),
+        "residential_proxy": bool(flags.get("residential_proxy")),
+    }
+    if risk_from_usage:
+        lowered = combined.lower()
+        risk_flags["vpn"] = risk_flags["vpn"] or "vpn" in lowered
+        risk_flags["proxy"] = risk_flags["proxy"] or "proxy" in lowered
+        risk_flags["hosting"] = risk_flags["hosting"] or "hosting" in lowered
+        risk_flags["datacenter"] = risk_flags["datacenter"] or "datacenter" in lowered or "data center" in lowered
+        risk_flags["tor"] = risk_flags["tor"] or "tor" in lowered
+    has_risk = any(risk_flags.values())
+    normalized_flags = {
+        **flags,
+        **risk_flags,
+        "active": bool(flags.get("active")),
+        "historical": bool(flags.get("historical")),
+        "residential": residential,
+    }
+    return {
+        **_empty_ip_provider_result(result.get("provider") or "provider"),
+        **result,
+        "status": result.get("status") or "ok",
+        "vpnProxy": result.get("vpnProxy") or ("Yes" if has_risk else "No"),
+        "confidence": result.get("confidence") or ("High" if has_risk else "Medium"),
+        "reputationCapable": result.get("reputationCapable", True),
+        "flags": normalized_flags,
+    }
+
+
+class IP2LocationProvider(IpIntelligenceProvider):
+    name = "IP2Location / IP2Proxy"
+    requires_key = True
+    env_key = "IP2PROXY_API_KEY"
+    enabled_env = "IP2PROXY_ENABLED"
+
+    async def lookup(self, ip_value):
+        params = {"key": self.api_key(), "ip": ip_value, "package": os.getenv("IP2PROXY_PACKAGE", "PX11")}
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get("https://api.ip2proxy.com/", params=params)
+            response.raise_for_status()
+            data = response.json()
+        if str(data.get("response") or "").upper() == "ERROR":
+            raise RuntimeError(str(data.get("message") or "IP2Proxy returned an error."))
+        proxy_value = str(data.get("is_proxy") or data.get("proxy") or "").strip().upper()
+        usage_type = str(data.get("usage_type") or "").strip()
+        last_seen = str(data.get("last_seen") or "").strip()
+        is_proxy = proxy_value in {"1", "YES", "Y", "TRUE"}
+        historical_residential = is_proxy and _last_seen_older_than(last_seen, 48) and _contains_any(usage_type, RESIDENTIAL_USAGE_MARKERS)
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_proxy else "No",
+            "lastSeen": last_seen,
+            "isp": data.get("isp") or "",
+            "asn": str(data.get("asn") or data.get("as") or ""),
+            "usageType": usage_type,
+            "country": data.get("country_name") or data.get("countryCode") or data.get("country") or "",
+            "region": data.get("region_name") or data.get("region") or "",
+            "city": data.get("city_name") or data.get("city") or "",
+            "connectionType": data.get("proxy_type") or "",
+            "confidence": "Medium" if historical_residential else ("High" if is_proxy else "Medium"),
+            "notes": "Historical residential proxy signal." if historical_residential else "",
+            "reputationCapable": True,
+            "flags": {
+                "vpn": is_proxy and not historical_residential,
+                "proxy": is_proxy,
+                "hosting": _contains_any(usage_type, ("hosting", "datacenter", "data center")),
+                "datacenter": _contains_any(usage_type, ("datacenter", "data center")),
+                "residential_proxy": historical_residential,
+                "active": is_proxy and not historical_residential,
+                "historical": historical_residential,
+                "residential": _contains_any(usage_type, RESIDENTIAL_USAGE_MARKERS),
+            },
+        })
+
+
+class IPinfoProvider(IpIntelligenceProvider):
+    name = "IPinfo.io"
+    requires_key = True
+    env_key = "IPINFO_TOKEN"
+    enabled_env = "IPINFO_ENABLED"
+
+    async def lookup(self, ip_value):
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"https://ipinfo.io/{quote(ip_value)}/json", params={"token": self.api_key()})
+            response.raise_for_status()
+            data = response.json()
+        privacy = data.get("privacy") or {}
+        company = data.get("company") or {}
+        asn = data.get("asn") or {}
+        usage_text = " ".join([
+            str(company.get("type") or ""),
+            str(asn.get("type") or ""),
+            str(company.get("name") or ""),
+            str(asn.get("name") or ""),
+        ])
+        flags = {
+            "vpn": _ip_safe_bool(privacy.get("vpn")),
+            "proxy": _ip_safe_bool(privacy.get("proxy")),
+            "hosting": _ip_safe_bool(privacy.get("hosting")) or _contains_any(usage_text, ("hosting",)),
+            "datacenter": _contains_any(usage_text, ("datacenter", "data center")),
+            "tor": _ip_safe_bool(privacy.get("tor")),
+            "active": any(_ip_safe_bool(privacy.get(key)) for key in ("vpn", "proxy", "hosting", "tor")),
+            "residential": _contains_any(usage_text, RESIDENTIAL_USAGE_MARKERS),
+        }
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "isp": data.get("org") or company.get("name") or "",
+            "asn": asn.get("asn") or "",
+            "usageType": company.get("type") or asn.get("type") or "",
+            "country": data.get("country") or "",
+            "region": data.get("region") or "",
+            "city": data.get("city") or "",
+            "connectionType": "privacy" if flags["active"] else "",
+            "confidence": "High" if flags["active"] else "Medium",
+            "reputationCapable": True,
+            "flags": flags,
+        })
+
+
+class IpTeohProvider(IpIntelligenceProvider):
+    name = "ip.teoh.io"
+    enabled_env = "IP_TEOH_ENABLED"
+    default_enabled = False
+
+    async def lookup(self, ip_value):
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"https://ip.teoh.io/api/vpn/{quote(ip_value)}")
+            if response.status_code in {401, 403, 404, 410}:
+                return _empty_ip_provider_result(
+                    self.name,
+                    "unavailable",
+                    "Provider endpoint is unavailable for automated lookup.",
+                    True,
+                )
+            response.raise_for_status()
+            data = response.json()
+        is_risk = _ip_safe_bool(data.get("vpn_or_proxy") or data.get("vpn") or data.get("proxy") or data.get("is_proxy"))
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_risk else "No",
+            "isp": data.get("isp") or data.get("organization") or "",
+            "asn": str(data.get("asn") or ""),
+            "usageType": data.get("usage_type") or data.get("type") or "",
+            "country": data.get("country") or data.get("country_code") or "",
+            "region": data.get("region") or "",
+            "city": data.get("city") or "",
+            "connectionType": data.get("connection_type") or "",
+            "confidence": "Medium",
+            "reputationCapable": True,
+            "flags": {"vpn": is_risk, "proxy": is_risk, "active": is_risk},
+        })
+
+
+class IpApiCoProvider(IpIntelligenceProvider):
+    name = "ipapi.co network metadata"
+    enabled_env = "IPAPI_CO_ENABLED"
+    reputation_capable = False
+
+    async def lookup(self, ip_value):
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"https://ipapi.co/{quote(ip_value)}/json/")
+            response.raise_for_status()
+            data = response.json()
+        usage_text = " ".join(str(data.get(key) or "") for key in ("org", "asn", "network"))
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "metadata",
+            "vpnProxy": "Unknown",
+            "isp": data.get("org") or "",
+            "asn": str(data.get("asn") or ""),
+            "usageType": "Network metadata only",
+            "country": data.get("country_name") or data.get("country") or "",
+            "region": data.get("region") or "",
+            "city": data.get("city") or "",
+            "connectionType": data.get("network") or "",
+            "confidence": "Informational",
+            "notes": "Metadata only. This provider does not verify VPN/proxy reputation.",
+            "reputationCapable": False,
+            "flags": {
+                "hosting": _contains_any(usage_text, ("hosting", "datacenter", "data center")),
+                "datacenter": _contains_any(usage_text, ("datacenter", "data center")),
+                "residential": _contains_any(usage_text, RESIDENTIAL_USAGE_MARKERS),
+            },
+        })
+
+
+def _configured_ip_intelligence_providers():
+    return [IP2LocationProvider(), IPinfoProvider(), IpTeohProvider(), IpApiCoProvider()]
+
+
+def _ip_result_has_risk(result):
+    flags = result.get("flags") or {}
+    return any(bool(flags.get(key)) for key in ("vpn", "proxy", "hosting", "datacenter", "tor", "residential_proxy"))
+
+
+def _ip_result_active_risk(result):
+    flags = result.get("flags") or {}
+    return bool(flags.get("active")) and any(bool(flags.get(key)) for key in ("vpn", "proxy", "hosting", "datacenter", "tor"))
+
+
+def _ip_result_hosting(result):
+    flags = result.get("flags") or {}
+    return bool(flags.get("hosting") or flags.get("datacenter"))
+
+
+def _ip_result_historical_residential_proxy(result):
+    flags = result.get("flags") or {}
+    return bool(flags.get("proxy") or flags.get("residential_proxy")) and bool(flags.get("historical")) and bool(flags.get("residential"))
+
+
+def _provider_results_disagree(results):
+    risk_states = {bool(_ip_result_has_risk(result)) for result in results if result.get("status") == "ok" and result.get("reputationCapable", True)}
+    return len(risk_states) > 1
+
+
+def _consensus_ip_intelligence(results, skipped_count=0):
+    successful = [result for result in results if result.get("status") in {"ok", "metadata"}]
+    reputation_successful = [result for result in successful if result.get("status") == "ok" and result.get("reputationCapable", True)]
+    if not reputation_successful:
+        return {
+            "verdict": "UNABLE TO VERIFY",
+            "level": "gray",
+            "summary": "No IP reputation provider is currently available. Manual verification required.",
+            "fallbackUsed": True,
+        }
+
+    historical_residential = [result for result in reputation_successful if _ip_result_historical_residential_proxy(result)]
+    total_risk_count = sum(1 for result in reputation_successful if _ip_result_has_risk(result))
+    hosting_confirmed = any(_ip_result_hosting(result) for result in reputation_successful)
+    active_vpn_confirmed = any((result.get("flags") or {}).get("vpn") and (result.get("flags") or {}).get("active") for result in reputation_successful)
+    residential_conflict = any((result.get("flags") or {}).get("residential") for result in reputation_successful) and total_risk_count > 0
+    disagreement = _provider_results_disagree(reputation_successful)
+
+    if historical_residential and total_risk_count == len(historical_residential):
+        return {
+            "verdict": "REVIEW",
+            "level": "yellow",
+            "summary": "One provider detected historical proxy activity. The connection currently appears residential. Do not fail based on this result alone.",
+            "fallbackUsed": False,
+        }
+
+    if total_risk_count >= 2 or (active_vpn_confirmed and hosting_confirmed):
+        return {
+            "verdict": "VPN / PROXY LIKELY",
+            "level": "red",
+            "summary": "Multiple providers independently identified this IP as VPN/proxy/datacenter. Candidate should be reviewed before continuing.",
+            "fallbackUsed": False,
+        }
+
+    if total_risk_count == 1 or disagreement or residential_conflict:
+        summary = "One provider detected VPN/proxy/hosting risk. Manual review is recommended."
+        if historical_residential:
+            summary = "One provider detected historical proxy activity, but the connection appears to be a residential ISP. Manual review is recommended."
+        return {"verdict": "REVIEW", "level": "yellow", "summary": summary, "fallbackUsed": False}
+
+    return {
+        "verdict": "CLEAR",
+        "level": "green",
+        "summary": "No providers detected VPN, proxy, hosting, or datacenter usage.",
+        "fallbackUsed": False,
+    }
+
+
+async def _run_ip_intelligence_lookup(ip_value):
+    try:
+        parsed_ip = ipaddress.ip_address(str(ip_value or "").strip())
+    except ValueError:
+        return {"ok": False, "error": "Enter a valid IPv4 or IPv6 address."}
+
+    normalized_ip = str(parsed_ip)
+    provider_results = []
+    skipped = []
+    for provider in _configured_ip_intelligence_providers():
+        enabled, reason = provider.enabled()
+        if not enabled:
+            skipped.append({"provider": provider.name, "reason": reason})
+            continue
+        started = time.perf_counter()
+        try:
+            result = await provider.lookup(normalized_ip)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            logger.info("[IP-INTEL] provider=%s duration_ms=%s success=true failure=", provider.name, duration_ms)
+            provider_results.append({**result, "durationMs": duration_ms})
+        except Exception as exc:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            logger.warning("[IP-INTEL] provider=%s duration_ms=%s success=false failure=%s", provider.name, duration_ms, exc.__class__.__name__)
+            provider_results.append(_empty_ip_provider_result(provider.name, "failed", "Provider lookup failed.", provider.reputation_capable))
+
+    consensus = _consensus_ip_intelligence(provider_results, skipped_count=len(skipped))
+    return {
+        "ok": True,
+        "ip": normalized_ip,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "verdict": consensus["verdict"],
+        "level": consensus["level"],
+        "summary": consensus["summary"],
+        "providerResults": provider_results,
+        "providersSkipped": skipped,
+        "fallbackUsed": consensus["fallbackUsed"],
+        "autoFail": False,
+    }
+
+
+@api_router.post("/ip-intelligence/check")
+async def check_candidate_ip_intelligence(payload: dict):
+    return await _run_ip_intelligence_lookup((payload or {}).get("ip") or "")
+
+
 @api_router.get("/shared/admin/candidates")
 async def get_shared_admin_candidates(request: Request):
     _require_admin_token(request)
@@ -8930,11 +9323,6 @@ def _get_notification_sheet_write_status():
 
 
 def _get_notification_sheet_service():
-    from services.apps_script_api import create_apps_script_sheet_service
-    apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-    if apps_script_res.get("ok"):
-        return {"ok": True, "service": apps_script_res["service"], "client_email": "apps-script-api-endpoint"}
-
     status = _get_notification_sheet_write_status()
     if not status.get("ready"):
         return {"ok": False, "error": status.get("error") or "Notification sheet credentials are not configured."}

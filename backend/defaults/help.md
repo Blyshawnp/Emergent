@@ -53,9 +53,8 @@ Basics verifies candidate readiness before any scoring begins.
 - Select the headset brand/model before answering USB and Noise Cancelling.
 - Headset must be USB with a noise-cancelling microphone. Approved headset selections automatically mark USB and Noise Cancelling as Yes.
 - VPN must be off, and required browser checks must pass before you can continue.
-- When checking for VPN or proxy, use more than one linked checker because databases can update at different times.
-- The VPN/proxy checker websites are https://www.ip2location.com/, https://ip.teoh.io/vpn-detection, and https://nodedata.io/vpn-detection-test.
-- Click a VPN/proxy website to copy it to your clipboard. The item changes to Copied for 3 seconds, and the app does not navigate away.
+- When checking for VPN or proxy, use Candidate IP Intelligence as decision support and manually review the result.
+- Candidate IP Intelligence never fails a candidate automatically. The tester always makes the final decision.
 - Headset and VPN fail popups include Discord copy buttons when the matching post template is available.
 - Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.
 - When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.
@@ -249,7 +248,7 @@ The Discord panel keeps reusable Discord messages and screenshot images close at
 - Template rows show the category above the blue post title, with the full message beside it.
 - Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.
 - Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.
-- Use Screenshots -> Discord Posts or Reference Library Preview to open the centralized Phonetics.png reference when supported.
+- Use Screenshots -> Discord Posts to open the centralized Phonetics.png reference when supported.
 - Templates and screenshots are managed in Settings.
 
 ## 25. Ticker and Notifications
@@ -272,7 +271,7 @@ Update checks and app version info live in the app menu and Settings.
 ## 27. Troubleshooting
 Use the built-in troubleshooting paths before ending a session for technical reasons.
 - Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.
-- Use Reference Library Preview or the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.
+- Use the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.
 - Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.
 - If the app itself is misbehaving, restart it. Active session drafts are saved automatically.
 - When reporting an app issue, include the screen name, the action you took, and any visible error text.
