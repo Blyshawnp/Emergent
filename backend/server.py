@@ -3621,6 +3621,20 @@ def _verify_master_shared_sheets():
         logger.error("[SHEETS] Master shared sheet verification failed before access: %s", service_result.get("error"))
         return result
 
+    if service_result.get("appsScriptClient"):
+        try:
+            service_result["appsScriptClient"].ping()
+            for title in _shared_tracking_required_setup().keys():
+                result["tabs"].append({"tab": title, "ok": True})
+            for title, _ in GEMINI_PROMPT_TABS.values():
+                result["tabs"].append({"tab": title, "ok": True})
+            result["ok"] = True
+            return result
+        except Exception as exc:
+            logger.error("[SHEETS] Apps Script ping failed during verification: %s", exc)
+            result.update({"error": f"Apps Script ping failed: {exc}"})
+            return result
+
     try:
         sheets_api = service_result["service"].spreadsheets()
         metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
@@ -3720,6 +3734,7 @@ def _get_shared_tracking_sheet_service():
             "setup": _shared_tracking_manual_setup(),
         }
 
+    # 1. Primary path: Use direct Google Sheets API via service account credentials
     creds_path = _resolve_notification_service_account_file()
     service_account_email = _get_service_account_email()
     _record_google_sheet_auth_status("shared_service_resolved", ok=bool(creds_path), path=creds_path, error="" if creds_path else "No service account credentials found.")
@@ -3729,30 +3744,45 @@ def _get_shared_tracking_sheet_service():
         bool(service_account_email),
         creds_path or "",
     )
-    if not creds_path:
-        return {
-            "ok": False,
-            "error": "Google service account credentials are not configured, so shared candidate tracking cannot write to the master sheet.",
-            "sheet_id": sheet_id,
-            "serviceAccountEmail": service_account_email,
-            "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
-        }
 
-    try:
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
-    except Exception as exc:
-        return {"ok": False, "error": f"Google Sheets dependencies are unavailable: {exc}", "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+    if creds_path:
+        try:
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            creds = service_account.Credentials.from_service_account_file(str(creds_path), scopes=scopes)
+            service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            _record_google_sheet_auth_status("shared_service_ok", ok=True, path=creds_path)
+            logger.info("[SHARED] Using direct Google Sheets API via service account credentials.")
+            return {"ok": True, "service": service, "sheet_id": sheet_id, "serviceAccountEmail": service_account_email}
+        except Exception as exc:
+            _record_google_sheet_auth_status("shared_service_failed", ok=False, path=creds_path, error=exc)
+            logger.warning("[SHARED] Direct service account initialization failed: %s. Trying Apps Script fallback.", exc)
 
+    # 2. Fallback path: Check if Apps Script client is configured and enabled
     try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = service_account.Credentials.from_service_account_file(str(creds_path), scopes=scopes)
-        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-        _record_google_sheet_auth_status("shared_service_ok", ok=True, path=creds_path)
-        return {"ok": True, "service": service, "sheet_id": sheet_id, "serviceAccountEmail": service_account_email}
+        from services.apps_script_api import create_apps_script_sheet_service
+        apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
+        if apps_script_res.get("ok"):
+            logger.info("[SHARED] Using Apps Script API client fallback for shared tracking operations.")
+            client = apps_script_res["client"]
+            return {
+                "ok": True,
+                "appsScriptClient": client,
+                "sheet_id": sheet_id,
+                "serviceAccountEmail": "apps-script-api-endpoint",
+            }
     except Exception as exc:
-        _record_google_sheet_auth_status("shared_service_failed", ok=False, path=creds_path, error=exc)
-        return {"ok": False, "error": f"Unable to initialize Google Sheets credentials for shared tracking: {exc}", "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+        logger.warning("[SHARED] Failed to initialize Apps Script client fallback: %s", exc)
+
+    # 3. Both failed/unavailable
+    return {
+        "ok": False,
+        "error": "Google service account credentials are not configured or failed, and Apps Script fallback is unavailable.",
+        "sheet_id": sheet_id,
+        "serviceAccountEmail": service_account_email,
+        "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+    }
 
 
 def _shared_permission_hint(exc):
@@ -4329,7 +4359,7 @@ def _split_headset_brand_model(value, brand="", model=""):
 
 def _headset_review_schema_from_context(context):
     statuses = ((context or {}).get("setupStatus") or {}).get("statuses") or []
-    match = next((status for status in statuses if status.get("tab") == HEADSET_REVIEW_LOG_TAB), {})
+    match = next((status for status in statuses if status.get("tab") == HEADSET_REVIEW_LOG_TAB and "schema" in status), {})
     return match.get("schema") or "review"
 
 
@@ -5306,7 +5336,7 @@ def _sam_master_sheet_context():
         return service_result
     return {
         "ok": True,
-        "service": service_result["service"],
+        "service": service_result.get("service"),
         "appsScriptClient": service_result.get("appsScriptClient"),
         "sheet_id": service_result["sheet_id"],
         "serviceAccountEmail": service_result.get("serviceAccountEmail") or _get_service_account_email(),
@@ -8870,7 +8900,13 @@ def _normalize_notification_date(value, end_of_day=False):
         return None
 
     parsed = None
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+    if "T" in text:
+        try:
+            clean_date = text.split("T")[0]
+            parsed = datetime.strptime(clean_date, "%Y-%m-%d")
+        except ValueError:
+            parsed = None
+    elif re.match(r"^\d{4}-\d{2}-\d{2}$", text):
         try:
             parsed = datetime.strptime(text, "%Y-%m-%d")
         except ValueError:
@@ -8895,6 +8931,14 @@ def _normalize_notification_time(value):
     text = _normalize_notification_text(value).upper().replace(".", "").strip()
     if not text:
         return None
+
+    if "T" in text:
+        try:
+            time_part = text.split("T")[1].split(".")[0].split("Z")[0].strip()
+            parsed = datetime.strptime(time_part, "%H:%M:%S")
+            return parsed.hour, parsed.minute, parsed.second
+        except Exception:
+            pass
 
     for fmt in ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S"):
         try:

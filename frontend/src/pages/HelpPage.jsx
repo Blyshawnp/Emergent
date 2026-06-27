@@ -944,6 +944,73 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
         </div>
 
         <aside className="help-support-column">
+          <div className="card help-support-card">
+            <div className="help-card-eyebrow">Support</div>
+            <h2>Support & Troubleshooting</h2>
+            
+            <div className="help-troubleshooting-section" style={{ marginTop: 12, marginBottom: 18, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ background: 'rgba(239, 68, 68, 0.08)', borderLeft: '3px solid #ef4444', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
+                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>Google Sheet Connection</strong>
+                <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
+                  Ensure <code>google-service-account.json</code> is located in your app's <code>backend/config/</code> resources folder. Without it, the app will fall back to cache/default data.
+                </span>
+              </div>
+              <div style={{ background: 'rgba(59, 130, 246, 0.08)', borderLeft: '3px solid #3b82f6', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
+                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>MTS Ticker Fallback</strong>
+                <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
+                  Verify that the spreadsheet URLs and sheet IDs in <code>runtime_config.json</code> match your Google Sheets setup.
+                </span>
+              </div>
+              <div style={{ background: 'rgba(16, 185, 129, 0.08)', borderLeft: '3px solid #10b981', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
+                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>App Support Form</strong>
+                <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
+                  For feature requests, bug reports, or account overrides, please submit a ticket using the button below or visit the Discord Tester Room.
+                </span>
+              </div>
+            </div>
+
+            <p className="help-card-body" style={{ marginBottom: 18 }}>
+              {support.intro || `Mock Testing Suite version ${version}. Include the screen, action, and visible error details when reporting issues.`}
+            </p>
+            <div className="help-support-actions" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                type="button"
+                className="btn btn-warning"
+                style={{ width: '100%', fontWeight: 800 }}
+                onClick={handleRequestSupport}
+                data-testid="support-request-btn"
+              >
+                Request App Support
+              </button>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <a
+                  href={`mailto:${support.email || 'blyshawnp@gmail.com'}?subject=Mock%20Testing%20Suite%20Support`}
+                  className="btn btn-primary"
+                  style={{ textDecoration: 'none', flex: 1, textAlign: 'center' }}
+                  data-testid="support-email"
+                >
+                  Send Email
+                </a>
+                <a
+                  href={support.discord_url || 'https://discord.com/users/shawnbly'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn"
+                  style={{ textDecoration: 'none', background: '#5865F2', color: 'white', flex: 1, textAlign: 'center' }}
+                  data-testid="support-discord"
+                >
+                  Discord
+                </a>
+              </div>
+            </div>
+            <div className="help-about-block" style={{ marginTop: 20, borderTop: '1px solid var(--border-subtle)', paddingTop: 14 }}>
+              <p><strong>Version:</strong> {version}</p>
+              <p><strong>Email:</strong> {support.email || 'blyshawnp@gmail.com'}</p>
+              <p><strong>Discord:</strong> {support.discord_name || 'shawnbly'}</p>
+              <p><strong>Support note:</strong> {support.footer || 'Include the page name, action taken, and any visible error details.'}</p>
+            </div>
+          </div>
+
           <div className="card help-support-card" id="faq">
             <div className="help-card-eyebrow">FAQ</div>
             <h2>Common Questions</h2>
@@ -965,48 +1032,6 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-
-          <div className="card help-support-card">
-            <div className="help-card-eyebrow">Support</div>
-            <h2>Support and About</h2>
-            <p className="help-card-body">
-              {support.intro || `Mock Testing Suite version ${version}. Include the screen, action, and visible error details when reporting issues.`}
-            </p>
-            <div className="help-support-actions">
-              <a
-                href={`mailto:${support.email || 'blyshawnp@gmail.com'}?subject=Mock%20Testing%20Suite%20Support`}
-                className="btn btn-primary"
-                style={{ textDecoration: 'none' }}
-                data-testid="support-email"
-              >
-                Send Email
-              </a>
-              <a
-                href={support.discord_url || 'https://discord.com/users/shawnbly'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn"
-                style={{ textDecoration: 'none', background: '#5865F2', color: 'white' }}
-                data-testid="support-discord"
-              >
-                Message on Discord
-              </a>
-              <button
-                type="button"
-                className="btn btn-warning"
-                onClick={handleRequestSupport}
-                data-testid="support-request-btn"
-              >
-                Request App Support
-              </button>
-            </div>
-            <div className="help-about-block">
-              <p><strong>Version:</strong> {version}</p>
-              <p><strong>Email:</strong> {support.email || 'blyshawnp@gmail.com'}</p>
-              <p><strong>Discord:</strong> {support.discord_name || 'shawnbly'}</p>
-              <p><strong>Support note:</strong> {support.footer || 'Include the page name, action taken, and any visible error details.'}</p>
             </div>
           </div>
         </aside>

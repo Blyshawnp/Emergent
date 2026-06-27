@@ -1932,3 +1932,74 @@ body.notification-manager-body {
     min-width: 300px;
   }
 }
+
+/* Custom Exit Confirmation Modal Styles */
+.sam-exit-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 14, 0.90);
+  backdrop-filter: blur(8px);
+}
+
+.sam-exit-modal {
+  background: #0f172a;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 16px;
+  padding: 32px;
+  width: 460px;
+  text-align: center;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  animation: samExitIn 200ms ease-out forwards;
+}
+
+@keyframes samExitIn {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.sam-exit-icon {
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.sam-exit-icon svg {
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.3));
+}
+
+.sam-exit-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #f8fafc;
+  margin-bottom: 12px;
+}
+
+.sam-exit-body {
+  font-size: 14px;
+  color: #94a3b8;
+  line-height: 1.6;
+  margin-bottom: 28px;
+}
+
+.sam-exit-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
+
+.sam-exit-buttons .nm-btn {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 700;
+}

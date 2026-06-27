@@ -1604,6 +1604,18 @@ export default function NotificationManagerApp() {
   const [statusModal, setStatusModal] = useState(null);
   const [confirmModal, setConfirmModal] = useState(null);
   const confirmResolverRef = useRef(null);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const exitConfirmResolverRef = useRef(null);
+  const requestExitConfirmation = useCallback(() => new Promise((resolve) => {
+    exitConfirmResolverRef.current = resolve;
+    setShowExitConfirm(true);
+  }), []);
+  const resolveExitConfirm = useCallback((value) => {
+    const resolver = exitConfirmResolverRef.current;
+    exitConfirmResolverRef.current = null;
+    setShowExitConfirm(false);
+    if (resolver) resolver(value);
+  }, []);
   const [tutorialStep, setTutorialStep] = useState(null);
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
@@ -2112,6 +2124,11 @@ export default function NotificationManagerApp() {
     }
     return window.electronAPI.onAppEvent(async (type, payload) => {
       try {
+        if (type === 'app:confirm-quit') {
+          const confirmed = await requestExitConfirmation();
+          await window.electronAPI?.respondToQuitConfirmation?.(confirmed);
+          return;
+        }
         if (type === 'menu:about') {
           if (payload?.version) setAppVersion(payload.version);
           setHelpOpen(true);
@@ -3097,6 +3114,38 @@ export default function NotificationManagerApp() {
           </div>
         </div>
       ) : null}
+      {showExitConfirm && (
+        <div className="sam-exit-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) resolveExitConfirm(false); }}>
+          <section className="sam-exit-modal" role="dialog" aria-modal="true">
+            <div className="sam-exit-icon">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </div>
+            <h2 className="sam-exit-title">Exit Smart Alert Manager</h2>
+            <p className="sam-exit-body">Are you sure you want to exit Smart Alert Manager?</p>
+            <div className="sam-exit-buttons">
+              <button
+                type="button"
+                className="nm-btn nm-btn-secondary"
+                onClick={() => resolveExitConfirm(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="nm-btn nm-btn-danger"
+                style={{ backgroundColor: '#ef4444', borderColor: '#ef4444' }}
+                onClick={() => resolveExitConfirm(true)}
+              >
+                Exit App
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 {
   "appId": "com.acddirect.mocktestingsuite.notificationmanager",
-  "productName": "Sam",
-  "artifactName": "Sam-Setup-${version}.${ext}",
+  "productName": "Smart Alert Manager",
+  "artifactName": "Smart-Alert-Manager-Setup-${version}.${ext}",
   "copyright": "Copyright © 2026 Shawn P. Bly",
   "directories": {
     "output": "dist-notification-manager"
@@ -42,7 +42,8 @@
       "to": "backend/config",
       "filter": [
         "**/runtime_config.json",
-        "**/apps-script-api.json"
+        "**/apps-script-api.json",
+        "**/google-service-account.json"
       ]
     },
     {
@@ -88,6 +89,6 @@
     "installerHeaderIcon": "assets/notification-taskbar.ico",
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "Sam"
+    "shortcutName": "Smart Alert Manager"
   }
 }

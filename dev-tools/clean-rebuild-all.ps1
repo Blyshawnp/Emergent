@@ -15,7 +15,7 @@ $samProdDir = Join-Path $prodDir 'ADMIN ONLY - SAM 1.0.1'
 $mtsDist = Join-Path $desktopDir 'dist'
 $samDist = Join-Path $desktopDir 'dist-notification-manager'
 $mtsInstaller = 'Mock-Testing-Suite-Setup-1.0.1.exe'
-$samInstaller = 'Sam-Setup-1.0.1.exe'
+$samInstaller = 'Smart-Alert-Manager-Setup-1.0.1.exe'
 $repoPython = Join-Path $rootDir '.venv\Scripts\python.exe'
 if (Test-Path -LiteralPath $repoPython) {
   $env:MTS_BUILD_PYTHON = $repoPython
@@ -221,9 +221,18 @@ function Copy-RuntimeConfig {
   New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
   $runtimeSource = Join-Path $backendDir 'config\runtime_config.json'
   $apiSource = Join-Path $backendDir 'config\apps-script-api.json'
+  $serviceAccountSource = Join-Path $backendDir 'config\google-service-account.json'
   Copy-FileChecked $runtimeSource (Join-Path $DestinationDir 'runtime_config.json')
   Copy-FileChecked $apiSource (Join-Path $DestinationDir 'apps-script-api.json')
-  foreach ($legacyName in @('google-service-account.json', 'service-account.json')) {
+  
+  if (Test-Path -LiteralPath $serviceAccountSource) {
+    Copy-FileChecked $serviceAccountSource (Join-Path $DestinationDir 'google-service-account.json')
+    Write-Log "Copied packaged service account to $Label."
+  } else {
+    Write-Log "Warning: Packaged service account not found at $serviceAccountSource."
+  }
+
+  foreach ($legacyName in @('service-account.json')) {
     $legacyPath = Join-Path $DestinationDir $legacyName
     if (Test-Path -LiteralPath $legacyPath) {
       Remove-Item -LiteralPath $legacyPath -Force
@@ -384,7 +393,7 @@ if ($Mode -ne 'sam') {
 if ($Mode -ne 'mts') {
   Section 'PACKAGING SAM SMART ALERT MANAGER'
   Run-Command 'npx electron-builder --win --x64 --config notification-manager-builder.json' 'npx electron-builder --win --x64 --config notification-manager-builder.json' $desktopDir
-  Verify-Path (Join-Path $samDist 'win-unpacked\Sam.exe') 'SAM win-unpacked executable'
+  Verify-Path (Join-Path $samDist 'win-unpacked\Smart Alert Manager.exe') 'SAM win-unpacked executable'
   Verify-OptionalPath (Join-Path $samDist 'win-unpacked\resources\backend\drivers\chromedriver.exe') 'SAM backend chromedriver.exe'
   Verify-OptionalPath (Join-Path $samDist 'win-unpacked\resources\backend\drivers\msedgedriver.exe') 'SAM backend msedgedriver.exe'
   Verify-Path (Join-Path $samDist $samInstaller) 'SAM installer'
@@ -415,6 +424,35 @@ if ($Mode -ne 'mts') {
   Copy-FileChecked (Join-Path $samDist $samInstaller) (Join-Path $samProdDir $samInstaller)
   Copy-FileChecked (Join-Path $samDist "$samInstaller.blockmap") (Join-Path $samProdDir "$samInstaller.blockmap")
   Write-HashFile (Join-Path $samProdDir $samInstaller) (Join-Path $samProdDir 'NOTIFICATION-MANAGER-HASH.txt') $samInstaller
+  
+  # Copy installers to ADMIN and tester folders if they exist
+  $releaseDirs = @(
+    (Join-Path $rootDir 'ADMIN'),
+    (Join-Path $rootDir 'Admin'),
+    (Join-Path $rootDir 'tester'),
+    (Join-Path $rootDir 'Testers')
+  )
+  foreach ($dir in $releaseDirs) {
+    if (Test-Path -LiteralPath $dir) {
+      Write-Log "Cleaning existing installers in release directory: $dir"
+      Get-ChildItem -LiteralPath $dir -Filter "*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
+      
+      if ($Mode -ne 'sam') {
+        $srcMts = Join-Path $mtsDist $mtsInstaller
+        if (Test-Path -LiteralPath $srcMts) {
+          Copy-Item -LiteralPath $srcMts -Destination (Join-Path $dir $mtsInstaller) -Force
+          Write-Log "Copied MTS installer to $dir"
+        }
+      }
+      if ($Mode -ne 'mts') {
+        $srcSam = Join-Path $samDist $samInstaller
+        if (Test-Path -LiteralPath $srcSam) {
+          Copy-Item -LiteralPath $srcSam -Destination (Join-Path $dir $samInstaller) -Force
+          Write-Log "Copied SAM installer to $dir"
+        }
+      }
+    }
+  }
 }
 
 Section 'VERIFYING OUTPUT HASHES'
