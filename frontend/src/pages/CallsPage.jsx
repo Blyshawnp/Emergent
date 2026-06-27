@@ -2,19 +2,17 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
-import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
-import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
+import { formatDonationAmountLabel, getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
   { id: 'c-dontask', label: "Don't Ask, Just Verify Address and Phone Number", helper: 'Existing member already provided address and phone number' },
   {
     id: 'c-verify',
     label: 'Verification',
-    children: ['Name', 'Address', 'Phone', 'Email', 'Card/EFT', 'Phonetics for Sound Alike Letters'],
+    children: ['Name', 'Address', 'Phone', 'Email', 'Card/EFT'],
   },
-  { id: 'c-phonetics', label: 'Phonetics table provided to candidate' },
   { id: 'c-verbatim', label: 'Read script verbatim', helper: 'No adlibbing or skipping sections' },
   { id: 'c-nav', label: 'Use effective script navigation', children: ['Scroll down to avoid missing parts of the script', 'Use the Back and Next buttons and not the Icons'] },
   { id: 'c-search-name', label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
@@ -22,7 +20,6 @@ const DEFAULT_CALL_COACHING = [
   { id: 'c-other', label: 'Other' },
 ];
 
-const PHONETICS_LABEL_RE = /phonetics/i;
 const OTHER_COACHING_RE = /^other$/i;
 
 function moveOtherCoachingLast(items = []) {
@@ -48,26 +45,23 @@ function moveOtherCoachingLast(items = []) {
 
 function getCallCoachingForDisplay(items = []) {
   const source = Array.isArray(items) && items.length ? items : DEFAULT_CALL_COACHING;
-  let phoneticsItem = null;
   const normalized = [];
 
   source.forEach((item) => {
     if (!item || !item.label) return;
     const label = String(item.label || '');
-    if (PHONETICS_LABEL_RE.test(label) && !/verification/i.test(label)) {
-      phoneticsItem = phoneticsItem || { ...item, children: undefined };
+    if (/phonetics/i.test(label)) {
       return;
     }
-    normalized.push({ ...item });
+    normalized.push({
+      ...item,
+      children: Array.isArray(item.children)
+        ? item.children.filter((child) => !/phonetics/i.test(String(child || '')))
+        : item.children,
+    });
   });
 
-  const topLevelPhonetics = phoneticsItem || { id: 'c-phonetics', label: 'Phonetics table provided to candidate' };
-  const verifyIndex = normalized.findIndex(item => /verification/i.test(String(item.label || '')));
-  if (verifyIndex >= 0) {
-    normalized.splice(verifyIndex + 1, 0, topLevelPhonetics);
-    return moveOtherCoachingLast(normalized);
-  }
-  return moveOtherCoachingLast([topLevelPhonetics, ...normalized]);
+  return moveOtherCoachingLast(normalized);
 }
 
 const DEFAULT_CALL_FAILS = [
@@ -382,13 +376,6 @@ export default function CallsPage({ onNavigate, navigationState }) {
   const shows = settings.shows || defaults.shows || [];
   const callCoaching = getCallCoachingForDisplay(settings.call_coaching || defaults.call_coaching || DEFAULT_CALL_COACHING);
   const callFails = settings.call_fails || defaults.call_fails || DEFAULT_CALL_FAILS;
-  const screenshotItems = useMemo(
-    () => [
-      ...(Array.isArray(settings.discord_screenshots) ? settings.discord_screenshots : []),
-      ...(Array.isArray(defaults.discord_screenshots) ? defaults.discord_screenshots : []),
-    ],
-    [settings.discord_screenshots, defaults.discord_screenshots]
-  );
   const callers = useMemo(() => getCallersForType(callSetup.type, settings, defaults), [callSetup.type, settings, defaults]);
   useEffect(() => {
     if (!callers.length) return;
@@ -610,7 +597,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
           </div>
           <div className="form-row"><label>Donation</label>
             <select value={callSetup.donation} onChange={e => setCallSetup(p => ({ ...p, donation: e.target.value }))} data-testid="call-donation">
-              {donations.map(d => <option key={d}>{d}</option>)}
+              {donations.map(d => <option key={d} value={d}>{formatDonationAmountLabel(d)}</option>)}
             </select>
           </div>
         </div>
@@ -636,7 +623,6 @@ export default function CallsPage({ onNavigate, navigationState }) {
       <div className="card" style={{ marginBottom: 16 }} data-tour="calls-coaching">
         <div className="coaching-card-header">
           <h3>Coaching Given</h3>
-          <PhoneticsTableButton screenshots={screenshotItems} />
         </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <CoachingGrid items={callCoaching} checked={coaching} onChange={setCoaching} />

@@ -20,7 +20,6 @@ Master source:
    - `Phone`
    - `Email`
    - `Card/EFT`
-   - `Phonetics for Sound Alike Letters`
 5. `Discord permission`
    Helper:
    - `Ask explicit permission to transfer via Discord`
@@ -30,4 +29,10 @@ Master source:
 7. `Screenshots/Discord Chat`
    Helper:
    - `Coached with standard instructions and screenshots`
-8. `Other`
+8. `Search name for every call`
+   Helper:
+   - `Search the caller's name on every call to avoid duplicate member records.`
+9. `Do not volunteer information`
+   Helper:
+   - `Do not verify details the member has not provided, such as an email address.`
+10. `Other`

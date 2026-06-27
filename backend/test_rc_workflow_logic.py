@@ -129,10 +129,20 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
 
     def test_screenshot_defaults_include_release_candidate_assets(self):
         content = server._load_local_defaults_content()
-        titles = {item.get("title") for item in content.get("discord_screenshots") or []}
+        screenshots = content.get("discord_screenshots") or []
+        titles = {item.get("title") for item in screenshots}
         self.assertTrue({
             "Script Disposition", "Click Transfer", "Queue", "Transfer", "Station Settings", "Station Settings 2",
         }.issubset(titles))
+        headset_connections = {
+            item.get("title"): item
+            for item in screenshots
+            if item.get("category") == "Headset Connections"
+        }
+        self.assertEqual(headset_connections.get("USB Connection", {}).get("image_url"), "/usb.png")
+        self.assertEqual(headset_connections.get("3.5 mm connections", {}).get("image_url"), "/3.5mm.png")
+        self.assertTrue((server.ROOT_DIR.parent / "frontend" / "public" / "usb.png").is_file())
+        self.assertTrue((server.ROOT_DIR.parent / "frontend" / "public" / "3.5mm.png").is_file())
 
     def test_candidate_matching_and_visibility(self):
         import datetime

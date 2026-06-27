@@ -40,7 +40,7 @@ Use this checklist after building packaged MTS and SAM from the integration bran
 - Change Card Option and EFT Option on Call 1, then start Call 2 and confirm both reset to default.
 - Change Card Option and EFT Option on Call 2, then start Call 3 and confirm both reset to default.
 - Start Sup Transfer and confirm payment dropdowns start at default and remain visible.
-- Confirm Phonetics Table button is visibly styled and opens the image.
+- Confirm the centralized Phonetics reference opens from Discord Posts/Screenshots.
 
 ## Fail And Coaching Checks
 

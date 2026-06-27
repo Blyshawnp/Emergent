@@ -10,23 +10,27 @@ Master source:
    Children:
    - `For Current/Existing Donors`
    - `After donation amount is given`
-2. `Phonetics table provided to candidate`
-3. `Don't Ask, Just Verify Address and Phone Number`
+2. `Don't Ask, Just Verify Address and Phone Number`
    Helper:
    - `Existing member already provided address and phone number`
-4. `Verification`
+3. `Verification`
    Children:
    - `Name`
    - `Address`
    - `Phone`
    - `Email`
    - `Card/EFT`
-   - `Phonetics for Sound Alike Letters`
-5. `Read script verbatim`
+4. `Read script verbatim`
    Helper:
    - `No adlibbing or skipping sections`
-6. `Use effective script navigation`
+5. `Use effective script navigation`
    Children:
    - `Scroll down to avoid missing parts of the script`
    - `Use the Back and Next buttons and not the Icons`
-7. `Other`
+6. `Search name for every call`
+   Helper:
+   - `Search the caller's name on every call to avoid duplicate member records.`
+7. `Do not volunteer information`
+   Helper:
+   - `Do not verify details the member has not provided, such as an email address.`
+8. `Other`

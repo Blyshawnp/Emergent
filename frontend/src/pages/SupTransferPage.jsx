@@ -2,7 +2,6 @@ import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useR
 import api, { findDiscordTemplateMessage } from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
-import PhoneticsTableButton from '../components/PhoneticsTableButton';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
 import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
@@ -10,7 +9,7 @@ const DEFAULT_SUP_COACHING = [
   { label: 'Minimize dead air', helper: 'Maintain engagement throughout hold and transfer' },
   { label: 'Queue Not Changed', helper: 'Did not change queue to ACD Direct Supervisor' },
   { label: 'Caller Placed On Hold' },
-  { label: 'Verification', children: ['Name', 'Address', 'Phone', 'Email', 'Card/EFT', 'Phonetics for Sound Alike Letters'] },
+  { label: 'Verification', children: ['Name', 'Address', 'Phone', 'Email', 'Card/EFT'] },
   { label: 'Discord permission', helper: 'Ask explicit permission to transfer via Discord' },
   { label: 'Did not notify caller of transfer', helper: 'Notify caller before transferring' },
   { label: 'Screenshots/Discord Chat', helper: 'Coached with standard instructions and screenshots' },
@@ -41,6 +40,12 @@ function getSupCoachingForDisplay(items = []) {
     if (key && seen.has(key)) return;
     if (key) seen.add(key);
     const normalized = { ...item };
+    if (/phonetics/i.test(key)) {
+      return;
+    }
+    if (Array.isArray(normalized.children)) {
+      normalized.children = normalized.children.filter((child) => !/phonetics/i.test(String(child || '')));
+    }
     if (key === 'other') {
       otherItems.push(normalized);
     } else {
@@ -199,13 +204,6 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   const supCoachingSplit = Math.ceil(supCoaching.length / 2);
   const supFails = settings.sup_fails || defaults.sup_fails || DEFAULT_SUP_FAILS;
   const supReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;
-  const screenshotItems = useMemo(
-    () => [
-      ...(Array.isArray(settings.discord_screenshots) ? settings.discord_screenshots : []),
-      ...(Array.isArray(defaults.discord_screenshots) ? defaults.discord_screenshots : []),
-    ],
-    [settings.discord_screenshots, defaults.discord_screenshots]
-  );
   const callers = useMemo(() => {
     const allCallers = [
       ...(settings.donors_new || defaults.donors_new || []),
@@ -568,7 +566,6 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       <div className="card" style={{ marginBottom: 16 }} data-tour="sup-coaching">
         <div className="coaching-card-header">
           <h3>Coaching Given</h3>
-          <PhoneticsTableButton screenshots={screenshotItems} />
         </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
         <div className="coaching-grid">

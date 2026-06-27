@@ -373,9 +373,94 @@
       "category": "Uncategorized"
     },
     {
+      "title": "Discord Audio",
+      "image_url": "/Discord-Audio.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Discord Input",
+      "image_url": "/Discord-Input.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Discord Output",
+      "image_url": "/Discord-Output.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Discord Share #1",
+      "image_url": "/Discord-Share-1.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Discord Share #2",
+      "image_url": "/Discord-Share-2.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Discord Share #3",
+      "image_url": "/Discord-Share-3.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Discord Instructions",
+      "image_url": "/Discord-Instructions.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "DTE Disposition",
+      "image_url": "/DTE-Disposition.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Phonetics Table",
+      "image_url": "/Phonetics.png",
+      "category": "Uncategorized"
+    },
+    {
       "title": "DTE Disposition Box",
       "image_url": "/DTE-Disposition-Box.png",
       "category": "Uncategorized"
+    },
+    {
+      "title": "Script Disposition",
+      "image_url": "/script-disposition.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Click Transfer",
+      "image_url": "/click-transfer.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Queue",
+      "image_url": "/queue.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Transfer",
+      "image_url": "/Transfer.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Station Settings",
+      "image_url": "/station-settings.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "Station Settings 2",
+      "image_url": "/station-settings-2.png",
+      "category": "Uncategorized"
+    },
+    {
+      "title": "USB Connection",
+      "image_url": "/usb.png",
+      "category": "Headset Connections"
+    },
+    {
+      "title": "3.5 mm connections",
+      "image_url": "/3.5mm.png",
+      "category": "Headset Connections"
     }
   ],
   "call_coaching": [
@@ -386,10 +471,6 @@
         "For Current/Existing Donors",
         "After donation amount is given"
       ]
-    },
-    {
-      "id": "c-phonetics",
-      "label": "Phonetics table provided to candidate"
     },
     {
       "id": "c-dontask",
@@ -404,8 +485,7 @@
         "Address",
         "Phone",
         "Email",
-        "Card/EFT",
-        "Phonetics for Sound Alike Letters"
+        "Card/EFT"
       ]
     },
     {
@@ -465,8 +545,7 @@
         "Address",
         "Phone",
         "Email",
-        "Card/EFT",
-        "Phonetics for Sound Alike Letters"
+        "Card/EFT"
       ]
     },
     {

@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+import asyncio
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from unittest import mock
@@ -41,6 +42,7 @@ class AppsScriptApiTests(unittest.TestCase):
             "getSamAdmins",
             "getTickerMessages",
             "getCandidateTracking",
+            "getSharedCandidates",
             "getSheetMetadata",
             "getSheetRange",
             "updateSheetRange",
@@ -50,6 +52,14 @@ class AppsScriptApiTests(unittest.TestCase):
             "batchUpdateSpreadsheet",
             "getSettings",
             "getNotificationRecipients",
+            "approveHeadset",
+            "denyHeadset",
+            "archiveHeadsetReview",
+            "deleteHeadsetReview",
+            "addNotification",
+            "updateNotification",
+            "disableNotification",
+            "deleteNotification",
         ):
             self.assertIn(f"case '{action}'", source)
         self.assertNotIn("BEGIN PRIVATE KEY", source)
@@ -395,6 +405,95 @@ class AppsScriptApiTests(unittest.TestCase):
         self.assertEqual(snapshot["pending"][0]["pending_id"], "pending-123")
         self.assertEqual(snapshot["pending"][0]["status"], "pending")
         self.assertEqual(snapshot["pending"][0]["created_at"], "2026-06-24T02:00:00Z")
+
+    def test_candidate_admin_action_posts_operation_to_apps_script(self):
+        mock_client = mock.MagicMock()
+        mock_client.post.return_value = {"updated": True}
+
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        with mock.patch("server._shared_sheet_context") as mock_ctx:
+            mock_ctx.return_value = {
+                "ok": True,
+                "appsScriptClient": mock_client,
+                "sheet_id": "test-sheet-id",
+            }
+            result = server._shared_admin_candidate_action({
+                "action": "archive_candidate",
+                "candidate_name": "Lisa Rusie",
+                "session_id": "session-1",
+            })
+
+        self.assertTrue(result["ok"])
+        mock_client.post.assert_called_once()
+        action, payload = mock_client.post.call_args.args
+        self.assertEqual(action, "updateCandidateTracking")
+        self.assertEqual(payload["operation"], "archive_candidate")
+        self.assertNotIn("action", payload)
+
+    def test_apps_script_ticker_rows_are_used_for_notification_groups(self):
+        mock_client = mock.MagicMock()
+        mock_client.get.return_value = {
+            "rows": [{
+                "Enabled": "TRUE",
+                "ID": "live-row",
+                "Type": "info",
+                "Title": "Live",
+                "Message": "Live sheet ticker",
+                "ShowTicker": "TRUE",
+                "ShowPopup": "FALSE",
+                "ShowBanner": "FALSE",
+                "Persistent": "TRUE",
+            }]
+        }
+
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        result = server._read_sam_notification_items_via_apps_script(mock_client, "sheet-id")
+        groups = server._group_notification_manager_items(result["items"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(groups["tickerMessages"][0]["message"], "Live sheet ticker")
+        mock_client.get.assert_called_once_with("getTickerMessages", {})
+
+    def test_ticker_endpoint_returns_live_apps_script_rows_before_fallback(self):
+        mock_client = mock.MagicMock()
+        mock_client.get.return_value = {
+            "rows": [{
+                "Enabled": "TRUE",
+                "ID": "live-row",
+                "Type": "info",
+                "Title": "Live",
+                "Message": "Live endpoint ticker",
+                "ShowTicker": "TRUE",
+                "ShowPopup": "FALSE",
+                "ShowBanner": "FALSE",
+                "Persistent": "TRUE",
+            }]
+        }
+
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
+        server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
+        with mock.patch("server._sam_master_sheet_context") as mock_ctx:
+            mock_ctx.return_value = {
+                "ok": True,
+                "appsScriptClient": mock_client,
+                "sheet_id": "test-sheet-id",
+            }
+            result = asyncio.run(server.get_ticker())
+
+        self.assertEqual(result["messages"], ["Live: Live endpoint ticker"])
+        self.assertFalse(result["fallback"])
+        self.assertEqual(result["source"], "google")
+        mock_client.get.assert_called_once_with("getTickerMessages", {})
 
 
 if __name__ == "__main__":

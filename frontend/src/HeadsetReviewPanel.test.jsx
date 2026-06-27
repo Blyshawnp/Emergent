@@ -50,6 +50,7 @@ test('Look Up opens the required Google query and presents all follow-up decisio
     onRefresh: jest.fn(),
     onDecision,
     onStatus: jest.fn(),
+    onConfirm: jest.fn().mockResolvedValue(true),
   });
 
   expect(view.container.textContent).toContain('Tester One');
@@ -69,7 +70,14 @@ test('Look Up opens the required Google query and presents all follow-up decisio
     buttonByText(view.container, 'Approve Headset').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
-  expect(onDecision).toHaveBeenCalledWith({ action: 'approve', brand: 'Acme', model: 'USB 100' });
+  expect(onDecision).toHaveBeenCalledWith({
+    action: 'approve',
+    brand: 'Acme',
+    model: 'USB 100',
+    review_id: '',
+    submitted_date: '2026-06-23T12:00:00Z',
+    tester: 'Tester One',
+  });
   await view.unmount();
 });
 
@@ -86,6 +94,7 @@ test('tabs allow approved headsets to be denied with a reason and denied headset
     onRefresh: jest.fn(),
     onDecision,
     onStatus: jest.fn(),
+    onConfirm: jest.fn().mockResolvedValue(true),
   });
 
   await act(async () => buttonByText(view.container, 'Approved Headsets (1)').dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -105,6 +114,9 @@ test('tabs allow approved headsets to be denied with a reason and denied headset
     model: 'A1',
     reason: 'Headset does not connect via USB',
     note: '',
+    review_id: '',
+    submitted_date: '',
+    tester: '',
   });
 
   await act(async () => buttonByText(view.container, 'Denied Headsets (1)').dispatchEvent(new MouseEvent('click', { bubbles: true })));
@@ -112,6 +124,13 @@ test('tabs allow approved headsets to be denied with a reason and denied headset
     buttonByText(view.container, 'Approve').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
-  expect(onDecision).toHaveBeenCalledWith({ action: 'approve', brand: 'Blocked', model: 'B1' });
+  expect(onDecision).toHaveBeenCalledWith({
+    action: 'approve',
+    brand: 'Blocked',
+    model: 'B1',
+    review_id: '',
+    submitted_date: '',
+    tester: '',
+  });
   await view.unmount();
 });

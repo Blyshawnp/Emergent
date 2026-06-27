@@ -32,6 +32,11 @@ if exist "desktop\dist" rmdir /s /q "desktop\dist"
 
 echo.
 echo Finding Python...
+if exist ".venv\Scripts\python.exe" (
+  set "PY=%CD%\.venv\Scripts\python.exe"
+  goto :python_found
+)
+
 where py >nul 2>nul
 if %errorlevel%==0 (
   py -3.11 --version >nul 2>nul
@@ -70,17 +75,24 @@ if not exist ".venv-backend-build\Scripts\python.exe" (
 call ".venv-backend-build\Scripts\activate.bat"
 if errorlevel 1 goto :fail
 
+%PY% -c "import PyInstaller" >nul 2>nul
+if %errorlevel%==0 (
+  echo Python build dependencies already available.
+  goto :backend_deps_ready
+)
+
 echo Upgrading Python build tools...
-python -m pip install --upgrade pip setuptools wheel
+%PY% -m pip install --upgrade pip setuptools wheel
 if errorlevel 1 goto :fail
 
 echo Installing backend dependencies and PyInstaller...
-python -m pip install -r backend\requirements.txt pyinstaller
+%PY% -m pip install -r backend\requirements.txt pyinstaller
 if errorlevel 1 goto :fail
 
+:backend_deps_ready
 echo Building backend.exe...
 pushd backend || goto :fail
-python -m PyInstaller --noconfirm backend.spec
+%PY% -m PyInstaller --noconfirm backend.spec
 if errorlevel 1 (
   popd
   goto :fail
@@ -118,7 +130,7 @@ copy /y "%ROOT%\backend\config\apps-script-api.json" "%MTS_RUNTIME_CONFIG_DIR%\a
 if errorlevel 1 goto :fail
 if exist "%MTS_RUNTIME_CONFIG_DIR%\google-service-account.json" del /q "%MTS_RUNTIME_CONFIG_DIR%\google-service-account.json"
 if exist "%MTS_RUNTIME_CONFIG_DIR%\service-account.json" del /q "%MTS_RUNTIME_CONFIG_DIR%\service-account.json"
-python -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); u=str(d.get('base_url') or ''); t=str(d.get('token') or ''); sys.exit(0 if d.get('enabled') is True and u.startswith('https://script.google.com/macros/s/') and u.endswith('/exec') and t else 2)" "%MTS_RUNTIME_CONFIG_DIR%\apps-script-api.json"
+%PY% -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); u=str(d.get('base_url') or ''); t=str(d.get('token') or ''); sys.exit(0 if d.get('enabled') is True and u.startswith('https://script.google.com/macros/s/') and u.endswith('/exec') and t else 2)" "%MTS_RUNTIME_CONFIG_DIR%\apps-script-api.json"
 if errorlevel 1 (
   echo Runtime Apps Script API config verification failed.
   goto :fail

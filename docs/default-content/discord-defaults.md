@@ -115,10 +115,44 @@ Transfer was not successful. Review steps and let me know when ready.
 
 1. `Welcome New Agent` -> `/welcome-new-agent.png`
 2. `Welcome to Stars` -> `/welcome-to-stars.png`
+3. `Discord Audio` -> `/Discord-Audio.png`
+4. `Discord Input` -> `/Discord-Input.png`
+5. `Discord Output` -> `/Discord-Output.png`
+6. `Discord Share #1` -> `/Discord-Share-1.png`
+7. `Discord Share #2` -> `/Discord-Share-2.png`
+8. `Discord Share #3` -> `/Discord-Share-3.png`
+9. `Discord Instructions` -> `/Discord-Instructions.png`
+10. `DTE Disposition` -> `/DTE-Disposition.png`
+11. `Phonetics Table` -> `/Phonetics.png`
+12. `DTE Disposition Box` -> `/DTE-Disposition-Box.png`
+13. `Script Disposition` -> `/script-disposition.png`
+14. `Click Transfer` -> `/click-transfer.png`
+15. `Queue` -> `/queue.png`
+16. `Transfer` -> `/Transfer.png`
+17. `Station Settings` -> `/station-settings.png`
+18. `Station Settings 2` -> `/station-settings-2.png`
+19. `USB Connection` -> `/usb.png` (`Headset Connections`)
+20. `3.5 mm connections` -> `/3.5mm.png` (`Headset Connections`)
 
 Current screenshot files:
 
 - `frontend/public/welcome-new-agent.png`
 - `frontend/public/welcome-to-stars.png`
-- `desktop/assets/welcome-new-agent.png`
-- `desktop/assets/welcome-to-stars.png`
+- `frontend/public/Discord-Audio.png`
+- `frontend/public/Discord-Input.png`
+- `frontend/public/Discord-Output.png`
+- `frontend/public/Discord-Share-1.png`
+- `frontend/public/Discord-Share-2.png`
+- `frontend/public/Discord-Share-3.png`
+- `frontend/public/Discord-Instructions.png`
+- `frontend/public/DTE-Disposition.png`
+- `frontend/public/Phonetics.png`
+- `frontend/public/DTE-Disposition-Box.png`
+- `frontend/public/script-disposition.png`
+- `frontend/public/click-transfer.png`
+- `frontend/public/queue.png`
+- `frontend/public/Transfer.png`
+- `frontend/public/station-settings.png`
+- `frontend/public/station-settings-2.png`
+- `frontend/public/usb.png`
+- `frontend/public/3.5mm.png`

@@ -181,7 +181,9 @@ function buildEasternDateTime(dateValue, timeValue, defaultToMidnight = false) {
   const dateMatch = String(dateValue).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!dateMatch) return null;
 
-  const parsedTime = parseTimeForValidation(timeValue) || (defaultToMidnight ? { hours: 0, minutes: 0 } : { hours: 0, minutes: 0 });
+  const timeText = String(timeValue || '').trim();
+  const parsedTime = timeText ? parseTimeForValidation(timeText) : (defaultToMidnight ? { hours: 0, minutes: 0 } : { hours: 0, minutes: 0 });
+  if (!parsedTime) return null;
   const year = Number(dateMatch[1]);
   const month = Number(dateMatch[2]) - 1;
   const day = Number(dateMatch[3]);
@@ -257,6 +259,8 @@ function normalizeSheetBoolean(value, defaultValue = false) {
 
 export function normalizeManagerNotification(item = {}) {
   const base = createEmptyNotification();
+  const hasStartDate = Object.prototype.hasOwnProperty.call(item, 'StartDate');
+  const hasStartTime = Object.prototype.hasOwnProperty.call(item, 'StartTime');
   const normalizedType = String(item.Type || base.Type || 'info').toLowerCase() === 'ticker'
     ? 'info'
     : String(item.Type || base.Type || 'info').toLowerCase();
@@ -269,8 +273,8 @@ export function normalizeManagerNotification(item = {}) {
     ShowTicker: normalizeSheetBoolean(item.ShowTicker, false),
     ShowBanner: normalizeSheetBoolean(item.ShowBanner, false),
     Persistent: normalizeSheetBoolean(item.Persistent, false),
-    StartDate: item.StartDate || base.StartDate,
-    StartTime: item.StartTime || base.StartTime,
+    StartDate: hasStartDate ? String(item.StartDate || '') : base.StartDate,
+    StartTime: hasStartTime ? String(item.StartTime || '') : base.StartTime,
     EndDate: item.EndDate || '',
     EndTime: item.EndTime || '',
     UpdatedAt: item.UpdatedAt || item.CreatedAt || base.UpdatedAt,

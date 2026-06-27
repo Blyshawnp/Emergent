@@ -1696,3 +1696,239 @@ body.notification-manager-body.nm-dialog-open {
     overflow-x: auto;
   }
 }
+/* Release-blocker readability and responsive action fixes */
+body.notification-manager-body {
+  background: #0b1020;
+}
+
+.nm-app {
+  padding: clamp(14px, 2vw, 28px);
+}
+
+.nm-shell {
+  max-width: 1680px;
+}
+
+.nm-hero,
+.nm-grid > section,
+.nm-form-card,
+.nm-candidate-panel,
+.nm-headset-panel,
+.nm-section-nav,
+.nm-status-card,
+.nm-actions-panel {
+  border-radius: 8px;
+  background: #101827;
+  border-color: rgba(203, 213, 225, 0.2);
+  backdrop-filter: none;
+}
+
+.nm-hero {
+  align-items: stretch;
+}
+
+.nm-subtitle,
+.nm-kicker,
+.nm-meta {
+  color: #b7c4d6;
+}
+
+.nm-btn,
+.nm-file-label,
+.nm-view-tab,
+.nm-status-dismiss,
+.nm-modal-close {
+  border-radius: 6px;
+}
+
+.nm-btn-secondary,
+.nm-file-label,
+.nm-view-tab {
+  background: #1f2937;
+  border-color: #475569;
+  color: #f8fafc;
+}
+
+.nm-btn-danger {
+  background: #b91c1c;
+  border-color: #ef4444;
+}
+
+.nm-btn-primary,
+.nm-view-tab.is-active,
+.nm-section-nav .nm-btn.is-active {
+  background: #0ea5e9;
+  color: #04111f;
+}
+
+.nm-btn-success {
+  background: #10b981;
+  color: #04140d;
+}
+
+.nm-table-wrap {
+  position: relative;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: #0f172a;
+  scrollbar-color: #7dd3fc #1e293b;
+  scrollbar-width: auto;
+}
+
+.nm-table-wrap::before {
+  content: "Scroll vertically or horizontally when needed";
+  display: block;
+  position: sticky;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  background: #111827;
+  color: #bae6fd;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nm-table-wrap::-webkit-scrollbar,
+.nm-editor-scroll::-webkit-scrollbar,
+.nm-update-notes::-webkit-scrollbar {
+  width: 13px;
+  height: 13px;
+}
+
+.nm-table-wrap::-webkit-scrollbar-track,
+.nm-editor-scroll::-webkit-scrollbar-track,
+.nm-update-notes::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+.nm-table-wrap::-webkit-scrollbar-thumb,
+.nm-editor-scroll::-webkit-scrollbar-thumb,
+.nm-update-notes::-webkit-scrollbar-thumb {
+  background: #7dd3fc;
+  border: 3px solid #1e293b;
+  border-radius: 999px;
+}
+
+.nm-row-actions {
+  flex-wrap: wrap;
+  width: min(100%, 560px);
+  max-width: 100%;
+  align-items: flex-start;
+}
+
+.nm-btn-table {
+  min-width: 74px;
+  white-space: normal;
+  line-height: 1.15;
+}
+
+.nm-table {
+  min-width: 860px;
+}
+
+.nm-table th {
+  background: #111827;
+  color: #dbeafe;
+}
+
+.nm-table td {
+  color: #eef2ff;
+}
+
+.nm-table .nm-row-select {
+  border-radius: 6px;
+  background: #182234;
+}
+
+.nm-candidate-table {
+  min-width: 1180px;
+}
+
+.nm-candidate-table .nm-actions-column,
+.nm-candidate-table td:last-child {
+  width: 360px !important;
+  min-width: 360px;
+}
+
+.nm-headset-table {
+  min-width: 980px;
+}
+
+.nm-headset-table .nm-actions-column {
+  width: 420px !important;
+  min-width: 420px;
+}
+
+.nm-editor-modal-layer,
+.modal-overlay.open {
+  background: rgba(2, 6, 14, 0.82) !important;
+  backdrop-filter: none !important;
+}
+
+.nm-editor-dialog,
+.modal {
+  border-radius: 8px !important;
+  border: 1px solid rgba(203, 213, 225, 0.3) !important;
+  background: #111827 !important;
+  color: #f8fafc !important;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.68) !important;
+}
+
+.nm-editor-header,
+.nm-editor-footer,
+.modal-header,
+.modal-body {
+  background: #111827 !important;
+  color: #f8fafc !important;
+}
+
+.modal-header {
+  border-bottom: 1px solid rgba(203, 213, 225, 0.22);
+}
+
+.modal-body input,
+.modal-body textarea,
+.nm-editor-dialog input,
+.nm-editor-dialog textarea,
+.nm-editor-dialog select,
+.nm-search-row input {
+  background: #0f172a;
+  border: 1px solid #475569;
+  color: #f8fafc;
+}
+
+[data-testid="support-request-btn"],
+.nm-support-button {
+  min-height: 48px;
+  background: #facc15 !important;
+  border-color: #fde047 !important;
+  color: #111827 !important;
+  font-size: 15px;
+  box-shadow: 0 10px 24px rgba(250, 204, 21, 0.22);
+}
+
+@media (max-width: 1100px) {
+  .nm-hero,
+  .nm-section-nav {
+    flex-direction: column;
+  }
+
+  .nm-status-panel {
+    min-width: 0;
+  }
+
+  .nm-section-nav-buttons {
+    justify-content: flex-start;
+  }
+
+  .nm-candidate-table .nm-actions-column,
+  .nm-candidate-table td:last-child,
+  .nm-headset-table .nm-actions-column {
+    width: 300px !important;
+    min-width: 300px;
+  }
+}
