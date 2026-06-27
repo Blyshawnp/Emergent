@@ -32,9 +32,9 @@ const isDev = !app.isPackaged;
 const isNotificationManagerMode = process.env.MTS_NOTIFICATION_MANAGER === '1';
 const BACKEND_PORT = isNotificationManagerMode ? 8601 : 8600;
 const DEFAULT_APP_VERSION = '1.0.1';
-const APP_DISPLAY_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing Suite';
+const APP_DISPLAY_NAME = isNotificationManagerMode ? 'Smart Alert Manager' : 'Mock Testing Suite';
 const APP_RUNTIME_ID = isNotificationManagerMode ? NOTIFICATION_MANAGER_APP_ID : APP_ID;
-const APP_STORAGE_DIR_NAME = isNotificationManagerMode ? 'Sam' : 'Mock Testing Suite';
+const APP_STORAGE_DIR_NAME = isNotificationManagerMode ? 'Smart Alert Manager' : 'Mock Testing Suite';
 const GITHUB_UPDATE_OWNER = 'Blyshawnp';
 const GITHUB_UPDATE_REPO = isNotificationManagerMode ? 'sam-releases' : 'mts-releases';
 const ENABLE_SIGNED_AUTO_UPDATES = String(process.env.ENABLE_SIGNED_AUTO_UPDATES || '').trim().toLowerCase() === 'true';
@@ -1157,29 +1157,6 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
   isHandlingCloseConfirmation = true;
 
   try {
-    if (isNotificationManagerMode) {
-      const { response } = await dialog.showMessageBox(parentWindow || null, {
-        type: 'question',
-        buttons: ['Exit App', 'Cancel'],
-        defaultId: 1,
-        cancelId: 1,
-        title: 'Exit Sam',
-        message: 'Are you sure you want to exit Sam?',
-      });
-
-      if (response !== 0) {
-        return false;
-      }
-
-      tray = null;
-      app.isQuitting = true;
-      allowWindowClose = true;
-      clearHeartbeat();
-      stopBackend();
-      app.quit();
-      return true;
-    }
-
     let confirmed = false;
 
     if (parentWindow && !parentWindow.isDestroyed()) {
@@ -1226,10 +1203,12 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
         buttons: ['Yes', 'No'],
         defaultId: 1,
         cancelId: 1,
-        title: 'Close App',
-        message: hasUnsavedChanges
-          ? 'You have unsaved work. Are you sure you want to close the app?'
-          : 'Are you sure you want to close the app?',
+        title: isNotificationManagerMode ? 'Exit Smart Alert Manager' : 'Close App',
+        message: isNotificationManagerMode
+          ? 'Are you sure you want to exit Smart Alert Manager?'
+          : (hasUnsavedChanges
+              ? 'You have unsaved work. Are you sure you want to close the app?'
+              : 'Are you sure you want to close the app?'),
       });
       confirmed = response === 0;
     }

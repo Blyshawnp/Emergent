@@ -8,7 +8,7 @@ $required = @(
   (Join-Path $desktopDir 'dist\win-unpacked'),
   (Join-Path $desktopDir 'dist\Mock-Testing-Suite-Setup-1.0.1.exe'),
   (Join-Path $desktopDir 'dist-notification-manager\win-unpacked'),
-  (Join-Path $desktopDir 'dist-notification-manager\Sam-Setup-1.0.1.exe')
+  (Join-Path $desktopDir 'dist-notification-manager\Smart-Alert-Manager-Setup-1.0.1.exe')
 )
 
 Write-Host 'REFRESH PRODUCTION-READY ONLY FROM EXISTING DESKTOP BUILDS'
