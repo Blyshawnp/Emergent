@@ -3734,23 +3734,7 @@ def _get_shared_tracking_sheet_service():
             "setup": _shared_tracking_manual_setup(),
         }
 
-    # 1. First, check if Apps Script client is configured and enabled
-    try:
-        from services.apps_script_api import create_apps_script_sheet_service
-        apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
-        if apps_script_res.get("ok"):
-            logger.info("[SHARED] Using Apps Script API client for shared tracking operations.")
-            client = apps_script_res["client"]
-            return {
-                "ok": True,
-                "appsScriptClient": client,
-                "sheet_id": sheet_id,
-                "serviceAccountEmail": "apps-script-api-endpoint",
-            }
-    except Exception as exc:
-        logger.warning("[SHARED] Failed to initialize Apps Script client: %s. Trying service account fallback.", exc)
-
-    # 2. Fall back to direct Google Sheets API via service account credentials
+    # 1. Primary path: Use direct Google Sheets API via service account credentials
     creds_path = _resolve_notification_service_account_file()
     service_account_email = _get_service_account_email()
     _record_google_sheet_auth_status("shared_service_resolved", ok=bool(creds_path), path=creds_path, error="" if creds_path else "No service account credentials found.")
@@ -3760,30 +3744,45 @@ def _get_shared_tracking_sheet_service():
         bool(service_account_email),
         creds_path or "",
     )
-    if not creds_path:
-        return {
-            "ok": False,
-            "error": "Google service account credentials are not configured, so shared candidate tracking cannot write to the master sheet.",
-            "sheet_id": sheet_id,
-            "serviceAccountEmail": service_account_email,
-            "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
-        }
 
-    try:
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
-    except Exception as exc:
-        return {"ok": False, "error": f"Google Sheets dependencies are unavailable: {exc}", "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+    if creds_path:
+        try:
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            creds = service_account.Credentials.from_service_account_file(str(creds_path), scopes=scopes)
+            service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            _record_google_sheet_auth_status("shared_service_ok", ok=True, path=creds_path)
+            logger.info("[SHARED] Using direct Google Sheets API via service account credentials.")
+            return {"ok": True, "service": service, "sheet_id": sheet_id, "serviceAccountEmail": service_account_email}
+        except Exception as exc:
+            _record_google_sheet_auth_status("shared_service_failed", ok=False, path=creds_path, error=exc)
+            logger.warning("[SHARED] Direct service account initialization failed: %s. Trying Apps Script fallback.", exc)
 
+    # 2. Fallback path: Check if Apps Script client is configured and enabled
     try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = service_account.Credentials.from_service_account_file(str(creds_path), scopes=scopes)
-        service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-        _record_google_sheet_auth_status("shared_service_ok", ok=True, path=creds_path)
-        return {"ok": True, "service": service, "sheet_id": sheet_id, "serviceAccountEmail": service_account_email}
+        from services.apps_script_api import create_apps_script_sheet_service
+        apps_script_res = create_apps_script_sheet_service(ROOT_DIR)
+        if apps_script_res.get("ok"):
+            logger.info("[SHARED] Using Apps Script API client fallback for shared tracking operations.")
+            client = apps_script_res["client"]
+            return {
+                "ok": True,
+                "appsScriptClient": client,
+                "sheet_id": sheet_id,
+                "serviceAccountEmail": "apps-script-api-endpoint",
+            }
     except Exception as exc:
-        _record_google_sheet_auth_status("shared_service_failed", ok=False, path=creds_path, error=exc)
-        return {"ok": False, "error": f"Unable to initialize Google Sheets credentials for shared tracking: {exc}", "setup": _shared_tracking_manual_setup(sheet_id, service_account_email)}
+        logger.warning("[SHARED] Failed to initialize Apps Script client fallback: %s", exc)
+
+    # 3. Both failed/unavailable
+    return {
+        "ok": False,
+        "error": "Google service account credentials are not configured or failed, and Apps Script fallback is unavailable.",
+        "sheet_id": sheet_id,
+        "serviceAccountEmail": service_account_email,
+        "setup": _shared_tracking_manual_setup(sheet_id, service_account_email),
+    }
 
 
 def _shared_permission_hint(exc):
@@ -4360,7 +4359,7 @@ def _split_headset_brand_model(value, brand="", model=""):
 
 def _headset_review_schema_from_context(context):
     statuses = ((context or {}).get("setupStatus") or {}).get("statuses") or []
-    match = next((status for status in statuses if status.get("tab") == HEADSET_REVIEW_LOG_TAB), {})
+    match = next((status for status in statuses if status.get("tab") == HEADSET_REVIEW_LOG_TAB and "schema" in status), {})
     return match.get("schema") or "review"
 
 
