@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 class MockTestingSuiteAPITester:
-    def __init__(self, base_url="https://app-screen-fixes.preview.emergentagent.com/api"):
+    def __init__(self, base_url="https://gui-polish-preview.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
