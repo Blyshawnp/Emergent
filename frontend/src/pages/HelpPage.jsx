@@ -9,6 +9,72 @@ export const TUTORIAL_VIDEO_CANDIDATES = [
   '/assets/tutorial/mts-tutorial.mp4',
 ];
 
+const HELP_CATEGORIES = [
+  {
+    id: 'cat-getting-started',
+    title: 'Getting Started',
+    description: 'First launch, setup wizard, and tutorial replay.',
+    anchor: 'getting-started',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 L12 3 L21 12"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>',
+  },
+  {
+    id: 'cat-basics-setup',
+    title: 'Basics Setup',
+    description: 'Candidate readiness, headsets, VPN, and IP checks.',
+    anchor: 'basics',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+  },
+  {
+    id: 'cat-calls-workflow',
+    title: 'Calls Workflow',
+    description: 'Mock calls, payment options, coaching, and fail reasons.',
+    anchor: 'calls',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
+  },
+  {
+    id: 'cat-supervisor-transfer',
+    title: 'Supervisor Transfer',
+    description: 'Transfer flow, supervisor-only sessions, and resume.',
+    anchor: 'supervisor-transfer',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',
+  },
+  {
+    id: 'cat-review-form',
+    title: 'Review / Form Fill',
+    description: 'Summaries, evaluator override, and Fill Form.',
+    anchor: 'review',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>',
+  },
+  {
+    id: 'cat-discord-tech',
+    title: 'Discord & Tech Issues',
+    description: 'Discord posts, tech-issue flow, and Newbie Shift.',
+    anchor: 'discord',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  },
+  {
+    id: 'cat-screenshots',
+    title: 'Screenshots',
+    description: 'Phonetics reference and configured screenshot images.',
+    anchor: 'discord',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+  },
+  {
+    id: 'cat-troubleshooting',
+    title: 'Troubleshooting',
+    description: 'When something is off: quick fixes and where to look.',
+    anchor: 'troubleshooting',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="0.6" fill="currentColor"/></svg>',
+  },
+  {
+    id: 'cat-contact-support',
+    title: 'Contact Support',
+    description: 'Open the Request App Support form when you need help.',
+    anchor: 'faq',
+    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+  },
+];
+
 const HELP_TOPICS = [
   {
     id: 'getting-started',
@@ -809,7 +875,7 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
         <div className="help-hero-copy">
           <h1>Mock Testing Suite Help Center</h1>
           <p>
-            Current guidance for running mock sessions, handling auto-fails, filling certification forms,
+            Quick guidance for running mock sessions, handling auto-fails, filling certification forms,
             managing Discord assets, and using app settings.
           </p>
           <div className="help-hero-pills">
@@ -822,13 +888,46 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
             <a href="#fill-form" className="help-common-task">Fill Form</a>
             <a href="#troubleshooting" className="help-common-task">Troubleshooting</a>
           </div>
+          <div className="help-hero-tips" aria-label="Quick tips">
+            <div className="help-hero-tip">
+              <span className="help-hero-tip-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </span>
+              <div>
+                <strong>Active drafts auto-save</strong>
+                <span>Switch screens freely - your session progress is preserved.</span>
+              </div>
+            </div>
+            <div className="help-hero-tip">
+              <span className="help-hero-tip-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+              </span>
+              <div>
+                <strong>Need help?</strong>
+                <span>Use Request App Support on the right - or jump to a topic below.</span>
+              </div>
+            </div>
+          </div>
           {helpLoadError ? <div className="help-note">{helpLoadError}</div> : null}
         </div>
         <div className="help-hero-panel">
-          <div>
+          <div className="help-hero-panel-head">
             <div className="help-card-eyebrow">Need Help Fast?</div>
             <h2>Quick Actions</h2>
           </div>
+          <button
+            type="button"
+            className="btn btn-warning help-support-cta"
+            onClick={handleRequestSupport}
+            data-testid="support-request-btn"
+          >
+            <span className="help-support-cta-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+              </svg>
+            </span>
+            Request App Support
+          </button>
           <label className="help-hero-search" htmlFor="help-hero-search">
             <span>Search Help</span>
             <input
@@ -856,31 +955,13 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
               Open History
             </button>
           </div>
-          <div className="help-status-grid">
-            <div className="help-status-card">
-              <span>Tutorial</span>
-              <strong>Replay anytime</strong>
-            </div>
-            <div className="help-status-card">
-              <span>Settings</span>
-              <strong>Tester setup</strong>
-            </div>
-            <div className="help-status-card">
-              <span>Fill Form</span>
-              <strong>Review first</strong>
-            </div>
-            <div className="help-status-card">
-              <span>Gemini</span>
-              <strong>{geminiActive ? 'Enabled' : 'Optional'}</strong>
-            </div>
-          </div>
           {geminiActive ? (
             <div className="help-gemini-brand">
               <img src={geminiActiveGraphic} alt="Gemini enabled" />
               <span>Gemini is configured for cleaner coaching and fail summary wording.</span>
             </div>
           ) : (
-            <p className="text-muted text-sm">
+            <p className="text-muted text-sm help-hero-footnote">
               Gemini is optional. The app still creates generic summaries from selected coaching and fail reasons.
             </p>
           )}
@@ -890,15 +971,28 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
       <section className="help-anchor-nav card">
         <div className="help-anchor-title">
           <h2>Browse Topics</h2>
-          <p className="text-muted text-sm">{visibleTopics.length} topic{visibleTopics.length === 1 ? '' : 's'} shown</p>
+          <p className="text-muted text-sm">Jump to the section you need. {visibleTopics.length} topic{visibleTopics.length === 1 ? '' : 's'} match your search.</p>
         </div>
-        <div className="help-anchor-grid">
-          {visibleTopics.map((topic) => (
-            <a key={topic.id} href={`#${topic.id}`} className="help-anchor-link">
-              {topic.title}
+        <div className="help-category-grid">
+          {HELP_CATEGORIES.map((category) => (
+            <a key={category.id} href={`#${category.anchor}`} className="help-category-card">
+              <span className="help-category-icon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: category.icon }} />
+              <span className="help-category-text">
+                <span className="help-category-title">{category.title}</span>
+                <span className="help-category-desc">{category.description}</span>
+              </span>
             </a>
           ))}
         </div>
+        {normalizedQuery ? (
+          <div className="help-anchor-grid help-anchor-grid-search">
+            {visibleTopics.map((topic) => (
+              <a key={topic.id} href={`#${topic.id}`} className="help-anchor-link">
+                {topic.title}
+              </a>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section className="help-doc-grid">
@@ -947,46 +1041,38 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
           <div className="card help-support-card">
             <div className="help-card-eyebrow">Support</div>
             <h2>Support & Troubleshooting</h2>
-            
-            <div className="help-troubleshooting-section" style={{ marginTop: 12, marginBottom: 18, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ background: 'rgba(239, 68, 68, 0.08)', borderLeft: '3px solid #ef4444', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
-                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>Google Sheet Connection</strong>
-                <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
-                  Ensure <code>google-service-account.json</code> is located in your app's <code>backend/config/</code> resources folder. Without it, the app will fall back to cache/default data.
-                </span>
+
+            <div className="help-troubleshooting-section">
+              <div className="help-support-tip help-support-tip-info">
+                <strong>Live content not loading?</strong>
+                <span>If alerts, the ticker, or candidate lookup appear stale, use Refresh from the affected screen. If it still won&apos;t update, contact support.</span>
               </div>
-              <div style={{ background: 'rgba(59, 130, 246, 0.08)', borderLeft: '3px solid #3b82f6', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
-                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>MTS Ticker Fallback</strong>
-                <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
-                  Verify that the spreadsheet URLs and sheet IDs in <code>runtime_config.json</code> match your Google Sheets setup.
-                </span>
+              <div className="help-support-tip help-support-tip-warn">
+                <strong>Live data temporarily unavailable</strong>
+                <span>Occasionally a live source is briefly rate-limited. Please wait a minute, then try Refresh.</span>
               </div>
-              <div style={{ background: 'rgba(16, 185, 129, 0.08)', borderLeft: '3px solid #10b981', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
-                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>App Support Form</strong>
-                <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
-                  For feature requests, bug reports, or account overrides, please submit a ticket using the button below or visit the Discord Tester Room.
-                </span>
+              <div className="help-support-tip help-support-tip-success">
+                <strong>Need help, a bug fix, or an override?</strong>
+                <span>Submit a ticket below or post in the Discord Tester Room.</span>
               </div>
             </div>
 
-            <p className="help-card-body" style={{ marginBottom: 18 }}>
-              {support.intro || `Mock Testing Suite version ${version}. Include the screen, action, and visible error details when reporting issues.`}
+            <p className="help-card-body help-support-intro">
+              {support.intro || `Mock Testing Suite version ${version}. Include the screen, the action you took, and any visible message when reporting issues.`}
             </p>
-            <div className="help-support-actions" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="help-support-actions">
               <button
                 type="button"
-                className="btn btn-warning"
-                style={{ width: '100%', fontWeight: 800 }}
+                className="btn btn-warning help-support-primary"
                 onClick={handleRequestSupport}
-                data-testid="support-request-btn"
+                data-testid="support-request-btn-secondary"
               >
                 Request App Support
               </button>
-              <div style={{ display: 'flex', gap: 10 }}>
+              <div className="help-support-secondary-row">
                 <a
                   href={`mailto:${support.email || 'blyshawnp@gmail.com'}?subject=Mock%20Testing%20Suite%20Support`}
-                  className="btn btn-primary"
-                  style={{ textDecoration: 'none', flex: 1, textAlign: 'center' }}
+                  className="btn btn-primary help-support-secondary"
                   data-testid="support-email"
                 >
                   Send Email
@@ -995,19 +1081,18 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
                   href={support.discord_url || 'https://discord.com/users/shawnbly'}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="btn"
-                  style={{ textDecoration: 'none', background: '#5865F2', color: 'white', flex: 1, textAlign: 'center' }}
+                  className="btn help-support-discord"
                   data-testid="support-discord"
                 >
                   Discord
                 </a>
               </div>
             </div>
-            <div className="help-about-block" style={{ marginTop: 20, borderTop: '1px solid var(--border-subtle)', paddingTop: 14 }}>
+            <div className="help-about-block">
               <p><strong>Version:</strong> {version}</p>
               <p><strong>Email:</strong> {support.email || 'blyshawnp@gmail.com'}</p>
               <p><strong>Discord:</strong> {support.discord_name || 'shawnbly'}</p>
-              <p><strong>Support note:</strong> {support.footer || 'Include the page name, action taken, and any visible error details.'}</p>
+              <p><strong>Support note:</strong> {support.footer || 'Include the page name, action taken, and any visible message.'}</p>
             </div>
           </div>
 

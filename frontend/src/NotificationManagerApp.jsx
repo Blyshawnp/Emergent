@@ -120,7 +120,7 @@ const SAM_TUTORIAL_STEPS = [
   {
     target: 'status-chips',
     title: 'Statuses',
-    body: 'These chips show backend health, the active master sheet source, and the configured SAM user.',
+    body: 'These chips show the live connection status, the active workspace, and the configured SAM user.',
     placement: 'left',
   },
   {
@@ -147,8 +147,8 @@ let notificationStartupSoundAttempted = false;
 function getErrorMessage(error, fallback) {
   if (!error) return fallback;
   if (error.response?.data?.error) return error.response.data.error;
-  if (error.code === 'ECONNABORTED') return 'Backend startup is taking longer than expected.';
-  if (/network error/i.test(error.message || '')) return 'Waiting for backend services to start.';
+  if (error.code === 'ECONNABORTED') return 'Connecting is taking longer than expected. Please try again in a moment.';
+  if (/network error/i.test(error.message || '')) return 'Unable to reach live content. Please try Refresh or contact support.';
   return error.message || fallback;
 }
 
@@ -550,14 +550,24 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
 function StatusModal({ message, kind = 'info', onClose }) {
   if (!message) return null;
   const title = kind === 'error' ? 'Action Failed' : kind === 'warning' ? 'Warning' : 'Success';
+  const badgeIcon = kind === 'error' ? (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
+  ) : kind === 'warning' ? (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><circle cx="12" cy="17" r="0.6" fill="currentColor" /></svg>
+  ) : (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+  );
   return (
     <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="nm-help-modal nm-status-modal" role="dialog" aria-modal="true">
+      <section className={`nm-help-modal nm-status-modal nm-status-modal-${kind}`} role="dialog" aria-modal="true">
         <div className="nm-help-header">
-          <div>
-            <div className="nm-overline">{title}</div>
-            <h2>{title}</h2>
-            <p>{message}</p>
+          <div className="nm-status-modal-head">
+            <span className={`nm-status-badge nm-status-badge-${kind}`} aria-hidden="true">{badgeIcon}</span>
+            <div>
+              <div className="nm-overline">{title}</div>
+              <h2>{title}</h2>
+              <p>{message}</p>
+            </div>
           </div>
           <button type="button" className="nm-modal-close" onClick={onClose} aria-label="Close status">×</button>
         </div>
@@ -575,14 +585,23 @@ function ConfirmModal({ state, onConfirm, onCancel }) {
     setNote(state?.initialNote || '');
   }, [state]);
   if (!state?.message) return null;
+  const isDanger = state.kind === 'danger';
+  const badgeIcon = isDanger ? (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><circle cx="12" cy="17" r="0.6" fill="currentColor" /></svg>
+  ) : (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><circle cx="12" cy="17" r="0.6" fill="currentColor" /></svg>
+  );
   return (
     <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
-      <section className="nm-help-modal nm-status-modal" role="dialog" aria-modal="true">
+      <section className={`nm-help-modal nm-status-modal nm-status-modal-${isDanger ? 'danger' : 'confirm'}`} role="dialog" aria-modal="true">
         <div className="nm-help-header">
-          <div>
-            <div className="nm-overline">{state.kind === 'danger' ? 'CONFIRM ACTION' : 'CONFIRM'}</div>
-            <h2>{state.title || 'Confirm'}</h2>
-            <p>{state.message}</p>
+          <div className="nm-status-modal-head">
+            <span className={`nm-status-badge nm-status-badge-${isDanger ? 'danger' : 'confirm'}`} aria-hidden="true">{badgeIcon}</span>
+            <div>
+              <div className="nm-overline">{isDanger ? 'CONFIRM ACTION' : 'CONFIRM'}</div>
+              <h2>{state.title || 'Confirm'}</h2>
+              <p>{state.message}</p>
+            </div>
           </div>
           <button type="button" className="nm-modal-close" onClick={onCancel} aria-label="Cancel">×</button>
         </div>
@@ -1584,7 +1603,7 @@ export default function NotificationManagerApp() {
     isLoading: true,
     isSaving: false,
     statusKind: '',
-    statusMessage: 'Starting backend services...',
+    statusMessage: 'Connecting to live data...',
     writeReady: false,
     writeError: '',
     readError: '',
@@ -2300,7 +2319,7 @@ export default function NotificationManagerApp() {
     try {
       const result = await window.electronAPI?.retryBackendStartup?.({ resetAttempts: resetAttempt });
       if (!result?.ok) {
-        const message = result?.error || 'Unable to start SAM backend right now.';
+        const message = result?.error || 'Unable to connect to live data right now. Please try again in a moment.';
         scheduleBackendStartupRetry(message);
         return;
       }
@@ -2322,7 +2341,7 @@ export default function NotificationManagerApp() {
       await loadSheetItems({ silent: false });
       await loadCandidateTracking({ silent: true });
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to start SAM backend right now.');
+      const message = getErrorMessage(error, 'Unable to connect to live data right now. Please try again in a moment.');
       scheduleBackendStartupRetry(message);
     }
   }, [clearBackendStartupRetryTimer, loadCandidateTracking, loadSamSetupStatus, loadSheetItems, refreshDiagnostics, scheduleBackendStartupRetry]);
@@ -2387,8 +2406,8 @@ export default function NotificationManagerApp() {
         const elapsed = Date.now() - startedAt;
         const timedOut = elapsed >= BACKEND_READY_TIMEOUT_MS;
         const message = timedOut
-          ? getErrorMessage(error, 'Backend services are still unavailable. Retrying in the background.')
-          : 'Starting backend services...';
+          ? getErrorMessage(error, 'Live content is still unavailable. We will keep retrying in the background.')
+          : 'Connecting to live data...';
         setSheetState((current) => ({
           ...current,
           isLoading: true,
@@ -3118,7 +3137,7 @@ export default function NotificationManagerApp() {
         <div className="sam-exit-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) resolveExitConfirm(false); }}>
           <section className="sam-exit-modal" role="dialog" aria-modal="true">
             <div className="sam-exit-icon">
-              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
                 <polyline points="16 17 21 12 16 7" />
                 <line x1="21" y1="12" x2="9" y2="12" />

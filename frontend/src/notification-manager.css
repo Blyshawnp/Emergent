@@ -489,6 +489,14 @@ body.notification-manager-body.nm-dialog-open {
   width: 100%;
   scrollbar-gutter: stable;
 }
+.nm-table-wrap::-webkit-scrollbar { width: 12px; height: 12px; }
+.nm-table-wrap::-webkit-scrollbar-thumb {
+  background: rgba(125, 211, 252, 0.32);
+  border-radius: 10px;
+  border: 3px solid rgba(3, 10, 20, 0.6);
+}
+.nm-table-wrap::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.55); }
+.nm-table-wrap::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); border-radius: 10px; }
 
 .nm-view-tabs {
   display: flex;
@@ -1384,8 +1392,8 @@ body.notification-manager-body.nm-dialog-open {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgba(2, 6, 14, 0.42);
-  backdrop-filter: blur(3px);
+  background: rgba(2, 6, 14, 0.78);
+  backdrop-filter: blur(6px);
 }
 
 .nm-help-modal {
@@ -1393,11 +1401,50 @@ body.notification-manager-body.nm-dialog-open {
   max-height: min(82vh, 720px);
   overflow: auto;
   border-radius: 22px;
-  border: 1px solid rgba(125, 211, 252, 0.22);
-  background: rgba(9, 19, 34, 0.98);
-  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.46);
-  padding: 22px;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  background: #0b1626;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
+  padding: 24px;
+  scrollbar-gutter: stable;
 }
+.nm-help-modal::-webkit-scrollbar { width: 12px; height: 12px; }
+.nm-help-modal::-webkit-scrollbar-thumb {
+  background: rgba(125, 211, 252, 0.32);
+  border-radius: 10px;
+  border: 3px solid #0b1626;
+}
+.nm-help-modal::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.55); }
+.nm-help-modal::-webkit-scrollbar-track { background: transparent; }
+
+.nm-status-modal {
+  width: min(520px, 100%);
+  max-height: auto;
+}
+.nm-status-modal-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+.nm-status-modal-head h2 { margin: 4px 0 6px; }
+.nm-status-modal-head p { margin: 0; color: var(--nm-muted); line-height: 1.55; font-size: 13px; }
+.nm-status-badge {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(14, 165, 233, 0.18);
+  color: #67e8f9;
+  border: 1px solid rgba(125, 211, 252, 0.32);
+}
+.nm-status-badge-info { background: rgba(14, 165, 233, 0.18); color: #67e8f9; border-color: rgba(125, 211, 252, 0.32); }
+.nm-status-badge-warning { background: rgba(245, 158, 11, 0.18); color: #fde68a; border-color: rgba(245, 158, 11, 0.36); }
+.nm-status-badge-error { background: rgba(239, 68, 68, 0.20); color: #fecaca; border-color: rgba(239, 68, 68, 0.42); }
+.nm-status-badge-confirm { background: rgba(125, 211, 252, 0.18); color: #bae6fd; border-color: rgba(125, 211, 252, 0.36); }
+.nm-status-badge-danger { background: rgba(239, 68, 68, 0.20); color: #fecaca; border-color: rgba(239, 68, 68, 0.42); }
 
 .nm-help-header,
 .nm-help-actions {
@@ -1515,16 +1562,22 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-help-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
   margin: 20px 0;
 }
 
 .nm-help-card {
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(3, 10, 20, 0.48);
-  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(125, 211, 252, 0.16);
+  background: rgba(3, 10, 20, 0.58);
+  padding: 16px 18px;
+  transition: border-color 150ms ease, transform 150ms ease, background 150ms ease;
+}
+.nm-help-card:hover {
+  border-color: rgba(125, 211, 252, 0.32);
+  transform: translateY(-1px);
+  background: rgba(3, 10, 20, 0.72);
 }
 
 .nm-help-card h3 {
@@ -1933,7 +1986,7 @@ body.notification-manager-body {
   }
 }
 
-/* Custom Exit Confirmation Modal Styles */
+/* Custom Exit Confirmation Modal Styles - matches MTS exit modal visually */
 .sam-exit-backdrop {
   position: fixed;
   inset: 0;
@@ -1941,24 +1994,24 @@ body.notification-manager-body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(2, 6, 14, 0.90);
-  backdrop-filter: blur(8px);
+  background: rgba(2, 6, 14, 0.78);
+  backdrop-filter: blur(6px);
 }
 
 .sam-exit-modal {
-  background: #0f172a;
-  border: 1px solid rgba(125, 211, 252, 0.22);
+  background: #0b1626;
+  border: 1px solid rgba(125, 211, 252, 0.28);
   border-radius: 16px;
-  padding: 32px;
-  width: 460px;
+  padding: 28px 32px 24px;
+  width: min(460px, calc(100vw - 48px));
   text-align: center;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
   animation: samExitIn 200ms ease-out forwards;
 }
 
 @keyframes samExitIn {
   from {
-    transform: scale(0.95);
+    transform: scale(0.96);
     opacity: 0;
   }
   to {
@@ -1968,38 +2021,48 @@ body.notification-manager-body {
 }
 
 .sam-exit-icon {
-  margin-bottom: 20px;
-  display: flex;
+  margin: 0 auto 16px;
+  display: inline-flex;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.32);
   justify-content: center;
   align-items: center;
 }
 
 .sam-exit-icon svg {
-  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.3));
+  width: 32px;
+  height: 32px;
+  filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.32));
 }
 
 .sam-exit-title {
   font-size: 22px;
   font-weight: 800;
   color: #f8fafc;
-  margin-bottom: 12px;
+  margin: 0 0 10px;
 }
 
 .sam-exit-body {
   font-size: 14px;
   color: #94a3b8;
   line-height: 1.6;
-  margin-bottom: 28px;
+  margin: 0 0 24px;
 }
 
 .sam-exit-buttons {
   display: flex;
   justify-content: center;
-  gap: 16px;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(125, 211, 252, 0.14);
 }
 
 .sam-exit-buttons .nm-btn {
   padding: 10px 24px;
   font-size: 14px;
   font-weight: 700;
+  min-width: 116px;
 }
