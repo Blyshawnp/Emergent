@@ -8014,6 +8014,7 @@ class IpIntelligenceProvider:
     env_key = ""
     enabled_env = ""
     default_enabled = True
+    capability = "vpn_proxy_detector"
     reputation_capable = True
 
     def enabled(self):
@@ -8032,7 +8033,16 @@ class IpIntelligenceProvider:
         raise NotImplementedError
 
 
-def _empty_ip_provider_result(provider, status="unavailable", notes="", reputation_capable=True):
+def _provider_capability_value(provider_or_capability, reputation_capable=True):
+    if isinstance(provider_or_capability, str) and provider_or_capability in {"vpn_proxy_detector", "metadata_only"}:
+        return provider_or_capability
+    if hasattr(provider_or_capability, "capability"):
+        return getattr(provider_or_capability, "capability") or ("vpn_proxy_detector" if reputation_capable else "metadata_only")
+    return "vpn_proxy_detector" if reputation_capable else "metadata_only"
+
+
+def _empty_ip_provider_result(provider, status="unavailable", notes="", reputation_capable=True, capability=None):
+    resolved_capability = capability or _provider_capability_value(capability, reputation_capable)
     return {
         "provider": provider,
         "status": status,
@@ -8048,6 +8058,7 @@ def _empty_ip_provider_result(provider, status="unavailable", notes="", reputati
         "confidence": "Unknown",
         "notes": notes,
         "reputationCapable": reputation_capable,
+        "capability": resolved_capability,
         "flags": {
             "vpn": False,
             "proxy": False,
@@ -8100,6 +8111,8 @@ def _last_seen_older_than(value, hours):
 
 def _normalize_ip_provider_result(result):
     flags = result.get("flags") or {}
+    capability = result.get("capability") or ("vpn_proxy_detector" if result.get("reputationCapable", True) else "metadata_only")
+    detector_capable = capability == "vpn_proxy_detector" and bool(result.get("reputationCapable", capability == "vpn_proxy_detector"))
     usage_type = result.get("usageType") or ""
     connection = result.get("connectionType") or ""
     isp = result.get("isp") or ""
@@ -8122,6 +8135,15 @@ def _normalize_ip_provider_result(result):
         risk_flags["hosting"] = risk_flags["hosting"] or "hosting" in lowered
         risk_flags["datacenter"] = risk_flags["datacenter"] or "datacenter" in lowered or "data center" in lowered
         risk_flags["tor"] = risk_flags["tor"] or "tor" in lowered
+    if not detector_capable:
+        risk_flags = {
+            "vpn": False,
+            "proxy": False,
+            "hosting": False,
+            "datacenter": False,
+            "tor": False,
+            "residential_proxy": False,
+        }
     has_risk = any(risk_flags.values())
     normalized_flags = {
         **flags,
@@ -8130,13 +8152,17 @@ def _normalize_ip_provider_result(result):
         "historical": bool(flags.get("historical")),
         "residential": residential,
     }
+    vpn_proxy_value = result.get("vpnProxy") or ("Yes" if has_risk else "No")
+    if not detector_capable:
+        vpn_proxy_value = "Unknown"
     return {
         **_empty_ip_provider_result(result.get("provider") or "provider"),
         **result,
         "status": result.get("status") or "ok",
-        "vpnProxy": result.get("vpnProxy") or ("Yes" if has_risk else "No"),
+        "vpnProxy": vpn_proxy_value,
         "confidence": result.get("confidence") or ("High" if has_risk else "Medium"),
-        "reputationCapable": result.get("reputationCapable", True),
+        "reputationCapable": detector_capable,
+        "capability": capability,
         "flags": normalized_flags,
     }
 
@@ -8146,6 +8172,7 @@ class IP2LocationProvider(IpIntelligenceProvider):
     requires_key = True
     env_key = "IP2PROXY_API_KEY"
     enabled_env = "IP2PROXY_ENABLED"
+    capability = "vpn_proxy_detector"
 
     async def lookup(self, ip_value):
         params = {"key": self.api_key(), "ip": ip_value, "package": os.getenv("IP2PROXY_PACKAGE", "PX11")}
@@ -8175,6 +8202,7 @@ class IP2LocationProvider(IpIntelligenceProvider):
             "confidence": "Medium" if historical_residential else ("High" if is_proxy else "Medium"),
             "notes": "Historical residential proxy signal." if historical_residential else "",
             "reputationCapable": True,
+            "capability": self.capability,
             "flags": {
                 "vpn": is_proxy and not historical_residential,
                 "proxy": is_proxy,
@@ -8193,6 +8221,7 @@ class IPinfoProvider(IpIntelligenceProvider):
     requires_key = True
     env_key = "IPINFO_TOKEN"
     enabled_env = "IPINFO_ENABLED"
+    capability = "vpn_proxy_detector"
 
     async def lookup(self, ip_value):
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -8200,26 +8229,21 @@ class IPinfoProvider(IpIntelligenceProvider):
             response.raise_for_status()
             data = response.json()
         privacy = data.get("privacy") or {}
+        has_privacy_fields = any(key in privacy for key in ("vpn", "proxy", "hosting", "tor"))
         company = data.get("company") or {}
         asn = data.get("asn") or {}
-        usage_text = " ".join([
-            str(company.get("type") or ""),
-            str(asn.get("type") or ""),
-            str(company.get("name") or ""),
-            str(asn.get("name") or ""),
-        ])
         flags = {
             "vpn": _ip_safe_bool(privacy.get("vpn")),
             "proxy": _ip_safe_bool(privacy.get("proxy")),
-            "hosting": _ip_safe_bool(privacy.get("hosting")) or _contains_any(usage_text, ("hosting",)),
-            "datacenter": _contains_any(usage_text, ("datacenter", "data center")),
+            "hosting": _ip_safe_bool(privacy.get("hosting")),
+            "datacenter": False,
             "tor": _ip_safe_bool(privacy.get("tor")),
             "active": any(_ip_safe_bool(privacy.get(key)) for key in ("vpn", "proxy", "hosting", "tor")),
-            "residential": _contains_any(usage_text, RESIDENTIAL_USAGE_MARKERS),
         }
+        capability = self.capability if has_privacy_fields else "metadata_only"
         return _normalize_ip_provider_result({
             "provider": self.name,
-            "status": "ok",
+            "status": "ok" if has_privacy_fields else "metadata",
             "isp": data.get("org") or company.get("name") or "",
             "asn": asn.get("asn") or "",
             "usageType": company.get("type") or asn.get("type") or "",
@@ -8228,43 +8252,150 @@ class IPinfoProvider(IpIntelligenceProvider):
             "city": data.get("city") or "",
             "connectionType": "privacy" if flags["active"] else "",
             "confidence": "High" if flags["active"] else "Medium",
-            "reputationCapable": True,
+            "notes": "" if has_privacy_fields else "Metadata only. IPinfo privacy fields were not available in this response.",
+            "reputationCapable": has_privacy_fields,
+            "capability": capability,
             "flags": flags,
         })
 
 
-class IpTeohProvider(IpIntelligenceProvider):
-    name = "ip.teoh.io"
-    enabled_env = "IP_TEOH_ENABLED"
-    default_enabled = False
+class IPQualityScoreProvider(IpIntelligenceProvider):
+    name = "IPQualityScore"
+    requires_key = True
+    env_key = "IPQUALITYSCORE_KEY"
+    enabled_env = "IPQUALITYSCORE_ENABLED"
+    capability = "vpn_proxy_detector"
 
     async def lookup(self, ip_value):
         async with httpx.AsyncClient(timeout=8.0) as client:
-            response = await client.get(f"https://ip.teoh.io/api/vpn/{quote(ip_value)}")
-            if response.status_code in {401, 403, 404, 410}:
-                return _empty_ip_provider_result(
-                    self.name,
-                    "unavailable",
-                    "Provider endpoint is unavailable for automated lookup.",
-                    True,
-                )
+            response = await client.get(
+                f"https://ipqualityscore.com/api/json/ip/{quote(self.api_key())}/{quote(ip_value)}",
+                params={"strictness": os.getenv("IPQUALITYSCORE_STRICTNESS", "1"), "allow_public_access_points": "true"},
+            )
             response.raise_for_status()
             data = response.json()
-        is_risk = _ip_safe_bool(data.get("vpn_or_proxy") or data.get("vpn") or data.get("proxy") or data.get("is_proxy"))
+        is_vpn = _ip_safe_bool(data.get("vpn"))
+        is_proxy = _ip_safe_bool(data.get("proxy") or data.get("active_vpn") or data.get("active_proxy"))
+        is_tor = _ip_safe_bool(data.get("tor"))
+        is_hosting = _ip_safe_bool(data.get("hosting") or data.get("data_center"))
+        is_risk = is_vpn or is_proxy or is_tor or is_hosting
         return _normalize_ip_provider_result({
             "provider": self.name,
             "status": "ok",
             "vpnProxy": "Yes" if is_risk else "No",
-            "isp": data.get("isp") or data.get("organization") or "",
-            "asn": str(data.get("asn") or ""),
-            "usageType": data.get("usage_type") or data.get("type") or "",
+            "isp": data.get("ISP") or data.get("organization") or "",
+            "asn": str(data.get("ASN") or ""),
+            "usageType": data.get("connection_type") or "",
             "country": data.get("country") or data.get("country_code") or "",
             "region": data.get("region") or "",
             "city": data.get("city") or "",
             "connectionType": data.get("connection_type") or "",
-            "confidence": "Medium",
+            "confidence": "High" if is_risk else "Medium",
             "reputationCapable": True,
-            "flags": {"vpn": is_risk, "proxy": is_risk, "active": is_risk},
+            "capability": self.capability,
+            "flags": {
+                "vpn": is_vpn,
+                "proxy": is_proxy,
+                "hosting": is_hosting,
+                "datacenter": is_hosting,
+                "tor": is_tor,
+                "active": is_risk,
+                "residential_proxy": _ip_safe_bool(data.get("active_proxy")) and not is_hosting,
+            },
+        })
+
+
+class AbuseIpDbProvider(IpIntelligenceProvider):
+    name = "AbuseIPDB"
+    requires_key = True
+    env_key = "ABUSEIPDB_API_KEY"
+    enabled_env = "ABUSEIPDB_ENABLED"
+    capability = "vpn_proxy_detector"
+
+    async def lookup(self, ip_value):
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
+                "https://api.abuseipdb.com/api/v2/check",
+                params={"ipAddress": ip_value, "maxAgeInDays": os.getenv("ABUSEIPDB_MAX_AGE_DAYS", "30"), "verbose": "true"},
+                headers={"Key": self.api_key(), "Accept": "application/json"},
+            )
+            response.raise_for_status()
+            data = (response.json() or {}).get("data") or {}
+        usage_type = str(data.get("usageType") or "")
+        domain = str(data.get("domain") or "")
+        risk_usage = _contains_any(" ".join([usage_type, domain]), RISK_USAGE_MARKERS)
+        active = risk_usage and not _contains_any(usage_type, RESIDENTIAL_USAGE_MARKERS)
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if active else "No",
+            "lastSeen": data.get("lastReportedAt") or "",
+            "isp": data.get("isp") or "",
+            "usageType": usage_type,
+            "country": data.get("countryName") or data.get("countryCode") or "",
+            "confidence": "Medium" if active else "Informational",
+            "notes": f"Abuse confidence score: {data.get('abuseConfidenceScore', 0)}",
+            "reputationCapable": True,
+            "capability": self.capability,
+            "flags": {
+                "vpn": "vpn" in usage_type.lower(),
+                "proxy": "proxy" in usage_type.lower(),
+                "hosting": _contains_any(usage_type, ("hosting", "datacenter", "data center")),
+                "datacenter": _contains_any(usage_type, ("datacenter", "data center")),
+                "tor": "tor" in usage_type.lower(),
+                "active": active,
+                "residential": _contains_any(usage_type, RESIDENTIAL_USAGE_MARKERS),
+                "historical": bool(data.get("lastReportedAt")) and _last_seen_older_than(data.get("lastReportedAt"), 48),
+            },
+        })
+
+
+class ProxyCheckProvider(IpIntelligenceProvider):
+    name = "proxycheck.io"
+    env_key = "PROXYCHECK_IO_KEY"
+    enabled_env = "PROXYCHECK_IO_ENABLED"
+    capability = "vpn_proxy_detector"
+
+    async def lookup(self, ip_value):
+        params = {
+            "vpn": "1",
+            "asn": "1",
+            "node": "1",
+            "risk": "1",
+            "port": "1",
+        }
+        if self.api_key():
+            params["key"] = self.api_key()
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"https://proxycheck.io/v2/{quote(ip_value)}", params=params)
+            response.raise_for_status()
+            data = response.json()
+        ip_data = data.get(ip_value) or data.get(str(ip_value)) or {}
+        proxy_value = str(ip_data.get("proxy") or "").lower()
+        proxy_type = str(ip_data.get("type") or "")
+        is_risk = proxy_value in {"yes", "true", "1"} or _contains_any(proxy_type, RISK_USAGE_MARKERS)
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_risk else "No",
+            "isp": ip_data.get("provider") or "",
+            "asn": str(ip_data.get("asn") or ""),
+            "usageType": proxy_type,
+            "country": ip_data.get("country") or ip_data.get("isocode") or "",
+            "region": ip_data.get("region") or "",
+            "city": ip_data.get("city") or "",
+            "connectionType": proxy_type,
+            "confidence": str(ip_data.get("risk") or ("High" if is_risk else "Medium")),
+            "reputationCapable": True,
+            "capability": self.capability,
+            "flags": {
+                "vpn": "vpn" in proxy_type.lower(),
+                "proxy": is_risk,
+                "hosting": _contains_any(proxy_type, ("hosting", "datacenter", "data center")),
+                "datacenter": _contains_any(proxy_type, ("datacenter", "data center")),
+                "tor": "tor" in proxy_type.lower(),
+                "active": is_risk,
+            },
         })
 
 
@@ -8272,6 +8403,7 @@ class IpApiCoProvider(IpIntelligenceProvider):
     name = "ipapi.co network metadata"
     enabled_env = "IPAPI_CO_ENABLED"
     reputation_capable = False
+    capability = "metadata_only"
 
     async def lookup(self, ip_value):
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -8293,6 +8425,7 @@ class IpApiCoProvider(IpIntelligenceProvider):
             "confidence": "Informational",
             "notes": "Metadata only. This provider does not verify VPN/proxy reputation.",
             "reputationCapable": False,
+            "capability": self.capability,
             "flags": {
                 "hosting": _contains_any(usage_text, ("hosting", "datacenter", "data center")),
                 "datacenter": _contains_any(usage_text, ("datacenter", "data center")),
@@ -8302,7 +8435,14 @@ class IpApiCoProvider(IpIntelligenceProvider):
 
 
 def _configured_ip_intelligence_providers():
-    return [IP2LocationProvider(), IPinfoProvider(), IpTeohProvider(), IpApiCoProvider()]
+    return [
+        IP2LocationProvider(),
+        IPinfoProvider(),
+        IPQualityScoreProvider(),
+        AbuseIpDbProvider(),
+        ProxyCheckProvider(),
+        IpApiCoProvider(),
+    ]
 
 
 def _ip_result_has_risk(result):
@@ -8320,35 +8460,61 @@ def _ip_result_hosting(result):
     return bool(flags.get("hosting") or flags.get("datacenter"))
 
 
+def _ip_result_strong_current_risk(result):
+    flags = result.get("flags") or {}
+    if not bool(flags.get("active")) or _ip_result_stale_risk(result):
+        return False
+    if str(result.get("confidence") or "").strip().lower() != "high":
+        return False
+    if any(bool(flags.get(key)) for key in ("vpn", "hosting", "datacenter", "tor")):
+        return True
+    network_text = " ".join(str(result.get(key) or "") for key in ("usageType", "connectionType"))
+    return _contains_any(network_text, ("vpn", "hosting", "datacenter", "data center", "tor"))
+
+
 def _ip_result_historical_residential_proxy(result):
     flags = result.get("flags") or {}
     return bool(flags.get("proxy") or flags.get("residential_proxy")) and bool(flags.get("historical")) and bool(flags.get("residential"))
 
 
+def _ip_result_stale_risk(result):
+    flags = result.get("flags") or {}
+    if not _ip_result_has_risk(result):
+        return False
+    return bool(flags.get("historical")) or _last_seen_older_than(result.get("lastSeen"), 48)
+
+
 def _provider_results_disagree(results):
-    risk_states = {bool(_ip_result_has_risk(result)) for result in results if result.get("status") == "ok" and result.get("reputationCapable", True)}
+    risk_states = {bool(_ip_result_has_risk(result)) for result in results if result.get("status") == "ok" and result.get("capability") == "vpn_proxy_detector" and result.get("reputationCapable", True)}
     return len(risk_states) > 1
 
 
 def _consensus_ip_intelligence(results, skipped_count=0):
     successful = [result for result in results if result.get("status") in {"ok", "metadata"}]
-    reputation_successful = [result for result in successful if result.get("status") == "ok" and result.get("reputationCapable", True)]
-    if not reputation_successful:
+    detector_successful = [result for result in successful if result.get("status") == "ok" and result.get("capability") == "vpn_proxy_detector" and result.get("reputationCapable", True)]
+    metadata_successful = [result for result in successful if result.get("capability") == "metadata_only" or not result.get("reputationCapable", True)]
+    if not detector_successful:
+        summary = "No VPN/proxy reputation provider available. Manual verification required."
+        if metadata_successful:
+            summary = "Only network metadata is available. No VPN/proxy reputation provider available. Manual verification required."
         return {
             "verdict": "UNABLE TO VERIFY",
             "level": "gray",
-            "summary": "No IP reputation provider is currently available. Manual verification required.",
+            "summary": summary,
             "fallbackUsed": True,
         }
 
-    historical_residential = [result for result in reputation_successful if _ip_result_historical_residential_proxy(result)]
-    total_risk_count = sum(1 for result in reputation_successful if _ip_result_has_risk(result))
-    hosting_confirmed = any(_ip_result_hosting(result) for result in reputation_successful)
-    active_vpn_confirmed = any((result.get("flags") or {}).get("vpn") and (result.get("flags") or {}).get("active") for result in reputation_successful)
-    residential_conflict = any((result.get("flags") or {}).get("residential") for result in reputation_successful) and total_risk_count > 0
-    disagreement = _provider_results_disagree(reputation_successful)
+    historical_residential = [result for result in detector_successful if _ip_result_historical_residential_proxy(result)]
+    stale_risk = [result for result in detector_successful if _ip_result_stale_risk(result)]
+    current_risk_results = [result for result in detector_successful if _ip_result_has_risk(result) and not _ip_result_stale_risk(result)]
+    total_risk_count = len(current_risk_results)
+    total_any_risk_count = total_risk_count + len(stale_risk)
+    hosting_confirmed = any(_ip_result_hosting(result) for result in current_risk_results)
+    active_vpn_confirmed = any((result.get("flags") or {}).get("vpn") and (result.get("flags") or {}).get("active") for result in current_risk_results)
+    residential_conflict = any((result.get("flags") or {}).get("residential") for result in detector_successful) and total_any_risk_count > 0
+    disagreement = _provider_results_disagree(detector_successful)
 
-    if historical_residential and total_risk_count == len(historical_residential):
+    if historical_residential and total_any_risk_count == len(historical_residential):
         return {
             "verdict": "REVIEW",
             "level": "yellow",
@@ -8356,11 +8522,21 @@ def _consensus_ip_intelligence(results, skipped_count=0):
             "fallbackUsed": False,
         }
 
-    if total_risk_count >= 2 or (active_vpn_confirmed and hosting_confirmed):
+    if stale_risk and total_risk_count < 2:
+        return {
+            "verdict": "REVIEW",
+            "level": "yellow",
+            "summary": "One provider reported a stale or historical VPN/proxy signal. Manual review is required before making a decision.",
+            "fallbackUsed": False,
+        }
+
+    single_active_hosting_signal = total_risk_count == 1 and active_vpn_confirmed and hosting_confirmed
+    single_strong_current_signal = total_risk_count == 1 and any(_ip_result_strong_current_risk(result) for result in current_risk_results)
+    if total_risk_count >= 2 or single_active_hosting_signal or single_strong_current_signal:
         return {
             "verdict": "VPN / PROXY LIKELY",
             "level": "red",
-            "summary": "Multiple providers independently identified this IP as VPN/proxy/datacenter. Candidate should be reviewed before continuing.",
+            "summary": "VPN/proxy detector signals indicate this IP is likely VPN/proxy/datacenter. Candidate should be reviewed before continuing.",
             "fallbackUsed": False,
         }
 
@@ -8401,13 +8577,15 @@ async def _run_ip_intelligence_lookup(ip_value):
         except Exception as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
             logger.warning("[IP-INTEL] provider=%s duration_ms=%s success=false failure=%s", provider.name, duration_ms, exc.__class__.__name__)
-            provider_results.append(_empty_ip_provider_result(provider.name, "failed", "Provider lookup failed.", provider.reputation_capable))
+            provider_results.append(_empty_ip_provider_result(provider.name, "failed", "Provider lookup failed.", provider.reputation_capable, provider.capability))
 
     consensus = _consensus_ip_intelligence(provider_results, skipped_count=len(skipped))
+    last_seen_values = [str(result.get("lastSeen") or "").strip() for result in provider_results if str(result.get("lastSeen") or "").strip()]
     return {
         "ok": True,
         "ip": normalized_ip,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "lastSeen": last_seen_values[0] if last_seen_values else "",
         "verdict": consensus["verdict"],
         "level": consensus["level"],
         "summary": consensus["summary"],

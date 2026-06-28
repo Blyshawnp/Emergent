@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api';
 
 export const CANDIDATE_IP_INTELLIGENCE_STORAGE_KEY = 'mts_candidate_ip_intelligence';
+export const VPN_PROXY_CHECK_LABEL = 'VPN / Proxy Check';
 
 const IPV4_PATTERN = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const IPV6_SEGMENT_PATTERN = /^[0-9a-fA-F]{1,4}$/;
@@ -63,8 +64,14 @@ function verdictClass(level) {
   return 'ip-verdict-gray';
 }
 
+export function vpnProxyNeedsTesterDecision(result) {
+  const verdict = String(result?.verdict || '').trim().toUpperCase();
+  return verdict === 'REVIEW' || verdict === 'VPN / PROXY LIKELY';
+}
+
 function riskText(result) {
   if (!result) return 'Unknown';
+  if (result.capability === 'metadata_only' || result.reputationCapable === false) return 'Metadata only';
   if (result.vpnProxy) return result.vpnProxy;
   const flags = result.flags || {};
   return ['vpn', 'proxy', 'hosting', 'datacenter', 'tor', 'residential_proxy'].some((key) => flags[key]) ? 'Yes' : 'No';
@@ -83,6 +90,7 @@ export function CandidateIpProviderTable({ results = [] }) {
             <th>Provider</th>
             <th>Status</th>
             <th>VPN / Proxy</th>
+            <th>Capability</th>
             <th>Last Seen</th>
             <th>ISP</th>
             <th>ASN</th>
@@ -97,13 +105,14 @@ export function CandidateIpProviderTable({ results = [] }) {
         </thead>
         <tbody>
           {rows.map((result, index) => {
-            const risky = riskText(result) === 'Yes';
+            const risky = result.capability === 'vpn_proxy_detector' && result.reputationCapable !== false && riskText(result) === 'Yes';
             const failed = result.status && !['ok', 'metadata'].includes(result.status);
             return (
               <tr key={`${result.provider || 'provider'}-${index}`} className={risky ? 'ip-provider-conflict' : failed ? 'ip-provider-failed' : ''}>
                 <td>{result.provider || 'Unknown'}</td>
                 <td>{result.status || 'Unknown'}</td>
                 <td>{riskText(result)}</td>
+                <td>{result.capability === 'vpn_proxy_detector' || result.reputationCapable ? 'VPN/proxy detector' : 'Metadata only'}</td>
                 <td>{result.lastSeen || 'N/A'}</td>
                 <td>{result.isp || 'N/A'}</td>
                 <td>{result.asn || 'N/A'}</td>
@@ -131,39 +140,46 @@ export function CandidateIpResultSummary({ result }) {
         <div className="ip-verdict-label">Current Verdict</div>
         <div className="ip-verdict-value">{result.verdict || 'UNABLE TO VERIFY'}</div>
       </div>
-      <div className="ip-verdict-summary">{result.summary || 'No summary available.'}</div>
+      <div className="ip-verdict-summary">
+        {result.summary || 'No summary available.'}
+        {result.lastSeen ? (
+          <div className="ip-last-seen"><strong>Last Seen:</strong> {result.lastSeen}</div>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly = false }) {
+export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly = false, showTrainerNotes = false }) {
   if (!result) return null;
   return (
     <div className="card candidate-ip-review-card" data-testid="candidate-ip-review">
-      <h3>Candidate IP Intelligence</h3>
+      <h3>{VPN_PROXY_CHECK_LABEL}</h3>
       <CandidateIpResultSummary result={result} />
       <div className="ip-review-grid">
         <div><strong>Candidate IP:</strong> {result.ip || 'N/A'}</div>
         <div><strong>Last Checked:</strong> {formatTimestamp(result.timestamp)}</div>
       </div>
       <div className="text-sm text-muted" style={{ marginTop: 10 }}>
-        This is decision support only. It does not automatically determine the session result.
+        This is decision support only. The tester always makes the final decision.
       </div>
-      <details className="ip-provider-details" open>
+      <details className="ip-provider-details">
         <summary>Provider Results</summary>
         <CandidateIpProviderTable results={result.providerResults} />
       </details>
-      <label className="ip-trainer-notes">
-        <span>Trainer Notes</span>
-        <textarea
-          rows={3}
-          value={notes || ''}
-          onChange={(event) => onNotesChange?.(event.target.value)}
-          readOnly={readOnly}
-          placeholder="Example: Candidate explained they were using a company VPN."
-          data-testid="candidate-ip-trainer-notes"
-        />
-      </label>
+      {showTrainerNotes ? (
+        <label className="ip-trainer-notes">
+          <span>Trainer Notes</span>
+          <textarea
+            rows={3}
+            value={notes || ''}
+            onChange={(event) => onNotesChange?.(event.target.value)}
+            readOnly={readOnly}
+            placeholder="Example: Candidate explained they were using a company VPN."
+            data-testid="candidate-ip-trainer-notes"
+          />
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -175,14 +191,12 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   const [validationMessage, setValidationMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
-  const [notes, setNotes] = useState(initialResult?.trainerNotes || '');
 
   const lastChecked = useMemo(() => formatTimestamp(result?.timestamp), [result]);
 
   useEffect(() => {
     setResult(initialResult || null);
     setIp(initialResult?.ip || '');
-    setNotes(initialResult?.trainerNotes || '');
   }, [initialResult]);
 
   const persist = async (nextResult) => {
@@ -209,12 +223,12 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
         setValidationMessage(response?.error || 'IP lookup could not be completed.');
         return;
       }
-      const next = { ...response, trainerNotes: notes };
+      const next = { ...response };
       setResult(next);
-      setProviderOpen(true);
+      setProviderOpen(false);
       await persist(next);
     } catch (_error) {
-      setValidationMessage('No IP reputation provider is currently available. Manual verification required.');
+      setValidationMessage('No VPN/proxy reputation provider available. Manual verification required.');
     } finally {
       setLoading(false);
     }
@@ -223,27 +237,9 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   const handleClear = async () => {
     setIp('');
     setResult(null);
-    setNotes('');
     setValidationMessage('');
     setProviderOpen(false);
     await persist(null);
-  };
-
-  const handleNotesChange = async (value) => {
-    setNotes(value);
-    if (!result) return;
-    const next = { ...result, trainerNotes: value };
-    setResult(next);
-    storeCandidateIpIntelligence(next);
-    onResultChange?.(next);
-    try {
-      const current = await api.getCurrentSession(3000);
-      if (current?.has_active) {
-        await api.updateSession({ candidate_ip_intelligence: next });
-      }
-    } catch (_error) {
-      // Notes remain in sessionStorage if no active backend session exists yet.
-    }
   };
 
   return (
@@ -254,7 +250,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
       >
-        <span>Candidate IP Intelligence</span>
+        <span>{VPN_PROXY_CHECK_LABEL}</span>
         <span>{open ? 'Collapse' : 'Expand'}</span>
       </button>
       {!open && result && (
@@ -296,16 +292,11 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
                 <span><strong>Current Verdict:</strong> {result.verdict || 'UNABLE TO VERIFY'}</span>
               </div>
               <CandidateIpResultSummary result={result} />
-              <label className="ip-trainer-notes">
-                <span>Trainer Notes</span>
-                <textarea
-                  rows={3}
-                  value={notes}
-                  onChange={(event) => handleNotesChange(event.target.value)}
-                  placeholder="Example: Candidate explained they were using a company VPN."
-                  data-testid="candidate-ip-notes"
-                />
-              </label>
+              {vpnProxyNeedsTesterDecision(result) ? (
+                <div className="ip-decision-reminder" data-testid="candidate-ip-decision-reminder">
+                  If the candidate turns off a VPN/proxy, wait 2-3 minutes before checking again. Reputation and routing services may take a few minutes to reflect the change.
+                </div>
+              ) : null}
               <details className="ip-provider-details" open={providerOpen} onToggle={(event) => setProviderOpen(event.currentTarget.open)}>
                 <summary>Provider Results</summary>
                 <CandidateIpProviderTable results={result.providerResults} />
@@ -313,7 +304,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
             </>
           ) : (
             <div className="text-sm text-muted">
-              This tool uses provider signals for decision support only. It never automatically fails a candidate.
+              This tool checks VPN/proxy reputation signals for decision support only. It never automatically fails a candidate.
             </div>
           )}
         </div>

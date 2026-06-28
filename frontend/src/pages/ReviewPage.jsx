@@ -995,6 +995,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         notes={s.candidate_ip_intelligence?.trainerNotes || ''}
         onNotesChange={handleCandidateIpNotesChange}
         readOnly={isHistoricalReview}
+        showTrainerNotes
       />
 
       <div style={{ marginTop: 32 }}>

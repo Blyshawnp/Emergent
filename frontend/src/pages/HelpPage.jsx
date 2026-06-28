@@ -152,8 +152,8 @@ const HELP_TOPICS = [
       'Select the headset brand/model before answering USB and Noise Cancelling.',
       'Headset must be USB with a noise-cancelling microphone. Approved headset selections automatically mark USB and Noise Cancelling as Yes.',
       'VPN must be off, and required browser checks must pass before you can continue.',
-      'When checking for VPN or proxy, use Candidate IP Intelligence as decision support and manually review the result.',
-      'Candidate IP Intelligence never fails a candidate automatically. The tester always makes the final decision.',
+      'When checking for VPN or proxy, use VPN / Proxy Check as decision support and manually review the result.',
+      'VPN / Proxy Check never fails a candidate automatically. The tester always makes the final decision.',
       'Headset and VPN fail popups include Discord copy buttons when the matching post template is available.',
       'Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.',
       'When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.',
@@ -488,7 +488,7 @@ const FAQ_FALLBACK = [
   },
   {
     question: 'How do I check a candidate IP address?',
-    blocks: [{ type: 'paragraph', text: 'On Basics, expand Candidate IP Intelligence, enter the public IP address, and click Check IP. If no provider is available, use manual verification.' }],
+    blocks: [{ type: 'paragraph', text: 'On Basics, expand VPN / Proxy Check, enter the public IP address, and click Check IP. If no provider is available, use manual verification.' }],
   },
   {
     question: 'What if the candidate stops responding?',
@@ -1044,16 +1044,16 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
 
             <div className="help-troubleshooting-section">
               <div className="help-support-tip help-support-tip-info">
-                <strong>Live content not loading?</strong>
-                <span>If alerts, the ticker, or candidate lookup appear stale, use Refresh from the affected screen. If it still won&apos;t update, contact support.</span>
+                <strong>Live Content Connection</strong>
+                <span>Unable to connect to the live content source. Please refresh and contact support if this continues.</span>
               </div>
               <div className="help-support-tip help-support-tip-warn">
-                <strong>Live data temporarily unavailable</strong>
-                <span>Occasionally a live source is briefly rate-limited. Please wait a minute, then try Refresh.</span>
+                <strong>Live Ticker</strong>
+                <span>If live ticker messages do not refresh, wait a minute, refresh the app, and contact support if the issue continues.</span>
               </div>
               <div className="help-support-tip help-support-tip-success">
-                <strong>Need help, a bug fix, or an override?</strong>
-                <span>Submit a ticket below or post in the Discord Tester Room.</span>
+                <strong>App Support Form</strong>
+                <span>For feature requests, bug reports, or account overrides, please submit a ticket using the button below or visit the Discord Tester Room.</span>
               </div>
             </div>
 

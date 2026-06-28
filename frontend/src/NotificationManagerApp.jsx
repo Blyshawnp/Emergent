@@ -1473,6 +1473,12 @@ const HEADSET_DENIAL_REASONS = [
   'Other',
 ];
 
+export function buildSamHeadsetResearchUrl(item) {
+  const headset = `${item?.brand || ''} ${item?.model || ''}`.trim().replace(/\s+/g, ' ');
+  const query = `Does the headset ${headset || '[BRAND MODEL]'} have a noise cancelling microphone and connect via USB?`;
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+}
+
 function formatHeadsetSubmittedDate(value) {
   if (!value) return 'N/A';
   const parsed = new Date(value);
@@ -1487,8 +1493,7 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
   const pending = (data?.pending || []).filter((item) => !deferred[`${item.brand}::${item.model}`]);
 
   const lookUp = async (item) => {
-    const question = `Does the "${item.brand} ${item.model}" have a noise cancelling microphone and have a USB connection?`;
-    const url = `https://www.google.com/search?q=${encodeURIComponent(question)}`;
+    const url = buildSamHeadsetResearchUrl(item);
     if (window.electronAPI?.openExternal) {
       await window.electronAPI.openExternal(url);
     } else {
@@ -1559,7 +1564,7 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
               <td className="nm-headset-note-cell">{item.note || 'N/A'}</td>
               {kind === 'pending' ? (
                 <td className="nm-actions-column"><div className="nm-row-actions">
-                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Look Up</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Research Headset</button>
                   <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
                   <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
                   <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
@@ -2302,7 +2307,7 @@ export default function NotificationManagerApp() {
         }));
       }
     });
-  }, [handleCheckForUpdates]);
+  }, [handleCheckForUpdates, requestExitConfirmation]);
 
   useEffect(() => {
     if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) {

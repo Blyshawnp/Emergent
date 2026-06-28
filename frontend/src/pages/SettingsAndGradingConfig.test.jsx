@@ -4,10 +4,11 @@ import { createRoot } from 'react-dom/client';
 import SettingsPage from './SettingsPage';
 import CallsPage from './CallsPage';
 import SupTransferPage from './SupTransferPage';
-import BasicsPage from './BasicsPage';
+import BasicsPage, { buildHeadsetResearchUrl, computeApprovedHeadsetHash } from './BasicsPage';
 import api from '../api';
 
 const mockModal = {
+  alert: jest.fn(),
   showModal: jest.fn(),
   confirm: jest.fn(),
   confirmDanger: jest.fn(),
@@ -103,13 +104,17 @@ beforeEach(() => {
   mockModal.confirm.mockResolvedValue(true);
   mockModal.confirmDanger.mockResolvedValue(false);
   mockModal.warning.mockResolvedValue(true);
+  mockModal.alert.mockResolvedValue(true);
   mockModal.error.mockResolvedValue(true);
   api.updateSession.mockResolvedValue({});
   api.lookupSharedCandidate.mockResolvedValue({ ok: true, matches: [] });
   api.logHeadsetReview.mockResolvedValue({ ok: true });
   api.startSession.mockResolvedValue({ ok: true });
+  window.localStorage.clear();
+  window.sessionStorage.clear();
   window.electronAPI = {
     setUnsavedChanges: jest.fn().mockResolvedValue(undefined),
+    openExternal: jest.fn().mockResolvedValue({ ok: true }),
   };
 });
 
@@ -435,6 +440,261 @@ test('basics headset search matches brand and model portions while preserving un
   expect(view.container.textContent).toContain('No matching approved headsets');
   expect(view.container.textContent).not.toContain('Approved headset selected. USB and Noise Cancelling are marked Yes automatically.');
 
+  await view.unmount();
+});
+
+test('basics shows headset list update popup once for a changed approved-list hash', async () => {
+  const oldGroups = [{ brand: 'Logitech', models: ['H390'] }];
+  const newGroups = [{ brand: 'Logitech', models: ['H390', 'H650e'] }];
+  window.localStorage.setItem('mts_approved_headset_list_seen_hash', computeApprovedHeadsetHash(oldGroups));
+  mockModal.showModal.mockResolvedValue('skip');
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: newGroups });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Headset List Updated',
+    body: 'Approved headsets have been added or updated since your last session. The headset list has been refreshed.',
+    buttons: expect.arrayContaining([
+      expect.objectContaining({ label: 'View Headsets' }),
+      expect.objectContaining({ label: 'Continue' }),
+      expect.objectContaining({ label: 'Skip' }),
+    ]),
+  }));
+  expect(window.localStorage.getItem('mts_approved_headset_list_seen_hash')).toBe(computeApprovedHeadsetHash(newGroups));
+  await view.unmount();
+});
+
+test('unknown headset research opens the required search query without approving the headset', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="basics-brand"]'), 'Acme USB 100');
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="headset-research-btn"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith(buildHeadsetResearchUrl('Acme USB 100'));
+  expect(mockModal.alert).toHaveBeenCalledWith(
+    'Research Headset',
+    expect.stringContaining('still requires admin review')
+  );
+  expect(view.container.textContent).not.toContain('Approved headset selected');
+  await view.unmount();
+});
+
+test('vpn proxy review verdict requires explicit manual-review decision before continuing', async () => {
+  const onNavigate = jest.fn();
+  mockModal.showModal.mockResolvedValue('manual');
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      tester_name: 'Tester',
+      final_attempt: false,
+      headset_usb: true,
+      noise_cancel: true,
+      headset_brand: 'Logitech H390',
+      vpn_on: false,
+      chrome_default: true,
+      extensions_disabled: true,
+      popups_allowed: true,
+      candidate_ip_intelligence: {
+        ok: true,
+        ip: '8.8.8.8',
+        timestamp: '2026-06-27T12:00:00Z',
+        verdict: 'REVIEW',
+        level: 'yellow',
+        summary: 'One provider detected VPN/proxy/hosting risk. Manual review is recommended.',
+        providerResults: [],
+      },
+    },
+  });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester' });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={onNavigate} />);
+  expect(view.container.textContent).not.toContain('Trainer Notes');
+  const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
+  expect(providerDetails?.hasAttribute('open') || false).toBe(false);
+  await act(async () => {
+    view.container.querySelector('[data-testid="basics-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'VPN / Proxy Check',
+    buttons: expect.arrayContaining([
+      expect.objectContaining({ label: 'Yes, recheck after a few minutes' }),
+      expect.objectContaining({ label: 'No, continue to VPN/proxy auto-fail' }),
+      expect.objectContaining({ label: 'Continue without auto-fail / manual review' }),
+    ]),
+  }));
+  expect(api.startSession).toHaveBeenCalledWith(expect.objectContaining({
+    candidate_ip_intelligence: expect.objectContaining({
+      verdict: 'REVIEW',
+      testerDecision: expect.objectContaining({ decision: 'manual_review' }),
+    }),
+  }));
+  expect(api.startSession.mock.calls[0][0].auto_fail_reason).toBeUndefined();
+  expect(onNavigate).toHaveBeenCalledWith('calls');
+  await view.unmount();
+});
+
+test('vpn proxy unable-to-turn-off choice uses existing VPN autofail session path', async () => {
+  const onNavigate = jest.fn();
+  mockModal.showModal
+    .mockResolvedValueOnce('fail')
+    .mockResolvedValueOnce(true);
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      tester_name: 'Tester',
+      final_attempt: false,
+      headset_usb: true,
+      noise_cancel: true,
+      headset_brand: 'Logitech H390',
+      vpn_on: false,
+      chrome_default: true,
+      extensions_disabled: true,
+      popups_allowed: true,
+      candidate_ip_intelligence: {
+        ok: true,
+        ip: '8.8.8.8',
+        timestamp: '2026-06-27T12:00:00Z',
+        verdict: 'VPN / PROXY LIKELY',
+        level: 'red',
+        summary: 'VPN/proxy detector signals indicate this IP is likely VPN/proxy/datacenter.',
+        providerResults: [],
+      },
+    },
+  });
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Tester',
+    discord_templates: [{ category: 'Failure Outcomes', title: 'VPN Fail', message: 'VPN fail post' }],
+  });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={onNavigate} />);
+  await act(async () => {
+    view.container.querySelector('[data-testid="basics-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal.mock.calls[0][0]).toEqual(expect.objectContaining({
+    title: 'VPN / Proxy Check',
+  }));
+  expect(mockModal.showModal.mock.calls[1][0]).toEqual(expect.objectContaining({
+    title: 'VPN Issue',
+    body: expect.stringContaining('Using a VPN/proxy is not accepted'),
+  }));
+  expect(api.startSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_status: 'Fail',
+    auto_fail_reason: 'Unable to turn off VPN',
+    candidate_ip_intelligence: expect.objectContaining({
+      verdict: 'VPN / PROXY LIKELY',
+      testerDecision: expect.objectContaining({ decision: 'auto_fail' }),
+    }),
+  }));
+  expect(onNavigate).toHaveBeenCalledWith('review');
+  await view.unmount();
+});
+
+test('vpn proxy recheck choice does not autofail or start session', async () => {
+  mockModal.showModal.mockResolvedValueOnce('recheck');
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      tester_name: 'Tester',
+      final_attempt: false,
+      headset_usb: true,
+      noise_cancel: true,
+      headset_brand: 'Logitech H390',
+      vpn_on: false,
+      chrome_default: true,
+      extensions_disabled: true,
+      popups_allowed: true,
+      candidate_ip_intelligence: {
+        ok: true,
+        ip: '8.8.8.8',
+        timestamp: '2026-06-27T12:00:00Z',
+        verdict: 'REVIEW',
+        level: 'yellow',
+        summary: 'One provider detected VPN/proxy/hosting risk.',
+        providerResults: [],
+      },
+    },
+  });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester' });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    view.container.querySelector('[data-testid="basics-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.warning).toHaveBeenCalledWith('Recheck Needed', expect.stringContaining('Wait 2-3 minutes'));
+  expect(api.startSession).not.toHaveBeenCalled();
+  await view.unmount();
+});
+
+test('existing non-IP VPN unable-to-turn-off flow still autofails as VPN', async () => {
+  const onNavigate = jest.fn();
+  mockModal.showModal.mockResolvedValueOnce(true);
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      tester_name: 'Tester',
+      final_attempt: false,
+      headset_usb: true,
+      noise_cancel: true,
+      headset_brand: 'Logitech H390',
+      vpn_on: true,
+      vpn_off: false,
+      chrome_default: true,
+      extensions_disabled: true,
+      popups_allowed: true,
+    },
+  });
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Tester',
+    discord_templates: [{ category: 'Failure Outcomes', title: 'VPN Fail', message: 'VPN fail post' }],
+  });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={onNavigate} />);
+  await act(async () => {
+    view.container.querySelector('[data-testid="basics-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenCalledTimes(1);
+  expect(mockModal.showModal.mock.calls[0][0]).toEqual(expect.objectContaining({
+    title: 'VPN Issue',
+    body: expect.stringContaining('Using a VPN is not accepted'),
+  }));
+  expect(api.startSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_status: 'Fail',
+    auto_fail_reason: 'Unable to turn off VPN',
+  }));
+  expect(onNavigate).toHaveBeenCalledWith('review');
   await view.unmount();
 });
 

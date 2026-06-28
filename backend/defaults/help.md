@@ -53,8 +53,8 @@ Basics verifies candidate readiness before any scoring begins.
 - Select the headset brand/model before answering USB and Noise Cancelling.
 - Headset must be USB with a noise-cancelling microphone. Approved headset selections automatically mark USB and Noise Cancelling as Yes.
 - VPN must be off, and required browser checks must pass before you can continue.
-- When checking for VPN or proxy, use Candidate IP Intelligence as decision support and manually review the result.
-- Candidate IP Intelligence never fails a candidate automatically. The tester always makes the final decision.
+- When checking for VPN or proxy, use VPN / Proxy Check as decision support and manually review the result.
+- VPN / Proxy Check never fails a candidate automatically. The tester always makes the final decision.
 - Headset and VPN fail popups include Discord copy buttons when the matching post template is available.
 - Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.
 - When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.
