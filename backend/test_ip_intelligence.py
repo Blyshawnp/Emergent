@@ -58,6 +58,7 @@ def risk_provider(name="risk-provider", **flags):
         "vpnProxy": "Yes",
         "isp": "Risk Network",
         "usageType": "VPN",
+        "confidence": "Medium",
         "flags": resolved_flags,
     })
 
@@ -98,7 +99,7 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["verdict"], "UNABLE TO VERIFY")
         self.assertEqual(result["level"], "gray")
-        self.assertEqual(result["summary"], "No VPN/proxy reputation provider is currently available. Manual verification required.")
+        self.assertEqual(result["summary"], "No VPN/proxy reputation provider available. Manual verification required.")
 
     def test_metadata_only_provider_is_unable_to_verify(self):
         result = run_lookup("8.8.8.8", [
@@ -143,6 +144,22 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertIn("historical proxy activity", result["summary"])
         self.assertEqual(result["lastSeen"], "2026-06-20T00:00:00+00:00")
 
+    def test_stale_last_seen_is_review_not_vpn_likely(self):
+        result = run_lookup("8.8.8.8", [
+            MockIpProvider("stale-detector", {
+                "vpnProxy": "Yes",
+                "lastSeen": "2026-06-20T00:00:00+00:00",
+                "usageType": "VPN",
+                "flags": {
+                    "vpn": True,
+                    "active": True,
+                },
+            }),
+        ])
+        self.assertEqual(result["verdict"], "REVIEW")
+        self.assertEqual(result["level"], "yellow")
+        self.assertIn("stale or historical", result["summary"])
+
     def test_metadata_only_provider_cannot_produce_red(self):
         result = run_lookup("8.8.8.8", [
             MockIpProvider("metadata-provider", {
@@ -159,6 +176,36 @@ class IpIntelligenceTests(unittest.TestCase):
             risk_provider("vpn-hosting-provider", vpn=True, hosting=True, datacenter=True, active=True),
         ])
         self.assertEqual(result["verdict"], "VPN / PROXY LIKELY")
+
+    def test_single_strong_current_vpn_signal_is_likely(self):
+        result = run_lookup("8.8.8.8", [
+            MockIpProvider("strong-vpn-provider", {
+                "vpnProxy": "Yes",
+                "usageType": "VPN",
+                "confidence": "High",
+                "flags": {"vpn": True, "active": True},
+            }),
+        ])
+        self.assertEqual(result["verdict"], "VPN / PROXY LIKELY")
+
+    def test_ipinfo_without_privacy_fields_is_metadata_only(self):
+        provider = server.IPinfoProvider()
+        with mock.patch.object(provider, "api_key", return_value="token"):
+            with mock.patch("server.httpx.AsyncClient") as client_cls:
+                response = mock.Mock()
+                response.json.return_value = {
+                    "org": "AS123 Example Datacenter",
+                    "company": {"type": "hosting", "name": "Example Hosting"},
+                    "asn": {"asn": "AS123", "type": "hosting", "name": "Example Hosting"},
+                }
+                response.raise_for_status.return_value = None
+                client_cls.return_value.__aenter__.return_value.get = mock.AsyncMock(return_value=response)
+                result = asyncio.run(provider.lookup("8.8.8.8"))
+        self.assertEqual(result["status"], "metadata")
+        self.assertEqual(result["capability"], "metadata_only")
+        self.assertFalse(result["reputationCapable"])
+        self.assertEqual(result["vpnProxy"], "Unknown")
+        self.assertFalse(server._ip_result_has_risk(result))
 
 
 if __name__ == "__main__":

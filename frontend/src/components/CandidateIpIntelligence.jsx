@@ -71,6 +71,7 @@ export function vpnProxyNeedsTesterDecision(result) {
 
 function riskText(result) {
   if (!result) return 'Unknown';
+  if (result.capability === 'metadata_only' || result.reputationCapable === false) return 'Metadata only';
   if (result.vpnProxy) return result.vpnProxy;
   const flags = result.flags || {};
   return ['vpn', 'proxy', 'hosting', 'datacenter', 'tor', 'residential_proxy'].some((key) => flags[key]) ? 'Yes' : 'No';
@@ -104,7 +105,7 @@ export function CandidateIpProviderTable({ results = [] }) {
         </thead>
         <tbody>
           {rows.map((result, index) => {
-            const risky = riskText(result) === 'Yes';
+            const risky = result.capability === 'vpn_proxy_detector' && result.reputationCapable !== false && riskText(result) === 'Yes';
             const failed = result.status && !['ok', 'metadata'].includes(result.status);
             return (
               <tr key={`${result.provider || 'provider'}-${index}`} className={risky ? 'ip-provider-conflict' : failed ? 'ip-provider-failed' : ''}>
@@ -149,7 +150,7 @@ export function CandidateIpResultSummary({ result }) {
   );
 }
 
-export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly = false }) {
+export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly = false, showTrainerNotes = false }) {
   if (!result) return null;
   return (
     <div className="card candidate-ip-review-card" data-testid="candidate-ip-review">
@@ -166,17 +167,19 @@ export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly 
         <summary>Provider Results</summary>
         <CandidateIpProviderTable results={result.providerResults} />
       </details>
-      <label className="ip-trainer-notes">
-        <span>Trainer Notes</span>
-        <textarea
-          rows={3}
-          value={notes || ''}
-          onChange={(event) => onNotesChange?.(event.target.value)}
-          readOnly={readOnly}
-          placeholder="Example: Candidate explained they were using a company VPN."
-          data-testid="candidate-ip-trainer-notes"
-        />
-      </label>
+      {showTrainerNotes ? (
+        <label className="ip-trainer-notes">
+          <span>Trainer Notes</span>
+          <textarea
+            rows={3}
+            value={notes || ''}
+            onChange={(event) => onNotesChange?.(event.target.value)}
+            readOnly={readOnly}
+            placeholder="Example: Candidate explained they were using a company VPN."
+            data-testid="candidate-ip-trainer-notes"
+          />
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -222,10 +225,10 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
       }
       const next = { ...response };
       setResult(next);
-      setProviderOpen(true);
+      setProviderOpen(false);
       await persist(next);
     } catch (_error) {
-      setValidationMessage('No VPN/proxy reputation provider is currently available. Manual verification required.');
+      setValidationMessage('No VPN/proxy reputation provider available. Manual verification required.');
     } finally {
       setLoading(false);
     }

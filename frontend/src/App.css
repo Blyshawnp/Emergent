@@ -1234,9 +1234,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .candidate-ip-card-embedded .candidate-ip-card-toggle {
-  min-height: 48px;
-  padding: 12px 14px;
-  font-size: var(--font-size-base);
+  min-height: 42px;
+  padding: 10px 12px;
+  font-size: var(--font-size-sm);
 }
 
 .candidate-ip-body {
@@ -1247,8 +1247,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .candidate-ip-card-embedded .candidate-ip-body {
-  padding: 0 14px 14px;
-  max-height: min(430px, calc(100vh - 260px));
+  gap: 10px;
+  padding: 0 12px 12px;
+  max-height: min(320px, calc(100vh - 320px));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1256,7 +1257,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .candidate-ip-input-row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto;
-  gap: 14px;
+  gap: 10px;
   align-items: end;
 }
 
@@ -1285,7 +1286,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .candidate-ip-card-embedded .candidate-ip-collapsed-summary {
-  padding: 0 14px 14px;
+  padding: 0 12px 12px;
 }
 
 .candidate-ip-meta-row {
@@ -1305,10 +1306,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .ip-verdict-banner {
   display: grid;
-  grid-template-columns: minmax(130px, 190px) 1fr;
-  gap: 12px;
+  grid-template-columns: minmax(120px, 170px) 1fr;
+  gap: 10px;
   align-items: center;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 2px solid var(--border-default);
   border-radius: var(--radius-md);
 }
@@ -1323,7 +1324,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .ip-verdict-value {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-base);
   font-weight: 900;
   line-height: 1.1;
 }
@@ -1374,7 +1375,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .ip-provider-details {
-  padding-top: 12px;
+  padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -1387,8 +1388,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .ip-provider-table-wrap {
   max-width: 100%;
-  max-height: 260px;
-  margin-top: 10px;
+  max-height: 180px;
+  margin-top: 8px;
   overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
@@ -1402,7 +1403,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .ip-provider-table th,
 .ip-provider-table td {
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--font-size-xs);
   text-align: left;

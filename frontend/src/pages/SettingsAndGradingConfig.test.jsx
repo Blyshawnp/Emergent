@@ -527,6 +527,9 @@ test('vpn proxy review verdict requires explicit manual-review decision before c
   api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
 
   const view = await renderComponent(<BasicsPage onNavigate={onNavigate} />);
+  expect(view.container.textContent).not.toContain('Trainer Notes');
+  const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
+  expect(providerDetails?.hasAttribute('open') || false).toBe(false);
   await act(async () => {
     view.container.querySelector('[data-testid="basics-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();

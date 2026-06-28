@@ -8229,26 +8229,21 @@ class IPinfoProvider(IpIntelligenceProvider):
             response.raise_for_status()
             data = response.json()
         privacy = data.get("privacy") or {}
+        has_privacy_fields = any(key in privacy for key in ("vpn", "proxy", "hosting", "tor"))
         company = data.get("company") or {}
         asn = data.get("asn") or {}
-        usage_text = " ".join([
-            str(company.get("type") or ""),
-            str(asn.get("type") or ""),
-            str(company.get("name") or ""),
-            str(asn.get("name") or ""),
-        ])
         flags = {
             "vpn": _ip_safe_bool(privacy.get("vpn")),
             "proxy": _ip_safe_bool(privacy.get("proxy")),
-            "hosting": _ip_safe_bool(privacy.get("hosting")) or _contains_any(usage_text, ("hosting",)),
-            "datacenter": _contains_any(usage_text, ("datacenter", "data center")),
+            "hosting": _ip_safe_bool(privacy.get("hosting")),
+            "datacenter": False,
             "tor": _ip_safe_bool(privacy.get("tor")),
             "active": any(_ip_safe_bool(privacy.get(key)) for key in ("vpn", "proxy", "hosting", "tor")),
-            "residential": _contains_any(usage_text, RESIDENTIAL_USAGE_MARKERS),
         }
+        capability = self.capability if has_privacy_fields else "metadata_only"
         return _normalize_ip_provider_result({
             "provider": self.name,
-            "status": "ok",
+            "status": "ok" if has_privacy_fields else "metadata",
             "isp": data.get("org") or company.get("name") or "",
             "asn": asn.get("asn") or "",
             "usageType": company.get("type") or asn.get("type") or "",
@@ -8257,8 +8252,9 @@ class IPinfoProvider(IpIntelligenceProvider):
             "city": data.get("city") or "",
             "connectionType": "privacy" if flags["active"] else "",
             "confidence": "High" if flags["active"] else "Medium",
-            "reputationCapable": True,
-            "capability": self.capability,
+            "notes": "" if has_privacy_fields else "Metadata only. IPinfo privacy fields were not available in this response.",
+            "reputationCapable": has_privacy_fields,
+            "capability": capability,
             "flags": flags,
         })
 
@@ -8464,9 +8460,28 @@ def _ip_result_hosting(result):
     return bool(flags.get("hosting") or flags.get("datacenter"))
 
 
+def _ip_result_strong_current_risk(result):
+    flags = result.get("flags") or {}
+    if not bool(flags.get("active")) or _ip_result_stale_risk(result):
+        return False
+    if str(result.get("confidence") or "").strip().lower() != "high":
+        return False
+    if any(bool(flags.get(key)) for key in ("vpn", "hosting", "datacenter", "tor")):
+        return True
+    network_text = " ".join(str(result.get(key) or "") for key in ("usageType", "connectionType"))
+    return _contains_any(network_text, ("vpn", "hosting", "datacenter", "data center", "tor"))
+
+
 def _ip_result_historical_residential_proxy(result):
     flags = result.get("flags") or {}
     return bool(flags.get("proxy") or flags.get("residential_proxy")) and bool(flags.get("historical")) and bool(flags.get("residential"))
+
+
+def _ip_result_stale_risk(result):
+    flags = result.get("flags") or {}
+    if not _ip_result_has_risk(result):
+        return False
+    return bool(flags.get("historical")) or _last_seen_older_than(result.get("lastSeen"), 48)
 
 
 def _provider_results_disagree(results):
@@ -8479,9 +8494,9 @@ def _consensus_ip_intelligence(results, skipped_count=0):
     detector_successful = [result for result in successful if result.get("status") == "ok" and result.get("capability") == "vpn_proxy_detector" and result.get("reputationCapable", True)]
     metadata_successful = [result for result in successful if result.get("capability") == "metadata_only" or not result.get("reputationCapable", True)]
     if not detector_successful:
-        summary = "No VPN/proxy reputation provider is currently available. Manual verification required."
+        summary = "No VPN/proxy reputation provider available. Manual verification required."
         if metadata_successful:
-            summary = "Only network metadata is available. No VPN/proxy reputation provider is currently available. Manual verification required."
+            summary = "Only network metadata is available. No VPN/proxy reputation provider available. Manual verification required."
         return {
             "verdict": "UNABLE TO VERIFY",
             "level": "gray",
@@ -8490,13 +8505,16 @@ def _consensus_ip_intelligence(results, skipped_count=0):
         }
 
     historical_residential = [result for result in detector_successful if _ip_result_historical_residential_proxy(result)]
-    total_risk_count = sum(1 for result in detector_successful if _ip_result_has_risk(result))
-    hosting_confirmed = any(_ip_result_hosting(result) for result in detector_successful)
-    active_vpn_confirmed = any((result.get("flags") or {}).get("vpn") and (result.get("flags") or {}).get("active") for result in detector_successful)
-    residential_conflict = any((result.get("flags") or {}).get("residential") for result in detector_successful) and total_risk_count > 0
+    stale_risk = [result for result in detector_successful if _ip_result_stale_risk(result)]
+    current_risk_results = [result for result in detector_successful if _ip_result_has_risk(result) and not _ip_result_stale_risk(result)]
+    total_risk_count = len(current_risk_results)
+    total_any_risk_count = total_risk_count + len(stale_risk)
+    hosting_confirmed = any(_ip_result_hosting(result) for result in current_risk_results)
+    active_vpn_confirmed = any((result.get("flags") or {}).get("vpn") and (result.get("flags") or {}).get("active") for result in current_risk_results)
+    residential_conflict = any((result.get("flags") or {}).get("residential") for result in detector_successful) and total_any_risk_count > 0
     disagreement = _provider_results_disagree(detector_successful)
 
-    if historical_residential and total_risk_count == len(historical_residential):
+    if historical_residential and total_any_risk_count == len(historical_residential):
         return {
             "verdict": "REVIEW",
             "level": "yellow",
@@ -8504,8 +8522,17 @@ def _consensus_ip_intelligence(results, skipped_count=0):
             "fallbackUsed": False,
         }
 
+    if stale_risk and total_risk_count < 2:
+        return {
+            "verdict": "REVIEW",
+            "level": "yellow",
+            "summary": "One provider reported a stale or historical VPN/proxy signal. Manual review is required before making a decision.",
+            "fallbackUsed": False,
+        }
+
     single_active_hosting_signal = total_risk_count == 1 and active_vpn_confirmed and hosting_confirmed
-    if total_risk_count >= 2 or single_active_hosting_signal:
+    single_strong_current_signal = total_risk_count == 1 and any(_ip_result_strong_current_risk(result) for result in current_risk_results)
+    if total_risk_count >= 2 or single_active_hosting_signal or single_strong_current_signal:
         return {
             "verdict": "VPN / PROXY LIKELY",
             "level": "red",
