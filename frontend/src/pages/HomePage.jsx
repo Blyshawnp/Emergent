@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Rocket, Repeat, History as HistoryIcon, Settings as SettingsIcon, HelpCircle, Activity, Clock3, BarChart3 } from 'lucide-react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
@@ -374,61 +375,133 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   };
 
   return (
-    <div data-testid="home-page" style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
-      <div className="home-header" style={{ marginBottom: 12 }} data-tour="home-header">
-        <div>
-          <h1 style={{ marginBottom: 0 }}>Welcome, {name}!</h1>
-          <p className="text-muted" style={{ margin: 0 }}>Mock Testing Suite - Certification</p>
+    <div data-testid="home-page" className="mc-home">
+      {/* Where am I + session status */}
+      <header className="mc-topbar" data-tour="home-header">
+        <div className="mc-topbar-id">
+          <span className="mc-eyebrow">Mock Testing Suite — Certification</span>
+          <h1 className="mc-greeting">Welcome, {name}!</h1>
         </div>
-      </div>
-      <div className="stats-row" style={{ marginBottom: 16 }}>
-        <StatCard label="Total Sessions" value={stats.total || 0} />
-        <StatCard label="Pass Rate" value={`${stats.pass_rate || 0}%`} color="var(--color-success)" />
-        <StatCard label="NC/NS Rate" value={`${stats.total > 0 ? Math.round((stats.ncns || 0) / stats.total * 100) : 0}%`} color="var(--color-danger)" />
-      </div>
-      <div className="home-actions" style={{ marginBottom: 12 }}>
-        <button className="home-btn home-btn-start" onClick={startStandardSession} data-testid="home-start-btn">
-          {'\uD83D\uDE80'} Start New Session
-        </button>
-        <button className="home-btn home-btn-sup" onClick={handleSupTransferOnly} data-testid="home-sup-only-btn">
-          {'\uD83D\uDD04'} Supervisor Transfer Only
-        </button>
-        <button className="home-btn home-btn-history" onClick={() => onNavigate('history')} data-testid="home-history-btn">
-          {'\uD83D\uDCCA'} Session History
-        </button>
-      </div>
-      <div className="home-section" style={{ flex: 1, minHeight: 0 }}>
-        <h3>Recent Sessions</h3>
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          {recent.length > 0 ? recent.map((s, i) => (
-            <div
-              key={i}
-              className="recent-row"
-              onClick={() => onNavigate('history', { selectedHistoryRecord: s })}
-              style={{ cursor: 'pointer' }}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onNavigate('history', { selectedHistoryRecord: s });
-                }
-              }}
-              title="Open this history record"
-            >
-              <span className="recent-date">{s.timestamp || 'Unknown'}</span>
-              <span style={{ margin: '0 8px', color: 'var(--text-tertiary)' }}>&bull;</span>
-              <span className="recent-name">{s.candidate || 'Unknown'}</span>
-              <span className={`badge ${badgeClass(s.status)}`}>{s.status || '?'}</span>
-            </div>
-          )) : startupStatuses?.history === 'pending' ? (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No recent sessions loaded yet</div>
-          ) : startupStatuses?.history === 'fallback' || startupStatuses?.history === 'error' ? (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Recent sessions could not be loaded.</div>
+        <div className="mc-session-status">
+          {resumableHistory.length > 0 ? (
+            <span className="mc-status-chip is-active">
+              <span className="mc-status-dot" /> Resume available
+            </span>
           ) : (
-            <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No sessions yet. Start testing to see history here.</div>
+            <span className="mc-status-chip">
+              <span className="mc-status-dot" /> No active session
+            </span>
           )}
         </div>
+      </header>
+
+      {/* Quick Actions — the visual focus / mission control */}
+      <section className="mc-section mc-section-actions">
+        <div className="mc-section-head">
+          <h3 className="mc-section-title">Quick actions</h3>
+          <span className="mc-section-hint">What would you like to do next?</span>
+        </div>
+        <div className="mc-quick-actions">
+          <button className="qa-tile qa-tile-primary" onClick={startStandardSession} data-testid="home-start-btn">
+            <span className="qa-icon"><Rocket size={22} strokeWidth={2} /></span>
+            <span className="qa-text">
+              <span className="qa-title">New session</span>
+              <span className="qa-sub">Begin a full mock test</span>
+            </span>
+          </button>
+          <button className="qa-tile" onClick={handleSupTransferOnly} data-testid="home-sup-only-btn">
+            <span className="qa-icon qa-icon-green"><Repeat size={20} strokeWidth={2} /></span>
+            <span className="qa-text">
+              <span className="qa-title">Supervisor transfer</span>
+              <span className="qa-sub">Resume or sup-only flow</span>
+            </span>
+          </button>
+          <button className="qa-tile" onClick={() => onNavigate('history')} data-testid="home-history-btn">
+            <span className="qa-icon qa-icon-amber"><HistoryIcon size={20} strokeWidth={2} /></span>
+            <span className="qa-text">
+              <span className="qa-title">Session history</span>
+              <span className="qa-sub">Review past results</span>
+            </span>
+          </button>
+          <button className="qa-tile" onClick={() => onNavigate('settings')}>
+            <span className="qa-icon qa-icon-slate"><SettingsIcon size={20} strokeWidth={2} /></span>
+            <span className="qa-text">
+              <span className="qa-title">Settings</span>
+              <span className="qa-sub">Configure your app</span>
+            </span>
+          </button>
+          <button className="qa-tile" onClick={() => onNavigate('help')}>
+            <span className="qa-icon qa-icon-cyan"><HelpCircle size={20} strokeWidth={2} /></span>
+            <span className="qa-text">
+              <span className="qa-title">Help</span>
+              <span className="qa-sub">Guides & support</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      {/* Lower grid: statistics + recent activity */}
+      <div className="mc-grid">
+        <section className="mc-panel">
+          <div className="mc-section-head">
+            <h3 className="mc-section-title"><BarChart3 size={16} strokeWidth={2.2} /> Today&apos;s statistics</h3>
+          </div>
+          <div className="stats-row">
+            <StatCard label="Total Sessions" value={stats.total || 0} />
+            <StatCard label="Pass Rate" value={`${stats.pass_rate || 0}%`} color="var(--color-success)" />
+            <StatCard label="NC/NS Rate" value={`${stats.total > 0 ? Math.round((stats.ncns || 0) / stats.total * 100) : 0}%`} color="var(--color-danger)" />
+          </div>
+        </section>
+
+        <section className="mc-panel mc-panel-activity">
+          <div className="mc-section-head">
+            <h3 className="mc-section-title"><Activity size={16} strokeWidth={2.2} /> Recent activity</h3>
+            {recent.length > 0 && (
+              <button className="mc-link-action" onClick={() => onNavigate('history')}>View all</button>
+            )}
+          </div>
+          <div className="mc-activity-list">
+            {recent.length > 0 ? recent.map((s, i) => (
+              <div
+                key={i}
+                className="recent-row"
+                onClick={() => onNavigate('history', { selectedHistoryRecord: s })}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onNavigate('history', { selectedHistoryRecord: s });
+                  }
+                }}
+                title="Open this history record"
+              >
+                <span className="recent-date"><Clock3 size={14} strokeWidth={2} /> {s.timestamp || 'Unknown'}</span>
+                <span className="recent-name">{s.candidate || 'Unknown'}</span>
+                <span className={`badge ${badgeClass(s.status)}`}>{s.status || '?'}</span>
+              </div>
+            )) : (
+              <div className="empty-state">
+                <span className="empty-state-icon"><HistoryIcon size={26} strokeWidth={1.75} /></span>
+                <div className="empty-state-title">
+                  {startupStatuses?.history === 'fallback' || startupStatuses?.history === 'error'
+                    ? 'Recent activity unavailable'
+                    : 'No sessions yet'}
+                </div>
+                <div className="empty-state-body">
+                  {startupStatuses?.history === 'pending'
+                    ? 'Loading your recent sessions…'
+                    : startupStatuses?.history === 'fallback' || startupStatuses?.history === 'error'
+                      ? 'Recent sessions could not be loaded right now.'
+                      : 'Start a mock test and your completed sessions will appear here.'}
+                </div>
+                {!(startupStatuses?.history === 'pending') && (
+                  <button className="btn btn-primary btn-sm" onClick={startStandardSession}>Start a session</button>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
 
       {resumeEntry && (

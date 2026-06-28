@@ -127,3 +127,75 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* =====================================================================
+   NOTIFICATION EDITOR — Outlook-style grouped sections
+   ===================================================================== */
+.nm-fields { gap: 16px; }
+.nm-form-section {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  background: rgba(3, 10, 20, 0.34);
+}
+.nm-form-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.nm-form-section-title {
+  position: relative;
+  padding-left: 12px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #9ec7eb;
+}
+.nm-form-section-title::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 3px; height: 14px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--nm-accent), var(--nm-accent-strong));
+}
+/* Sections already provide grouping; relax nested section card chrome */
+.nm-form-section .nm-active-section,
+.nm-form-section .nm-delivery-section {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+/* =====================================================================
+   SAM DASHBOARD — operational command-center feel
+   ===================================================================== */
+/* Status pills read as a top status strip */
+.nm-hero .nm-pill-row { gap: 8px; }
+.nm-hero .nm-pill {
+  background: rgba(8, 20, 36, 0.6);
+  border-color: rgba(125, 211, 252, 0.22);
+}
+/* Quick actions grid (tighter, scannable desktop density) */
+.nm-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.nm-actions .nm-btn { min-height: 40px; }
+
+/* =====================================================================
+   SAM HELP — settings-doc grouping & rhythm
+   ===================================================================== */
+.nm-help-modal { padding: 26px 28px; }
+.nm-help-grid { gap: 12px; margin: 16px 0; }
+.nm-help-toc { gap: 8px; padding-bottom: 14px; border-bottom: 1px solid rgba(148,163,184,0.12); }
+.nm-help-card { padding: 16px; }
+.nm-help-card h3 { font-size: 15px; }
+.nm-help-header h2 { letter-spacing: -0.01em; }

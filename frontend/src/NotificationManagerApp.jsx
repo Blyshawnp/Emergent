@@ -1257,6 +1257,8 @@ function NotificationEditorModal({
                     Edit this notification, then use the save bar at the bottom of the form to push only this row to the sheet.
                   </div>
 
+                  <section className="nm-form-section">
+                    <div className="nm-form-section-head"><span className="nm-form-section-title">Message</span></div>
                   <div className="nm-field-grid">
                     <div className="nm-field">
                       <label htmlFor="nm-type">Notification Level</label>
@@ -1284,7 +1286,10 @@ function NotificationEditorModal({
                     <label htmlFor="nm-message">Message</label>
                     <textarea id="nm-message" value={selectedItem.Message} onChange={(event) => updateSelected({ Message: event.target.value })} />
                   </div>
+                  </section>
 
+                  <section className="nm-form-section">
+                    <div className="nm-form-section-head"><span className="nm-form-section-title">Status &amp; priority</span></div>
                   <div className="nm-active-section" data-sam-tour="active-status">
                     <div>
                       <div className="nm-active-label">Active Status</div>
@@ -1295,7 +1300,10 @@ function NotificationEditorModal({
                       <span>{selectedItem.Enabled ? 'Enabled' : 'Disabled'}</span>
                     </label>
                   </div>
+                  </section>
 
+                  <section className="nm-form-section">
+                    <div className="nm-form-section-head"><span className="nm-form-section-title">Delivery</span></div>
                   <div className="nm-delivery-section">
                     <div className="nm-active-label">Delivery Types</div>
                     <div className="nm-inline">
@@ -1305,7 +1313,10 @@ function NotificationEditorModal({
                       <label className="nm-checkbox"><input type="checkbox" checked={selectedItem.Persistent} onChange={(event) => updateSelected({ Persistent: event.target.checked })} /> Persistent</label>
                     </div>
                   </div>
+                  </section>
 
+                  <section className="nm-form-section">
+                    <div className="nm-form-section-head"><span className="nm-form-section-title">Schedule</span></div>
                   <div className="nm-field-grid">
                     <div className="nm-field">
                       <label htmlFor="nm-start-date">Starts At Date</label>
@@ -1335,7 +1346,10 @@ function NotificationEditorModal({
                     </button>
                     <span className="nm-inline-note">End date and time are optional. Clear them if this notification should stay active until you disable or remove it.</span>
                   </div>
+                  </section>
 
+                  <section className="nm-form-section">
+                    <div className="nm-form-section-head"><span className="nm-form-section-title">Action button</span></div>
                   <div className="nm-field-grid">
                     <div className="nm-field">
                       <label htmlFor="nm-action-text">Action Text</label>
@@ -1346,6 +1360,7 @@ function NotificationEditorModal({
                       <input id="nm-action-url" value={selectedItem.ActionURL} onChange={(event) => updateSelected({ ActionURL: event.target.value })} />
                     </div>
                   </div>
+                  </section>
 
                   {validation.errors.length > 0 ? (
                     <div className="nm-errors">

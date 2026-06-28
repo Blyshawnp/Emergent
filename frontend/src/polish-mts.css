@@ -293,3 +293,223 @@ textarea:focus-visible {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* =====================================================================
+   MTS HOME — "Mission Control" dashboard architecture
+   ===================================================================== */
+.mc-home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  min-height: 100%;
+  animation: mts-fade-in 180ms ease both;
+}
+
+/* Topbar: where am I + session status */
+.mc-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+.mc-eyebrow {
+  display: block;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+.mc-greeting {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.mc-session-status { flex: 0 0 auto; }
+.mc-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+}
+.mc-status-chip .mc-status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.mc-status-chip.is-active {
+  color: var(--text-primary);
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.1);
+}
+.mc-status-chip.is-active .mc-status-dot {
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+}
+
+/* Section heads */
+.mc-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+.mc-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+}
+.mc-section-title svg { color: var(--color-info); }
+.mc-section-hint { font-size: var(--font-size-sm); color: var(--text-tertiary); }
+.mc-link-action {
+  background: none; border: none; cursor: pointer; padding: 0;
+  color: var(--color-info); font-size: var(--font-size-sm); font-weight: 650;
+}
+.mc-link-action:hover { text-decoration: underline; }
+
+/* Quick actions — visual focus */
+.mc-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-md);
+}
+.qa-tile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  text-align: left;
+  box-shadow: var(--shadow-xs);
+  transition: transform var(--transition-fast),
+              border-color var(--transition-fast),
+              box-shadow var(--transition-fast);
+}
+.qa-tile:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+.qa-tile:active { transform: translateY(0) scale(0.99); }
+.qa-tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.qa-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px; height: 44px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-md);
+  background: rgba(37, 99, 235, 0.14);
+  color: #93c5fd;
+}
+.qa-icon-green { background: rgba(34, 197, 94, 0.14); color: #86efac; }
+.qa-icon-amber { background: rgba(245, 158, 11, 0.16); color: #fcd34d; }
+.qa-icon-slate { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; }
+.qa-icon-cyan  { background: rgba(14, 165, 233, 0.16); color: #7dd3fc; }
+.qa-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qa-title { font-size: var(--font-size-base); font-weight: 700; color: var(--text-primary); }
+.qa-sub { font-size: var(--font-size-xs); color: var(--text-tertiary); }
+.qa-tile-primary {
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-active));
+  border-color: transparent;
+  box-shadow: 0 10px 28px rgba(37, 99, 235, 0.28);
+}
+.qa-tile-primary .qa-icon { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.qa-tile-primary .qa-title { color: #fff; }
+.qa-tile-primary .qa-sub { color: rgba(255, 255, 255, 0.8); }
+
+/* Lower grid */
+.mc-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: var(--space-lg);
+  align-items: start;
+  flex: 1;
+  min-height: 0;
+}
+.mc-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-xs);
+}
+.mc-panel .stats-row { display: grid; grid-template-columns: 1fr; gap: var(--space-md); margin: 0; }
+.mc-panel .stat-card { background: var(--bg-input); border-color: var(--border-subtle); }
+.mc-activity-list { display: flex; flex-direction: column; }
+.mc-activity-list .recent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.mc-activity-list .recent-row:hover { background: var(--bg-card-hover); }
+.mc-activity-list .recent-row + .recent-row { border-top: 1px solid var(--border-subtle); border-radius: 0; }
+.mc-activity-list .recent-date {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--text-tertiary); font-size: var(--font-size-xs); white-space: nowrap;
+}
+.mc-activity-list .recent-name { flex: 1; font-weight: 650; color: var(--text-primary); }
+
+@media (max-width: 1100px) {
+  .mc-grid { grid-template-columns: 1fr; }
+}
+
+/* =====================================================================
+   10. MTS HELP — VS Code-style docs layout (less scrolling fatigue)
+   ===================================================================== */
+.help-doc-grid { gap: var(--space-lg); }
+/* Keep the support panel docked while reading topics */
+.help-support-column {
+  position: sticky;
+  top: var(--space-md);
+  align-self: start;
+  gap: var(--space-md);
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+  padding-right: 4px;
+}
+.help-doc-column { gap: var(--space-md); }
+/* Tighter, more scannable topic cards */
+.help-doc-card { padding: var(--space-md) var(--space-lg); }
+.help-doc-card .help-card-header { margin-bottom: 4px; }
+.help-doc-card h2 { font-size: var(--font-size-lg); letter-spacing: -0.01em; }
+.help-card-eyebrow {
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+/* Compact, intentional category cards */
+.help-category-grid { gap: var(--space-md); }
+.help-category-card {
+  transition: border-color var(--transition-fast),
+              transform var(--transition-fast),
+              box-shadow var(--transition-fast);
+}
+.help-category-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+.help-category-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@media (max-width: 1100px) {
+  .help-support-column { position: static; max-height: none; overflow: visible; }
+}
