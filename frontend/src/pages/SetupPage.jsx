@@ -33,7 +33,7 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
           <div className="card setup-card">
             <div className="form-row"><label>First Name</label><input type="text" value={first} onChange={e => setFirst(e.target.value)} placeholder="e.g. Jordan" data-testid="setup-first" /></div>
             <div className="form-row"><label>Last Name</label><input type="text" value={last} onChange={e => setLast(e.target.value)} placeholder="e.g. Taylor" data-testid="setup-last" /></div>
-            <div className="form-row"><label>Display Name</label><input type="text" value={display} onChange={e => setDisplay(e.target.value)} placeholder="Optional nickname" data-testid="setup-display" /><small className="text-muted">If blank, the app uses the first name from Tester Name.</small></div>
+            <div className="form-row"><label>Display Name</label><input type="text" value={display} onChange={e => setDisplay(e.target.value)} placeholder="Optional nickname" data-testid="setup-display" /><small className="text-muted">Optional. Leave blank to automatically use your first name.</small></div>
           </div>
         </div>
       </div>

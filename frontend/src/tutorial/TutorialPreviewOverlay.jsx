@@ -436,16 +436,18 @@ export default function TutorialPreviewOverlay({
     <div className="tutorial-overlay-root" data-testid="tutorial-overlay">
       <div
         aria-hidden="true"
+        className="tutorial-overlay-scrim"
         style={{
           position: 'fixed',
           inset: 0,
           zIndex: 9998,
-          background: 'rgba(0, 0, 0, 0.48)',
+          background: 'rgba(0, 0, 0, 0.52)',
           pointerEvents: 'none',
         }}
       />
       <div
         aria-hidden="true"
+        className="tutorial-overlay-spotlight"
         style={{
           position: 'fixed',
           zIndex: 9999,
@@ -454,8 +456,8 @@ export default function TutorialPreviewOverlay({
           width: targetRect.width + 16,
           height: targetRect.height + 16,
           borderRadius: 12,
-          border: '2px solid rgba(56, 189, 248, 0.9)',
-          boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.28), 0 0 24px rgba(56, 189, 248, 0.5)',
+          border: '2px solid rgba(56, 189, 248, 0.92)',
+          boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.34), 0 0 28px rgba(56, 189, 248, 0.55)',
           pointerEvents: 'none',
         }}
       />
@@ -463,6 +465,7 @@ export default function TutorialPreviewOverlay({
         role="dialog"
         aria-modal="false"
         aria-label="App tutorial"
+        className="tutorial-overlay-tooltip"
         style={{
           position: 'fixed',
           zIndex: 10000,
@@ -470,25 +473,29 @@ export default function TutorialPreviewOverlay({
           left: tooltipLeft,
           width: tooltipWidth,
           maxWidth: 'calc(100vw - 32px)',
-          color: '#f8fafc',
-          background: '#0b1220',
-          border: '1px solid rgba(56, 189, 248, 0.35)',
-          borderRadius: 16,
-          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(56, 189, 248, 0.18)',
-          padding: 18,
         }}
       >
-        <div style={{ fontSize: 12, fontWeight: 800, color: '#7dd3fc', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0 }}>
-          Tutorial {stepIndex + 1} of {baseSteps.length}
+        <div className="tutorial-overlay-header">
+          <span className="tutorial-overlay-eyebrow">Tutorial</span>
+          <span className="tutorial-overlay-progress">
+            {baseSteps.map((_, idx) => (
+              <span
+                key={idx}
+                className={`tutorial-overlay-progress-dot ${idx === stepIndex ? 'is-active' : idx < stepIndex ? 'is-done' : ''}`}
+                aria-hidden="true"
+              />
+            ))}
+          </span>
+          <span className="tutorial-overlay-count">{stepIndex + 1} / {baseSteps.length}</span>
         </div>
-        <div style={{ color: '#e2e8f0', fontSize: 14, lineHeight: 1.6 }}>
+        <div className="tutorial-overlay-content">
           {renderedStep.content}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 18 }}>
-          <button type="button" onClick={handleSkip} className="btn btn-muted btn-sm">
+        <div className="tutorial-overlay-actions">
+          <button type="button" onClick={handleSkip} className="btn btn-ghost btn-sm">
             Skip
           </button>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className="tutorial-overlay-nav">
             <button type="button" onClick={handleBack} className="btn btn-muted btn-sm" disabled={stepIndex === 0}>
               Back
             </button>

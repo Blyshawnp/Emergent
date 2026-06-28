@@ -203,7 +203,7 @@ test('settings exposes welcome voice and sound volume controls', async () => {
     />
   );
 
-  expect(view.container.textContent).toContain('If blank, the app uses the first name from Tester Name.');
+  expect(view.container.textContent).toContain('Optional. Leave blank to automatically use your first name.');
   expect(view.container.querySelector('[data-testid="settings-welcome-voice"]').value).toBe('male');
   expect(view.container.querySelector('[data-testid="settings-sound-volume"]').value).toBe('medium');
   expect(view.container.querySelector('[data-testid="settings-ticker-speed"]').value).toBe('normal');

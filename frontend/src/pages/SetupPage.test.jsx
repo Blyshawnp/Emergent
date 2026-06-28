@@ -82,7 +82,7 @@ test('setup uses default welcome audio and allows blank display name', async () 
   const view = await renderComponent(<SetupPage onNavigate={jest.fn()} onSetupCompleted={onSetupCompleted} />);
 
   expect(playSound).toHaveBeenCalledWith('welcome', { setupComplete: false });
-  expect(view.container.textContent).toContain('If blank, the app uses the first name from Tester Name.');
+  expect(view.container.textContent).toContain('Optional. Leave blank to automatically use your first name.');
 
   await act(async () => {
     const first = view.container.querySelector('[data-testid="setup-first"]');
