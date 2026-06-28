@@ -773,6 +773,22 @@ export default function BasicsPage({ onNavigate }) {
     onNavigate('review');
   };
 
+  const runVpnAutoFailFlow = async (sessionData, body) => {
+    const yes = await showFailDiscordModal({
+      title: 'VPN Issue',
+      body,
+      templateTitle: 'VPN Fail',
+      helperText: 'Discord Post: VPN Fail',
+    });
+    if (!yes) return false;
+    const failData = { ...sessionData, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
+    window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+    await logUnknownHeadsetIfNeeded(failData);
+    await api.startSession(failData);
+    onNavigate('review');
+    return true;
+  };
+
   const handleVpnProxyDecision = async (sessionData) => {
     if (!vpnProxyNeedsTesterDecision(candidateIpIntelligence)) {
       return { shouldContinue: true, sessionData };
@@ -797,23 +813,16 @@ export default function BasicsPage({ onNavigate }) {
       return { shouldContinue: false, sessionData };
     }
     if (decision === 'fail') {
-      const yes = await showFailDiscordModal({
-        title: 'VPN Issue',
-        body: 'Using a VPN/proxy is not accepted when contracting with ACD and the candidate was not able to turn it off.<br><br>Fail this session?',
-        templateTitle: 'VPN Fail',
-        helperText: 'Discord Post: VPN Fail',
-      });
-      if (!yes) return { shouldContinue: false, sessionData };
       const nextIp = {
         ...candidateIpIntelligence,
         testerDecision: { resultId, decision: 'auto_fail', decidedAt: new Date().toISOString() },
       };
       setCandidateIpIntelligence(nextIp);
-      const failData = { ...sessionData, candidate_ip_intelligence: nextIp, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
-      window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-      await logUnknownHeadsetIfNeeded(failData);
-      await api.startSession(failData);
-      onNavigate('review');
+      const failData = { ...sessionData, candidate_ip_intelligence: nextIp };
+      await runVpnAutoFailFlow(
+        failData,
+        'Using a VPN/proxy is not accepted when contracting with ACD and the candidate was not able to turn it off.<br><br>This will mark the candidate as failed for this session. Continue?'
+      );
       return { shouldContinue: false, sessionData: failData };
     }
     if (decision === 'manual') {
@@ -906,19 +915,10 @@ export default function BasicsPage({ onNavigate }) {
       return;
     }
     if (workflowData.vpn_on && workflowData.vpn_off === false) {
-      const yes = await showFailDiscordModal({
-        title: 'VPN Issue',
-        body: 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?',
-        templateTitle: 'VPN Fail',
-        helperText: 'Discord Post: VPN Fail',
-      });
-      if (yes) {
-        const failData = { ...workflowData, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
-        window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await logUnknownHeadsetIfNeeded(failData);
-        await api.startSession(failData);
-        onNavigate('review');
-      }
+      await runVpnAutoFailFlow(
+        workflowData,
+        'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?'
+      );
       return;
     }
     if (workflowData.chrome_default === false) {

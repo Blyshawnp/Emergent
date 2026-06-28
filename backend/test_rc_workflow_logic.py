@@ -118,6 +118,25 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             "Wrong headset (not noise cancelling)",
         )
 
+    def test_vpn_auto_fail_form_payload_maps_to_existing_vpn_choice(self):
+        session = {
+            "candidate_name": "Candidate",
+            "tester_name": "Tester",
+            "headset_brand": "Logitech H390",
+            "auto_fail_reason": "Unable to turn off VPN",
+            "final_status": "Fail",
+            "candidate_ip_intelligence": {
+                "verdict": "VPN / PROXY LIKELY",
+                "testerDecision": {"decision": "auto_fail"},
+            },
+        }
+        payload = server.build_form_fill_payload(session, {})
+        summaries = server.generate_summaries(session)
+        self.assertEqual(payload["auto_fail"], "Unable to turn off VPN")
+        self.assertIn("VPN", payload["fail_reason"])
+        self.assertIn("VPN", summaries["fail"])
+        self.assertEqual(server._classify_auto_fail_reason(session["auto_fail_reason"]), "vpn")
+
     def test_gemini_prompt_source_logging_only_repeats_when_source_changes(self):
         server._last_logged_gemini_prompt_sources.clear()
         with mock.patch.object(server.logger, "info") as info:
