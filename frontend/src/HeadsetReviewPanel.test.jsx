@@ -1,7 +1,7 @@
 import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { HeadsetReviewPanel } from './NotificationManagerApp';
+import { HeadsetReviewPanel, buildSamHeadsetResearchUrl } from './NotificationManagerApp';
 
 function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -37,7 +37,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-test('Look Up opens the required Google query and presents all follow-up decisions', async () => {
+test('Research Headset opens the required Google query and presents all follow-up decisions', async () => {
   const onDecision = jest.fn().mockResolvedValue({ ok: true });
   const view = await renderPanel({
     data: {
@@ -55,12 +55,13 @@ test('Look Up opens the required Google query and presents all follow-up decisio
 
   expect(view.container.textContent).toContain('Tester One');
   await act(async () => {
-    buttonByText(view.container, 'Look Up').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    buttonByText(view.container, 'Research Headset').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
 
   const openedUrl = window.electronAPI.openExternal.mock.calls[0][0];
-  expect(decodeURIComponent(openedUrl)).toContain('Does the "Acme USB 100" have a noise cancelling microphone and have a USB connection?');
+  expect(openedUrl).toBe(buildSamHeadsetResearchUrl({ brand: 'Acme', model: 'USB 100' }));
+  expect(decodeURIComponent(openedUrl)).toContain('Does the headset Acme USB 100 have a noise cancelling microphone and connect via USB?');
   expect(buttonByText(view.container, 'Approve Headset')).toBeTruthy();
   expect(buttonByText(view.container, 'Deny Headset')).toBeTruthy();
   expect(buttonByText(view.container, 'Review Later')).toBeTruthy();
