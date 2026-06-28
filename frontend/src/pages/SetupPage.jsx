@@ -31,9 +31,15 @@ export default function SetupPage({ onNavigate, onSetupCompleted }) {
           <h1 className="setup-heading">Welcome to Mock Testing Suite</h1>
           <p className="setup-sub">Let's get your profile set up.</p>
           <div className="card setup-card">
-            <div className="form-row"><label>First Name</label><input type="text" value={first} onChange={e => setFirst(e.target.value)} placeholder="e.g. Jordan" data-testid="setup-first" /></div>
-            <div className="form-row"><label>Last Name</label><input type="text" value={last} onChange={e => setLast(e.target.value)} placeholder="e.g. Taylor" data-testid="setup-last" /></div>
-            <div className="form-row"><label>Display Name</label><input type="text" value={display} onChange={e => setDisplay(e.target.value)} placeholder="Optional nickname" data-testid="setup-display" /><small className="text-muted">Optional. Leave blank to automatically use your first name.</small></div>
+            <div className="form-row"><label htmlFor="setup-first">First Name</label><input id="setup-first" type="text" value={first} onChange={e => setFirst(e.target.value)} placeholder="e.g. Jordan" data-testid="setup-first" /></div>
+            <div className="form-row"><label htmlFor="setup-last">Last Name</label><input id="setup-last" type="text" value={last} onChange={e => setLast(e.target.value)} placeholder="e.g. Taylor" data-testid="setup-last" /></div>
+            <div className="form-row form-row-stacked">
+              <label htmlFor="setup-display">Display Name</label>
+              <div className="form-field">
+                <input id="setup-display" type="text" value={display} onChange={e => setDisplay(e.target.value)} placeholder="Optional nickname" data-testid="setup-display" />
+                <small className="form-helper">Optional. Leave blank to automatically use your first name.</small>
+              </div>
+            </div>
           </div>
         </div>
       </div>

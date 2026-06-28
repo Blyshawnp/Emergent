@@ -414,7 +414,7 @@ function GeneralTab({ s, set }) {
       <SettingsRow label="Tester Name"><input type="text" value={s.tester_name || ''} onChange={e => set('tester_name', e.target.value)} style={{ maxWidth: 300 }} data-testid="settings-name" /></SettingsRow>
       <SettingsRow label="Display Name">
         <div>
-          <input type="text" value={s.display_name || ''} onChange={e => set('display_name', e.target.value)} placeholder="Home screen greeting" style={{ maxWidth: 300 }} data-testid="settings-display" />
+          <input type="text" value={s.display_name || ''} onChange={e => set('display_name', e.target.value)} placeholder="Optional nickname" style={{ maxWidth: 320, width: '100%' }} data-testid="settings-display" />
           <div className="text-muted text-xs" style={{ marginTop: 6 }}>Optional. Leave blank to automatically use your first name.</div>
         </div>
       </SettingsRow>

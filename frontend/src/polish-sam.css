@@ -199,3 +199,122 @@
 .nm-help-card { padding: 16px; }
 .nm-help-card h3 { font-size: 15px; }
 .nm-help-header h2 { letter-spacing: -0.01em; }
+
+/* =====================================================================
+   CANDIDATE TRACKING — table + docked detail side panel
+   ===================================================================== */
+.nm-candidate-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.nm-candidate-layout .nm-table-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.nm-detail-panel {
+  flex: 0 0 360px;
+  width: 360px;
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background: rgba(8, 18, 31, 0.62);
+  padding: 16px;
+  position: sticky;
+  top: 8px;
+  scrollbar-gutter: stable;
+}
+.nm-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  margin-bottom: 14px;
+}
+.nm-detail-id { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.nm-detail-name { font-size: 17px; font-weight: 800; overflow-wrap: anywhere; }
+.nm-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 4px;
+}
+.nm-detail-grid > div { min-width: 0; }
+.nm-detail-grid dt {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.08em;
+  text-transform: uppercase; color: #9ec7eb; margin-bottom: 3px;
+}
+.nm-detail-grid dd { margin: 0; font-size: 13px; color: #e5f0ff; overflow-wrap: anywhere; }
+.nm-detail-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(148, 163, 184, 0.12); }
+.nm-detail-label {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.1em;
+  text-transform: uppercase; color: #9ec7eb; margin-bottom: 10px;
+}
+.nm-detail-section .nm-row-actions { width: 100%; flex-wrap: wrap; }
+.nm-detail-section .nm-candidate-details { gap: 8px; }
+.nm-detail-empty { margin: 0; height: 100%; }
+@media (max-width: 1280px) {
+  .nm-candidate-layout { flex-direction: column; }
+  .nm-detail-panel { position: static; width: 100%; flex-basis: auto; max-height: none; }
+}
+
+/* =====================================================================
+   HEADSET REVIEW — ticket-queue workflow (pending tab)
+   ===================================================================== */
+.nm-ticket-queue {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+.nm-ticket {
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 10px;
+  background: rgba(8, 18, 31, 0.55);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+.nm-ticket:hover {
+  border-color: rgba(125, 211, 252, 0.34);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(2, 8, 20, 0.4);
+}
+.nm-ticket-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.nm-ticket-title { font-size: 16px; font-weight: 800; }
+.nm-ticket-sub { font-size: 12px; color: #9fb3c8; margin-top: 2px; }
+.nm-ticket-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+.nm-ticket-fields > div { min-width: 0; }
+.nm-ticket-fields dt {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.07em;
+  text-transform: uppercase; color: #9ec7eb; margin-bottom: 2px;
+}
+.nm-ticket-fields dd { margin: 0; font-size: 13px; color: #e5f0ff; overflow-wrap: anywhere; }
+.nm-ticket-note-field { grid-column: 1 / -1; }
+.nm-ticket-actions { flex-wrap: wrap; gap: 8px; }
+.nm-ticket-empty {
+  flex-direction: column;
+  gap: 10px;
+  padding: 48px 28px;
+  text-align: center;
+  align-items: center;
+}
+.nm-ticket-empty strong { font-size: 16px; }
+.nm-ticket-empty span { color: #9fb3c8; max-width: 400px; }
+@media (max-width: 900px) { .nm-ticket-queue { grid-template-columns: 1fr; } }

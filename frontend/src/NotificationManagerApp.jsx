@@ -739,7 +739,7 @@ const SECTION_NAV_ITEMS = [
 ];
 
 function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault }) {
-  const [expanded, setExpanded] = useState({});
+  const [detailKey, setDetailKey] = useState(null);
   const [selectedTargets, setSelectedTargets] = useState({});
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
   const rows = data?.views?.[view] || [];
@@ -891,6 +891,107 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     });
   };
 
+  const computeRowMeta = (row) => {
+    const results = [row.call_1_result, row.call_2_result, row.call_3_result, row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || row.mock_call_summary || 'Recorded';
+    const notes = row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded';
+    const hasFinalNotes = Boolean(row.final_notes_strengths || row.final_notes_needs_coaching || row.final_notes_other || row.evaluator_notes_summary);
+    const isFinalNotesHistoryOnly = hasFinalNotes && (row.final_notes_history_only === true || row.final_notes_history_only === 'TRUE');
+    const attempts = Array.isArray(row.attempts) ? row.attempts : [];
+    const statusUpper = String(row.status || row.latest_status || '').toUpperCase();
+    const isPendingTransfer = view === 'pending' || Boolean(row.pending_id);
+    const isIncomplete = view === 'incomplete' || statusUpper === 'INCOMPLETE';
+    const isWithdrawn = sheetTruthy(row.withdrawn) || statusUpper === 'WITHDREW FROM CERTIFICATION';
+    const isArchived = isCandidateArchived(row);
+    return { results, notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts, statusUpper, isPendingTransfer, isIncomplete, isWithdrawn, isArchived };
+  };
+
+  const renderCandidateActions = (row) => {
+    const { isIncomplete, isPendingTransfer, isWithdrawn, isArchived } = computeRowMeta(row);
+    return (
+      <div className="nm-row-actions">
+        {(isIncomplete || isPendingTransfer || isWithdrawn) ? (
+          <>
+            <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_passed', 'Mark Passed')}>Mark Passed</button>
+            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_failed', 'Mark Failed')}>Mark Failed</button>
+          </>
+        ) : null}
+        {isIncomplete && !isPendingTransfer ? (
+          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'move_pending_sup_transfer', 'Move to Pending Sup Transfer')}>Move to Pending Sup</button>
+        ) : null}
+        {isPendingTransfer ? (
+          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete')}>Mark Incomplete</button>
+        ) : null}
+        {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
+        <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
+        {!isArchived ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleArchive(row)}>Archive</button> : null}
+        {isWithdrawn ? (
+          <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
+        ) : (
+          <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
+        )}
+        <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleDeleteRow(row)}>Delete</button>
+      </div>
+    );
+  };
+
+  const renderCandidateDetails = (row) => {
+    const { notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts } = computeRowMeta(row);
+    return (
+      <div className="nm-candidate-details">
+        <div><strong>Notes:</strong> {notes}</div>
+        <div><strong>Coaching:</strong> {row.coaching_summary || 'N/A'}</div>
+        <div><strong>Fail Summary:</strong> {row.fail_summary || 'N/A'}</div>
+        <div><strong>Basics:</strong> Headset {row.headset_brand || 'N/A'}; USB {row.headset_usb === true ? 'Yes' : row.headset_usb === false ? 'No' : 'N/A'}; Noise cancelling {row.noise_cancel === true ? 'Yes' : row.noise_cancel === false ? 'No' : 'N/A'}; VPN {row.vpn_on === true ? 'Yes' : row.vpn_on === false ? 'No' : 'N/A'}</div>
+        <div><strong>Call Results:</strong> {[row.call_1_result, row.call_2_result, row.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
+        <div><strong>Sup Transfer Results:</strong> {[row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+        {hasFinalNotes ? (
+          <div className="nm-final-notes-section">
+            <strong className="nm-final-notes-heading">Final Evaluator Notes</strong>
+            {isFinalNotesHistoryOnly ? (
+              <div className="nm-final-notes-history-warning">⚠ History only — not included in the Review summary</div>
+            ) : null}
+            {row.final_notes_strengths ? <div><strong>Strengths:</strong> {row.final_notes_strengths}</div> : null}
+            {row.final_notes_needs_coaching ? <div><strong>Needs Coaching:</strong> {row.final_notes_needs_coaching}</div> : null}
+            {row.final_notes_other ? <div><strong>Other:</strong> {row.final_notes_other}</div> : null}
+            {row.evaluator_notes_summary ? <div><strong>Evaluator Summary:</strong> {row.evaluator_notes_summary}</div> : null}
+            {row.final_notes_created_at ? <div className="nm-meta"><strong>Notes Created:</strong> {row.final_notes_created_at}</div> : null}
+          </div>
+        ) : null}
+        {attempts.length ? (
+          <div className="nm-attempt-list">
+            <strong>Attempt History</strong>
+            {attempts.map((attempt, attemptIndex) => (
+              <details key={`${attempt.session_id || attemptIndex}`} className="nm-attempt-detail">
+                <summary>{attempt.completed_at || attempt.created_at || `Attempt ${attemptIndex + 1}`} - {attempt.status || 'Unknown'} - {attempt.tester_name || 'Unknown tester'}</summary>
+                <div>Final attempt: {sheetTruthy(attempt.final_attempt) ? 'Yes' : 'No'}</div>
+                <div>Coaching: {attempt.coaching_summary || 'N/A'}</div>
+                <div>Fail: {attempt.fail_summary || 'N/A'}</div>
+                <div>Calls: {[attempt.call_1_result, attempt.call_2_result, attempt.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
+                <div>Sup Transfers: {[attempt.sup_transfer_1_result, attempt.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+                <div>Review Notes: {attempt.review_notes || 'N/A'}</div>
+                {(attempt.final_notes_strengths || attempt.final_notes_needs_coaching || attempt.final_notes_other) ? (
+                  <div className="nm-final-notes-section">
+                    <strong className="nm-final-notes-heading">Final Notes</strong>
+                    {(attempt.final_notes_history_only === true || attempt.final_notes_history_only === 'TRUE') ? (
+                      <div className="nm-final-notes-history-warning">⚠ History only — not in review summary</div>
+                    ) : null}
+                    {attempt.final_notes_strengths ? <div>Strengths: {attempt.final_notes_strengths}</div> : null}
+                    {attempt.final_notes_needs_coaching ? <div>Needs Coaching: {attempt.final_notes_needs_coaching}</div> : null}
+                    {attempt.final_notes_other ? <div>Other: {attempt.final_notes_other}</div> : null}
+                  </div>
+                ) : null}
+              </details>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const detailEntry = visibleEntries.find((entry) => entry.key === detailKey) || null;
+  const detailRow = detailEntry?.row || null;
+  const detailMeta = detailRow ? computeRowMeta(detailRow) : null;
+
   return (
     <section className="nm-panel nm-candidate-panel" id="sam-candidate-tracking" data-sam-tour="candidate-tracking">
       <div className="nm-section-title">
@@ -949,6 +1050,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           Include archived candidates
         </label>
       </div>
+      <div className="nm-candidate-layout">
       <div className="nm-table-wrap">
         <table className="nm-table nm-candidate-table">
           <thead>
@@ -975,20 +1077,11 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             {!visibleRows.length ? (
               <tr><td colSpan={9}><div className="nm-empty">No candidates in this view.</div></td></tr>
             ) : visibleEntries.map(({ row, index, key: rowKey }) => {
-              const results = [row.call_1_result, row.call_2_result, row.call_3_result, row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || row.mock_call_summary || 'Recorded';
-              const notes = row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded';
-              const hasFinalNotes = Boolean(row.final_notes_strengths || row.final_notes_needs_coaching || row.final_notes_other || row.evaluator_notes_summary);
-              const isFinalNotesHistoryOnly = hasFinalNotes && (row.final_notes_history_only === true || row.final_notes_history_only === 'TRUE');
-              const attempts = Array.isArray(row.attempts) ? row.attempts : [];
-              const isExpanded = Boolean(expanded[rowKey]);
-              const statusUpper = String(row.status || row.latest_status || '').toUpperCase();
-              const isPendingTransfer = view === 'pending' || Boolean(row.pending_id);
-              const isIncomplete = view === 'incomplete' || statusUpper === 'INCOMPLETE';
-              const isWithdrawn = sheetTruthy(row.withdrawn) || statusUpper === 'WITHDREW FROM CERTIFICATION';
-              const isArchived = isCandidateArchived(row);
+              const { results, notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts, isArchived } = computeRowMeta(row);
+              const isExpanded = detailKey === rowKey;
               return (
                 <React.Fragment key={rowKey}>
-                  <tr>
+                  <tr className={isExpanded ? 'is-selected' : ''}>
                     <td className="nm-select-column">
                       <input
                         type="checkbox"
@@ -1009,95 +1102,51 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                     <td className="nm-meta nm-notes-cell">
                       <div className="nm-notes-preview">{notes}</div>
                       {hasFinalNotes ? <span className="nm-final-notes-badge" title={isFinalNotesHistoryOnly ? 'Final notes (history only — not in review summary)' : 'Final evaluator notes available'}>📝 Final Notes{isFinalNotesHistoryOnly ? ' (History)' : ''}</span> : null}
-                      <button type="button" className="nm-link-button" onClick={() => setExpanded((current) => ({ ...current, [rowKey]: !current[rowKey] }))}>
+                      <button type="button" className="nm-link-button" onClick={() => setDetailKey((current) => (current === rowKey ? null : rowKey))}>
                         {isExpanded ? 'Hide Details' : 'View Details'}
                       </button>
                     </td>
                     <td>
-                      <div className="nm-row-actions">
-                        {(isIncomplete || isPendingTransfer || isWithdrawn) ? (
-                          <>
-                            <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_passed', 'Mark Passed')}>Mark Passed</button>
-                            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_failed', 'Mark Failed')}>Mark Failed</button>
-                          </>
-                        ) : null}
-                        {isIncomplete && !isPendingTransfer ? (
-                          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'move_pending_sup_transfer', 'Move to Pending Sup Transfer')}>Move to Pending Sup</button>
-                        ) : null}
-                        {isPendingTransfer ? (
-                          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete')}>Mark Incomplete</button>
-                        ) : null}
-                        {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
-                        <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
-                        {!isArchived ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleArchive(row)}>Archive</button> : null}
-                        {isWithdrawn ? (
-                          <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
-                        ) : (
-                          <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
-                        )}
-                        <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleDeleteRow(row)}>Delete</button>
-                      </div>
+                      {renderCandidateActions(row)}
                     </td>
                   </tr>
-                  {isExpanded ? (
-                    <tr className="nm-candidate-detail-row">
-                      <td colSpan={9}>
-                        <div className="nm-candidate-details">
-                          <div><strong>Notes:</strong> {notes}</div>
-                          <div><strong>Coaching:</strong> {row.coaching_summary || 'N/A'}</div>
-                          <div><strong>Fail Summary:</strong> {row.fail_summary || 'N/A'}</div>
-                          <div><strong>Basics:</strong> Headset {row.headset_brand || 'N/A'}; USB {row.headset_usb === true ? 'Yes' : row.headset_usb === false ? 'No' : 'N/A'}; Noise cancelling {row.noise_cancel === true ? 'Yes' : row.noise_cancel === false ? 'No' : 'N/A'}; VPN {row.vpn_on === true ? 'Yes' : row.vpn_on === false ? 'No' : 'N/A'}</div>
-                          <div><strong>Call Results:</strong> {[row.call_1_result, row.call_2_result, row.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
-                          <div><strong>Sup Transfer Results:</strong> {[row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
-                          {hasFinalNotes ? (
-                            <div className="nm-final-notes-section">
-                              <strong className="nm-final-notes-heading">Final Evaluator Notes</strong>
-                              {isFinalNotesHistoryOnly ? (
-                                <div className="nm-final-notes-history-warning">⚠ History only — not included in the Review summary</div>
-                              ) : null}
-                              {row.final_notes_strengths ? <div><strong>Strengths:</strong> {row.final_notes_strengths}</div> : null}
-                              {row.final_notes_needs_coaching ? <div><strong>Needs Coaching:</strong> {row.final_notes_needs_coaching}</div> : null}
-                              {row.final_notes_other ? <div><strong>Other:</strong> {row.final_notes_other}</div> : null}
-                              {row.evaluator_notes_summary ? <div><strong>Evaluator Summary:</strong> {row.evaluator_notes_summary}</div> : null}
-                              {row.final_notes_created_at ? <div className="nm-meta"><strong>Notes Created:</strong> {row.final_notes_created_at}</div> : null}
-                            </div>
-                          ) : null}
-                          {attempts.length ? (
-                            <div className="nm-attempt-list">
-                              <strong>Attempt History</strong>
-                              {attempts.map((attempt, attemptIndex) => (
-                                <details key={`${attempt.session_id || attemptIndex}`} className="nm-attempt-detail">
-                                  <summary>{attempt.completed_at || attempt.created_at || `Attempt ${attemptIndex + 1}`} - {attempt.status || 'Unknown'} - {attempt.tester_name || 'Unknown tester'}</summary>
-                                  <div>Final attempt: {sheetTruthy(attempt.final_attempt) ? 'Yes' : 'No'}</div>
-                                  <div>Coaching: {attempt.coaching_summary || 'N/A'}</div>
-                                  <div>Fail: {attempt.fail_summary || 'N/A'}</div>
-                                  <div>Calls: {[attempt.call_1_result, attempt.call_2_result, attempt.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
-                                  <div>Sup Transfers: {[attempt.sup_transfer_1_result, attempt.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
-                                  <div>Review Notes: {attempt.review_notes || 'N/A'}</div>
-                                  {(attempt.final_notes_strengths || attempt.final_notes_needs_coaching || attempt.final_notes_other) ? (
-                                    <div className="nm-final-notes-section">
-                                      <strong className="nm-final-notes-heading">Final Notes</strong>
-                                      {(attempt.final_notes_history_only === true || attempt.final_notes_history_only === 'TRUE') ? (
-                                        <div className="nm-final-notes-history-warning">⚠ History only — not in review summary</div>
-                                      ) : null}
-                                      {attempt.final_notes_strengths ? <div>Strengths: {attempt.final_notes_strengths}</div> : null}
-                                      {attempt.final_notes_needs_coaching ? <div>Needs Coaching: {attempt.final_notes_needs_coaching}</div> : null}
-                                      {attempt.final_notes_other ? <div>Other: {attempt.final_notes_other}</div> : null}
-                                    </div>
-                                  ) : null}
-                                </details>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ) : null}
                 </React.Fragment>
               );
             })}
           </tbody>
         </table>
+      </div>
+      <aside className="nm-detail-panel" aria-label="Candidate details">
+        {detailRow ? (
+          <>
+            <div className="nm-detail-head">
+              <div className="nm-detail-id">
+                <div className="nm-detail-name">{detailRow.candidate_name || 'Unknown'}</div>
+                <span className={`nm-badge ${detailMeta.isWithdrawn ? 'nm-badge-urgent' : detailMeta.isPendingTransfer ? 'nm-badge-warning' : detailMeta.isIncomplete ? 'nm-badge-info' : detailMeta.isArchived ? 'nm-badge-offline' : 'nm-badge-success'}`}>{detailRow.status || detailRow.latest_status || 'Unknown'}</span>
+              </div>
+              <button type="button" className="nm-modal-close" aria-label="Close candidate details" onClick={() => setDetailKey(null)}>×</button>
+            </div>
+            <dl className="nm-detail-grid">
+              <div><dt>Attempts</dt><dd>{detailRow.attempt_count ?? detailRow.attempt_number ?? detailMeta.attempts.length ?? '0'}</dd></div>
+              <div><dt>Tester</dt><dd>{detailRow.original_tester_name || detailRow.tester_name || 'Unknown'}</dd></div>
+              <div><dt>Date</dt><dd>{detailRow.completed_at || detailRow.last_session_date || detailRow.created_at || 'Unknown'}</dd></div>
+              <div><dt>Results</dt><dd>{detailMeta.results}</dd></div>
+            </dl>
+            <div className="nm-detail-section">
+              <div className="nm-detail-label">Actions</div>
+              {renderCandidateActions(detailRow)}
+            </div>
+            <div className="nm-detail-section">
+              <div className="nm-detail-label">Record</div>
+              {renderCandidateDetails(detailRow)}
+            </div>
+          </>
+        ) : (
+          <div className="nm-empty nm-detail-empty">
+            Select <strong>View Details</strong> on a candidate to see their full record, history, and actions here.
+          </div>
+        )}
+      </aside>
       </div>
     </section>
   );
@@ -1538,6 +1587,45 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
     </div>
   );
 
+  const renderPendingQueue = (rows) => (
+    !rows.length ? (
+      <div className="nm-empty nm-ticket-empty">
+        <strong>No headsets waiting for review</strong>
+        <span>New unknown headsets submitted by testers appear here as review tickets.</span>
+        <button type="button" className="nm-btn nm-btn-secondary nm-btn-inline" onClick={onRefresh} disabled={loading}>Refresh queue</button>
+      </div>
+    ) : (
+      <div className="nm-ticket-queue">
+        {rows.map((item, index) => (
+          <article className="nm-ticket" key={`pending-${item.brand}-${item.model}-${index}`}>
+            <div className="nm-ticket-head">
+              <div className="nm-ticket-id">
+                <div className="nm-ticket-title">{item.brand} {item.model}</div>
+                <div className="nm-ticket-sub">Awaiting review decision</div>
+              </div>
+              <span className="nm-badge nm-badge-warning">Pending</span>
+            </div>
+            <dl className="nm-ticket-fields">
+              <div><dt>Brand</dt><dd>{item.brand || 'N/A'}</dd></div>
+              <div><dt>Model</dt><dd>{item.model || 'N/A'}</dd></div>
+              <div><dt>Submitted</dt><dd>{formatHeadsetSubmittedDate(item.submitted_date)}</dd></div>
+              <div><dt>Tester</dt><dd>{item.tester || 'N/A'}</dd></div>
+              <div className="nm-ticket-note-field"><dt>Notes</dt><dd>{item.note || 'N/A'}</dd></div>
+            </dl>
+            <div className="nm-ticket-actions nm-row-actions">
+              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Look Up</button>
+              <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
+              <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
+              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
+              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
+              <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+            </div>
+          </article>
+        ))}
+      </div>
+    )
+  );
+
   return (
     <section className="nm-panel nm-headset-panel" id="sam-headset-review">
       <div className="nm-section-title">
@@ -1554,7 +1642,7 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
           <button key={key} type="button" role="tab" aria-selected={activeTab === key} className={`nm-view-tab ${activeTab === key ? 'is-active' : ''}`} onClick={() => setActiveTab(key)}>{label}</button>
         ))}
       </div>
-      {activeTab === 'pending' ? renderRows(pending, 'pending') : null}
+      {activeTab === 'pending' ? renderPendingQueue(pending) : null}
       {activeTab === 'approved' ? renderRows(data?.approved || [], 'approved') : null}
       {activeTab === 'denied' ? renderRows(data?.denied || [], 'denied') : null}
       {lookupReview ? (
