@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import api, { findDiscordTemplateMessage } from '../api';
 import { useModal } from '../components/ModalProvider';
-import CandidateIpIntelligencePanel, { loadStoredCandidateIpIntelligence } from '../components/CandidateIpIntelligence';
+import CandidateIpIntelligencePanel, { loadStoredCandidateIpIntelligence, vpnProxyNeedsTesterDecision } from '../components/CandidateIpIntelligence';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
+const HEADSET_LIST_VERSION_KEY = 'mts_approved_headset_list_seen_hash';
 const HEADSET_HELPER_TEXT = 'Search approved headsets by brand or model number, such as Logitech, H390, or H650e.';
+const HEADSET_RESEARCH_PREFIX = 'Does the headset';
+const HEADSET_RESEARCH_SUFFIX = 'have a noise cancelling microphone and connect via USB?';
 const HEADSET_DETAIL_BULLETS = [
   'If the brand/model is not listed, confirm it is USB and has a noise-cancelling microphone.',
   'Unsure? Post in Discord Tester Room.',
@@ -166,6 +169,38 @@ function findDeniedHeadset(value, deniedHeadsets) {
   }) || null;
 }
 
+export function buildHeadsetResearchUrl(value) {
+  const headset = String(value || '').trim().replace(/\s+/g, ' ');
+  const query = `${HEADSET_RESEARCH_PREFIX} ${headset || '[BRAND MODEL]'} ${HEADSET_RESEARCH_SUFFIX}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+}
+
+export function computeApprovedHeadsetHash(groups) {
+  const rows = (Array.isArray(groups) ? groups : [])
+    .flatMap((group) => (group?.models || []).map((model) => ({
+      brand: normalizeHeadsetSearchValue(group?.brand || ''),
+      model: normalizeHeadsetSearchValue(model || ''),
+    })))
+    .filter((row) => row.brand || row.model)
+    .sort((a, b) => `${a.brand} ${a.model}`.localeCompare(`${b.brand} ${b.model}`));
+  if (!rows.length) return '';
+  const text = JSON.stringify(rows);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${rows.length}:${(hash >>> 0).toString(16)}`;
+}
+
+function openExternalUrl(url) {
+  if (window.electronAPI?.openExternal) {
+    return window.electronAPI.openExternal(url);
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return Promise.resolve();
+}
+
 function hasBasicsDraft(form) {
   return Boolean(
     String(form.candidate_name || '').trim() ||
@@ -203,6 +238,7 @@ export default function BasicsPage({ onNavigate }) {
   const containerRef = useRef(null);
   const itemRefs = useRef([]);
   const [candidateIpIntelligence, setCandidateIpIntelligence] = useState(() => loadStoredCandidateIpIntelligence());
+  const headsetUpdateNoticeShownRef = useRef(false);
   const [form, setForm] = useState({
     candidate_name: '', tester_name: '', final_attempt: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
@@ -266,6 +302,39 @@ export default function BasicsPage({ onNavigate }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!hydratedRef.current || headsetLookupLoading || headsetLookupError || headsetUpdateNoticeShownRef.current) return;
+    const hash = computeApprovedHeadsetHash(approvedHeadsets);
+    if (!hash) return;
+    const previous = window.localStorage.getItem(HEADSET_LIST_VERSION_KEY) || '';
+    if (!previous) {
+      window.localStorage.setItem(HEADSET_LIST_VERSION_KEY, hash);
+      return;
+    }
+    if (previous === hash) return;
+    headsetUpdateNoticeShownRef.current = true;
+    (async () => {
+      const choice = await modal.showModal({
+        type: 'confirm',
+        title: 'Headset List Updated',
+        body: 'Approved headsets have been added or updated since your last session. The headset list has been refreshed.',
+        icon: 'headphones',
+        buttons: [
+          { label: 'View Headsets', cls: 'btn-primary', value: 'view' },
+          { label: 'Continue', cls: 'btn-muted', value: 'continue' },
+          { label: 'Skip', cls: 'btn-muted', value: 'skip' },
+        ],
+      });
+      window.localStorage.setItem(HEADSET_LIST_VERSION_KEY, hash);
+      if (choice === 'view') {
+        setHeadsetLookupOpen(true);
+        window.setTimeout(() => {
+          document.querySelector('[data-tour="basics-headset-section"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+        }, 0);
+      }
+    })();
+  }, [approvedHeadsets, headsetLookupError, headsetLookupLoading, modal]);
 
   useEffect(() => {
     if (!hydratedRef.current || !hasBasicsDraft(form)) {
@@ -573,6 +642,19 @@ export default function BasicsPage({ onNavigate }) {
     }
   };
 
+  const researchUnknownHeadset = async () => {
+    const headsetModel = String(form.headset_brand || '').trim();
+    if (!headsetModel) {
+      await modal.warning('Missing Headset', 'Enter the headset brand/model before researching it.');
+      return;
+    }
+    await openExternalUrl(buildHeadsetResearchUrl(headsetModel));
+    await modal.alert(
+      'Research Headset',
+      'This headset appears likely to meet the USB/noise-cancelling requirement only if the search results support both requirements, but it still requires admin review before being added to the approved list.'
+    );
+  };
+
   const buildBasicsRecoveredForm = (source, candidateName, finalAttempt, blockResult) => ({
     ...mergeBasicsIntoSession(form, buildBasicsFromRecord(source)),
     candidate_name: candidateName || form.candidate_name,
@@ -691,6 +773,60 @@ export default function BasicsPage({ onNavigate }) {
     onNavigate('review');
   };
 
+  const handleVpnProxyDecision = async (sessionData) => {
+    if (!vpnProxyNeedsTesterDecision(candidateIpIntelligence)) {
+      return { shouldContinue: true, sessionData };
+    }
+    const resultId = `${candidateIpIntelligence.ip || ''}:${candidateIpIntelligence.timestamp || ''}`;
+    if (candidateIpIntelligence?.testerDecision?.resultId === resultId) {
+      return { shouldContinue: true, sessionData: { ...sessionData, candidate_ip_intelligence: candidateIpIntelligence } };
+    }
+    const decision = await modal.showModal({
+      type: 'confirm',
+      title: 'VPN / Proxy Check',
+      body: 'Was the candidate able to turn off the VPN/proxy?<br><br>If the candidate turns off a VPN/proxy, wait 2-3 minutes before checking again. Reputation and routing services may take a few minutes to reflect the change.',
+      graphic: 'warning',
+      buttons: [
+        { label: 'Yes, recheck after a few minutes', cls: 'btn-primary', value: 'recheck' },
+        { label: 'No, continue to VPN/proxy auto-fail', cls: 'btn-danger', value: 'fail' },
+        { label: 'Continue without auto-fail / manual review', cls: 'btn-muted', value: 'manual' },
+      ],
+    });
+    if (decision === 'recheck') {
+      await modal.warning('Recheck Needed', 'Wait 2-3 minutes, then run VPN / Proxy Check again before continuing.');
+      return { shouldContinue: false, sessionData };
+    }
+    if (decision === 'fail') {
+      const yes = await showFailDiscordModal({
+        title: 'VPN Issue',
+        body: 'Using a VPN/proxy is not accepted when contracting with ACD and the candidate was not able to turn it off.<br><br>Fail this session?',
+        templateTitle: 'VPN Fail',
+        helperText: 'Discord Post: VPN Fail',
+      });
+      if (!yes) return { shouldContinue: false, sessionData };
+      const nextIp = {
+        ...candidateIpIntelligence,
+        testerDecision: { resultId, decision: 'auto_fail', decidedAt: new Date().toISOString() },
+      };
+      setCandidateIpIntelligence(nextIp);
+      const failData = { ...sessionData, candidate_ip_intelligence: nextIp, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
+      window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
+      await logUnknownHeadsetIfNeeded(failData);
+      await api.startSession(failData);
+      onNavigate('review');
+      return { shouldContinue: false, sessionData: failData };
+    }
+    if (decision === 'manual') {
+      const nextIp = {
+        ...candidateIpIntelligence,
+        testerDecision: { resultId, decision: 'manual_review', decidedAt: new Date().toISOString() },
+      };
+      setCandidateIpIntelligence(nextIp);
+      return { shouldContinue: true, sessionData: { ...sessionData, candidate_ip_intelligence: nextIp } };
+    }
+    return { shouldContinue: false, sessionData };
+  };
+
   const handleContinue = async () => {
     const headsetApproved = Boolean(String(form.headset_brand || '').trim()) && headsetIsApproved(form.headset_brand, approvedHeadsets);
     const deniedHeadset = findDeniedHeadset(form.headset_brand, deniedHeadsets);
@@ -746,10 +882,14 @@ export default function BasicsPage({ onNavigate }) {
     if (d.vpn_on && d.vpn_off === null) { await modal.warning('Missing Info', 'Please confirm if the candidate can turn off their VPN.'); return; }
     if (d.chrome_default === null || d.extensions_disabled === null || d.popups_allowed === null) { await modal.warning('Missing Info', 'All Browser questions must be answered.'); return; }
 
-    if (!d.headset_usb || !d.noise_cancel) {
+    const vpnDecision = await handleVpnProxyDecision({ ...d, candidate_ip_intelligence: candidateIpIntelligence, supervisor_only: supervisorOnlyMode });
+    if (!vpnDecision.shouldContinue) return;
+    const workflowData = vpnDecision.sessionData;
+
+    if (!workflowData.headset_usb || !workflowData.noise_cancel) {
       const reasons = [];
-      if (!d.headset_usb) reasons.push('Wrong headset (not USB)');
-      if (!d.noise_cancel) reasons.push('Wrong headset (not noise cancelling)');
+      if (!workflowData.headset_usb) reasons.push('Wrong headset (not USB)');
+      if (!workflowData.noise_cancel) reasons.push('Wrong headset (not noise cancelling)');
       const yes = await showFailDiscordModal({
         title: 'Headset Issue',
         body: `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`,
@@ -757,7 +897,7 @@ export default function BasicsPage({ onNavigate }) {
         helperText: 'Discord Post: Wrong Headset',
       });
       if (yes) {
-        const failData = { ...d, candidate_ip_intelligence: candidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
+        const failData = { ...workflowData, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
         await logUnknownHeadsetIfNeeded(failData);
         await api.startSession(failData);
@@ -765,7 +905,7 @@ export default function BasicsPage({ onNavigate }) {
       }
       return;
     }
-    if (d.vpn_on && d.vpn_off === false) {
+    if (workflowData.vpn_on && workflowData.vpn_off === false) {
       const yes = await showFailDiscordModal({
         title: 'VPN Issue',
         body: 'Using a VPN is not accepted when contracting with ACD. The candidate cannot turn it off.<br><br>Fail this session?',
@@ -773,7 +913,7 @@ export default function BasicsPage({ onNavigate }) {
         helperText: 'Discord Post: VPN Fail',
       });
       if (yes) {
-        const failData = { ...d, candidate_ip_intelligence: candidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
+        const failData = { ...workflowData, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
         await logUnknownHeadsetIfNeeded(failData);
         await api.startSession(failData);
@@ -781,10 +921,10 @@ export default function BasicsPage({ onNavigate }) {
       }
       return;
     }
-    if (d.chrome_default === false) {
+    if (workflowData.chrome_default === false) {
       const fixed = await modal.confirm('Browser Issue', 'The browser must be set as default so that DTE login functions properly.<br><br>Were they able to fix it?');
       if (!fixed) {
-        const failData = { ...d, candidate_ip_intelligence: candidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
+        const failData = { ...workflowData, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
         await logUnknownHeadsetIfNeeded(failData);
         await api.startSession(failData);
@@ -792,10 +932,10 @@ export default function BasicsPage({ onNavigate }) {
         return;
       }
     }
-    if (d.extensions_disabled === false) {
+    if (workflowData.extensions_disabled === false) {
       const fixed = await modal.confirm('Browser Issue', 'Browser extensions must be disabled so they do not interfere with the script.<br><br>Were they able to fix it?');
       if (!fixed) {
-        const failData = { ...d, candidate_ip_intelligence: candidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
+        const failData = { ...workflowData, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
         await logUnknownHeadsetIfNeeded(failData);
         await api.startSession(failData);
@@ -803,10 +943,10 @@ export default function BasicsPage({ onNavigate }) {
         return;
       }
     }
-    if (d.popups_allowed === false) {
+    if (workflowData.popups_allowed === false) {
       const fixed = await modal.confirm('Browser Issue', 'Necessary pop-ups must be allowed so the script can pop correctly.<br><br>Were they able to fix it?');
       if (!fixed) {
-        const failData = { ...d, candidate_ip_intelligence: candidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
+        const failData = { ...workflowData, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
         await logUnknownHeadsetIfNeeded(failData);
         await api.startSession(failData);
@@ -815,11 +955,9 @@ export default function BasicsPage({ onNavigate }) {
       }
     }
     const startData = {
-      ...d,
-      candidate_ip_intelligence: candidateIpIntelligence,
-      candidate_override_used: Boolean(d.candidate_override_used || candidateBlockResult.override),
-      candidate_override_reason: d.candidate_override_reason || (candidateBlockResult.override ? 'Tester override after shared final-attempt block.' : ''),
-      supervisor_only: supervisorOnlyMode,
+      ...workflowData,
+      candidate_override_used: Boolean(workflowData.candidate_override_used || candidateBlockResult.override),
+      candidate_override_reason: workflowData.candidate_override_reason || (candidateBlockResult.override ? 'Tester override after shared final-attempt block.' : ''),
       time_for_sup: supervisorOnlyMode ? true : null,
     };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -1056,6 +1194,16 @@ export default function BasicsPage({ onNavigate }) {
             {currentHeadsetIsApproved && (
               <div className="basics-headset-auto-note">
                 Approved headset selected. USB and Noise Cancelling are marked Yes automatically.
+              </div>
+            )}
+            {String(form.headset_brand || '').trim() && !currentHeadsetIsApproved && (
+              <div className="basics-headset-research">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={researchUnknownHeadset} data-testid="headset-research-btn">
+                  Research Headset
+                </button>
+                <span className="text-xs text-muted">
+                  Research can help confirm likely USB/noise-cancelling support, but admin review is still required.
+                </span>
               </div>
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
