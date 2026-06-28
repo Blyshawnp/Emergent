@@ -86,8 +86,8 @@ const HELP_TOPICS = [
       'Select the headset brand/model before answering USB and Noise Cancelling.',
       'Headset must be USB with a noise-cancelling microphone. Approved headset selections automatically mark USB and Noise Cancelling as Yes.',
       'VPN must be off, and required browser checks must pass before you can continue.',
-      'When checking for VPN or proxy, use Candidate IP Intelligence as decision support and manually review the result.',
-      'Candidate IP Intelligence never fails a candidate automatically. The tester always makes the final decision.',
+      'When checking for VPN or proxy, use VPN / Proxy Check as decision support and manually review the result.',
+      'VPN / Proxy Check never fails a candidate automatically. The tester always makes the final decision.',
       'Headset and VPN fail popups include Discord copy buttons when the matching post template is available.',
       'Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.',
       'When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.',
@@ -422,7 +422,7 @@ const FAQ_FALLBACK = [
   },
   {
     question: 'How do I check a candidate IP address?',
-    blocks: [{ type: 'paragraph', text: 'On Basics, expand Candidate IP Intelligence, enter the public IP address, and click Check IP. If no provider is available, use manual verification.' }],
+    blocks: [{ type: 'paragraph', text: 'On Basics, expand VPN / Proxy Check, enter the public IP address, and click Check IP. If no provider is available, use manual verification.' }],
   },
   {
     question: 'What if the candidate stops responding?',
@@ -950,15 +950,15 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
             
             <div className="help-troubleshooting-section" style={{ marginTop: 12, marginBottom: 18, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div style={{ background: 'rgba(239, 68, 68, 0.08)', borderLeft: '3px solid #ef4444', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
-                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>Google Sheet Connection</strong>
+                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>Live Content Connection</strong>
                 <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
-                  Ensure <code>google-service-account.json</code> is located in your app's <code>backend/config/</code> resources folder. Without it, the app will fall back to cache/default data.
+                  Unable to connect to the live content source. Please refresh and contact support if this continues.
                 </span>
               </div>
               <div style={{ background: 'rgba(59, 130, 246, 0.08)', borderLeft: '3px solid #3b82f6', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>
-                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>MTS Ticker Fallback</strong>
+                <strong style={{ color: '#f8fafc', display: 'block', marginBottom: 4 }}>Live Ticker</strong>
                 <span className="text-muted" style={{ display: 'block', lineHeight: 1.4 }}>
-                  Verify that the spreadsheet URLs and sheet IDs in <code>runtime_config.json</code> match your Google Sheets setup.
+                  If live ticker messages do not refresh, wait a minute, refresh the app, and contact support if the issue continues.
                 </span>
               </div>
               <div style={{ background: 'rgba(16, 185, 129, 0.08)', borderLeft: '3px solid #10b981', padding: '10px 12px', borderRadius: '0 8px 8px 0' }}>

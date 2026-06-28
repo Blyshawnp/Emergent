@@ -11,14 +11,16 @@ import server  # noqa: E402
 
 class MockIpProvider:
     reputation_capable = True
+    capability = "vpn_proxy_detector"
 
-    def __init__(self, name, result=None, enabled=True, reason="", fails=False, reputation_capable=True):
+    def __init__(self, name, result=None, enabled=True, reason="", fails=False, reputation_capable=True, capability=None):
         self.name = name
         self.result = result or {}
         self._enabled = enabled
         self.reason = reason
         self.fails = fails
         self.reputation_capable = reputation_capable
+        self.capability = capability or ("vpn_proxy_detector" if reputation_capable else "metadata_only")
 
     def enabled(self):
         return self._enabled, self.reason
@@ -30,6 +32,7 @@ class MockIpProvider:
             "provider": self.name,
             "status": "ok" if self.reputation_capable else "metadata",
             "reputationCapable": self.reputation_capable,
+            "capability": self.capability,
             **self.result,
         })
 
@@ -95,7 +98,7 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["verdict"], "UNABLE TO VERIFY")
         self.assertEqual(result["level"], "gray")
-        self.assertEqual(result["summary"], "No IP reputation provider is currently available. Manual verification required.")
+        self.assertEqual(result["summary"], "No VPN/proxy reputation provider is currently available. Manual verification required.")
 
     def test_metadata_only_provider_is_unable_to_verify(self):
         result = run_lookup("8.8.8.8", [
@@ -103,7 +106,7 @@ class IpIntelligenceTests(unittest.TestCase):
                 "vpnProxy": "Unknown",
                 "flags": {"hosting": True},
                 "notes": "Metadata only.",
-            }, reputation_capable=False),
+            }, reputation_capable=False, capability="metadata_only"),
         ])
         self.assertTrue(result["ok"])
         self.assertEqual(result["verdict"], "UNABLE TO VERIFY")
@@ -138,6 +141,24 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "REVIEW")
         self.assertEqual(result["level"], "yellow")
         self.assertIn("historical proxy activity", result["summary"])
+        self.assertEqual(result["lastSeen"], "2026-06-20T00:00:00+00:00")
+
+    def test_metadata_only_provider_cannot_produce_red(self):
+        result = run_lookup("8.8.8.8", [
+            MockIpProvider("metadata-provider", {
+                "vpnProxy": "Yes",
+                "usageType": "Datacenter Hosting",
+                "flags": {"hosting": True, "datacenter": True, "active": True},
+            }, reputation_capable=False, capability="metadata_only"),
+        ])
+        self.assertEqual(result["verdict"], "UNABLE TO VERIFY")
+        self.assertEqual(result["providerResults"][0]["capability"], "metadata_only")
+
+    def test_single_active_hosting_vpn_signal_is_likely(self):
+        result = run_lookup("8.8.8.8", [
+            risk_provider("vpn-hosting-provider", vpn=True, hosting=True, datacenter=True, active=True),
+        ])
+        self.assertEqual(result["verdict"], "VPN / PROXY LIKELY")
 
 
 if __name__ == "__main__":

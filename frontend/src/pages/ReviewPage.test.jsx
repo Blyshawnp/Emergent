@@ -214,6 +214,32 @@ test('history session with legacy final notes still loads read-only review', asy
   await view.unmount();
 });
 
+test('review displays saved VPN proxy check result and keeps trainer notes on review', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    candidate_ip_intelligence: {
+      ok: true,
+      ip: '8.8.8.8',
+      timestamp: '2026-06-27T12:00:00Z',
+      lastSeen: '2026-06-26T12:00:00Z',
+      verdict: 'REVIEW',
+      level: 'yellow',
+      summary: 'One provider detected historical proxy activity, but the connection appears residential.',
+      trainerNotes: 'Candidate said they turned off their VPN.',
+      providerResults: [
+        { provider: 'IP2Location / IP2Proxy', status: 'ok', capability: 'vpn_proxy_detector', vpnProxy: 'Yes', lastSeen: '2026-06-26T12:00:00Z' },
+      ],
+    },
+  });
+
+  expect(view.container.textContent).toContain('VPN / Proxy Check');
+  expect(view.container.textContent).toContain('REVIEW');
+  expect(view.container.textContent).toContain('Last Seen:');
+  expect(view.container.querySelector('[data-testid="candidate-ip-trainer-notes"]').value).toBe('Candidate said they turned off their VPN.');
+
+  await view.unmount();
+});
+
 test('override requires primary reason before fill form', async () => {
   const view = await renderReview();
 

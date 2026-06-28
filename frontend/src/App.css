@@ -1200,6 +1200,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-input);
+  max-width: 100%;
 }
 
 .candidate-ip-card-toggle {
@@ -1247,11 +1248,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .candidate-ip-card-embedded .candidate-ip-body {
   padding: 0 14px 14px;
+  max-height: min(430px, calc(100vh - 260px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .candidate-ip-input-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(180px, 1fr) auto;
   gap: 14px;
   align-items: end;
 }
@@ -1301,10 +1305,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .ip-verdict-banner {
   display: grid;
-  grid-template-columns: minmax(160px, 220px) 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(130px, 190px) 1fr;
+  gap: 12px;
   align-items: center;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border: 2px solid var(--border-default);
   border-radius: var(--radius-md);
 }
@@ -1319,7 +1323,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .ip-verdict-value {
-  font-size: var(--font-size-xl);
+  font-size: var(--font-size-lg);
   font-weight: 900;
   line-height: 1.1;
 }
@@ -1328,6 +1332,21 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   font-size: var(--font-size-sm);
   font-weight: 700;
   line-height: 1.5;
+}
+
+.ip-last-seen {
+  margin-top: 6px;
+}
+
+.ip-decision-reminder {
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .ip-verdict-green {
@@ -1368,15 +1387,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .ip-provider-table-wrap {
   max-width: 100%;
+  max-height: 260px;
   margin-top: 10px;
-  overflow-x: auto;
+  overflow: auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
 
 .ip-provider-table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 1240px;
   border-collapse: collapse;
 }
 
@@ -1430,6 +1450,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   min-height: 84px;
 }
 
+.basics-headset-research {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
 @media (max-width: 980px) {
   .basics-headset-layout {
     grid-template-columns: 1fr;
@@ -1457,6 +1484,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   .ip-verdict-banner,
   .ip-review-grid {
     grid-template-columns: 1fr;
+  }
+
+  .candidate-ip-card-embedded .candidate-ip-body {
+    max-height: none;
   }
 }
 
@@ -1741,6 +1772,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .modal-overlay.open { opacity: 1; pointer-events: all; }
 .modal { background: var(--bg-modal); border: 1px solid var(--border-default); border-radius: var(--radius-lg); width: 560px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: var(--shadow-lg); transform: translateY(20px) scale(0.97); transition: transform var(--transition-base); }
 .modal-overlay.open .modal { transform: translateY(0) scale(1); }
+.page-with-sticky-actions > .modal-overlay {
+  left: var(--active-sidebar-width, var(--sidebar-width));
+  align-items: flex-start;
+  padding: 8vh var(--space-xl) calc(var(--sticky-action-reserved-space) + var(--space-xl));
+}
+.page-with-sticky-actions > .modal-overlay .modal {
+  max-height: calc(100vh - var(--sticky-action-reserved-space) - 12vh);
+}
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-lg); border-bottom: 1px solid var(--border-subtle); }
 .modal-header h2 { font-size: var(--font-size-lg); font-weight: 700; }
 .modal-close { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: var(--text-secondary); font-size: 22px; cursor: pointer; border-radius: var(--radius-sm); transition: background-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast); }
