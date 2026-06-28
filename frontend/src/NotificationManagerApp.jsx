@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './notification-manager.css';
+import './polish-sam.css';
 import api from './api';
 import { playSound, setSoundSettings } from './utils/sound';
 import {

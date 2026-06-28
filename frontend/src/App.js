@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import '@/App.css';
+import '@/polish-mts.css';
 import api from './api';
 import { ModalProvider, useModal } from './components/ModalProvider';
 import NotificationBanner from './components/NotificationBanner';

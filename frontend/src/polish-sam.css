@@ -1,0 +1,129 @@
+/* =====================================================================
+   SAM (Smart Alert Manager) — UI POLISH LAYER (visual-only)
+   Loaded AFTER notification-manager.css. Refines, never redesigns.
+   No functional change. Transitions kept <= ~180ms.
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   13. NOTIFICATION / BRANDING — remove oversized graphic
+   The "Sam" banner fallback rendered as a huge 16:9 block. Constrain it
+   to a tasteful, proportionate brand mark.
+   --------------------------------------------------------------------- */
+.nm-sam-banner-frame {
+  max-width: 360px;
+  margin-left: auto;
+  padding: 8px;
+}
+.nm-sam-banner {
+  max-height: 132px;
+}
+.nm-sam-banner-fallback {
+  aspect-ratio: auto;
+  height: 96px;
+  font-size: 22px;
+  letter-spacing: 0.08em;
+}
+
+/* ---------------------------------------------------------------------
+   5. CARDS / SECTIONS — consistent, gentle hover lift
+   --------------------------------------------------------------------- */
+.nm-hero,
+.nm-grid > section,
+.nm-form-card,
+.nm-candidate-panel,
+.nm-headset-panel,
+.nm-actions-panel,
+.nm-status-card,
+.nm-section-nav {
+  transition: border-color 150ms ease,
+              box-shadow 150ms ease,
+              transform 150ms ease;
+}
+.nm-actions-panel:hover {
+  border-color: rgba(125, 211, 252, 0.3);
+}
+
+/* ---------------------------------------------------------------------
+   8. BUTTONS — unified press feedback + visible focus
+   --------------------------------------------------------------------- */
+.nm-btn:not(:disabled):active,
+.nm-file-label:active,
+.nm-view-tab:active {
+  transform: translateY(0) scale(0.98);
+}
+.nm-btn:focus-visible,
+.nm-file-label:focus-visible,
+.nm-view-tab:focus-visible,
+.nm-modal-close:focus-visible,
+.nm-status-dismiss:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.4);
+}
+
+/* ---------------------------------------------------------------------
+   6. STATUS PILLS / BADGES — consistent, refined
+   --------------------------------------------------------------------- */
+.nm-pill {
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+.nm-pill:hover { transform: translateY(-1px); }
+
+/* ---------------------------------------------------------------------
+   3. TABLES — clearer selected row, smoother row hover
+   --------------------------------------------------------------------- */
+.nm-table tbody tr { transition: background-color 140ms ease; }
+.nm-table tbody tr:hover { background: rgba(125, 211, 252, 0.06); }
+.nm-table tr.is-selected {
+  background: rgba(14, 165, 233, 0.14);
+  box-shadow: inset 3px 0 0 var(--nm-accent);
+}
+
+/* ---------------------------------------------------------------------
+   4. EMPTY STATES — more breathing room
+   --------------------------------------------------------------------- */
+.nm-empty {
+  padding: 40px 28px;
+  gap: 12px;
+}
+.nm-empty::before {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+}
+
+/* ---------------------------------------------------------------------
+   1. SECTION NAV / VIEW TABS — smoother active feel
+   --------------------------------------------------------------------- */
+.nm-view-tab,
+.nm-section-nav .nm-btn {
+  transition: background 150ms ease, border-color 150ms ease,
+              color 150ms ease, box-shadow 150ms ease, transform 120ms ease;
+}
+
+/* ---------------------------------------------------------------------
+   10. ACCESSIBILITY — visible focus on links & toc buttons
+   --------------------------------------------------------------------- */
+.nm-link-button:focus-visible,
+.nm-help-toc-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.4);
+  border-radius: 6px;
+}
+
+/* ---------------------------------------------------------------------
+   14. MICRO ANIMATIONS — subtle entrance, respect reduced motion
+   --------------------------------------------------------------------- */
+@keyframes nmFadeUp {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.nm-panel,
+.nm-empty,
+.nm-status-card { animation: nmFadeUp 160ms ease both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nm-app *, .nm-app *::before, .nm-app *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

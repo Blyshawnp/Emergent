@@ -1,0 +1,295 @@
+/* =====================================================================
+   MTS — UI POLISH LAYER (visual-only refinements)
+   Loaded AFTER App.css. Refines, never redesigns. No functional change.
+   Goal: make MTS feel like premium desktop software (Office / JetBrains /
+   VS Code / Linear). All transitions kept <= ~180ms.
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   1. SIDEBAR — alignment, consistent icons, smoother states
+   --------------------------------------------------------------------- */
+
+/* Normalize every sidebar icon: identical box + stroke weight */
+.sidebar .nav-icon svg,
+.sidebar .action-icon svg,
+.sidebar .exit-btn-icon svg,
+.sidebar .link-btn svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2px;
+}
+
+/* Sidebar nav items: gentle, intentional hover + active feedback */
+.nav-btn {
+  transition: background-color var(--transition-fast),
+              color var(--transition-fast),
+              box-shadow var(--transition-fast),
+              transform var(--transition-fast);
+}
+.nav-btn:hover {
+  background: var(--bg-sidebar-hover);
+  color: #eaf2ff;
+  transform: translateX(2px);
+}
+.nav-btn:hover .nav-icon { color: #cfe4ff; }
+
+/* Active state: cleaner fill + smoother accent rail */
+.nav-btn.active,
+.nav-btn[aria-current="page"] {
+  background: var(--bg-sidebar-hover);
+  color: #ffffff;
+  transform: none;
+}
+.nav-btn.active .nav-icon,
+.nav-btn[aria-current="page"] .nav-icon { color: #ffffff; }
+
+.nav-btn::before {
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  transition: background-color var(--transition-fast),
+              box-shadow var(--transition-fast),
+              transform 160ms ease;
+  transform: scaleY(0.4);
+  transform-origin: center;
+}
+.nav-btn.active::before,
+.nav-btn[aria-current="page"]::before {
+  background: var(--bg-sidebar-active);
+  box-shadow: 0 0 10px rgba(233, 69, 96, 0.55);
+  transform: scaleY(1);
+}
+
+/* Consistent rhythm between nav rows */
+.sidebar-links { gap: 2px; }
+
+/* Toolbar (Discord / Cert) + Exit: unified press + hover lift */
+.action-btn,
+.exit-btn { transition: background-color var(--transition-fast),
+                        transform var(--transition-fast),
+                        box-shadow var(--transition-fast),
+                        filter var(--transition-fast); }
+.action-btn:hover { transform: translateY(-1px); filter: brightness(1.05); }
+.action-btn:active,
+.exit-btn:active { transform: translateY(0) scale(0.99); }
+
+/* Sidebar collapse toggle: clearer hover */
+.sidebar-toggle:hover {
+  background: rgba(56, 189, 248, 0.18);
+  color: #eaf6ff;
+  border-color: rgba(125, 211, 252, 0.35);
+}
+
+/* Collapsed: keep icons perfectly centered */
+.sidebar.collapsed .nav-icon,
+.sidebar.collapsed .action-icon,
+.sidebar.collapsed .exit-btn-icon { margin: 0 auto; }
+
+/* ---------------------------------------------------------------------
+   2. TYPOGRAPHY — clearer hierarchy (sentence case kept as authored)
+   --------------------------------------------------------------------- */
+.page-header-row h1,
+.home-header h1 {
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.page-header-row { align-items: flex-start; }
+
+/* Eyebrow / overline labels: refined, never shouty */
+.stat-label,
+.settings-table thead th,
+.hist-table thead th {
+  letter-spacing: 0.06em;
+}
+
+/* ---------------------------------------------------------------------
+   3. CARDS — consistent radius / shadow / hover balance
+   --------------------------------------------------------------------- */
+.card {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--transition-fast),
+              box-shadow var(--transition-fast),
+              transform var(--transition-fast);
+}
+.card:hover { box-shadow: var(--shadow-sm); }
+.card.is-clickable:hover,
+a.card:hover,
+button.card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* ---------------------------------------------------------------------
+   3b. STAT / DASHBOARD CARDS — easier to scan
+   --------------------------------------------------------------------- */
+.stat-card {
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  text-align: left;
+  box-shadow: var(--shadow-xs);
+  transition: border-color var(--transition-fast),
+              transform var(--transition-fast),
+              box-shadow var(--transition-fast);
+}
+.stat-card:hover {
+  border-color: var(--border-default);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+.stat-value {
+  font-size: var(--font-size-3xl);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin-top: 6px;
+}
+.stat-label { font-weight: 700; }
+
+/* Home action buttons: stand out, equal weight */
+.home-btn {
+  transition: transform var(--transition-fast),
+              box-shadow var(--transition-fast),
+              filter var(--transition-fast);
+}
+.home-btn:hover { transform: translateY(-1px); filter: brightness(1.04); }
+.home-btn:active { transform: translateY(0) scale(0.99); }
+
+/* ---------------------------------------------------------------------
+   4. EMPTY STATES — polished, balanced
+   --------------------------------------------------------------------- */
+.empty-state { padding: 40px 24px; gap: 10px; }
+.empty-state-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+}
+.empty-state-icon svg { width: 28px; height: 28px; stroke-width: 1.75px; }
+.empty-state-title { font-size: var(--font-size-lg); }
+
+/* ---------------------------------------------------------------------
+   5. TABLES — modern, scannable, sticky headers
+   --------------------------------------------------------------------- */
+.hist-table thead th,
+.settings-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-card);
+  backdrop-filter: blur(6px);
+}
+.hist-table tbody tr,
+.settings-table tbody tr { transition: background-color var(--transition-fast); }
+.hist-table tbody tr:hover,
+.settings-table tbody tr:hover { background: var(--bg-card-hover); }
+.hist-table tbody tr.is-selected,
+.settings-table tbody tr.is-selected,
+.hist-table tbody tr[aria-selected="true"] {
+  background: rgba(56, 189, 248, 0.10);
+  box-shadow: inset 3px 0 0 var(--color-info);
+}
+
+/* ---------------------------------------------------------------------
+   6. STATUS BADGES — consistent shape + leading dot
+   --------------------------------------------------------------------- */
+.badge {
+  gap: 6px;
+  padding: 3px 10px;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+}
+.badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  opacity: 0.9;
+}
+
+/* ---------------------------------------------------------------------
+   7. BUTTONS — unified height / radius / focus / press
+   --------------------------------------------------------------------- */
+.btn,
+.btn-primary,
+.btn-success,
+.btn-danger,
+.btn-warning,
+.btn-ghost,
+.btn-muted,
+.btn-danger-outline {
+  border-radius: var(--radius-md);
+  transition: background-color var(--transition-fast),
+              border-color var(--transition-fast),
+              color var(--transition-fast),
+              transform var(--transition-fast),
+              box-shadow var(--transition-fast),
+              filter var(--transition-fast);
+}
+.btn:not(:disabled):active,
+.btn-primary:not(:disabled):active,
+.btn-success:not(:disabled):active,
+.btn-danger:not(:disabled):active,
+.btn-warning:not(:disabled):active {
+  transform: translateY(0) scale(0.985);
+}
+.btn:not(:disabled):hover { filter: brightness(1.04); }
+
+/* ---------------------------------------------------------------------
+   8. FORM CONTROLS — consistent focus + comfortable spacing
+   --------------------------------------------------------------------- */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--color-info);
+}
+
+/* ---------------------------------------------------------------------
+   9. MODALS — consistent backdrop / motion / shadow
+   --------------------------------------------------------------------- */
+.modal-overlay,
+.cmodal-overlay {
+  background: rgba(8, 12, 22, 0.62);
+  backdrop-filter: blur(6px);
+}
+.modal { box-shadow: var(--shadow-xl); }
+.modal-header { align-items: center; }
+.modal-close { transition: background-color var(--transition-fast),
+                           color var(--transition-fast),
+                           transform var(--transition-fast); }
+.modal-close:hover { transform: scale(1.06); }
+
+/* ---------------------------------------------------------------------
+   10. ACCESSIBILITY — visible, consistent focus rings
+   --------------------------------------------------------------------- */
+.nav-btn:focus-visible,
+.action-btn:focus-visible,
+.exit-btn:focus-visible,
+.btn:focus-visible,
+.home-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---------------------------------------------------------------------
+   11. MICRO ANIMATIONS — subtle entrance for content
+   --------------------------------------------------------------------- */
+@keyframes mts-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-header-row,
+.empty-state { animation: mts-fade-in 160ms ease both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
