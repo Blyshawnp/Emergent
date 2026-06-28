@@ -149,3 +149,8 @@ tmp/
 *.bak
 *.tmp
 *.cache
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
