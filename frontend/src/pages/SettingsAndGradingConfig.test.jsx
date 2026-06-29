@@ -28,6 +28,7 @@ jest.mock('../api', () => ({
     getApprovedHeadsets: jest.fn(),
     lookupSharedCandidate: jest.fn(),
     logHeadsetReview: jest.fn(),
+    checkIpIntelligence: jest.fn(),
     startSession: jest.fn(),
     updateSession: jest.fn(() => Promise.resolve({})),
     saveCall: jest.fn(),
@@ -109,6 +110,16 @@ beforeEach(() => {
   api.updateSession.mockResolvedValue({});
   api.lookupSharedCandidate.mockResolvedValue({ ok: true, matches: [] });
   api.logHeadsetReview.mockResolvedValue({ ok: true });
+  api.checkIpIntelligence.mockResolvedValue({
+    ok: true,
+    ip: '8.8.8.8',
+    timestamp: '2026-06-29T12:00:00Z',
+    verdict: 'CLEAR',
+    level: 'green',
+    summary: 'No providers detected VPN, proxy, hosting, or datacenter usage.',
+    warning: '',
+    providerResults: [],
+  });
   api.startSession.mockResolvedValue({ ok: true });
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -551,6 +562,64 @@ test('vpn proxy review verdict requires explicit manual-review decision before c
   }));
   expect(api.startSession.mock.calls[0][0].auto_fail_reason).toBeUndefined();
   expect(onNavigate).toHaveBeenCalledWith('calls');
+  await view.unmount();
+});
+
+test('vpn proxy checker mode runs the built-in provider lookup and keeps clear provider results collapsed', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'checker' });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    view.container.querySelector('.candidate-ip-card-toggle').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="candidate-ip-input"]'), '8.8.8.8');
+    view.container.querySelector('.candidate-ip-actions .btn-primary').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.checkIpIntelligence).toHaveBeenCalledWith('8.8.8.8');
+  const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
+  expect(providerDetails?.hasAttribute('open') || false).toBe(false);
+  expect(view.container.textContent).not.toContain('Trainer Notes');
+  await view.unmount();
+});
+
+test('vpn proxy links mode shows external lookup buttons and does not call provider API', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'links' });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="candidate-ip-manual-input"]'), '8.8.8.8');
+    view.container.querySelector('[data-testid="candidate-ip-link-ipinfo"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.checkIpIntelligence).not.toHaveBeenCalled();
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://ipinfo.io/8.8.8.8');
+  expect(view.container.textContent).toContain('Manual links do not run provider lookups');
+  await view.unmount();
+});
+
+test('vpn proxy disabled mode hides built-in checker and provider table', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'disabled' });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  expect(view.container.querySelector('[data-testid="candidate-ip-disabled"]')).not.toBeNull();
+  expect(view.container.textContent).toContain('Built-in VPN / Proxy Check is disabled. Use manual verification if needed.');
+  expect(view.container.querySelector('.ip-provider-table')).toBeNull();
+  expect(api.checkIpIntelligence).not.toHaveBeenCalled();
   await view.unmount();
 });
 

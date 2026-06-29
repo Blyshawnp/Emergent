@@ -3,6 +3,11 @@ import api from '../api';
 
 export const CANDIDATE_IP_INTELLIGENCE_STORAGE_KEY = 'mts_candidate_ip_intelligence';
 export const VPN_PROXY_CHECK_LABEL = 'VPN / Proxy Check';
+export const VPN_PROXY_CHECK_MODES = {
+  CHECKER: 'checker',
+  LINKS: 'links',
+  DISABLED: 'disabled',
+};
 
 const IPV4_PATTERN = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const IPV6_SEGMENT_PATTERN = /^[0-9a-fA-F]{1,4}$/;
@@ -49,6 +54,30 @@ export function validateIpAddress(value) {
   return 'Enter a valid IPv4 or IPv6 address before checking providers.';
 }
 
+export function normalizeVpnProxyCheckMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return Object.values(VPN_PROXY_CHECK_MODES).includes(mode) ? mode : VPN_PROXY_CHECK_MODES.CHECKER;
+}
+
+export function buildManualLookupLinks(ipValue) {
+  const ip = String(ipValue || '').trim();
+  const encoded = encodeURIComponent(ip);
+  return [
+    {
+      label: 'IP2Location',
+      url: ip ? `https://www.ip2location.com/demo/${encoded}` : 'https://www.ip2location.com/demo',
+    },
+    {
+      label: 'IPinfo',
+      url: ip ? `https://ipinfo.io/${encoded}` : 'https://ipinfo.io/',
+    },
+    {
+      label: 'ip.teoh.io',
+      url: ip ? `https://ip.teoh.io/?ip=${encoded}` : 'https://ip.teoh.io/',
+    },
+  ];
+}
+
 function formatTimestamp(value) {
   if (!value) return 'Not checked';
   const date = new Date(value);
@@ -89,18 +118,13 @@ export function CandidateIpProviderTable({ results = [] }) {
           <tr>
             <th>Provider</th>
             <th>Status</th>
-            <th>VPN / Proxy</th>
             <th>Capability</th>
+            <th>VPN / Proxy</th>
             <th>Last Seen</th>
             <th>ISP</th>
             <th>ASN</th>
             <th>Usage Type</th>
-            <th>Country</th>
-            <th>Region</th>
-            <th>City</th>
-            <th>Connection Type</th>
             <th>Confidence</th>
-            <th>Notes</th>
           </tr>
         </thead>
         <tbody>
@@ -111,18 +135,13 @@ export function CandidateIpProviderTable({ results = [] }) {
               <tr key={`${result.provider || 'provider'}-${index}`} className={risky ? 'ip-provider-conflict' : failed ? 'ip-provider-failed' : ''}>
                 <td>{result.provider || 'Unknown'}</td>
                 <td>{result.status || 'Unknown'}</td>
-                <td>{riskText(result)}</td>
                 <td>{result.capability === 'vpn_proxy_detector' || result.reputationCapable ? 'VPN/proxy detector' : 'Metadata only'}</td>
+                <td>{riskText(result)}</td>
                 <td>{result.lastSeen || 'N/A'}</td>
                 <td>{result.isp || 'N/A'}</td>
                 <td>{result.asn || 'N/A'}</td>
                 <td>{result.usageType || 'N/A'}</td>
-                <td>{result.country || 'N/A'}</td>
-                <td>{result.region || 'N/A'}</td>
-                <td>{result.city || 'N/A'}</td>
-                <td>{result.connectionType || 'N/A'}</td>
                 <td>{result.confidence || 'Unknown'}</td>
-                <td>{result.notes || 'None'}</td>
               </tr>
             );
           })}
@@ -144,6 +163,9 @@ export function CandidateIpResultSummary({ result }) {
         {result.summary || 'No summary available.'}
         {result.lastSeen ? (
           <div className="ip-last-seen"><strong>Last Seen:</strong> {result.lastSeen}</div>
+        ) : null}
+        {result.warning ? (
+          <div className="ip-detector-warning" data-testid="candidate-ip-detector-warning">{result.warning}</div>
         ) : null}
       </div>
     </div>
@@ -184,7 +206,8 @@ export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly 
   );
 }
 
-export default function CandidateIpIntelligencePanel({ initialResult, onResultChange }) {
+export default function CandidateIpIntelligencePanel({ initialResult, onResultChange, mode = VPN_PROXY_CHECK_MODES.CHECKER }) {
+  const resolvedMode = normalizeVpnProxyCheckMode(mode);
   const [open, setOpen] = useState(false);
   const [ip, setIp] = useState(initialResult?.ip || '');
   const [result, setResult] = useState(initialResult || null);
@@ -193,6 +216,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   const [providerOpen, setProviderOpen] = useState(false);
 
   const lastChecked = useMemo(() => formatTimestamp(result?.timestamp), [result]);
+  const manualLinks = useMemo(() => buildManualLookupLinks(ip), [ip]);
 
   useEffect(() => {
     setResult(initialResult || null);
@@ -225,7 +249,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
       }
       const next = { ...response };
       setResult(next);
-      setProviderOpen(false);
+      setProviderOpen(next.verdict !== 'CLEAR');
       await persist(next);
     } catch (_error) {
       setValidationMessage('No VPN/proxy reputation provider available. Manual verification required.');
@@ -241,6 +265,57 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
     setProviderOpen(false);
     await persist(null);
   };
+
+  const openManualLink = async (url) => {
+    if (window.electronAPI?.openExternal) {
+      await window.electronAPI.openExternal(url);
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  if (resolvedMode === VPN_PROXY_CHECK_MODES.DISABLED) {
+    return (
+      <div className="candidate-ip-card candidate-ip-card-embedded candidate-ip-card-disabled" data-testid="candidate-ip-disabled">
+        <div className="candidate-ip-static-title">{VPN_PROXY_CHECK_LABEL}</div>
+        <div className="text-sm text-muted">Built-in VPN / Proxy Check is disabled. Use manual verification if needed.</div>
+      </div>
+    );
+  }
+
+  if (resolvedMode === VPN_PROXY_CHECK_MODES.LINKS) {
+    return (
+      <div className="candidate-ip-card candidate-ip-card-embedded candidate-ip-card-links" data-testid="candidate-ip-links">
+        <div className="candidate-ip-static-title">{VPN_PROXY_CHECK_LABEL}</div>
+        <div className="candidate-ip-input-row candidate-ip-links-row">
+          <label>
+            <span>Candidate Public IP Address</span>
+            <input
+              type="text"
+              value={ip}
+              onChange={(event) => setIp(event.target.value)}
+              placeholder="IPv4 or IPv6"
+              data-testid="candidate-ip-manual-input"
+            />
+          </label>
+          <div className="candidate-ip-actions">
+            {manualLinks.map((link) => (
+              <button
+                key={link.label}
+                type="button"
+                className="btn btn-muted btn-sm"
+                onClick={() => openManualLink(link.url)}
+                data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+              >
+                {link.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="text-xs text-muted">Manual links do not run provider lookups or create automated VPN/proxy verdicts.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="candidate-ip-card candidate-ip-card-embedded" data-testid="candidate-ip-intelligence">

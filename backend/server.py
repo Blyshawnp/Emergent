@@ -2853,6 +2853,7 @@ DEFAULT_SETTINGS = {
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
     "support_form_url": DEFAULT_SUPPORT_FORM_URL,
+    "vpnProxyCheckMode": "checker",
     "ticker_speed": "normal",
     "enable_sounds": True,
     "sound_volume": "medium",
@@ -3051,6 +3052,11 @@ def _normalize_welcome_voice(value):
     return "female" if str(value or "").strip().lower() == "female" else "male"
 
 
+def _normalize_vpn_proxy_check_mode(value):
+    mode = str(value or "").strip().lower()
+    return mode if mode in {"checker", "links", "disabled"} else "checker"
+
+
 def sanitize_settings(doc: Optional[dict]) -> dict:
     base = {key: value for key, value in DEFAULT_SETTINGS.items() if key not in ADMIN_ONLY_SETTINGS_KEYS}
     if doc:
@@ -3062,6 +3068,7 @@ def sanitize_settings(doc: Optional[dict]) -> dict:
     base["sound_volume"] = _normalize_sound_volume(base.get("sound_volume"), base.get("enable_sounds"))
     base["enable_sounds"] = base["sound_volume"] != "off"
     base["welcome_voice"] = _normalize_welcome_voice(base.get("welcome_voice"))
+    base["vpnProxyCheckMode"] = _normalize_vpn_proxy_check_mode(base.get("vpnProxyCheckMode"))
     for key in SENSITIVE_SETTINGS_KEYS:
         base[key] = ""
         if key == GEMINI_API_KEY_SETTING:
@@ -3097,6 +3104,8 @@ def normalize_settings_payload(payload: dict) -> dict:
             sanitized["enable_sounds"] = value != "off"
         elif key == "welcome_voice":
             value = _normalize_welcome_voice(value)
+        elif key == "vpnProxyCheckMode":
+            value = _normalize_vpn_proxy_check_mode(value)
         if key in DEFAULT_MANAGED_SETTINGS_KEYS and _content_values_equal(value, DEFAULT_SETTINGS.get(key)):
             unset_defaults[key] = ""
             unset_defaults[_managed_custom_flag(key)] = ""
@@ -8399,6 +8408,102 @@ class ProxyCheckProvider(IpIntelligenceProvider):
         })
 
 
+class IPHubProvider(IpIntelligenceProvider):
+    name = "IPHub"
+    requires_key = True
+    env_key = "IPHUB_API_KEY"
+    enabled_env = "IPHUB_ENABLED"
+    capability = "vpn_proxy_detector"
+
+    async def lookup(self, ip_value):
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"https://v2.api.iphub.info/ip/{quote(ip_value)}", headers={"X-Key": self.api_key()})
+            response.raise_for_status()
+            data = response.json()
+        block_value = str(data.get("block") or "").strip()
+        is_risk = block_value == "1"
+        isp = data.get("isp") or ""
+        usage_type = data.get("type") or ("hosting/proxy" if is_risk else "")
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_risk else "No",
+            "isp": isp,
+            "asn": str(data.get("asn") or ""),
+            "usageType": usage_type,
+            "country": data.get("countryName") or data.get("countryCode") or "",
+            "confidence": "High" if is_risk else "Medium",
+            "notes": f"IPHub block={block_value or 'unknown'}",
+            "reputationCapable": True,
+            "capability": self.capability,
+            "flags": {
+                "proxy": is_risk,
+                "hosting": is_risk,
+                "datacenter": is_risk,
+                "active": is_risk,
+                "residential": block_value == "0" and _contains_any(isp, RESIDENTIAL_USAGE_MARKERS),
+            },
+        })
+
+
+class ScamalyticsProvider(IpIntelligenceProvider):
+    name = "Scamalytics"
+    enabled_env = "SCAMALYTICS_ENABLED"
+    capability = "vpn_proxy_detector"
+
+    def enabled(self):
+        configured = os.getenv(self.enabled_env or "")
+        enabled_value = str(configured if configured != "" else self.default_enabled).strip().lower()
+        if enabled_value in {"0", "false", "no", "off", "disabled"}:
+            return False, "disabled"
+        if not (self.username() and self.api_key()):
+            return False, "missing_api_key"
+        return True, ""
+
+    def username(self):
+        return (os.getenv("SCAMALYTICS_USERNAME") or "").strip()
+
+    def api_key(self):
+        return (os.getenv("SCAMALYTICS_API_KEY") or "").strip()
+
+    async def lookup(self, ip_value):
+        params = {"key": self.api_key(), "ip": ip_value}
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"https://api11.scamalytics.com/{quote(self.username())}/", params=params)
+            response.raise_for_status()
+            data = response.json()
+        score_raw = data.get("score") or data.get("ip_score") or data.get("risk_score") or 0
+        try:
+            score = float(score_raw)
+        except (TypeError, ValueError):
+            score = 0.0
+        risk = str(data.get("risk") or data.get("risk_level") or "").strip().lower()
+        usage_type = " ".join(str(data.get(key) or "") for key in ("ip_city", "ip_state_name", "ip_country_name", "isp_name"))
+        is_risk = score >= 75 or risk in {"high", "very high", "fraud", "proxy", "vpn"}
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_risk else "No",
+            "isp": data.get("isp_name") or "",
+            "asn": str(data.get("asn") or ""),
+            "usageType": usage_type,
+            "country": data.get("ip_country_name") or data.get("ip_country_code") or "",
+            "region": data.get("ip_state_name") or "",
+            "city": data.get("ip_city") or "",
+            "confidence": "High" if is_risk else "Medium",
+            "notes": f"Scamalytics score={score_raw}",
+            "reputationCapable": True,
+            "capability": self.capability,
+            "flags": {
+                "proxy": is_risk,
+                "vpn": "vpn" in risk,
+                "hosting": _contains_any(usage_type, ("hosting", "datacenter", "data center")),
+                "datacenter": _contains_any(usage_type, ("datacenter", "data center")),
+                "active": is_risk,
+            },
+        })
+
+
 class IpApiCoProvider(IpIntelligenceProvider):
     name = "ipapi.co network metadata"
     enabled_env = "IPAPI_CO_ENABLED"
@@ -8441,6 +8546,8 @@ def _configured_ip_intelligence_providers():
         IPQualityScoreProvider(),
         AbuseIpDbProvider(),
         ProxyCheckProvider(),
+        IPHubProvider(),
+        ScamalyticsProvider(),
         IpApiCoProvider(),
     ]
 
@@ -8504,6 +8611,10 @@ def _consensus_ip_intelligence(results, skipped_count=0):
             "fallbackUsed": True,
         }
 
+    detector_warning = ""
+    if len(detector_successful) < 2:
+        detector_warning = "Only one VPN/proxy detector is currently available. Verify manually if the result is important."
+
     historical_residential = [result for result in detector_successful if _ip_result_historical_residential_proxy(result)]
     stale_risk = [result for result in detector_successful if _ip_result_stale_risk(result)]
     current_risk_results = [result for result in detector_successful if _ip_result_has_risk(result) and not _ip_result_stale_risk(result)]
@@ -8520,6 +8631,7 @@ def _consensus_ip_intelligence(results, skipped_count=0):
             "level": "yellow",
             "summary": "One provider detected historical proxy activity. The connection currently appears residential. Do not fail based on this result alone.",
             "fallbackUsed": False,
+            "warning": detector_warning,
         }
 
     if stale_risk and total_risk_count < 2:
@@ -8528,6 +8640,7 @@ def _consensus_ip_intelligence(results, skipped_count=0):
             "level": "yellow",
             "summary": "One provider reported a stale or historical VPN/proxy signal. Manual review is required before making a decision.",
             "fallbackUsed": False,
+            "warning": detector_warning,
         }
 
     single_active_hosting_signal = total_risk_count == 1 and active_vpn_confirmed and hosting_confirmed
@@ -8538,19 +8651,21 @@ def _consensus_ip_intelligence(results, skipped_count=0):
             "level": "red",
             "summary": "VPN/proxy detector signals indicate this IP is likely VPN/proxy/datacenter. Candidate should be reviewed before continuing.",
             "fallbackUsed": False,
+            "warning": detector_warning,
         }
 
     if total_risk_count == 1 or disagreement or residential_conflict:
         summary = "One provider detected VPN/proxy/hosting risk. Manual review is recommended."
         if historical_residential:
             summary = "One provider detected historical proxy activity, but the connection appears to be a residential ISP. Manual review is recommended."
-        return {"verdict": "REVIEW", "level": "yellow", "summary": summary, "fallbackUsed": False}
+        return {"verdict": "REVIEW", "level": "yellow", "summary": summary, "fallbackUsed": False, "warning": detector_warning}
 
     return {
         "verdict": "CLEAR",
         "level": "green",
         "summary": "No providers detected VPN, proxy, hosting, or datacenter usage.",
         "fallbackUsed": False,
+        "warning": detector_warning,
     }
 
 
@@ -8589,8 +8704,16 @@ async def _run_ip_intelligence_lookup(ip_value):
         "verdict": consensus["verdict"],
         "level": consensus["level"],
         "summary": consensus["summary"],
+        "warning": consensus.get("warning", ""),
         "providerResults": provider_results,
         "providersSkipped": skipped,
+        "detectorProviderCount": sum(
+            1
+            for result in provider_results
+            if result.get("status") == "ok"
+            and result.get("capability") == "vpn_proxy_detector"
+            and result.get("reputationCapable", True)
+        ),
         "fallbackUsed": consensus["fallbackUsed"],
         "autoFail": False,
     }

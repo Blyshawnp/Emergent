@@ -81,6 +81,11 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["ip"], "2001:4860:4860::8888")
         self.assertEqual(result["verdict"], "CLEAR")
+        self.assertEqual(
+            result["warning"],
+            "Only one VPN/proxy detector is currently available. Verify manually if the result is important.",
+        )
+        self.assertEqual(result["detectorProviderCount"], 1)
 
     def test_one_provider_failure_does_not_stop_lookup(self):
         result = run_lookup("8.8.4.4", [
@@ -206,6 +211,45 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertFalse(result["reputationCapable"])
         self.assertEqual(result["vpnProxy"], "Unknown")
         self.assertFalse(server._ip_result_has_risk(result))
+
+    def test_optional_detector_providers_are_registered_and_key_gated(self):
+        providers = server._configured_ip_intelligence_providers()
+        names = {provider.name for provider in providers}
+        self.assertIn("IPHub", names)
+        self.assertIn("Scamalytics", names)
+        iphub = next(provider for provider in providers if provider.name == "IPHub")
+        scamalytics = next(provider for provider in providers if provider.name == "Scamalytics")
+        with mock.patch.dict(server.os.environ, {
+            "IPHUB_API_KEY": "",
+            "SCAMALYTICS_USERNAME": "",
+            "SCAMALYTICS_API_KEY": "",
+        }, clear=False):
+            self.assertEqual(iphub.enabled(), (False, "missing_api_key"))
+            self.assertEqual(scamalytics.enabled(), (False, "missing_api_key"))
+
+    def test_iphub_provider_normalizes_detector_result(self):
+        provider = server.IPHubProvider()
+        with mock.patch.object(provider, "api_key", return_value="key"):
+            with mock.patch("server.httpx.AsyncClient") as client_cls:
+                response = mock.Mock()
+                response.json.return_value = {
+                    "block": 1,
+                    "isp": "Example Hosting",
+                    "asn": 12345,
+                    "countryName": "United States",
+                }
+                response.raise_for_status.return_value = None
+                client_cls.return_value.__aenter__.return_value.get = mock.AsyncMock(return_value=response)
+                result = asyncio.run(provider.lookup("8.8.8.8"))
+        self.assertEqual(result["provider"], "IPHub")
+        self.assertEqual(result["capability"], "vpn_proxy_detector")
+        self.assertEqual(result["vpnProxy"], "Yes")
+        self.assertTrue(server._ip_result_has_risk(result))
+
+    def test_settings_normalize_vpn_proxy_check_mode(self):
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "links"})["vpnProxyCheckMode"], "links")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "disabled"})["vpnProxyCheckMode"], "disabled")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "bad"})["vpnProxyCheckMode"], "checker")
 
 
 if __name__ == "__main__":

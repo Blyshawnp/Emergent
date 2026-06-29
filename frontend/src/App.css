@@ -1658,14 +1658,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .candidate-ip-card-embedded .candidate-ip-body {
   gap: 10px;
   padding: 0 12px 12px;
-  max-height: min(320px, calc(100vh - 320px));
+  max-height: min(260px, calc(100vh - var(--sticky-action-reserved-space, 96px) - 360px));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .candidate-ip-input-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(150px, 1fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -1686,6 +1686,27 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.candidate-ip-static-title {
+  padding: 10px 12px 4px;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 900;
+}
+
+.candidate-ip-card-disabled,
+.candidate-ip-card-links {
+  padding-bottom: 10px;
+}
+
+.candidate-ip-card-disabled .text-sm,
+.candidate-ip-card-links .text-xs {
+  padding: 0 12px;
+}
+
+.candidate-ip-links-row {
+  padding: 6px 12px 8px;
 }
 
 .candidate-ip-collapsed-summary {
@@ -1739,13 +1760,18 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .ip-verdict-summary {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   font-weight: 700;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .ip-last-seen {
   margin-top: 6px;
+}
+
+.ip-detector-warning {
+  margin-top: 6px;
+  color: #f59e0b;
 }
 
 .ip-decision-reminder {
@@ -1797,7 +1823,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .ip-provider-table-wrap {
   max-width: 100%;
-  max-height: 180px;
+  max-height: 140px;
   margin-top: 8px;
   overflow: auto;
   border: 1px solid var(--border-subtle);
@@ -1806,7 +1832,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .ip-provider-table {
   width: 100%;
-  min-width: 1240px;
+  min-width: 860px;
   border-collapse: collapse;
 }
 
