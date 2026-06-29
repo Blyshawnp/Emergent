@@ -8613,7 +8613,7 @@ def _consensus_ip_intelligence(results, skipped_count=0):
 
     detector_warning = ""
     if len(detector_successful) < 2:
-        detector_warning = "Only one VPN/proxy detector is currently available. Verify manually if the result is important."
+        detector_warning = "Only one VPN/proxy detector is currently available. Verify manually if this result is important."
 
     historical_residential = [result for result in detector_successful if _ip_result_historical_residential_proxy(result)]
     stale_risk = [result for result in detector_successful if _ip_result_stale_risk(result)]
@@ -8669,6 +8669,19 @@ def _consensus_ip_intelligence(results, skipped_count=0):
     }
 
 
+def _ip_intelligence_summary_confidence(consensus, detector_count, metadata_count):
+    verdict = str((consensus or {}).get("verdict") or "").upper()
+    if detector_count <= 0:
+        return "Unknown"
+    if verdict == "VPN / PROXY LIKELY":
+        return "High" if detector_count >= 2 else "Medium"
+    if verdict == "CLEAR":
+        return "High" if detector_count >= 2 else "Medium"
+    if verdict == "REVIEW":
+        return "Medium" if detector_count >= 2 else "Low"
+    return "Low" if metadata_count else "Unknown"
+
+
 async def _run_ip_intelligence_lookup(ip_value):
     try:
         parsed_ip = ipaddress.ip_address(str(ip_value or "").strip())
@@ -8696,6 +8709,19 @@ async def _run_ip_intelligence_lookup(ip_value):
 
     consensus = _consensus_ip_intelligence(provider_results, skipped_count=len(skipped))
     last_seen_values = [str(result.get("lastSeen") or "").strip() for result in provider_results if str(result.get("lastSeen") or "").strip()]
+    detector_provider_count = sum(
+        1
+        for result in provider_results
+        if result.get("status") == "ok"
+        and result.get("capability") == "vpn_proxy_detector"
+        and result.get("reputationCapable", True)
+    )
+    metadata_provider_count = sum(
+        1
+        for result in provider_results
+        if result.get("status") in {"ok", "metadata"}
+        and (result.get("capability") == "metadata_only" or not result.get("reputationCapable", True))
+    )
     return {
         "ok": True,
         "ip": normalized_ip,
@@ -8707,13 +8733,9 @@ async def _run_ip_intelligence_lookup(ip_value):
         "warning": consensus.get("warning", ""),
         "providerResults": provider_results,
         "providersSkipped": skipped,
-        "detectorProviderCount": sum(
-            1
-            for result in provider_results
-            if result.get("status") == "ok"
-            and result.get("capability") == "vpn_proxy_detector"
-            and result.get("reputationCapable", True)
-        ),
+        "detectorProviderCount": detector_provider_count,
+        "metadataProviderCount": metadata_provider_count,
+        "confidence": _ip_intelligence_summary_confidence(consensus, detector_provider_count, metadata_provider_count),
         "fallbackUsed": consensus["fallbackUsed"],
         "autoFail": False,
     }

@@ -74,6 +74,9 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["verdict"], "CLEAR")
         self.assertEqual(result["level"], "green")
+        self.assertEqual(result["detectorProviderCount"], 2)
+        self.assertEqual(result["metadataProviderCount"], 0)
+        self.assertEqual(result["confidence"], "High")
         self.assertFalse(result["autoFail"])
 
     def test_ipv6_clear_result(self):
@@ -83,9 +86,11 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "CLEAR")
         self.assertEqual(
             result["warning"],
-            "Only one VPN/proxy detector is currently available. Verify manually if the result is important.",
+            "Only one VPN/proxy detector is currently available. Verify manually if this result is important.",
         )
         self.assertEqual(result["detectorProviderCount"], 1)
+        self.assertEqual(result["metadataProviderCount"], 0)
+        self.assertEqual(result["confidence"], "Medium")
 
     def test_one_provider_failure_does_not_stop_lookup(self):
         result = run_lookup("8.8.4.4", [
@@ -105,6 +110,9 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "UNABLE TO VERIFY")
         self.assertEqual(result["level"], "gray")
         self.assertEqual(result["summary"], "No VPN/proxy reputation provider available. Manual verification required.")
+        self.assertEqual(result["detectorProviderCount"], 0)
+        self.assertEqual(result["metadataProviderCount"], 0)
+        self.assertEqual(result["confidence"], "Unknown")
 
     def test_metadata_only_provider_is_unable_to_verify(self):
         result = run_lookup("8.8.8.8", [
@@ -117,6 +125,9 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["verdict"], "UNABLE TO VERIFY")
         self.assertEqual(result["level"], "gray")
+        self.assertEqual(result["detectorProviderCount"], 0)
+        self.assertEqual(result["metadataProviderCount"], 1)
+        self.assertEqual(result["confidence"], "Unknown")
 
     def test_one_risk_provider_is_review(self):
         result = run_lookup("8.8.8.8", [risk_provider("risk-provider"), clear_provider("clear-provider")])

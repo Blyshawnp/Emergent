@@ -106,66 +106,170 @@ function riskText(result) {
   return ['vpn', 'proxy', 'hosting', 'datacenter', 'tor', 'residential_proxy'].some((key) => flags[key]) ? 'Yes' : 'No';
 }
 
+function isDetectorResult(result) {
+  return result?.capability === 'vpn_proxy_detector' && result.reputationCapable !== false;
+}
+
+function isMetadataResult(result) {
+  return result?.capability === 'metadata_only' || result?.reputationCapable === false;
+}
+
+function providerCapabilityText(result) {
+  return isDetectorResult(result) ? 'VPN/proxy detector' : 'Metadata only';
+}
+
+function successfulDetectorCount(results = []) {
+  return results.filter((result) => result.status === 'ok' && isDetectorResult(result)).length;
+}
+
+function successfulMetadataCount(results = []) {
+  return results.filter((result) => ['ok', 'metadata'].includes(result.status) && isMetadataResult(result)).length;
+}
+
+function firstProviderValue(results = [], key, predicate = () => true) {
+  const row = results.find((result) => predicate(result) && String(result?.[key] || '').trim());
+  return row ? row[key] : '';
+}
+
+function summaryConfidence(result, detectorCount, metadataCount) {
+  if (result?.confidence) return result.confidence;
+  const verdict = String(result?.verdict || '').toUpperCase();
+  if (detectorCount <= 0) return 'Unknown';
+  if (verdict === 'CLEAR' || verdict === 'VPN / PROXY LIKELY') return detectorCount >= 2 ? 'High' : 'Medium';
+  if (verdict === 'REVIEW') return detectorCount >= 2 ? 'Medium' : 'Low';
+  return metadataCount ? 'Low' : 'Unknown';
+}
+
+function primaryWarningText(result, detectorCount) {
+  if (detectorCount <= 0) return 'No VPN/proxy reputation provider is currently available. Manual verification required.';
+  if (result?.warning) return result.warning;
+  if (detectorCount < 2) return 'Only one VPN/proxy detector is currently available. Verify manually if this result is important.';
+  return '';
+}
+
+function ProviderSummaryTable({ title, rows = [] }) {
+  if (!rows.length) return null;
+  return (
+    <div className="ip-provider-group">
+      <div className="ip-provider-group-title">{title}</div>
+      <div className="ip-provider-table-wrap ip-provider-table-wrap-simple">
+        <table className="ip-provider-table ip-provider-table-simple">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Result</th>
+              <th>Capability</th>
+              <th>Last Seen</th>
+              <th>Confidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((result, index) => {
+              const risky = isDetectorResult(result) && riskText(result) === 'Yes';
+              const failed = result.status && !['ok', 'metadata'].includes(result.status);
+              return (
+                <tr key={`${title}-${result.provider || 'provider'}-${index}`} className={risky ? 'ip-provider-conflict' : failed ? 'ip-provider-failed' : ''}>
+                  <td>{result.provider || 'Unknown'}</td>
+                  <td>{riskText(result)}</td>
+                  <td>{providerCapabilityText(result)}</td>
+                  <td>{result.lastSeen || 'N/A'}</td>
+                  <td>{result.confidence || 'Unknown'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AdvancedProviderMetadata({ rows = [] }) {
+  if (!rows.length) return null;
+  return (
+    <details className="ip-provider-advanced">
+      <summary>Show advanced provider metadata</summary>
+      <div className="ip-provider-table-wrap ip-provider-table-wrap-advanced">
+        <table className="ip-provider-table ip-provider-table-advanced">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Status</th>
+              <th>ISP</th>
+              <th>ASN</th>
+              <th>Usage Type</th>
+              <th>Country</th>
+              <th>Region</th>
+              <th>City</th>
+              <th>Connection Type</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((result, index) => (
+              <tr key={`advanced-${result.provider || 'provider'}-${index}`}>
+                <td>{result.provider || 'Unknown'}</td>
+                <td>{result.status || 'Unknown'}</td>
+                <td>{result.isp || 'N/A'}</td>
+                <td>{result.asn || 'N/A'}</td>
+                <td>{result.usageType || 'N/A'}</td>
+                <td>{result.country || 'N/A'}</td>
+                <td>{result.region || 'N/A'}</td>
+                <td>{result.city || 'N/A'}</td>
+                <td>{result.connectionType || 'N/A'}</td>
+                <td>{result.notes || result.error || 'None'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
 export function CandidateIpProviderTable({ results = [] }) {
   const rows = Array.isArray(results) ? results : [];
   if (!rows.length) {
     return <div className="text-sm text-muted">No provider results available.</div>;
   }
+  const detectorRows = rows.filter(isDetectorResult);
+  const metadataRows = rows.filter((result) => !isDetectorResult(result));
   return (
-    <div className="ip-provider-table-wrap">
-      <table className="ip-provider-table">
-        <thead>
-          <tr>
-            <th>Provider</th>
-            <th>Status</th>
-            <th>Capability</th>
-            <th>VPN / Proxy</th>
-            <th>Last Seen</th>
-            <th>ISP</th>
-            <th>ASN</th>
-            <th>Usage Type</th>
-            <th>Confidence</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((result, index) => {
-            const risky = result.capability === 'vpn_proxy_detector' && result.reputationCapable !== false && riskText(result) === 'Yes';
-            const failed = result.status && !['ok', 'metadata'].includes(result.status);
-            return (
-              <tr key={`${result.provider || 'provider'}-${index}`} className={risky ? 'ip-provider-conflict' : failed ? 'ip-provider-failed' : ''}>
-                <td>{result.provider || 'Unknown'}</td>
-                <td>{result.status || 'Unknown'}</td>
-                <td>{result.capability === 'vpn_proxy_detector' || result.reputationCapable ? 'VPN/proxy detector' : 'Metadata only'}</td>
-                <td>{riskText(result)}</td>
-                <td>{result.lastSeen || 'N/A'}</td>
-                <td>{result.isp || 'N/A'}</td>
-                <td>{result.asn || 'N/A'}</td>
-                <td>{result.usageType || 'N/A'}</td>
-                <td>{result.confidence || 'Unknown'}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="ip-provider-details-body">
+      <ProviderSummaryTable title="Detector providers" rows={detectorRows} />
+      <ProviderSummaryTable title="Metadata providers" rows={metadataRows} />
+      <AdvancedProviderMetadata rows={rows} />
     </div>
   );
 }
 
 export function CandidateIpResultSummary({ result }) {
   if (!result) return null;
+  const rows = Array.isArray(result.providerResults) ? result.providerResults : [];
+  const detectorCount = Number.isFinite(Number(result.detectorProviderCount)) ? Number(result.detectorProviderCount) : successfulDetectorCount(rows);
+  const metadataCount = Number.isFinite(Number(result.metadataProviderCount)) ? Number(result.metadataProviderCount) : successfulMetadataCount(rows);
+  const primaryIsp = firstProviderValue(rows, 'isp', isDetectorResult) || firstProviderValue(rows, 'isp');
+  const usageType = firstProviderValue(rows, 'usageType', isDetectorResult) || firstProviderValue(rows, 'usageType');
+  const lastSeen = result.lastSeen || firstProviderValue(rows, 'lastSeen');
+  const warning = primaryWarningText(result, detectorCount);
   return (
     <div className={`ip-verdict-banner ${verdictClass(result.level)}`} data-testid="candidate-ip-verdict">
-      <div>
-        <div className="ip-verdict-label">Current Verdict</div>
+      <div className="ip-verdict-heading">
+        <div className="ip-verdict-label">Verdict</div>
         <div className="ip-verdict-value">{result.verdict || 'UNABLE TO VERIFY'}</div>
       </div>
       <div className="ip-verdict-summary">
-        {result.summary || 'No summary available.'}
-        {result.lastSeen ? (
-          <div className="ip-last-seen"><strong>Last Seen:</strong> {result.lastSeen}</div>
-        ) : null}
-        {result.warning ? (
-          <div className="ip-detector-warning" data-testid="candidate-ip-detector-warning">{result.warning}</div>
+        <div className="ip-summary-copy">{result.summary || 'No summary available.'}</div>
+        <div className="ip-summary-grid">
+          <div><strong>Confidence:</strong> {summaryConfidence(result, detectorCount, metadataCount)}</div>
+          <div><strong>Detectors checked:</strong> {detectorCount}</div>
+          <div><strong>Metadata sources:</strong> {metadataCount}</div>
+          {primaryIsp ? <div><strong>ISP:</strong> {primaryIsp}</div> : null}
+          {usageType ? <div><strong>Connection:</strong> {usageType}</div> : null}
+          {lastSeen ? <div><strong>Last Seen:</strong> {lastSeen}</div> : null}
+        </div>
+        {warning ? (
+          <div className="ip-detector-warning" data-testid="candidate-ip-detector-warning">{warning}</div>
         ) : null}
       </div>
     </div>
@@ -186,7 +290,7 @@ export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly 
         This is decision support only. The tester always makes the final decision.
       </div>
       <details className="ip-provider-details">
-        <summary>Provider Results</summary>
+        <summary>Show technical details</summary>
         <CandidateIpProviderTable results={result.providerResults} />
       </details>
       {showTrainerNotes ? (
@@ -222,6 +326,10 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
     setResult(initialResult || null);
     setIp(initialResult?.ip || '');
   }, [initialResult]);
+
+  useEffect(() => {
+    setProviderOpen(result ? result.verdict !== 'CLEAR' : false);
+  }, [result]);
 
   const persist = async (nextResult) => {
     storeCandidateIpIntelligence(nextResult);
@@ -373,7 +481,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
                 </div>
               ) : null}
               <details className="ip-provider-details" open={providerOpen} onToggle={(event) => setProviderOpen(event.currentTarget.open)}>
-                <summary>Provider Results</summary>
+                <summary>{providerOpen ? 'Hide technical details' : 'Show technical details'}</summary>
                 <CandidateIpProviderTable results={result.providerResults} />
               </details>
             </>

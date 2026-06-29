@@ -117,8 +117,45 @@ beforeEach(() => {
     verdict: 'CLEAR',
     level: 'green',
     summary: 'No providers detected VPN, proxy, hosting, or datacenter usage.',
-    warning: '',
-    providerResults: [],
+    warning: 'Only one VPN/proxy detector is currently available. Verify manually if this result is important.',
+    detectorProviderCount: 1,
+    metadataProviderCount: 1,
+    confidence: 'Medium',
+    providerResults: [
+      {
+        provider: 'proxycheck.io',
+        status: 'ok',
+        capability: 'vpn_proxy_detector',
+        reputationCapable: true,
+        vpnProxy: 'No',
+        lastSeen: '',
+        isp: 'Comcast Cable Communications, LLC',
+        asn: 'AS7922',
+        usageType: 'Residential',
+        country: 'United States',
+        region: 'PA',
+        city: 'Philadelphia',
+        connectionType: 'Cable',
+        confidence: 'Medium',
+        notes: 'Clear detector result',
+      },
+      {
+        provider: 'ipapi.co network metadata',
+        status: 'metadata',
+        capability: 'metadata_only',
+        reputationCapable: false,
+        vpnProxy: 'Unknown',
+        isp: 'Comcast Cable Communications, LLC',
+        asn: 'AS7922',
+        usageType: 'Network metadata only',
+        country: 'United States',
+        region: 'PA',
+        city: 'Philadelphia',
+        connectionType: 'Residential',
+        confidence: 'Unknown',
+        notes: 'Metadata only',
+      },
+    ],
   });
   api.startSession.mockResolvedValue({ ok: true });
   window.localStorage.clear();
@@ -583,10 +620,120 @@ test('vpn proxy checker mode runs the built-in provider lookup and keeps clear p
   });
 
   expect(api.checkIpIntelligence).toHaveBeenCalledWith('8.8.8.8');
+  expect(view.container.textContent).toContain('Confidence: Medium');
+  expect(view.container.textContent).toContain('Detectors checked: 1');
+  expect(view.container.textContent).toContain('Metadata sources: 1');
+  expect(view.container.textContent).toContain('ISP: Comcast Cable Communications, LLC');
+  expect(view.container.textContent).toContain('Connection: Residential');
+  expect(view.container.textContent).toContain('Only one VPN/proxy detector is currently available. Verify manually if this result is important.');
   const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
   expect(providerDetails?.hasAttribute('open') || false).toBe(false);
   expect(view.container.textContent).not.toContain('Trainer Notes');
   await view.unmount();
+});
+
+test('vpn proxy technical details show simplified columns and keep advanced metadata hidden until expanded', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'checker' });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    view.container.querySelector('.candidate-ip-card-toggle').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="candidate-ip-input"]'), '8.8.8.8');
+    view.container.querySelector('.candidate-ip-actions .btn-primary').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('.ip-provider-details summary').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const details = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
+  expect(details?.hasAttribute('open') || false).toBe(true);
+  const simpleHeaders = Array.from(view.container.querySelectorAll('.ip-provider-table-simple th')).map((cell) => cell.textContent);
+  expect(simpleHeaders).toEqual(expect.arrayContaining(['Provider', 'Result', 'Capability', 'Last Seen', 'Confidence']));
+  expect(simpleHeaders).not.toEqual(expect.arrayContaining(['ISP', 'ASN', 'City', 'Region', 'Connection Type']));
+  expect(view.container.textContent).toContain('Detector providers');
+  expect(view.container.textContent).toContain('Metadata providers');
+  expect(view.container.textContent).toContain('proxycheck.io');
+  expect(view.container.textContent).toContain('ipapi.co network metadata');
+  expect(view.container.textContent).toContain('Metadata only');
+  const advanced = view.container.querySelector('.ip-provider-advanced');
+  expect(advanced?.hasAttribute('open') || false).toBe(false);
+  await act(async () => {
+    advanced.querySelector('summary').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(advanced.hasAttribute('open')).toBe(true);
+  const advancedHeaders = Array.from(view.container.querySelectorAll('.ip-provider-table-advanced th')).map((cell) => cell.textContent);
+  expect(advancedHeaders).toEqual(expect.arrayContaining(['ISP', 'ASN', 'Usage Type', 'Country', 'Region', 'City', 'Connection Type', 'Details']));
+  await view.unmount();
+});
+
+test('vpn proxy non-clear verdicts auto-expand technical details', async () => {
+  const scenarios = [
+    { verdict: 'REVIEW', level: 'yellow' },
+    { verdict: 'VPN / PROXY LIKELY', level: 'red' },
+    { verdict: 'UNABLE TO VERIFY', level: 'gray', detectorProviderCount: 0, metadataProviderCount: 1, warning: 'No VPN/proxy reputation provider is currently available. Manual verification required.' },
+  ];
+
+  for (const scenario of scenarios) {
+    api.getCurrentSession.mockResolvedValue({
+      session: {
+        candidate_name: 'Taylor Example',
+        tester_name: 'Tester',
+        final_attempt: false,
+        headset_usb: true,
+        noise_cancel: true,
+        headset_brand: 'Logitech H390',
+        vpn_on: false,
+        chrome_default: true,
+        extensions_disabled: true,
+        popups_allowed: true,
+        candidate_ip_intelligence: {
+          ok: true,
+          ip: '8.8.8.8',
+          timestamp: `2026-06-29T12:00:0${scenarios.indexOf(scenario)}Z`,
+          verdict: scenario.verdict,
+          level: scenario.level,
+          summary: scenario.verdict === 'UNABLE TO VERIFY' ? 'Only network metadata is available.' : 'Manual review is recommended.',
+          warning: scenario.warning || 'Only one VPN/proxy detector is currently available. Verify manually if this result is important.',
+          detectorProviderCount: scenario.detectorProviderCount ?? 1,
+          metadataProviderCount: scenario.metadataProviderCount ?? 1,
+          confidence: scenario.verdict === 'UNABLE TO VERIFY' ? 'Unknown' : 'Low',
+          providerResults: [
+            {
+              provider: scenario.verdict === 'UNABLE TO VERIFY' ? 'ipapi.co network metadata' : 'proxycheck.io',
+              status: scenario.verdict === 'UNABLE TO VERIFY' ? 'metadata' : 'ok',
+              capability: scenario.verdict === 'UNABLE TO VERIFY' ? 'metadata_only' : 'vpn_proxy_detector',
+              reputationCapable: scenario.verdict !== 'UNABLE TO VERIFY',
+              vpnProxy: scenario.verdict === 'UNABLE TO VERIFY' ? 'Unknown' : 'Yes',
+              confidence: scenario.verdict === 'UNABLE TO VERIFY' ? 'Unknown' : 'Low',
+            },
+          ],
+        },
+      },
+    });
+    api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'checker' });
+    api.getDefaults.mockResolvedValue({});
+    api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+    const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+    await act(async () => {
+      view.container.querySelector('.candidate-ip-card-toggle').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await flushPromises();
+    });
+
+    const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
+    expect(providerDetails?.hasAttribute('open') || false).toBe(true);
+    expect(providerDetails.textContent).toContain('Hide technical details');
+    await view.unmount();
+  }
 });
 
 test('vpn proxy links mode shows external lookup buttons and does not call provider API', async () => {
