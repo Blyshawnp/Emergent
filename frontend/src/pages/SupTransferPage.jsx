@@ -520,7 +520,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         <div className="card card-scenario" data-testid="sup-scenario-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h3 style={{ color: 'var(--border-scenario)', margin: 0 }}>SCENARIO</h3>
-            <button className="btn btn-ghost btn-sm" onClick={regenSupFlags} data-testid="sup-regen">{'\uD83D\uDD04'} Regenerate</button>
+            <button className="scenario-regen-btn" onClick={regenSupFlags} data-testid="sup-regen" title="Re-roll random variables"><span className="regen-icon">{'\uD83D\uDD04'}</span> Regenerate</button>
           </div>
           {currentCaller.length > 0 ? (
             <>

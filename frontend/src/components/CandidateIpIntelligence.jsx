@@ -156,11 +156,10 @@ function ProviderSummaryTable({ title, rows = [] }) {
         <table className="ip-provider-table ip-provider-table-simple">
           <thead>
             <tr>
-              <th>Provider</th>
-              <th>Result</th>
-              <th>Capability</th>
-              <th>Last Seen</th>
-              <th>Confidence</th>
+              <th style={{ width: '35%' }}>Provider</th>
+              <th style={{ width: '20%' }}>Result</th>
+              <th style={{ width: '25%' }}>Capability</th>
+              <th style={{ width: '20%' }}>Confidence</th>
             </tr>
           </thead>
           <tbody>
@@ -169,10 +168,9 @@ function ProviderSummaryTable({ title, rows = [] }) {
               const failed = result.status && !['ok', 'metadata'].includes(result.status);
               return (
                 <tr key={`${title}-${result.provider || 'provider'}-${index}`} className={risky ? 'ip-provider-conflict' : failed ? 'ip-provider-failed' : ''}>
-                  <td>{result.provider || 'Unknown'}</td>
+                  <td style={{ whiteSpace: 'nowrap', minWidth: '120px' }}>{result.provider || 'Unknown'}</td>
                   <td>{riskText(result)}</td>
                   <td>{providerCapabilityText(result)}</td>
-                  <td>{result.lastSeen || 'N/A'}</td>
                   <td>{result.confidence || 'Unknown'}</td>
                 </tr>
               );
@@ -260,13 +258,13 @@ export function CandidateIpResultSummary({ result }) {
       </div>
       <div className="ip-verdict-summary">
         <div className="ip-summary-copy">{result.summary || 'No summary available.'}</div>
-        <div className="ip-summary-grid">
-          <div><strong>Confidence:</strong> {summaryConfidence(result, detectorCount, metadataCount)}</div>
-          <div><strong>Detectors checked:</strong> {detectorCount}</div>
-          <div><strong>Metadata sources:</strong> {metadataCount}</div>
-          {primaryIsp ? <div><strong>ISP:</strong> {primaryIsp}</div> : null}
-          {usageType ? <div><strong>Connection:</strong> {usageType}</div> : null}
-          {lastSeen ? <div><strong>Last Seen:</strong> {lastSeen}</div> : null}
+        <div className="ip-summary-list">
+          <div className="ip-summary-row"><span className="ip-summary-label">Confidence:</span> <strong>{summaryConfidence(result, detectorCount, metadataCount)}</strong></div>
+          <div className="ip-summary-row"><span className="ip-summary-label">Detectors:</span> <strong>{detectorCount}</strong></div>
+          <div className="ip-summary-row"><span className="ip-summary-label">Metadata sources:</span> <strong>{metadataCount}</strong></div>
+          {primaryIsp ? <div className="ip-summary-row"><span className="ip-summary-label">ISP:</span> <strong>{primaryIsp}</strong></div> : null}
+          {usageType ? <div className="ip-summary-row"><span className="ip-summary-label">Connection:</span> <strong>{usageType}</strong></div> : null}
+          {lastSeen ? <div className="ip-summary-row"><span className="ip-summary-label">Last Seen:</span> <strong>{lastSeen}</strong></div> : null}
         </div>
         {warning ? (
           <div className="ip-detector-warning" data-testid="candidate-ip-detector-warning">{warning}</div>

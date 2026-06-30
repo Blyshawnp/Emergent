@@ -621,7 +621,7 @@ test('vpn proxy checker mode runs the built-in provider lookup and keeps clear p
 
   expect(api.checkIpIntelligence).toHaveBeenCalledWith('8.8.8.8');
   expect(view.container.textContent).toContain('Confidence: Medium');
-  expect(view.container.textContent).toContain('Detectors checked: 1');
+  expect(view.container.textContent).toContain('Detectors: 1');
   expect(view.container.textContent).toContain('Metadata sources: 1');
   expect(view.container.textContent).toContain('ISP: Comcast Cable Communications, LLC');
   expect(view.container.textContent).toContain('Connection: Residential');
@@ -656,7 +656,7 @@ test('vpn proxy technical details show simplified columns and keep advanced meta
   const details = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
   expect(details?.hasAttribute('open') || false).toBe(true);
   const simpleHeaders = Array.from(view.container.querySelectorAll('.ip-provider-table-simple th')).map((cell) => cell.textContent);
-  expect(simpleHeaders).toEqual(expect.arrayContaining(['Provider', 'Result', 'Capability', 'Last Seen', 'Confidence']));
+  expect(simpleHeaders).toEqual(expect.arrayContaining(['Provider', 'Result', 'Capability', 'Confidence']));
   expect(simpleHeaders).not.toEqual(expect.arrayContaining(['ISP', 'ASN', 'City', 'Region', 'Connection Type']));
   expect(view.container.textContent).toContain('Detector providers');
   expect(view.container.textContent).toContain('Metadata providers');

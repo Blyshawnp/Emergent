@@ -2881,12 +2881,8 @@ export default function NotificationManagerApp() {
     `${items.filter(isCurrentNotification).length} current`,
     `${items.filter((item) => !isCurrentNotification(item)).length} disabled or expired`,
     'All times interpreted as Eastern',
-    `Backend ${sheetState.backendStatus || 'initializing'}`,
-    `Backend started here: ${sheetState.backendStartedByNotificationApp ? 'yes' : 'no'}`,
-    `Startup retries: ${sheetState.backendRetryCount || 0}`,
-    `Ticker source: ${(sheetState.tickerSource || 'unknown').toUpperCase()}`,
-    samSetupStatus.userName ? `SAM user: ${samSetupStatus.userName}` : null,
-    sheetState.writeReady ? 'Direct sheet write ready' : 'Direct sheet write not configured',
+    samSetupStatus.userName ? `Operator: ${samSetupStatus.userName}` : null,
+    `Status: ${sheetState.backendStatus === 'connected' ? 'Online' : 'Offline'}`
   ].filter(Boolean);
 
   const visibleItems = items

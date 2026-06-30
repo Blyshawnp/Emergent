@@ -1,320 +1,392 @@
 /* =====================================================================
-   SAM (Smart Alert Manager) — UI POLISH LAYER (visual-only)
-   Loaded AFTER notification-manager.css. Refines, never redesigns.
-   No functional change. Transitions kept <= ~180ms.
+   SAM (Smart Alert Manager) — UI POLISH LAYER (Revamped Version)
+   Loaded AFTER notification-manager.css. Elevates to a premium console.
+   No functional changes. Smooth transitions and layout stability.
    ===================================================================== */
 
 /* ---------------------------------------------------------------------
-   13. NOTIFICATION / BRANDING — remove oversized graphic
-   The "Sam" banner fallback rendered as a huge 16:9 block. Constrain it
-   to a tasteful, proportionate brand mark.
+   1. GLOBAL PAGE & HERO OVERRIDES
    --------------------------------------------------------------------- */
-.nm-sam-banner-frame {
-  max-width: 360px;
-  margin-left: auto;
-  padding: 8px;
-}
-.nm-sam-banner {
-  max-height: 132px;
-}
-.nm-sam-banner-fallback {
-  aspect-ratio: auto;
-  height: 96px;
-  font-size: 22px;
-  letter-spacing: 0.08em;
+body.notification-manager-body {
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 35%),
+    radial-gradient(circle at bottom left, rgba(30, 41, 59, 0.3), transparent 30%),
+    #030712;
 }
 
-/* ---------------------------------------------------------------------
-   5. CARDS / SECTIONS — consistent, gentle hover lift
-   --------------------------------------------------------------------- */
-.nm-hero,
-.nm-grid > section,
-.nm-form-card,
-.nm-candidate-panel,
-.nm-headset-panel,
-.nm-actions-panel,
-.nm-status-card,
-.nm-section-nav {
-  transition: border-color 150ms ease,
-              box-shadow 150ms ease,
-              transform 150ms ease;
-}
-.nm-actions-panel:hover {
-  border-color: rgba(125, 211, 252, 0.3);
-}
-
-/* ---------------------------------------------------------------------
-   8. BUTTONS — unified press feedback + visible focus
-   --------------------------------------------------------------------- */
-.nm-btn:not(:disabled):active,
-.nm-file-label:active,
-.nm-view-tab:active {
-  transform: translateY(0) scale(0.98);
-}
-.nm-btn:focus-visible,
-.nm-file-label:focus-visible,
-.nm-view-tab:focus-visible,
-.nm-modal-close:focus-visible,
-.nm-status-dismiss:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.4);
-}
-
-/* ---------------------------------------------------------------------
-   6. STATUS PILLS / BADGES — consistent, refined
-   --------------------------------------------------------------------- */
-.nm-pill {
-  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
-}
-.nm-pill:hover { transform: translateY(-1px); }
-
-/* ---------------------------------------------------------------------
-   3. TABLES — clearer selected row, smoother row hover
-   --------------------------------------------------------------------- */
-.nm-table tbody tr { transition: background-color 140ms ease; }
-.nm-table tbody tr:hover { background: rgba(125, 211, 252, 0.06); }
-.nm-table tr.is-selected {
-  background: rgba(14, 165, 233, 0.14);
-  box-shadow: inset 3px 0 0 var(--nm-accent);
-}
-
-/* ---------------------------------------------------------------------
-   4. EMPTY STATES — more breathing room
-   --------------------------------------------------------------------- */
-.nm-empty {
-  padding: 40px 28px;
-  gap: 12px;
-}
-.nm-empty::before {
-  width: 52px;
-  height: 52px;
+.nm-hero {
+  background: rgba(15, 23, 42, 0.45);
+  border: 1.5px solid rgba(56, 189, 248, 0.12);
   border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(16px);
+  padding: 24px;
 }
 
-/* ---------------------------------------------------------------------
-   1. SECTION NAV / VIEW TABS — smoother active feel
-   --------------------------------------------------------------------- */
-.nm-view-tab,
-.nm-section-nav .nm-btn {
-  transition: background 150ms ease, border-color 150ms ease,
-              color 150ms ease, box-shadow 150ms ease, transform 120ms ease;
-}
-
-/* ---------------------------------------------------------------------
-   10. ACCESSIBILITY — visible focus on links & toc buttons
-   --------------------------------------------------------------------- */
-.nm-link-button:focus-visible,
-.nm-help-toc-button:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.4);
-  border-radius: 6px;
-}
-
-/* ---------------------------------------------------------------------
-   14. MICRO ANIMATIONS — subtle entrance, respect reduced motion
-   --------------------------------------------------------------------- */
-@keyframes nmFadeUp {
-  from { opacity: 0; transform: translateY(5px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.nm-panel,
-.nm-empty,
-.nm-status-card { animation: nmFadeUp 160ms ease both; }
-
-@media (prefers-reduced-motion: reduce) {
-  .nm-app *, .nm-app *::before, .nm-app *::after {
-    animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
-  }
-}
-
-/* =====================================================================
-   NOTIFICATION EDITOR — Outlook-style grouped sections
-   ===================================================================== */
-.nm-fields { gap: 16px; }
-.nm-form-section {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 10px;
-  border: 1px solid rgba(125, 211, 252, 0.14);
-  background: rgba(3, 10, 20, 0.34);
-}
-.nm-form-section-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
-}
-.nm-form-section-title {
-  position: relative;
-  padding-left: 12px;
-  font-size: 12px;
+.nm-title {
   font-weight: 800;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #9ec7eb;
-}
-.nm-form-section-title::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 50%;
-  transform: translateY(-50%);
-  width: 3px; height: 14px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, var(--nm-accent), var(--nm-accent-strong));
-}
-/* Sections already provide grouping; relax nested section card chrome */
-.nm-form-section .nm-active-section,
-.nm-form-section .nm-delivery-section {
-  border: 0;
-  background: transparent;
-  padding: 0;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 60%, #94a3b8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 8px;
 }
 
-/* =====================================================================
-   SAM DASHBOARD — operational command-center feel
-   ===================================================================== */
-/* Status pills read as a top status strip */
-.nm-hero .nm-pill-row { gap: 8px; }
-.nm-hero .nm-pill {
-  background: rgba(8, 20, 36, 0.6);
-  border-color: rgba(125, 211, 252, 0.22);
+.nm-subtitle {
+  font-size: var(--font-size-sm);
+  color: #94a3b8;
+  line-height: 1.6;
 }
-/* Quick actions grid (tighter, scannable desktop density) */
+
+/* ---------------------------------------------------------------------
+   2. HERO ACTIONS & TOOLBAR
+   --------------------------------------------------------------------- */
+.nm-actions-panel {
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  background: rgba(3, 10, 20, 0.25);
+  padding: 16px;
+  border-radius: 12px;
+}
+
 .nm-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
 }
-.nm-actions .nm-btn { min-height: 40px; }
 
-/* =====================================================================
-   SAM HELP — settings-doc grouping & rhythm
-   ===================================================================== */
-.nm-help-modal { padding: 26px 28px; }
-.nm-help-grid { gap: 12px; margin: 16px 0; }
-.nm-help-toc { gap: 8px; padding-bottom: 14px; border-bottom: 1px solid rgba(148,163,184,0.12); }
-.nm-help-card { padding: 16px; }
-.nm-help-card h3 { font-size: 15px; }
-.nm-help-header h2 { letter-spacing: -0.01em; }
+.nm-btn,
+.nm-file-label {
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  min-height: 38px;
+  transition: all 180ms ease;
+  border: 1px solid transparent;
+}
 
-/* =====================================================================
-   CANDIDATE TRACKING — table + docked detail side panel
-   ===================================================================== */
+.nm-btn-primary {
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  color: #ffffff;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.15);
+}
+
+.nm-btn-primary:hover {
+  background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+  box-shadow: 0 0 16px rgba(14, 165, 233, 0.35);
+  transform: translateY(-1px);
+}
+
+.nm-btn-secondary,
+.nm-file-label {
+  background: rgba(30, 41, 59, 0.45);
+  border-color: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+}
+
+.nm-btn-secondary:hover,
+.nm-file-label:hover {
+  background: rgba(30, 41, 59, 0.7);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.nm-btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #f87171;
+}
+
+.nm-btn-danger:hover {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.25);
+  transform: translateY(-1px);
+}
+
+/* ---------------------------------------------------------------------
+   3. STATUS PANEL & CHIPS (DASHBOARD GRID)
+   --------------------------------------------------------------------- */
+.nm-status-panel {
+  min-width: 320px;
+}
+
+.nm-pill-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.nm-pill {
+  display: flex;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(56, 189, 248, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 150ms ease;
+  line-height: 1.2;
+}
+
+.nm-pill:hover {
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(14, 165, 233, 0.08);
+  transform: translateY(-1px);
+}
+
+.nm-pill::before {
+  background: #38bdf8;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.55);
+}
+
+.nm-sam-banner-frame {
+  max-width: 100%;
+  margin-top: 12px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  background: rgba(15, 23, 42, 0.4);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.nm-sam-banner {
+  max-height: 120px;
+  border-radius: 8px;
+}
+
+.nm-sam-banner-fallback {
+  height: 96px;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+/* ---------------------------------------------------------------------
+   4. SECTIONS & TAB SWITCHER
+   --------------------------------------------------------------------- */
+.nm-section-nav {
+  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+  border-radius: 12px;
+  padding: 14px 20px;
+}
+
+.nm-section-nav-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.nm-section-nav-buttons .nm-btn {
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+}
+
+.nm-section-nav-buttons .nm-btn:hover {
+  border-color: rgba(56, 189, 248, 0.3);
+  color: #e2e8f0;
+}
+
+.nm-section-nav-buttons .nm-btn.is-active {
+  background: rgba(14, 165, 233, 0.15);
+  border-color: #0ea5e9;
+  color: #38bdf8;
+  box-shadow: 0 0 12px rgba(14, 165, 233, 0.15);
+}
+
+/* ---------------------------------------------------------------------
+   5. TABLES & NOTIFICATION LIST
+   --------------------------------------------------------------------- */
+.nm-panel {
+  background: rgba(15, 23, 42, 0.45);
+  border: 1.5px solid rgba(56, 189, 248, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  padding: 24px;
+}
+
+.nm-view-tabs {
+  border-bottom: 1.5px solid rgba(148, 163, 184, 0.1);
+  margin-bottom: 16px;
+}
+
+.nm-view-tab {
+  font-weight: 700;
+  font-size: 13px;
+  color: #64748b;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  transition: all 180ms ease;
+}
+
+.nm-view-tab:hover {
+  color: #cbd5e1;
+}
+
+.nm-view-tab.is-active {
+  color: #38bdf8;
+  border-bottom-color: #0ea5e9;
+  font-weight: 800;
+}
+
+.nm-table {
+  border-collapse: separate;
+  border-spacing: 0 6px;
+  width: 100%;
+}
+
+.nm-table th {
+  background: transparent;
+  color: #94a3b8;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1.5px solid rgba(56, 189, 248, 0.15);
+  padding: 10px 12px;
+}
+
+.nm-table tbody tr {
+  background: rgba(15, 23, 42, 0.25);
+  border-radius: 8px;
+  transition: all 180ms ease;
+}
+
+.nm-table tbody tr:hover {
+  background: rgba(15, 23, 42, 0.5);
+  transform: scale(1.002);
+}
+
+.nm-table td {
+  padding: 12px;
+  border-top: 1px solid rgba(56, 189, 248, 0.06);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.06);
+  vertical-align: middle;
+}
+
+.nm-table td:first-child {
+  border-left: 1px solid rgba(56, 189, 248, 0.06);
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+}
+
+.nm-table td:last-child {
+  border-right: 1px solid rgba(56, 189, 248, 0.06);
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.nm-table tr.is-selected {
+  background: rgba(14, 165, 233, 0.08) !important;
+  border-color: rgba(14, 165, 233, 0.35) !important;
+  box-shadow: inset 4px 0 0 #0ea5e9 !important;
+}
+
+.nm-badge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-transform: uppercase;
+}
+
+.nm-row-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f1f5f9;
+}
+
+/* ---------------------------------------------------------------------
+   6. CANDIDATE TRACKING & SIDE PANEL
+   --------------------------------------------------------------------- */
 .nm-candidate-layout {
   display: flex;
   gap: 16px;
   align-items: flex-start;
 }
-.nm-candidate-layout .nm-table-wrap {
-  flex: 1 1 auto;
-  min-width: 0;
-}
+
 .nm-detail-panel {
   flex: 0 0 360px;
-  width: 360px;
-  max-height: min(72vh, 760px);
-  overflow: auto;
-  border-radius: 10px;
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  background: rgba(8, 18, 31, 0.62);
-  padding: 16px;
-  position: sticky;
-  top: 8px;
-  scrollbar-gutter: stable;
-}
-.nm-detail-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
-  margin-bottom: 14px;
-}
-.nm-detail-id { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.nm-detail-name { font-size: 17px; font-weight: 800; overflow-wrap: anywhere; }
-.nm-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0 0 4px;
-}
-.nm-detail-grid > div { min-width: 0; }
-.nm-detail-grid dt {
-  font-size: 11px; font-weight: 800; letter-spacing: 0.08em;
-  text-transform: uppercase; color: #9ec7eb; margin-bottom: 3px;
-}
-.nm-detail-grid dd { margin: 0; font-size: 13px; color: #e5f0ff; overflow-wrap: anywhere; }
-.nm-detail-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(148, 163, 184, 0.12); }
-.nm-detail-label {
-  font-size: 11px; font-weight: 800; letter-spacing: 0.1em;
-  text-transform: uppercase; color: #9ec7eb; margin-bottom: 10px;
-}
-.nm-detail-section .nm-row-actions { width: 100%; flex-wrap: wrap; }
-.nm-detail-section .nm-candidate-details { gap: 8px; }
-.nm-detail-empty { margin: 0; height: 100%; }
-@media (max-width: 1280px) {
-  .nm-candidate-layout { flex-direction: column; }
-  .nm-detail-panel { position: static; width: 100%; flex-basis: auto; max-height: none; }
+  background: rgba(15, 23, 42, 0.55);
+  border: 1.5px solid rgba(56, 189, 248, 0.12);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
 }
 
-/* =====================================================================
-   HEADSET REVIEW — ticket-queue workflow (pending tab)
-   ===================================================================== */
-.nm-ticket-queue {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 14px;
+.nm-detail-name {
+  font-size: 16px;
+  font-weight: 800;
+  color: #ffffff;
 }
+
+.nm-detail-grid dt {
+  color: #7dd3fc;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+/* ---------------------------------------------------------------------
+   7. HEADSET REVIEW & TICKET QUEUE
+   --------------------------------------------------------------------- */
 .nm-ticket {
-  border: 1px solid rgba(125, 211, 252, 0.18);
-  border-radius: 10px;
-  background: rgba(8, 18, 31, 0.55);
+  background: rgba(15, 23, 42, 0.4);
+  border: 1.5px solid rgba(56, 189, 248, 0.1);
+  border-radius: 12px;
   padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  transition: all 180ms ease;
 }
+
 .nm-ticket:hover {
-  border-color: rgba(125, 211, 252, 0.34);
+  border-color: rgba(56, 189, 248, 0.35);
   transform: translateY(-2px);
-  box-shadow: 0 10px 26px rgba(2, 8, 20, 0.4);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
 }
-.nm-ticket-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+
+.nm-ticket-title {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
 }
-.nm-ticket-title { font-size: 16px; font-weight: 800; }
-.nm-ticket-sub { font-size: 12px; color: #9fb3c8; margin-top: 2px; }
-.nm-ticket-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 16px;
-  margin: 0;
-}
-.nm-ticket-fields > div { min-width: 0; }
+
 .nm-ticket-fields dt {
-  font-size: 11px; font-weight: 800; letter-spacing: 0.07em;
-  text-transform: uppercase; color: #9ec7eb; margin-bottom: 2px;
+  color: #7dd3fc;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
 }
-.nm-ticket-fields dd { margin: 0; font-size: 13px; color: #e5f0ff; overflow-wrap: anywhere; }
-.nm-ticket-note-field { grid-column: 1 / -1; }
-.nm-ticket-actions { flex-wrap: wrap; gap: 8px; }
-.nm-ticket-empty {
-  flex-direction: column;
-  gap: 10px;
-  padding: 48px 28px;
-  text-align: center;
-  align-items: center;
+
+/* ---------------------------------------------------------------------
+   8. DIALOGS & FORM SECTIONS
+   --------------------------------------------------------------------- */
+.nm-form-section {
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  background: rgba(15, 23, 42, 0.3);
+  padding: 16px;
+  border-radius: 10px;
 }
-.nm-ticket-empty strong { font-size: 16px; }
-.nm-ticket-empty span { color: #9fb3c8; max-width: 400px; }
-@media (max-width: 900px) { .nm-ticket-queue { grid-template-columns: 1fr; } }
+
+.nm-form-section-title {
+  font-weight: 800;
+  font-size: 11px;
+  color: #7dd3fc;
+  letter-spacing: 0.05em;
+}
+
+.nm-form-section-title::before {
+  background: linear-gradient(180deg, #38bdf8, #0ea5e9);
+  width: 3px;
+  height: 12px;
+}

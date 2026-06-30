@@ -8027,8 +8027,14 @@ class IpIntelligenceProvider:
     reputation_capable = True
 
     def enabled(self):
-        configured = os.getenv(self.enabled_env or "")
-        enabled_value = str(configured if configured != "" else self.default_enabled).strip().lower()
+        env_val = os.getenv(self.enabled_env or "")
+        if env_val is None or env_val == "":
+            try:
+                config = _load_backend_runtime_config()
+                env_val = config.get(self.enabled_env) or config.get((self.enabled_env or "").lower())
+            except Exception:
+                pass
+        enabled_value = str(env_val if env_val is not None and env_val != "" else self.default_enabled).strip().lower()
         if enabled_value in {"0", "false", "no", "off", "disabled"}:
             return False, "disabled"
         if self.requires_key and not self.api_key():
@@ -8036,7 +8042,17 @@ class IpIntelligenceProvider:
         return True, ""
 
     def api_key(self):
-        return (os.getenv(self.env_key or "") or "").strip()
+        val = os.getenv(self.env_key or "")
+        if val:
+            return val.strip()
+        try:
+            config = _load_backend_runtime_config()
+            val = config.get(self.env_key) or config.get((self.env_key or "").lower())
+            if val:
+                return str(val).strip()
+        except Exception:
+            pass
+        return ""
 
     async def lookup(self, ip_value):
         raise NotImplementedError
@@ -8452,8 +8468,14 @@ class ScamalyticsProvider(IpIntelligenceProvider):
     capability = "vpn_proxy_detector"
 
     def enabled(self):
-        configured = os.getenv(self.enabled_env or "")
-        enabled_value = str(configured if configured != "" else self.default_enabled).strip().lower()
+        env_val = os.getenv(self.enabled_env or "")
+        if env_val is None or env_val == "":
+            try:
+                config = _load_backend_runtime_config()
+                env_val = config.get(self.enabled_env) or config.get((self.enabled_env or "").lower())
+            except Exception:
+                pass
+        enabled_value = str(env_val if env_val is not None and env_val != "" else self.default_enabled).strip().lower()
         if enabled_value in {"0", "false", "no", "off", "disabled"}:
             return False, "disabled"
         if not (self.username() and self.api_key()):
@@ -8461,10 +8483,30 @@ class ScamalyticsProvider(IpIntelligenceProvider):
         return True, ""
 
     def username(self):
-        return (os.getenv("SCAMALYTICS_USERNAME") or "").strip()
+        val = os.getenv("SCAMALYTICS_USERNAME")
+        if val:
+            return val.strip()
+        try:
+            config = _load_backend_runtime_config()
+            val = config.get("SCAMALYTICS_USERNAME") or config.get("scamalytics_username")
+            if val:
+                return str(val).strip()
+        except Exception:
+            pass
+        return ""
 
     def api_key(self):
-        return (os.getenv("SCAMALYTICS_API_KEY") or "").strip()
+        val = os.getenv("SCAMALYTICS_API_KEY")
+        if val:
+            return val.strip()
+        try:
+            config = _load_backend_runtime_config()
+            val = config.get("SCAMALYTICS_API_KEY") or config.get("scamalytics_api_key")
+            if val:
+                return str(val).strip()
+        except Exception:
+            pass
+        return ""
 
     async def lookup(self, ip_value):
         params = {"key": self.api_key(), "ip": ip_value}
@@ -8539,6 +8581,67 @@ class IpApiCoProvider(IpIntelligenceProvider):
         })
 
 
+class GetIpIntelProvider(IpIntelligenceProvider):
+    name = "GetIPIntel"
+    enabled_env = "GETIPINTEL_ENABLED"
+    default_enabled = True
+    capability = "vpn_proxy_detector"
+
+    async def lookup(self, ip_value):
+        email = (os.getenv("GETIPINTEL_EMAIL") or "").strip()
+        if not email:
+            try:
+                config = _load_backend_runtime_config()
+                email = (config.get("GETIPINTEL_EMAIL") or config.get("getipintel_email") or "").strip()
+            except Exception:
+                pass
+        if not email:
+            email = "blyshawnp@gmail.com"  # fallback default
+            
+        params = {
+            "ip": ip_value,
+            "contact": email,
+            "format": "json",
+            "flags": "m",
+        }
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get("http://check.getipintel.net/check.php", params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+        status = str(data.get("status") or "").lower()
+        if status != "success":
+            raise RuntimeError(f"GetIPIntel API returned non-success status: {status}")
+            
+        score_raw = data.get("result") or "0"
+        try:
+            score = float(score_raw)
+        except (TypeError, ValueError):
+            score = 0.0
+            
+        if score < 0:
+            raise RuntimeError(f"GetIPIntel API returned error code: {score}")
+            
+        is_risk = score >= 0.99
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_risk else "No",
+            "isp": "",
+            "asn": "",
+            "usageType": "VPN/Proxy reputation score",
+            "country": "",
+            "confidence": "High" if is_risk else "Medium",
+            "notes": f"GetIPIntel score={score_raw}",
+            "reputationCapable": True,
+            "capability": self.capability,
+            "flags": {
+                "proxy": is_risk,
+                "vpn": is_risk,
+                "active": is_risk,
+            },
+        })
+
 def _configured_ip_intelligence_providers():
     return [
         IP2LocationProvider(),
@@ -8548,6 +8651,7 @@ def _configured_ip_intelligence_providers():
         ProxyCheckProvider(),
         IPHubProvider(),
         ScamalyticsProvider(),
+        GetIpIntelProvider(),
         IpApiCoProvider(),
     ]
 

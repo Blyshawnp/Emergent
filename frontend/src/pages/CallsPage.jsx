@@ -179,7 +179,7 @@ function ScenarioCard({ currentCaller, callSetup, randFlags, donations, onRegene
     <div className="card card-scenario" data-testid="scenario-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ color: 'var(--border-scenario)', margin: 0 }}>SCENARIO</h3>
-        <button className="btn btn-ghost btn-sm" onClick={onRegenerate} data-testid="scenario-regen" title="Re-roll random variables">{'\uD83D\uDD04'} Regenerate</button>
+        <button className="scenario-regen-btn" onClick={onRegenerate} data-testid="scenario-regen" title="Re-roll random variables"><span className="regen-icon">{'\uD83D\uDD04'}</span> Regenerate</button>
       </div>
       <p style={{ lineHeight: 1.7, marginBottom: 16 }}>
         <b>For this call you will portray {fullName}.</b> {fname} is {donorType} wishing to {action} {donation} to support {callSetup.show}.{scenarioNotes ? ` ${scenarioNotes}` : ''}
