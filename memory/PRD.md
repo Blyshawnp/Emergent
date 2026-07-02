@@ -120,6 +120,13 @@ Branch: `release/ui-rc-polish`. SAM (Smart Alert Manager, `NotificationManagerAp
 - Validation: 9/9 SAM unit tests pass (releasePolish, HeadsetReviewPanel, AppDiscordLayout); production build compiles clean.
 - Pending (Phase 2): MTS refinement (Mission Control balance, dialog icons/sticky footers, spacing tokens), cross-app token consolidation.
 
+### RC Phase 2 — MTS Refinement (July 2025)
+MTS refined (not redesigned); cat branding preserved. Changes are CSS-only in `polish-mts.css` (loaded after `App.css`).
+- Dialogs: confirmed shared cmodal (confirm/warning/decision incl. VPN-Proxy, Sup-Transfer time check, Research Headset alert) and TechIssueDialog already use branded graphics + sticky footers; VPN/Proxy panel already collapsible with preserved amber note. Added: docked sticky footers for page-level `.modal` dialogs (headset lookup, etc.), refined modal-body scrollbars, search/tab separators in Discord/list popup, modal-close/tab/copy focus rings.
+- Home/Mission Control verified already balanced (quick-action hierarchy, stat sizing, recent activity empty state, help placement) — kept intact.
+- Global: normalized icon sizing (quick actions, section titles, modal headers), consistent focus-visible + hover states, high-DPI/OS-scaling safety (`max-height` caps + `max-height:720px` compact mode so dialog footers never clip at 125–200%), reduced-motion neutralizes hover translates.
+- Validation: 61/61 frontend tests pass (13 suites); production build compiles clean; dialogs verified at reduced/high-DPI viewport with no clipping.
+
 ## Prioritized Backlog
 ### P0 (Critical)
 - None — all core features working

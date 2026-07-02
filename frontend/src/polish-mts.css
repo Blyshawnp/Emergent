@@ -535,3 +535,103 @@ textarea:focus-visible {
   color: var(--text-tertiary);
   line-height: 1.45;
 }
+
+/* =====================================================================
+   12. RELEASE-CANDIDATE PHASE 2 — DIALOG & GLOBAL CONSISTENCY
+   Visual-only. Builds on the existing modal architecture (flex column:
+   fixed header/controls + scrolling body). No structural/logic changes.
+   ===================================================================== */
+
+/* ---- Page-level modal shell: crisper corners + comfortable body scroll ---- */
+.modal { overflow: hidden; }
+.modal-header h2 {
+  letter-spacing: -0.01em;
+  display: inline-flex; align-items: center; gap: 10px;
+}
+.modal-body { scrollbar-width: thin; scrollbar-gutter: stable; }
+.modal-body::-webkit-scrollbar,
+.discord-modal-list::-webkit-scrollbar,
+.headset-lookup-results-scroll::-webkit-scrollbar { width: 10px; }
+.modal-body::-webkit-scrollbar-thumb,
+.discord-modal-list::-webkit-scrollbar-thumb,
+.headset-lookup-results-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.modal-body::-webkit-scrollbar-thumb:hover,
+.discord-modal-list::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* ---- Consistent docked (sticky) footers for page-level dialogs ---- */
+.headset-lookup-footer,
+.modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: var(--space-md) calc(-1 * var(--space-lg)) calc(-1 * var(--space-lg));
+  padding: 14px var(--space-lg);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-modal);
+}
+.headset-lookup-footer { margin-top: var(--space-md); }
+
+/* ---- Discord / list picker popup: crisper separation + denser rows ---- */
+.discord-modal-tabs { padding-top: 4px; }
+.discord-modal-search {
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 14px;
+  margin-bottom: 4px;
+}
+.discord-modal-list { padding-top: 6px; }
+
+/* ---- Modal close button: bigger hit target, calmer hover ---- */
+.modal-close:focus-visible,
+.tab-btn:focus-visible,
+.discord-copy:focus-visible,
+.headset-lookup-model-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.headset-lookup-model-btn { transition: background-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast); }
+.headset-lookup-model-btn:hover { transform: translateX(2px); }
+
+/* ---- Confirmation/decision (cmodal) rhythm consistency ---- */
+.cmodal-title { letter-spacing: -0.01em; }
+.cmodal-btns .btn { min-width: 120px; }
+.cmodal-graphic { filter: drop-shadow(0 6px 14px rgba(0,0,0,0.28)); }
+
+/* ---- Icon sizing normalization across modals + quick actions ---- */
+.qa-icon svg { width: 20px; height: 20px; stroke-width: 2px; }
+.mc-section-title svg { width: 18px; height: 18px; }
+.modal-header h2 svg { width: 18px; height: 18px; }
+
+/* ---- Selected / hover states for list rows (Outlook-like) ---- */
+.mc-activity-list .recent-row:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-md); }
+
+/* ---- High-DPI / OS scaling (125% / 150% / 200%) safety ----
+   Keep dialogs fully usable when the OS scales the UI: cap height and
+   let the body scroll instead of clipping the footer. ---- */
+.modal { max-height: min(85vh, 900px); }
+.cmodal { max-height: min(88vh, 940px); }
+@media (max-height: 720px) {
+  .cmodal { padding-top: 20px; }
+  .cmodal-graphic { width: 64px; height: 64px; margin-bottom: 12px; }
+  .cmodal-graphic-logo { width: 180px; height: auto; }
+  .modal-header { padding-top: var(--space-md); padding-bottom: var(--space-sm); }
+}
+
+/* ---- Reduced motion: neutralize hover translates added above ---- */
+@media (prefers-reduced-motion: reduce) {
+  .nav-btn:hover,
+  .qa-tile:hover,
+  .card.is-clickable:hover,
+  .stat-card:hover,
+  .home-btn:hover,
+  .headset-lookup-model-btn:hover,
+  .action-btn:hover { transform: none !important; }
+}
