@@ -326,7 +326,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   }, [initialResult]);
 
   useEffect(() => {
-    setProviderOpen(result ? result.verdict !== 'CLEAR' : false);
+    setProviderOpen(false);
   }, [result]);
 
   const persist = async (nextResult) => {
@@ -355,7 +355,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
       }
       const next = { ...response };
       setResult(next);
-      setProviderOpen(next.verdict !== 'CLEAR');
+      setProviderOpen(false);
       await persist(next);
     } catch (_error) {
       setValidationMessage('No VPN/proxy reputation provider available. Manual verification required.');

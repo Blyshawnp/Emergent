@@ -39,13 +39,15 @@ disabled
 
 Runs the built-in VPN / Proxy Check panel and backend provider lookup.
 
+This is the default behavior.
+
 Detector providers are used only when available or configured. Providers that need keys are optional and are skipped when the key is missing. Do not store API keys in source control.
 
 Metadata-only providers, such as `ipapi.co` or IPinfo responses without privacy fields, can show ISP, ASN, and location details, but they do not determine VPN/proxy verdicts.
 
 ### links
 
-Restores manual lookup behavior.
+Restores legacy manual IP lookup behavior.
 
 The Basics screen shows external lookup buttons for:
 
@@ -70,6 +72,8 @@ Copy/paste default-code change:
 ```python
 DEFAULT_SETTINGS["vpnProxyCheckMode"] = "links"
 ```
+
+Use this mode when administrators want to disable integrated VPN lookup without removing the VPN questions or the manual VPN autofail flow.
 
 ### disabled
 
@@ -105,3 +109,15 @@ Can turn off?
 ```
 
 If the candidate cannot disable VPN/proxy, the existing VPN autofail flow is still used, including the existing Review summary, Gemini/fallback summary behavior, and Microsoft form/Selenium autofail mapping.
+
+## What not to touch
+
+Do not change these systems when switching VPN modes:
+
+```text
+Selenium form fill mapping
+Microsoft Forms field names
+VPN autofail reason mapping
+Google Sheets credentials or service-account files
+Provider API keys
+```

@@ -675,7 +675,7 @@ test('vpn proxy technical details show simplified columns and keep advanced meta
   await view.unmount();
 });
 
-test('vpn proxy non-clear verdicts auto-expand technical details', async () => {
+test('vpn proxy non-clear verdicts keep technical details collapsed by default', async () => {
   const scenarios = [
     { verdict: 'REVIEW', level: 'yellow' },
     { verdict: 'VPN / PROXY LIKELY', level: 'red' },
@@ -730,8 +730,8 @@ test('vpn proxy non-clear verdicts auto-expand technical details', async () => {
     });
 
     const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
-    expect(providerDetails?.hasAttribute('open') || false).toBe(true);
-    expect(providerDetails.textContent).toContain('Hide technical details');
+    expect(providerDetails?.hasAttribute('open') || false).toBe(false);
+    expect(providerDetails.textContent).toContain('Show technical details');
     await view.unmount();
   }
 });

@@ -1501,16 +1501,16 @@ function DiscordModal({ settings, defaults, onClose }) {
 
   return (
     <div className="modal-overlay open" onClick={e => { if (e.target.classList.contains('modal-overlay')) onClose(); }} data-testid="discord-modal">
-      <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 700, maxHeight: '85vh' }}>
+      <div className="modal discord-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Discord Post</h2>
           <button className="modal-close" onClick={onClose}>&times;</button>
         </div>
-        <div style={{ padding: '0 24px 8px', display: 'flex', gap: 8 }}>
-          <button className={`tab-btn ${tab === 'templates' ? 'active' : ''}`} onClick={() => setTab('templates')} style={{ padding: '6px 14px' }}>Templates</button>
-          <button className={`tab-btn ${tab === 'screenshots' ? 'active' : ''}`} onClick={() => setTab('screenshots')} style={{ padding: '6px 14px' }}>Screenshots</button>
+        <div className="discord-modal-tabs">
+          <button className={`tab-btn ${tab === 'templates' ? 'active' : ''}`} onClick={() => setTab('templates')}>Templates</button>
+          <button className={`tab-btn ${tab === 'screenshots' ? 'active' : ''}`} onClick={() => setTab('screenshots')}>Screenshots</button>
         </div>
-        <div style={{ padding: '0 24px 12px' }}>
+        <div className="discord-modal-search">
           <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={tab === 'templates' ? 'Search templates...' : 'Search screenshots...'} data-testid="discord-search" style={{ width: '100%' }} />
           {categories.length > 0 && (
             <label className="discord-category-filter">
@@ -1522,7 +1522,7 @@ function DiscordModal({ settings, defaults, onClose }) {
             </label>
           )}
         </div>
-        <div className="modal-body" style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+        <div className="modal-body discord-modal-list">
           {tab === 'templates' ? (
             filteredTemplates.length === 0 ? (
               <p className="text-muted" style={{ padding: 20 }}>
@@ -1610,7 +1610,7 @@ function DiscordScreenshotRow({ category, title, imageUrl }) {
     }
   };
   return (
-    <div className="discord-row" style={{ flexDirection: 'column', gap: 8 }}>
+    <div className="discord-row discord-screenshot-row">
       <div className="discord-screenshot-header">
         <div className="discord-title-row">
           {category && <span className="discord-category-badge">{category}</span>}
@@ -1629,10 +1629,10 @@ function DiscordScreenshotRow({ category, title, imageUrl }) {
             console.error(`[SCREENSHOT PREVIEW] Load FAILURE for: "${title}" | Resolved: ${resolvedImageUrl}`);
             setPreviewError(true);
           }}
-          style={{ width: '100%', maxHeight: 300, objectFit: 'contain', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}
+          className="discord-screenshot-preview"
         />
       ) : (
-        <div className="text-muted" style={{ border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: 16 }}>
+        <div className="text-muted discord-screenshot-missing">
           Screenshot image not found or unavailable: {imageUrl || 'No image path configured'}
         </div>
       )}
