@@ -1,5 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  Activity,
+  Bell,
+  Headphones,
+  Users,
+  Clock,
+  Plus,
+  RefreshCw,
+  HelpCircle,
+  Search,
+  Copy,
+  Pencil,
+  Download,
+  Upload,
+  DownloadCloud,
+  LogOut,
+  ChevronDown,
+  Wifi,
+  WifiOff,
+  Inbox,
+} from 'lucide-react';
 import './notification-manager.css';
 import './polish-sam.css';
 import api from './api';
@@ -233,6 +254,27 @@ function formatFlags(item) {
 function getRowStatusLabel(item) {
   if (isExpiredNotification(item)) return 'Expired';
   return item.Enabled ? 'Enabled' : 'Disabled';
+}
+
+function getRowStatusTone(item) {
+  if (isExpiredNotification(item)) return 'expired';
+  return item.Enabled ? 'enabled' : 'disabled';
+}
+
+function formatRelativeSyncTime(timestamp) {
+  if (!timestamp) return 'Not yet synced';
+  const diffSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (diffSeconds < 10) return 'Just now';
+  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  const minutes = Math.round(diffSeconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  try {
+    return new Date(timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  } catch (_error) {
+    return 'Earlier';
+  }
 }
 
 function getTickerPreviewMessage(item) {
@@ -1724,6 +1766,8 @@ export default function NotificationManagerApp() {
     tickerSource: '',
   });
   const [notificationView, setNotificationView] = useState('active');
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [samBannerSrc, setSamBannerSrc] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -2885,6 +2929,30 @@ export default function NotificationManagerApp() {
     `Status: ${sheetState.backendStatus === 'connected' ? 'Online' : 'Offline'}`
   ].filter(Boolean);
 
+  // ----- Operations Center derived metrics -----
+  const isOnline = sheetState.backendStatus === 'connected';
+  const isConnecting = sheetState.backendStatus === 'initializing' || sheetState.backendStatus === 'retrying' || sheetState.isLoading;
+  const activeNotificationCount = items.filter(isCurrentNotification).length;
+  const enabledCount = items.filter((item) => item.Enabled).length;
+  const pendingHeadsetCount = Array.isArray(headsetReviews?.pending) ? headsetReviews.pending.length : 0;
+  const pendingCandidateCount = Array.isArray(candidateTracking?.views?.pending)
+    ? candidateTracking.views.pending.length
+    : (Array.isArray(candidateTracking?.pending) ? candidateTracking.pending.length : 0);
+  const syncTone = isOnline ? 'ok' : (isConnecting ? 'pending' : 'warn');
+  const syncLabel = isOnline ? 'Live' : (isConnecting ? 'Connecting' : 'Offline');
+  const syncSub = isOnline
+    ? 'Connected to sheet'
+    : (isConnecting ? 'Reaching data source' : 'Working from local draft');
+  const lastSyncLabel = formatRelativeSyncTime(lastSyncAt);
+  const operatorName = samSetupStatus.userName || samSetupStatus.userRole || '';
+
+  useEffect(() => {
+    if (sheetState.backendStatus === 'connected' && !sheetState.isLoading && !sheetState.readError) {
+      setLastSyncAt(Date.now());
+    }
+    // Track last successful sync whenever a fresh, error-free load completes.
+  }, [sheetState.backendStatus, sheetState.isLoading, sheetState.readError, items.length]);
+
   const visibleItems = items
     .map((item, index) => ({ item: normalizeManagerNotification(item), index }))
     .filter(({ item }) => {
@@ -2923,82 +2991,176 @@ export default function NotificationManagerApp() {
   return (
     <div className="nm-app">
       <div className="nm-shell">
-        <section className="nm-hero">
-          <div>
-            <div className="nm-overline">{SAM_SUBTITLE}</div>
-            <h1 className="nm-title">{SAM_TITLE}</h1>
-            <p className="nm-subtitle">
-              Create, edit, preview, and push structured alerts directly into the configured Google Sheet.
-              Starts At defaults to the current Eastern time, Expires At uses 12:00 AM Eastern when you leave the time blank, and the saved row matches the live app schema the main app already reads.
-            </p>
-            <div className="nm-hero-toolbar" data-sam-tour="help-access">
-            <div className="nm-actions-panel">
-                <div className="nm-toolbar-label">Actions</div>
-                <div className="nm-actions">
-                  <button type="button" className="nm-btn nm-btn-primary" onClick={handleAdd} data-sam-tour="add-notification">Add Notification</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => { setActiveSection('candidates'); setCandidateView('allActive'); setCandidateSearch(''); }} data-sam-tour="candidate-tracking-btn">Candidate Tracking</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setActiveSection('headsets')} data-testid="sam-headset-review-button">Headset Review</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setSearchModalOpen(true)} data-sam-tour="candidate-search-btn">Candidate Search</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => openEditor(selectedIndex)} disabled={!selectedItem}>Edit Selected</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={handleDuplicate} disabled={!selectedItem}>Duplicate Selected</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={loadSheetItems} disabled={sheetState.isLoading || sheetState.isSaving}>Refresh from Sheet</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={handleCheckForUpdates}>Check for Updates</button>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={handleExport}>Export Backup CSV</button>
-                  <label className="nm-file-label" htmlFor="nm-import-file">
-                    Import CSV
-                    <input
-                      id="nm-import-file"
-                      ref={fileInputRef}
-                      className="nm-file-input"
-                      type="file"
-                      accept=".csv,text/csv"
-                      onChange={handleImport}
-                    />
-                  </label>
-                  <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setHelpOpen(true)}>Help</button>
-                  <button type="button" className="nm-btn nm-btn-danger" onClick={handleExitApp}>Exit App</button>
-                </div>
-              </div>
+        {/* ===== Operations Center topbar ===== */}
+        <header className="nm-ops-topbar">
+          <div className="nm-ops-brand">
+            <div className="nm-ops-mark" aria-hidden="true">
+              {samBannerSrc ? <img src={samBannerSrc} alt="" /> : <span>SAM</span>}
+            </div>
+            <div className="nm-ops-brand-text">
+              <div className="nm-overline">{SAM_SUBTITLE}</div>
+              <h1 className="nm-ops-title">Operations Center</h1>
+              <p className="nm-ops-tagline">Manage alerts, headset reviews, and candidate tracking.</p>
             </div>
           </div>
-          <div className="nm-status-panel">
-            <div className="nm-toolbar-label">Status</div>
-            <div className="nm-pill-row" data-sam-tour="status-chips">
-              {infoTiles.map((tile) => <div key={tile} className="nm-pill">{tile}</div>)}
+          <div className="nm-ops-topbar-actions" data-sam-tour="help-access">
+            <span className={`nm-ops-conn is-${syncTone}`}>
+              {isOnline ? <Wifi size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />}
+              {syncLabel}
+            </span>
+            <button type="button" className="nm-btn nm-btn-primary nm-ops-primary" onClick={handleAdd} data-sam-tour="add-notification">
+              <Plus size={16} aria-hidden="true" /> Add Notification
+            </button>
+            <button
+              type="button"
+              className="nm-ops-icon-btn"
+              onClick={loadSheetItems}
+              disabled={sheetState.isLoading || sheetState.isSaving}
+              title="Refresh from sheet"
+              aria-label="Refresh from sheet"
+            >
+              <RefreshCw size={18} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="nm-ops-icon-btn"
+              onClick={() => setHelpOpen(true)}
+              title="Help &amp; settings"
+              aria-label="Help and settings"
+            >
+              <HelpCircle size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+
+        {/* ===== Metrics strip ===== */}
+        <section className="nm-ops-metrics" aria-label="Operations overview" data-sam-tour="status-chips">
+          <div className={`nm-metric nm-metric-status is-${syncTone}`}>
+            <div className="nm-metric-icon"><Activity size={20} aria-hidden="true" /></div>
+            <div className="nm-metric-body">
+              <div className="nm-metric-label">Current Sync</div>
+              <div className="nm-metric-value">{syncLabel}</div>
+              <div className="nm-metric-sub">{syncSub}</div>
             </div>
-            <div className="nm-sam-banner-frame">
-              {samBannerSrc ? (
-                <img className="nm-sam-banner" src={samBannerSrc} alt="Sam" />
-              ) : (
-                <div className="nm-sam-banner-fallback">Sam</div>
-              )}
+          </div>
+          <button type="button" className="nm-metric nm-metric-btn" onClick={() => setActiveSection('notifications')}>
+            <div className="nm-metric-icon"><Bell size={20} aria-hidden="true" /></div>
+            <div className="nm-metric-body">
+              <div className="nm-metric-label">Active Notifications</div>
+              <div className="nm-metric-value">{activeNotificationCount}</div>
+              <div className="nm-metric-sub">{enabledCount} enabled · {items.length} total</div>
             </div>
-            <div className="nm-powered">Powered by MTS</div>
+          </button>
+          <button type="button" className={`nm-metric nm-metric-btn ${pendingHeadsetCount ? 'has-attention' : ''}`} onClick={() => setActiveSection('headsets')} data-testid="sam-headset-review-button">
+            <div className="nm-metric-icon"><Headphones size={20} aria-hidden="true" /></div>
+            <div className="nm-metric-body">
+              <div className="nm-metric-label">Pending Headsets</div>
+              <div className="nm-metric-value">{pendingHeadsetCount}</div>
+              <div className="nm-metric-sub">{pendingHeadsetCount ? 'Awaiting review' : 'Queue clear'}</div>
+            </div>
+          </button>
+          <button type="button" className={`nm-metric nm-metric-btn ${pendingCandidateCount ? 'has-attention' : ''}`} onClick={() => { setActiveSection('candidates'); setCandidateView('pending'); }}>
+            <div className="nm-metric-icon"><Users size={20} aria-hidden="true" /></div>
+            <div className="nm-metric-body">
+              <div className="nm-metric-label">Pending Candidates</div>
+              <div className="nm-metric-value">{pendingCandidateCount}</div>
+              <div className="nm-metric-sub">{pendingCandidateCount ? 'Sup transfers due' : 'Nothing pending'}</div>
+            </div>
+          </button>
+          <div className="nm-metric nm-metric-muted">
+            <div className="nm-metric-icon"><Clock size={20} aria-hidden="true" /></div>
+            <div className="nm-metric-body">
+              <div className="nm-metric-label">Last Sync</div>
+              <div className="nm-metric-value nm-metric-value-sm">{lastSyncLabel}</div>
+              <div className="nm-metric-sub">All times Eastern</div>
+            </div>
           </div>
         </section>
 
-        <section className="nm-section-nav" aria-label="SAM sections">
-          <div>
-            <div className="nm-toolbar-label">Sections</div>
-            <div className="nm-kicker">Jump directly to notification work or candidate administration.</div>
+        {/* ===== Quick actions (grouped) ===== */}
+        <section className="nm-ops-quick" aria-label="Quick actions">
+          <div className="nm-ops-quick-group">
+            <span className="nm-ops-quick-label">Selection</span>
+            <div className="nm-ops-quick-buttons">
+              <button type="button" className="nm-ops-action" onClick={() => openEditor(selectedIndex)} disabled={!selectedItem}>
+                <Pencil size={15} aria-hidden="true" /> Edit
+              </button>
+              <button type="button" className="nm-ops-action" onClick={handleDuplicate} disabled={!selectedItem}>
+                <Copy size={15} aria-hidden="true" /> Duplicate
+              </button>
+            </div>
           </div>
-          <div className="nm-section-nav-buttons">
-            {SECTION_NAV_ITEMS.map((item) => (
+          <div className="nm-ops-quick-group">
+            <span className="nm-ops-quick-label">Data</span>
+            <div className="nm-ops-quick-buttons">
+              <button type="button" className="nm-ops-action" onClick={loadSheetItems} disabled={sheetState.isLoading || sheetState.isSaving}>
+                <RefreshCw size={15} aria-hidden="true" /> Refresh
+              </button>
+              <button type="button" className="nm-ops-action" onClick={handleExport}>
+                <Download size={15} aria-hidden="true" /> Export CSV
+              </button>
+              <label className="nm-ops-action nm-file-label" htmlFor="nm-import-file">
+                <Upload size={15} aria-hidden="true" /> Import CSV
+                <input
+                  id="nm-import-file"
+                  ref={fileInputRef}
+                  className="nm-file-input"
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleImport}
+                />
+              </label>
+            </div>
+          </div>
+          <div className="nm-ops-quick-group">
+            <span className="nm-ops-quick-label">Tools</span>
+            <div className="nm-ops-quick-buttons">
+              <button type="button" className="nm-ops-action" onClick={() => setSearchModalOpen(true)} data-sam-tour="candidate-search-btn">
+                <Search size={15} aria-hidden="true" /> Candidate Search
+              </button>
+              <button type="button" className="nm-ops-action" onClick={handleCheckForUpdates}>
+                <DownloadCloud size={15} aria-hidden="true" /> Check for Updates
+              </button>
+            </div>
+          </div>
+          <div className="nm-ops-quick-group nm-ops-quick-group-end">
+            <span className="nm-ops-quick-label">System</span>
+            <div className="nm-ops-quick-buttons">
+              <button type="button" className="nm-ops-action" onClick={() => setHelpOpen(true)}>
+                <HelpCircle size={15} aria-hidden="true" /> Help
+              </button>
+              <button type="button" className="nm-ops-action is-danger" onClick={handleExitApp}>
+                <LogOut size={15} aria-hidden="true" /> Exit
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* ===== Section tabs ===== */}
+        <nav className="nm-ops-tabs" role="tablist" aria-label="SAM sections">
+          {SECTION_NAV_ITEMS.filter((item) => item.key !== 'help').map((item) => {
+            const isActive = item.key === 'candidates'
+              ? (activeSection === 'candidates' && item.candidateView === candidateView)
+              : (activeSection === item.key);
+            const badge = item.target === 'sam-headset-review'
+              ? pendingHeadsetCount
+              : (item.candidateView === 'pending' ? pendingCandidateCount : 0);
+            return (
               <button
                 key={`${item.target}-${item.label}`}
                 type="button"
-                className={`nm-btn nm-btn-secondary nm-btn-table ${
-                  item.key === 'candidates'
-                    ? (activeSection === 'candidates' && item.candidateView === candidateView ? 'is-active' : '')
-                    : (activeSection === item.key ? 'is-active' : '')
-                }`}
+                role="tab"
+                aria-selected={isActive}
+                className={`nm-ops-tab ${isActive ? 'is-active' : ''}`}
                 onClick={() => openSection(item)}
+                data-sam-tour={item.target === 'sam-candidate-tracking' && item.candidateView === 'allActive' ? 'candidate-tracking-btn' : undefined}
               >
                 {item.label}
+                {badge ? <span className="nm-ops-tab-badge">{badge}</span> : null}
               </button>
-            ))}
-          </div>
-        </section>
+            );
+          })}
+        </nav>
 
         {sheetState.statusMessage ? (
           <section className={`nm-status-card is-${sheetState.statusKind || 'info'}`}>
@@ -3077,61 +3239,68 @@ export default function NotificationManagerApp() {
                 </button>
               ))}
             </div>
-            <div className="nm-table-wrap">
-              <table className="nm-table">
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Schedule</th>
-                    <th className="nm-actions-column">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleItems.map(({ item: normalized, index }) => {
-                    return (
-                      <tr key={`${normalized.ID || 'new'}-${index}`} className={index === selectedIndex ? 'is-selected' : ''}>
-                        <td className="nm-actions-column">
-                          <button type="button" className="nm-row-select" onClick={() => selectNotification(index)}>
-                            <span className={getBadgeClass(normalized.Type)}>{normalized.Type}</span>
-                          </button>
-                        </td>
-                        <td>
-                          <button type="button" className="nm-row-select nm-row-title-button" onClick={() => selectNotification(index)}>
-                            <div className="nm-row-title">{normalized.Title || '(Untitled notification)'}</div>
-                            <div className="nm-meta">{normalized.Message || 'No message yet.'}</div>
-                          </button>
-                        </td>
-                        <td>
-                        <div style={{ fontWeight: 700 }}>{getRowStatusLabel(normalized)}</div>
-                          <div className="nm-meta">{formatFlags(normalized)}</div>
-                        </td>
-                        <td className="nm-meta">
-                          <div>{normalized.StartDate || 'Starts immediately'} {normalized.StartTime || ''}</div>
-                          <div>{normalized.EndDate ? `Expires ${normalized.EndDate} ${normalized.EndTime || '12:00 AM'}` : 'No auto-expiration'}</div>
-                        </td>
-                        <td>
-                          <div className="nm-row-actions">
-                            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => openEditor(index)}>Edit</button>
-                            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleToggleEnabled(index)}>
-                              {normalized.Enabled ? 'Disable' : 'Enable'}
-                            </button>
-                            <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleDeleteIndex(index)}>Delete</button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {!visibleItems.length ? (
-                    <tr>
-                      <td colSpan={5}>
-                        <div className="nm-empty">No notifications in this view.</div>
-                      </td>
-                    </tr>
+            <div className="nm-note-cards" role="list">
+              {visibleItems.map(({ item: normalized, index }) => {
+                const statusTone = getRowStatusTone(normalized);
+                return (
+                  <article
+                    role="listitem"
+                    key={`${normalized.ID || 'new'}-${index}`}
+                    className={`nm-note-card ${index === selectedIndex ? 'is-selected' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="nm-note-card-main"
+                      onClick={() => selectNotification(index)}
+                      aria-pressed={index === selectedIndex}
+                    >
+                      <div className="nm-note-card-head">
+                        <span className={getBadgeClass(normalized.Type)}>{normalized.Type}</span>
+                        <span className={`nm-note-status is-${statusTone}`}>{getRowStatusLabel(normalized)}</span>
+                      </div>
+                      <div className="nm-note-title">{normalized.Title || '(Untitled notification)'}</div>
+                      <div className="nm-note-preview">{normalized.Message || 'No message yet.'}</div>
+                      <div className="nm-note-meta">
+                        <span className="nm-note-meta-chip">
+                          <Clock size={13} aria-hidden="true" />
+                          {normalized.StartDate ? `${normalized.StartDate} ${normalized.StartTime || ''}`.trim() : 'Starts immediately'}
+                        </span>
+                        <span className="nm-note-meta-chip">
+                          {normalized.EndDate ? `Expires ${normalized.EndDate} ${normalized.EndTime || '12:00 AM'}` : 'No auto-expiration'}
+                        </span>
+                        <span className="nm-note-meta-flags">{formatFlags(normalized)}</span>
+                      </div>
+                    </button>
+                    <div className="nm-note-card-actions">
+                      <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => openEditor(index)}>Edit</button>
+                      <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleToggleEnabled(index)}>
+                        {normalized.Enabled ? 'Disable' : 'Enable'}
+                      </button>
+                      <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleDeleteIndex(index)}>Delete</button>
+                    </div>
+                  </article>
+                );
+              })}
+              {!visibleItems.length ? (
+                <div className="nm-empty nm-empty-state">
+                  <div className="nm-empty-icon" aria-hidden="true"><Inbox size={30} /></div>
+                  <div className="nm-empty-title">
+                    {sheetState.isLoading ? 'Loading notifications…' : 'No notifications here'}
+                  </div>
+                  <div className="nm-empty-text">
+                    {sheetState.isLoading
+                      ? 'Fetching the latest rows from the data source.'
+                      : notificationView === 'active'
+                        ? 'There are no current notifications. Create one to alert testers.'
+                        : 'Nothing matches this view yet.'}
+                  </div>
+                  {!sheetState.isLoading ? (
+                    <button type="button" className="nm-btn nm-btn-primary nm-ops-primary" onClick={handleAdd}>
+                      <Plus size={16} aria-hidden="true" /> Add Notification
+                    </button>
                   ) : null}
-                </tbody>
-              </table>
+                </div>
+              ) : null}
             </div>
           </section>
           ) : null}
@@ -3161,6 +3330,34 @@ export default function NotificationManagerApp() {
             onStatus={(message, kind = 'info') => setSheetState((current) => ({ ...current, statusKind: kind, statusMessage: message }))}
           />
         ) : null}
+
+        {/* ===== System health / diagnostics (relocated developer detail) ===== */}
+        <section className="nm-ops-diagnostics">
+          <button
+            type="button"
+            className="nm-ops-diag-toggle"
+            aria-expanded={diagnosticsOpen}
+            onClick={() => setDiagnosticsOpen((open) => !open)}
+          >
+            <span className="nm-ops-diag-title">
+              <span className={`nm-ops-diag-dot is-${syncTone}`} aria-hidden="true" />
+              System Health &amp; Diagnostics
+            </span>
+            <span className="nm-ops-diag-summary">{syncLabel} · {lastSyncLabel}</span>
+            <ChevronDown size={16} aria-hidden="true" className={`nm-ops-diag-chevron ${diagnosticsOpen ? 'is-open' : ''}`} />
+          </button>
+          {diagnosticsOpen ? (
+            <div className="nm-ops-diag-body">
+              {infoTiles.map((tile) => (
+                <div key={tile} className="nm-ops-diag-item">{tile}</div>
+              ))}
+              {sheetState.tickerSource ? (
+                <div className="nm-ops-diag-item">Ticker source: {sheetState.tickerSource}</div>
+              ) : null}
+              <div className="nm-ops-diag-item">App version {appVersion}</div>
+            </div>
+          ) : null}
+        </section>
       </div>
       <NotificationEditorModal
         open={editorOpen}

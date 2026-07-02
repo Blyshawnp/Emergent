@@ -106,6 +106,20 @@ User uploaded an Electron-based Mock Testing Suite app (FastAPI + vanilla HTML/C
 - **Google Calendar**: Working via URL template (no API needed)
 - **Form Filler**: Web version shows copy guidance (desktop-only feature)
 
+### Release Candidate UI Polish — SAM Operations Center (July 2025)
+Branch: `release/ui-rc-polish`. SAM (Smart Alert Manager, `NotificationManagerApp.jsx`) redesigned into a cohesive desktop "Operations Center" while preserving all functionality (FastAPI, Google Sheets, Selenium/MS Forms flows untouched).
+- Replaced oversized hero + "Sam" bubble + "Powered by MTS" with a compact topbar (brand mark, live connection pill, primary "Add Notification", Refresh/Help icon buttons).
+- Added a 5-tile metrics strip: Current Sync, Active Notifications, Pending Headsets, Pending Candidates, Last Sync (clickable where they map to a section).
+- Grouped Quick Actions (Selection / Data / Tools / System) replacing the flat action grid.
+- Segmented section tabs with attention count badges on Headset Review + Pending Sup Transfers.
+- Notifications converted from spreadsheet table to modern cards (type badge, status, title, preview, schedule chips, grouped actions).
+- Status banners softened to compact tinted strips with left accent bar + inline Retry.
+- Relocated developer terminology into a collapsible "System Health & Diagnostics" section (reuses infoTiles, ticker source, version); removed the "Scroll vertically/horizontally" caption.
+- Polished empty/offline/loading states; accessibility: focus-visible rings + prefers-reduced-motion; responsive metric/quick-action/card layouts.
+- Kept dark sky-blue aesthetic (design family parity with MTS). New styles in `polish-sam.css` (loaded last). Icons via existing `lucide-react` dep.
+- Validation: 9/9 SAM unit tests pass (releasePolish, HeadsetReviewPanel, AppDiscordLayout); production build compiles clean.
+- Pending (Phase 2): MTS refinement (Mission Control balance, dialog icons/sticky footers, spacing tokens), cross-app token consolidation.
+
 ## Prioritized Backlog
 ### P0 (Critical)
 - None — all core features working

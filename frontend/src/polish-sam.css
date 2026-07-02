@@ -390,3 +390,358 @@ body.notification-manager-body {
   width: 3px;
   height: 12px;
 }
+
+/* =====================================================================
+   9. OPERATIONS CENTER — RC REDESIGN (loaded last, authoritative)
+   Elevates the SAM dashboard into a cohesive desktop operations console.
+   ===================================================================== */
+
+.nm-app { padding: 28px 32px 40px; }
+.nm-shell { gap: 18px; }
+
+/* ---- Topbar ---- */
+.nm-ops-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 4px 4px 2px;
+  flex-wrap: wrap;
+}
+.nm-ops-brand { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.nm-ops-mark {
+  width: 52px; height: 52px; flex: 0 0 52px;
+  border-radius: 14px;
+  display: grid; place-items: center;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  box-shadow: 0 6px 18px rgba(2, 8, 20, 0.4), inset 0 0 0 1px rgba(255,255,255,0.02);
+  overflow: hidden;
+}
+.nm-ops-mark img { width: 100%; height: 100%; object-fit: cover; }
+.nm-ops-mark span { font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: #7dd3fc; }
+.nm-ops-brand-text { min-width: 0; }
+.nm-ops-brand-text .nm-overline {
+  color: #7dd3fc; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.nm-ops-title {
+  margin: 2px 0 3px;
+  font-size: 24px; font-weight: 800; letter-spacing: -0.02em;
+  color: #f8fafc; line-height: 1.05;
+}
+.nm-ops-tagline { margin: 0; font-size: 13px; color: #94a3b8; }
+
+.nm-ops-topbar-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.nm-ops-conn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.01em;
+  border: 1px solid transparent;
+}
+.nm-ops-conn.is-ok { color: #6ee7b7; background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.28); }
+.nm-ops-conn.is-warn { color: #fbbf24; background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); }
+.nm-ops-conn.is-pending { color: #7dd3fc; background: rgba(56,189,248,0.1); border-color: rgba(56,189,248,0.28); }
+
+.nm-btn-primary.nm-ops-primary {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 18px; white-space: nowrap;
+}
+.nm-ops-icon-btn {
+  width: 40px; height: 40px; flex: 0 0 40px;
+  display: grid; place-items: center;
+  border-radius: 10px; cursor: pointer;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+.nm-ops-icon-btn:hover:not(:disabled) {
+  background: rgba(30, 41, 59, 0.85); border-color: rgba(56,189,248,0.4); color: #fff; transform: translateY(-1px);
+}
+.nm-ops-icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- Metrics strip ---- */
+.nm-ops-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+.nm-metric {
+  display: flex; align-items: center; gap: 14px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.22);
+  text-align: left;
+  min-width: 0;
+}
+button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; }
+.nm-metric-btn { transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease; }
+.nm-metric-btn:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(14, 165, 233, 0.08);
+  box-shadow: 0 12px 26px rgba(0,0,0,0.3);
+}
+.nm-metric-icon {
+  width: 44px; height: 44px; flex: 0 0 44px;
+  border-radius: 12px; display: grid; place-items: center;
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.16);
+}
+.nm-metric-body { min-width: 0; }
+.nm-metric-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #93a4bd;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nm-metric-value { font-size: 26px; font-weight: 800; line-height: 1.1; color: #f8fafc; letter-spacing: -0.02em; }
+.nm-metric-value-sm { font-size: 17px; }
+.nm-metric-sub { font-size: 12px; color: #7e91ab; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.nm-metric-status.is-ok .nm-metric-icon { background: rgba(16,185,129,0.14); color: #6ee7b7; border-color: rgba(16,185,129,0.3); }
+.nm-metric-status.is-warn .nm-metric-icon { background: rgba(245,158,11,0.14); color: #fbbf24; border-color: rgba(245,158,11,0.32); }
+.nm-metric-status.is-ok .nm-metric-value { color: #6ee7b7; }
+.nm-metric-status.is-warn .nm-metric-value { color: #fbbf24; }
+.nm-metric-status.is-pending .nm-metric-value { color: #7dd3fc; }
+.nm-metric.has-attention { border-color: rgba(245,158,11,0.35); }
+.nm-metric.has-attention .nm-metric-icon { background: rgba(245,158,11,0.14); color: #fbbf24; border-color: rgba(245,158,11,0.32); }
+.nm-metric.has-attention .nm-metric-value { color: #fbbf24; }
+.nm-metric-muted { background: rgba(15,23,42,0.4); }
+.nm-metric-muted .nm-metric-icon { background: rgba(148,163,184,0.1); color: #94a3b8; border-color: rgba(148,163,184,0.16); }
+
+/* ---- Quick actions ---- */
+.nm-ops-quick {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 22px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+}
+.nm-ops-quick-group { display: flex; flex-direction: column; gap: 8px; }
+.nm-ops-quick-group + .nm-ops-quick-group { border-left: 1px solid rgba(148,163,184,0.1); padding-left: 22px; }
+.nm-ops-quick-group-end { margin-left: auto; }
+.nm-ops-quick-label { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; }
+.nm-ops-quick-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.nm-ops-action {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 13px;
+  border-radius: 8px; cursor: pointer;
+  font-size: 12.5px; font-weight: 700; letter-spacing: 0.01em;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+.nm-ops-action svg { color: #7dd3fc; }
+.nm-ops-action:hover:not(:disabled) { background: rgba(30, 41, 59, 0.85); border-color: rgba(56,189,248,0.4); color: #fff; transform: translateY(-1px); }
+.nm-ops-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.nm-ops-action.is-danger { color: #f7a3a3; }
+.nm-ops-action.is-danger svg { color: #f87171; }
+.nm-ops-action.is-danger:hover { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.45); color: #fff; }
+.nm-ops-action .nm-file-input { display: none; }
+
+/* ---- Section tabs (segmented) ---- */
+.nm-ops-tabs {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 6px;
+  border-radius: 12px;
+  background: rgba(9, 16, 30, 0.55);
+  border: 1px solid rgba(56, 189, 248, 0.08);
+}
+.nm-ops-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 16px;
+  border: 1px solid transparent; border-radius: 9px; cursor: pointer;
+  font-size: 13px; font-weight: 700; letter-spacing: 0.01em;
+  color: #93a4bd; background: transparent;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+.nm-ops-tab:hover { color: #e2e8f0; background: rgba(30,41,59,0.5); }
+.nm-ops-tab.is-active {
+  color: #0b1220; background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+  box-shadow: 0 4px 14px rgba(14,165,233,0.28);
+}
+.nm-ops-tab-badge {
+  min-width: 20px; height: 20px; padding: 0 6px;
+  display: inline-grid; place-items: center;
+  border-radius: 999px; font-size: 11px; font-weight: 800;
+  background: rgba(245,158,11,0.9); color: #1a1204;
+}
+.nm-ops-tab.is-active .nm-ops-tab-badge { background: rgba(11,18,32,0.35); color: #fff; }
+
+/* ---- Notification cards ---- */
+.nm-note-cards { display: flex; flex-direction: column; gap: 10px; }
+.nm-note-card {
+  display: flex; align-items: stretch; gap: 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.42);
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  position: relative;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+.nm-note-card:hover { border-color: rgba(56,189,248,0.32); background: rgba(15,23,42,0.6); box-shadow: 0 8px 22px rgba(0,0,0,0.26); }
+.nm-note-card.is-selected {
+  border-color: rgba(14,165,233,0.5);
+  background: rgba(14,165,233,0.08);
+  box-shadow: inset 3px 0 0 #0ea5e9, 0 8px 22px rgba(0,0,0,0.26);
+}
+.nm-note-card-main {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 7px;
+  text-align: left; background: transparent; border: 0; cursor: pointer; color: inherit; padding: 0;
+}
+.nm-note-card-head { display: flex; align-items: center; gap: 10px; }
+.nm-note-status { font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+.nm-note-status.is-enabled { color: #6ee7b7; }
+.nm-note-status.is-disabled { color: #94a3b8; }
+.nm-note-status.is-expired { color: #fbbf24; }
+.nm-note-title { font-size: 15px; font-weight: 800; color: #f1f5f9; line-height: 1.25; }
+.nm-note-preview {
+  font-size: 13px; color: #9fb0c9; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.nm-note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 2px; }
+.nm-note-meta-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #7e91ab; }
+.nm-note-meta-chip svg { color: #64748b; }
+.nm-note-meta-flags { font-size: 12px; color: #64748b; }
+.nm-note-card-actions {
+  flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; justify-content: center;
+  padding-left: 14px; border-left: 1px solid rgba(148,163,184,0.1);
+}
+.nm-note-card-actions .nm-btn { min-height: 30px; }
+
+/* ---- Empty states ---- */
+.nm-empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 44px 24px; text-align: center;
+  border: 1px dashed rgba(56,189,248,0.2); border-radius: 14px;
+  background: rgba(15,23,42,0.3);
+}
+.nm-empty-icon {
+  width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center;
+  background: rgba(56,189,248,0.1); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.2);
+}
+.nm-empty-title { font-size: 16px; font-weight: 800; color: #e2e8f0; }
+.nm-empty-text { font-size: 13px; color: #8ea3be; max-width: 380px; line-height: 1.5; }
+.nm-empty-state .nm-ops-primary { margin-top: 6px; }
+
+/* ---- Diagnostics ---- */
+.nm-ops-diagnostics {
+  border-radius: 12px;
+  background: rgba(9, 16, 30, 0.45);
+  border: 1px solid rgba(148,163,184,0.1);
+  overflow: hidden;
+}
+.nm-ops-diag-toggle {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 12px 18px; cursor: pointer;
+  background: transparent; border: 0; color: #cbd5e1;
+  font-size: 13px; font-weight: 700;
+}
+.nm-ops-diag-title { display: inline-flex; align-items: center; gap: 9px; }
+.nm-ops-diag-dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; box-shadow: 0 0 8px rgba(100,116,139,0.6); }
+.nm-ops-diag-dot.is-ok { background: #10b981; box-shadow: 0 0 8px rgba(16,185,129,0.7); }
+.nm-ops-diag-dot.is-warn { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.7); }
+.nm-ops-diag-dot.is-pending { background: #38bdf8; box-shadow: 0 0 8px rgba(56,189,248,0.7); }
+.nm-ops-diag-summary { color: #7e91ab; font-size: 12px; font-weight: 600; margin-left: 2px; }
+.nm-ops-diag-chevron { margin-left: auto; color: #94a3b8; transition: transform 180ms ease; }
+.nm-ops-diag-chevron.is-open { transform: rotate(180deg); }
+.nm-ops-diag-body {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px;
+  padding: 4px 18px 18px;
+}
+.nm-ops-diag-item {
+  font-family: "IBM Plex Mono", monospace; font-size: 12px; color: #93a4bd;
+  padding: 8px 12px; border-radius: 8px;
+  background: rgba(15,23,42,0.5); border: 1px solid rgba(148,163,184,0.08);
+}
+
+/* ---- Status banner (compact) ---- */
+.nm-shell > .nm-status-card { padding: 14px 18px; border-radius: 12px; }
+
+/* ---- Responsive ---- */
+@media (max-width: 1200px) {
+  .nm-ops-metrics { grid-template-columns: repeat(3, minmax(0,1fr)); }
+}
+@media (max-width: 820px) {
+  .nm-ops-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .nm-ops-quick-group + .nm-ops-quick-group { border-left: 0; padding-left: 0; }
+  .nm-ops-quick-group-end { margin-left: 0; }
+  .nm-note-card { flex-direction: column; }
+  .nm-note-card-actions { flex-direction: row; padding-left: 0; border-left: 0; border-top: 1px solid rgba(148,163,184,0.1); padding-top: 10px; }
+}
+
+/* ---- Accessibility: focus + reduced motion ---- */
+.nm-ops-topbar :focus-visible,
+.nm-ops-metrics :focus-visible,
+.nm-ops-quick :focus-visible,
+.nm-ops-tabs :focus-visible,
+.nm-note-card :focus-visible,
+.nm-ops-diagnostics :focus-visible,
+.nm-metric-btn:focus-visible {
+  outline: 2px solid #38bdf8; outline-offset: 2px; border-radius: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nm-metric-btn, .nm-ops-icon-btn, .nm-ops-action, .nm-note-card, .nm-ops-tab, .nm-ops-diag-chevron, .nm-btn-primary.nm-ops-primary {
+    transition: none !important;
+  }
+  .nm-metric-btn:hover, .nm-ops-icon-btn:hover, .nm-ops-action:hover, .nm-btn:hover { transform: none !important; }
+}
+
+/* ---- Refined status banners (calmer, lighter) ---- */
+.nm-shell > .nm-status-card {
+  border-radius: 12px;
+  padding: 12px 16px;
+  gap: 10px;
+  align-items: center;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+  border-left-width: 4px;
+}
+.nm-shell > .nm-status-card strong {
+  font-size: 11px; min-width: auto; font-weight: 800;
+}
+.nm-shell > .nm-status-card span { font-size: 13px; line-height: 1.45; color: #dbe6f5; }
+.nm-shell > .nm-status-card.is-warning {
+  background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); border-left-color: #f59e0b;
+}
+.nm-shell > .nm-status-card.is-warning strong { color: #fbbf24; }
+.nm-shell > .nm-status-card.is-error {
+  background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3); border-left-color: #ef4444;
+}
+.nm-shell > .nm-status-card.is-error strong { color: #f87171; }
+.nm-shell > .nm-status-card.is-success {
+  background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.3); border-left-color: #10b981;
+}
+.nm-shell > .nm-status-card.is-success strong { color: #6ee7b7; }
+.nm-shell > .nm-status-card.is-info {
+  background: rgba(56,189,248,0.1); border-color: rgba(56,189,248,0.3); border-left-color: #38bdf8;
+}
+.nm-shell > .nm-status-card.is-info strong { color: #7dd3fc; }
+/* Retry button inline instead of full-width block */
+.nm-shell > .nm-status-card > div[style] { margin-top: 0 !important; margin-left: auto; }
+.nm-shell > .nm-status-card > div[style] .nm-btn { min-height: 32px; padding: 0 16px; }
+
+/* ---- Remove developer scroll caption; refine table wraps ---- */
+.nm-table-wrap::before { content: none !important; display: none !important; }
+.nm-table-wrap {
+  border: 1px solid rgba(56, 189, 248, 0.1);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.4);
+}
+/* Candidate view sub-tabs -> consistent segmented pills */
+.nm-view-tabs { border-bottom: 0; display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.nm-view-tab {
+  border: 1px solid rgba(148,163,184,0.14); border-radius: 8px;
+  background: rgba(30,41,59,0.4); color: #93a4bd; padding: 7px 13px; font-size: 12.5px;
+}
+.nm-view-tab:hover { color: #e2e8f0; background: rgba(30,41,59,0.7); }
+.nm-view-tab.is-active {
+  color: #0b1220; background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+  border-color: transparent; box-shadow: 0 3px 12px rgba(14,165,233,0.25);
+}
+/* Larger, softer empty-state icon inside tables */
+.nm-empty { padding: 40px 24px; }
+.nm-empty::before { width: 52px; height: 52px; border-radius: 16px; }
