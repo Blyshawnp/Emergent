@@ -1213,7 +1213,16 @@ function AppShell() {
 
   const tickerContent = displayTickerMessages.length > 0
     ? displayTickerMessages
-    : [{ id: 'default-welcome', className: 'ticker-item ticker-item-info', text: `Welcome to Mock Testing Suite v${appVersion}` }];
+    : [
+        { id: 'default-welcome', className: 'ticker-item ticker-item-info', text: `Welcome to Mock Testing Suite v${appVersion}.` },
+        { id: 'default-basics', className: 'ticker-item ticker-item-info', text: 'Complete The Basics before beginning call review.' },
+        { id: 'default-headset', className: 'ticker-item ticker-item-info', text: 'Review headset requirements before certification begins.' },
+        { id: 'default-discord', className: 'ticker-item ticker-item-info', text: 'Use Discord copy templates when posting session updates.' },
+        { id: 'default-vpn', className: 'ticker-item ticker-item-warning', text: 'Confirm VPN/proxy checks manually when automated coverage is limited.' },
+        { id: 'default-readiness', className: 'ticker-item ticker-item-info', text: 'Remember to review final readiness before submitting results.' },
+        { id: 'default-fallback', className: 'ticker-item ticker-item-warning', text: 'If Google Sheets is unavailable, continue using local fallback guidance.' },
+        { id: 'default-tip', className: 'ticker-item ticker-item-info', text: 'Tip: Use the Discord Post button to quickly copy common messages.' },
+      ];
 
   return (
     <>

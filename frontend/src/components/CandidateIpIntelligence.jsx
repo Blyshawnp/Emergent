@@ -64,16 +64,28 @@ export function buildManualLookupLinks(ipValue) {
   const encoded = encodeURIComponent(ip);
   return [
     {
+      label: 'IPQualityScore',
+      desc: 'Strong VPN/proxy reputation',
+      badge: 'VPN',
+      url: ip ? `https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test/lookup/${encoded}` : 'https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test',
+    },
+    {
+      label: 'ProxyCheck.io',
+      desc: 'VPN/proxy detection',
+      badge: 'Proxy',
+      url: 'https://proxycheck.io/',
+    },
+    {
+      label: 'GetIPIntel',
+      desc: 'Residential vs proxy reputation',
+      badge: 'Geo',
+      url: 'https://getipintel.net/',
+    },
+    {
       label: 'IP2Location',
+      desc: 'IP intelligence and ASN',
+      badge: 'ASN',
       url: ip ? `https://www.ip2location.com/demo/${encoded}` : 'https://www.ip2location.com/demo',
-    },
-    {
-      label: 'IPinfo',
-      url: ip ? `https://ipinfo.io/${encoded}` : 'https://ipinfo.io/',
-    },
-    {
-      label: 'ip.teoh.io',
-      url: ip ? `https://ip.teoh.io/?ip=${encoded}` : 'https://ip.teoh.io/',
     },
   ];
 }
@@ -260,6 +272,7 @@ export function CandidateIpResultSummary({ result }) {
         <div className="ip-summary-copy">{result.summary || 'No summary available.'}</div>
         <div className="ip-summary-list">
           <div className="ip-summary-row"><span className="ip-summary-label">Confidence:</span> <strong>{summaryConfidence(result, detectorCount, metadataCount)}</strong></div>
+          <div className="ip-summary-row"><span className="ip-summary-label">Providers checked:</span> <strong>{detectorCount + metadataCount} of {rows.length}</strong></div>
           <div className="ip-summary-row"><span className="ip-summary-label">Detectors:</span> <strong>{detectorCount}</strong></div>
           <div className="ip-summary-row"><span className="ip-summary-label">Metadata sources:</span> <strong>{metadataCount}</strong></div>
           {primaryIsp ? <div className="ip-summary-row"><span className="ip-summary-label">ISP:</span> <strong>{primaryIsp}</strong></div> : null}
@@ -316,6 +329,18 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   const [validationMessage, setValidationMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
+  const [copiedIp, setCopiedIp] = useState(false);
+
+  const handleCopyIp = async () => {
+    if (!ip) return;
+    try {
+      await navigator.clipboard.writeText(ip);
+      setCopiedIp(true);
+      setTimeout(() => setCopiedIp(false), 2000);
+    } catch (e) {
+      console.error('Failed to copy IP', e);
+    }
+  };
 
   const lastChecked = useMemo(() => formatTimestamp(result?.timestamp), [result]);
   const manualLinks = useMemo(() => buildManualLookupLinks(ip), [ip]);
@@ -392,33 +417,68 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   if (resolvedMode === VPN_PROXY_CHECK_MODES.LINKS) {
     return (
       <div className="candidate-ip-card candidate-ip-card-embedded candidate-ip-card-links" data-testid="candidate-ip-links">
-        <div className="candidate-ip-static-title">{VPN_PROXY_CHECK_LABEL}</div>
-        <div className="candidate-ip-input-row candidate-ip-links-row">
-          <label>
-            <span>Candidate Public IP Address</span>
+        <div className="candidate-ip-static-title">VPN & Proxy Verification</div>
+        
+        <div className="text-sm text-muted" style={{ marginBottom: '1rem', lineHeight: '1.4' }}>
+          Use one or more trusted lookup services below to verify whether the candidate IP is associated with:
+          <ul style={{ margin: '0.5rem 0 0 1.5rem', padding: 0 }}>
+            <li>VPN</li>
+            <li>Proxy</li>
+            <li>Hosting Provider</li>
+            <li>Datacenter</li>
+            <li>TOR Exit Node</li>
+          </ul>
+        </div>
+
+        <div className="candidate-ip-input-row" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', marginBottom: '1.5rem' }}>
+          <label style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Candidate IP</span>
             <input
               type="text"
               value={ip}
               onChange={(event) => setIp(event.target.value)}
               placeholder="IPv4 or IPv6"
               data-testid="candidate-ip-manual-input"
+              style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #ccc)' }}
             />
           </label>
-          <div className="candidate-ip-actions">
-            {manualLinks.map((link) => (
+          <button
+            type="button"
+            className="btn btn-muted"
+            onClick={handleCopyIp}
+            style={{ width: '100px', height: '36px' }}
+          >
+            {copiedIp ? 'Copied!' : 'Copy IP'}
+          </button>
+        </div>
+
+        <div className="ip-manual-services-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          {manualLinks.map((link) => (
+            <div key={link.label} className="ip-manual-service-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', backgroundColor: 'var(--bg-muted, #f8f9fa)', borderRadius: '6px', border: '1px solid var(--border-color, #eaeaea)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', textTransform: 'uppercase', backgroundColor: 'var(--primary-color, #0056b3)', color: '#fff', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>
+                  {link.badge}
+                </span>
+                <div>
+                  <div style={{ fontWeight: 600 }}>{link.label}</div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted, #666)' }}>{link.desc}</div>
+                </div>
+              </div>
               <button
-                key={link.label}
                 type="button"
-                className="btn btn-muted btn-sm"
+                className="btn btn-ghost btn-sm"
                 onClick={() => openManualLink(link.url)}
                 data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
               >
-                {link.label}
+                Open Lookup
               </button>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
-        <div className="text-xs text-muted">Manual links do not run provider lookups or create automated VPN/proxy verdicts.</div>
+
+        <div className="text-xs text-muted" style={{ fontStyle: 'italic' }}>
+          Integrated automated VPN verification may be available if configured by your administrator.
+        </div>
       </div>
     );
   }

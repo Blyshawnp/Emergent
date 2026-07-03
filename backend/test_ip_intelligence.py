@@ -83,10 +83,10 @@ class IpIntelligenceTests(unittest.TestCase):
         result = run_lookup("2001:4860:4860::8888", [clear_provider("provider-a")])
         self.assertTrue(result["ok"])
         self.assertEqual(result["ip"], "2001:4860:4860::8888")
-        self.assertEqual(result["verdict"], "CLEAR")
+        self.assertEqual(result["verdict"], "CLEAR — LIMITED CHECK")
         self.assertEqual(
-            result["warning"],
-            "Only one VPN/proxy detector is currently available. Verify manually if this result is important.",
+            result["summary"],
+            "No VPN or proxy signals detected, but only one provider responded. Verify manually if this result is important.",
         )
         self.assertEqual(result["detectorProviderCount"], 1)
         self.assertEqual(result["metadataProviderCount"], 0)
@@ -98,7 +98,7 @@ class IpIntelligenceTests(unittest.TestCase):
             clear_provider("clear-provider"),
         ])
         self.assertTrue(result["ok"])
-        self.assertEqual(result["verdict"], "CLEAR")
+        self.assertEqual(result["verdict"], "CLEAR — LIMITED CHECK")
         self.assertEqual(result["providerResults"][0]["status"], "failed")
 
     def test_no_reputation_provider_available_is_unable_to_verify(self):
@@ -258,9 +258,10 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(server._ip_result_has_risk(result))
 
     def test_settings_normalize_vpn_proxy_check_mode(self):
-        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "links"})["vpnProxyCheckMode"], "links")
-        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "disabled"})["vpnProxyCheckMode"], "disabled")
-        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "bad"})["vpnProxyCheckMode"], "checker")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "links", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "links")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "disabled", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "disabled")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "bad", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "checker")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "checker", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "checker")
 
 
 if __name__ == "__main__":

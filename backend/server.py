@@ -1135,6 +1135,7 @@ DEFAULT_MANAGED_SETTINGS_KEYS = {
     "sup_coaching",
     "call_fails",
     "sup_fails",
+    "vpnProxyCheckMode",
 }
 
 
@@ -2222,9 +2223,14 @@ AUTO_FAIL_REASONS = [
 ]
 
 TICKER_MESSAGES = [
-    f"Welcome to Mock Testing Suite v{APP_VERSION}",
-    "Tip: Use the Discord Post button to quickly copy common messages",
-    "Need help? Check the Help tab for step-by-step setup guides",
+    f"Welcome to Mock Testing Suite v{APP_VERSION}.",
+    "Complete The Basics before beginning call review.",
+    "Review headset requirements before certification begins.",
+    "Use Discord copy templates when posting session updates.",
+    "Confirm VPN/proxy checks manually when automated coverage is limited.",
+    "Remember to review final readiness before submitting results.",
+    "If Google Sheets is unavailable, continue using local fallback guidance.",
+    "Tip: Use the Discord Post button to quickly copy common messages.",
 ]
 
 DEFAULT_FORM_URL = "https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl"
@@ -2853,7 +2859,7 @@ DEFAULT_SETTINGS = {
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
     "support_form_url": DEFAULT_SUPPORT_FORM_URL,
-    "vpnProxyCheckMode": "checker",
+    "vpnProxyCheckMode": "links",
     "ticker_speed": "normal",
     "enable_sounds": True,
     "sound_volume": "medium",
@@ -8642,6 +8648,149 @@ class GetIpIntelProvider(IpIntelligenceProvider):
             },
         })
 
+
+class VpnApiIoProvider(IpIntelligenceProvider):
+    """vpnapi.io free-tier VPN/proxy detection. Requires VPNAPI_IO_KEY (free tier available)."""
+    name = "vpnapi.io"
+    requires_key = True
+    env_key = "VPNAPI_IO_KEY"
+    enabled_env = "VPNAPI_IO_ENABLED"
+    capability = "vpn_proxy_detector"
+
+    async def lookup(self, ip_value):
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
+                f"https://vpnapi.io/api/{quote(ip_value)}",
+                params={"key": self.api_key()},
+            )
+            response.raise_for_status()
+            data = response.json()
+        security = data.get("security") or {}
+        location = data.get("location") or {}
+        network = data.get("network") or {}
+        is_vpn = bool(security.get("vpn"))
+        is_proxy = bool(security.get("proxy"))
+        is_tor = bool(security.get("tor"))
+        is_relay = bool(security.get("relay"))
+        is_risk = is_vpn or is_proxy or is_tor or is_relay
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_risk else "No",
+            "isp": network.get("autonomous_system_organization") or str(network.get("autonomous_system_number") or ""),
+            "asn": str(network.get("autonomous_system_number") or ""),
+            "usageType": ", ".join(k for k, v in security.items() if v) or "residential/unknown",
+            "country": location.get("country") or location.get("country_code") or "",
+            "region": location.get("region") or "",
+            "city": location.get("city") or "",
+            "confidence": "High" if is_risk else "Medium",
+            "notes": f"vpnapi.io vpn={is_vpn} proxy={is_proxy} tor={is_tor} relay={is_relay}",
+            "reputationCapable": True,
+            "capability": self.capability,
+            "flags": {
+                "vpn": is_vpn or is_relay,
+                "proxy": is_proxy,
+                "tor": is_tor,
+                "active": is_risk,
+                "residential": not is_risk,
+            },
+        })
+
+
+class IpApiComProvider(IpIntelligenceProvider):
+    """ip-api.com free endpoint. No key required. Proxy and hosting flags on free tier."""
+    name = "ip-api.com"
+    requires_key = False
+    enabled_env = "IPAPI_COM_ENABLED"
+    capability = "vpn_proxy_detector"
+    reputation_capable = True
+
+    async def lookup(self, ip_value):
+        fields = "status,message,country,regionName,city,isp,org,as,proxy,hosting,query"
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
+                f"http://ip-api.com/json/{quote(ip_value)}",
+                params={"fields": fields},
+            )
+            response.raise_for_status()
+            data = response.json()
+        if data.get("status") != "success":
+            raise ValueError(
+                f"ip-api.com status={data.get('status')}: {data.get('message', 'unknown error')}"
+            )
+        is_proxy = bool(data.get("proxy"))
+        is_hosting = bool(data.get("hosting"))
+        is_risk = is_proxy or is_hosting
+        isp = data.get("isp") or data.get("org") or ""
+        org = data.get("org") or ""
+        asn_raw = data.get("as") or ""
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "ok",
+            "vpnProxy": "Yes" if is_risk else "No",
+            "isp": isp,
+            "asn": asn_raw,
+            "usageType": "proxy/hosting" if is_risk else "residential/ISP",
+            "country": data.get("country") or "",
+            "region": data.get("regionName") or "",
+            "city": data.get("city") or "",
+            "confidence": "High" if is_risk else "Medium",
+            "notes": f"ip-api.com proxy={is_proxy} hosting={is_hosting} org={org[:60]}",
+            "reputationCapable": True,
+            "capability": self.capability,
+            "flags": {
+                "proxy": is_proxy,
+                "hosting": is_hosting,
+                "datacenter": is_hosting,
+                "active": is_risk,
+                "residential": _contains_any(isp + " " + org, RESIDENTIAL_USAGE_MARKERS) and not is_risk,
+            },
+        })
+
+
+class IpWhoIsProvider(IpIntelligenceProvider):
+    """ipwho.is free metadata provider. No key required. Metadata-only capability."""
+    name = "ipwho.is"
+    requires_key = False
+    enabled_env = "IPWHOIS_ENABLED"
+    reputation_capable = False
+    capability = "metadata_only"
+
+    async def lookup(self, ip_value):
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(f"https://ipwho.is/{quote(ip_value)}")
+            response.raise_for_status()
+            data = response.json()
+        if not data.get("success"):
+            raise ValueError(f"ipwho.is error: {data.get('message', 'unknown error')}")
+        connection = data.get("connection") or {}
+        isp = connection.get("isp") or connection.get("org") or ""
+        asn_raw = str(connection.get("asn") or "")
+        org = connection.get("org") or ""
+        type_raw = connection.get("type") or ""
+        usage_text = " ".join(filter(None, [isp, org, type_raw]))
+        return _normalize_ip_provider_result({
+            "provider": self.name,
+            "status": "metadata",
+            "vpnProxy": "Unknown",
+            "isp": isp,
+            "asn": asn_raw,
+            "usageType": type_raw or "Network metadata only",
+            "country": data.get("country") or "",
+            "region": data.get("region") or "",
+            "city": data.get("city") or "",
+            "confidence": "Informational",
+            "notes": "Metadata only. ipwho.is does not verify VPN/proxy reputation.",
+            "reputationCapable": False,
+            "capability": self.capability,
+            "flags": {
+                "hosting": _contains_any(usage_text, ("hosting", "datacenter", "data center")),
+                "datacenter": _contains_any(usage_text, ("datacenter", "data center")),
+                "residential": _contains_any(usage_text, RESIDENTIAL_USAGE_MARKERS),
+            },
+        })
+
+
 def _configured_ip_intelligence_providers():
     return [
         IP2LocationProvider(),
@@ -8652,7 +8801,10 @@ def _configured_ip_intelligence_providers():
         IPHubProvider(),
         ScamalyticsProvider(),
         GetIpIntelProvider(),
+        VpnApiIoProvider(),
+        IpApiComProvider(),
         IpApiCoProvider(),
+        IpWhoIsProvider(),
     ]
 
 
@@ -8716,8 +8868,6 @@ def _consensus_ip_intelligence(results, skipped_count=0):
         }
 
     detector_warning = ""
-    if len(detector_successful) < 2:
-        detector_warning = "Only one VPN/proxy detector is currently available. Verify manually if this result is important."
 
     historical_residential = [result for result in detector_successful if _ip_result_historical_residential_proxy(result)]
     stale_risk = [result for result in detector_successful if _ip_result_stale_risk(result)]
@@ -8758,18 +8908,30 @@ def _consensus_ip_intelligence(results, skipped_count=0):
             "warning": detector_warning,
         }
 
-    if total_risk_count == 1 or disagreement or residential_conflict:
+    if total_risk_count == 1 or residential_conflict:
         summary = "One provider detected VPN/proxy/hosting risk. Manual review is recommended."
         if historical_residential:
             summary = "One provider detected historical proxy activity, but the connection appears to be a residential ISP. Manual review is recommended."
-        return {"verdict": "REVIEW", "level": "yellow", "summary": summary, "fallbackUsed": False, "warning": detector_warning}
+        return {"verdict": "REVIEW", "level": "yellow", "summary": summary, "fallbackUsed": False, "warning": ""}
 
+    if disagreement:
+        return {"verdict": "MIXED SIGNAL — VERIFY MANUALLY", "level": "yellow", "summary": "Providers returned conflicting results. At least one detected VPN/proxy risk and at least one did not. Manual verification is required before making a decision.", "fallbackUsed": False, "warning": ""}
+
+    # When fewer than 2 detectors responded, downgrade CLEAR to a cautious verdict.
+    if len(detector_successful) < 2:
+        return {
+            "verdict": "CLEAR — LIMITED CHECK",
+            "level": "yellow",
+            "summary": "No VPN or proxy signals detected, but only one provider responded. Verify manually if this result is important.",
+            "fallbackUsed": False,
+            "warning": "",
+        }
     return {
         "verdict": "CLEAR",
         "level": "green",
         "summary": "No providers detected VPN, proxy, hosting, or datacenter usage.",
         "fallbackUsed": False,
-        "warning": detector_warning,
+        "warning": "",
     }
 
 
@@ -8779,9 +8941,9 @@ def _ip_intelligence_summary_confidence(consensus, detector_count, metadata_coun
         return "Unknown"
     if verdict == "VPN / PROXY LIKELY":
         return "High" if detector_count >= 2 else "Medium"
-    if verdict == "CLEAR":
+    if verdict.startswith("CLEAR"):
         return "High" if detector_count >= 2 else "Medium"
-    if verdict == "REVIEW":
+    if verdict == "REVIEW" or "MIXED" in verdict:
         return "Medium" if detector_count >= 2 else "Low"
     return "Low" if metadata_count else "Unknown"
 
@@ -9210,7 +9372,91 @@ _notification_defaults = {
             "id": "default-welcome",
             "type": "ticker",
             "title": "Welcome",
-            "message": f"Welcome to Mock Testing Suite v{APP_VERSION}",
+            "message": f"Welcome to Mock Testing Suite v{APP_VERSION}.",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-basics",
+            "type": "ticker",
+            "title": "Basics",
+            "message": "Complete The Basics before beginning call review.",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-headset",
+            "type": "ticker",
+            "title": "Headset",
+            "message": "Review headset requirements before certification begins.",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-discord",
+            "type": "ticker",
+            "title": "Discord",
+            "message": "Use Discord copy templates when posting session updates.",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-vpn",
+            "type": "ticker",
+            "title": "VPN",
+            "message": "Confirm VPN/proxy checks manually when automated coverage is limited.",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-readiness",
+            "type": "ticker",
+            "title": "Readiness",
+            "message": "Remember to review final readiness before submitting results.",
+            "showTicker": True,
+            "showPopup": False,
+            "showBanner": False,
+            "persistent": True,
+            "startTime": "",
+            "endTime": "",
+            "actionText": "",
+            "actionURL": "",
+        },
+        {
+            "id": "default-fallback",
+            "type": "ticker",
+            "title": "Offline",
+            "message": "If Google Sheets is unavailable, continue using local fallback guidance.",
             "showTicker": True,
             "showPopup": False,
             "showBanner": False,
@@ -9224,7 +9470,7 @@ _notification_defaults = {
             "id": "default-tip",
             "type": "ticker",
             "title": "Tip",
-            "message": "Tip: Use the Discord Post button to quickly copy common messages",
+            "message": "Tip: Use the Discord Post button to quickly copy common messages.",
             "showTicker": True,
             "showPopup": False,
             "showBanner": False,
@@ -9234,20 +9480,6 @@ _notification_defaults = {
             "actionText": "",
             "actionURL": "",
         },
-        {
-            "id": "default-help",
-            "type": "ticker",
-            "title": "Help",
-            "message": "Need help? Check the Help tab for step-by-step setup guides",
-            "showTicker": True,
-            "showPopup": False,
-            "showBanner": False,
-            "persistent": True,
-            "startTime": "",
-            "endTime": "",
-            "actionText": "",
-            "actionURL": "",
-        }
     ],
     "banners": [],
     "popups": [],

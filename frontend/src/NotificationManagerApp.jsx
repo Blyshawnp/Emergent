@@ -780,7 +780,7 @@ const SECTION_NAV_ITEMS = [
   { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
 ];
 
-function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault }) {
+function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault, showStatusModal }) {
   const [detailKey, setDetailKey] = useState(null);
   const [selectedTargets, setSelectedTargets] = useState({});
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
@@ -819,6 +819,71 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   useEffect(() => {
     setIncludeArchivedSearch(Boolean(includeArchivedDefault));
   }, [includeArchivedDefault]);
+
+  const serializeCandidatesToCsv = (rowList) => {
+    if (!rowList.length) return '';
+    const headers = ['Candidate Name', 'Status', 'Attempts', 'Tester', 'Date', 'Result', 'Notes'];
+    const escapeCsv = (str) => {
+      if (str === null || str === undefined) return '';
+      const text = String(str).replace(/"/g, '""');
+      return `"${text}"`;
+    };
+    const csvRows = [headers.join(',')];
+    for (const row of rowList) {
+      const meta = computeRowMeta(row);
+      csvRows.push([
+        escapeCsv(row.candidate_name),
+        escapeCsv(meta.statusUpper),
+        escapeCsv(meta.attempts.length),
+        escapeCsv(row.tester_name || meta.attempts[0]?.tester_name || ''),
+        escapeCsv(row.updated_at || meta.attempts[0]?.completed_at || ''),
+        escapeCsv(meta.results),
+        escapeCsv(meta.notes)
+      ].join(','));
+    }
+    return csvRows.join('\n');
+  };
+
+  const handleExportVisible = () => {
+    const csvContent = serializeCandidatesToCsv(visibleEntries.map(e => e.row));
+    downloadCsv('candidate-tracking-report.csv', csvContent);
+  };
+
+  const handleExportSelected = () => {
+    const csvContent = serializeCandidatesToCsv(selectedList.map(key => visibleEntries.find(e => e.key === key)?.row).filter(Boolean));
+    downloadCsv('candidate-tracking-selected.csv', csvContent);
+  };
+
+  const handleCopySelected = async () => {
+    const rows = selectedList.map(key => visibleEntries.find(e => e.key === key)?.row).filter(Boolean);
+    if (!rows.length) return;
+    const textLines = [];
+    for (const row of rows) {
+      const meta = computeRowMeta(row);
+      textLines.push(`Candidate Name: ${row.candidate_name || ''}`);
+      textLines.push(`Status: ${meta.statusUpper}`);
+      textLines.push(`Attempts: ${meta.attempts.length}`);
+      textLines.push(`Tester: ${row.tester_name || meta.attempts[0]?.tester_name || ''}`);
+      textLines.push(`Date: ${row.updated_at || meta.attempts[0]?.completed_at || ''}`);
+      textLines.push(`Result: ${meta.results}`);
+      textLines.push(`Notes: ${meta.notes}`);
+      textLines.push('------------------------');
+    }
+    try {
+      await navigator.clipboard.writeText(textLines.join('\n'));
+      if (showStatusModal) showStatusModal('Selected candidates copied to clipboard.', 'success');
+    } catch (err) {
+      if (showStatusModal) showStatusModal('Failed to copy to clipboard.', 'error');
+    }
+  };
+
+  const handlePrintSelected = () => {
+    if (selectedCount === 0) {
+      if (showStatusModal) showStatusModal('Select one or more candidates to print.', 'warning');
+      return;
+    }
+    window.print();
+  };
 
   const handleWithdraw = async (row) => {
     const confirmed = await onConfirm(`Mark ${row.candidate_name || 'this candidate'} as withdrew from certification?`, { kind: 'danger', confirmLabel: 'Withdraw' });
@@ -1045,14 +1110,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={onRefresh} disabled={loading}>
             {loading ? 'Refreshing...' : 'Refresh'}
           </button>
-          <button
-            type="button"
-            className="nm-btn nm-btn-danger nm-btn-table"
-            onClick={() => handleDeleteTargets(selectedList, `${selectedCount} selected candidate record${selectedCount === 1 ? '' : 's'}`)}
-            disabled={!selectedCount || loading}
-          >
-            Delete Selected
-          </button>
+          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={handleExportVisible}>Export CSV</button>
         </div>
       </div>
       {!data?.ok && data?.error ? (
@@ -1092,6 +1150,17 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           Include archived candidates
         </label>
       </div>
+      {selectedCount > 0 ? (
+        <div className="nm-bulk-action-bar">
+          <span className="nm-bulk-count">✓ {selectedCount} candidate{selectedCount !== 1 ? 's' : ''} selected</span>
+          <div className="nm-bulk-actions">
+            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={handleCopySelected}>Copy Selected</button>
+            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={handlePrintSelected}>Print Report</button>
+            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={handleExportSelected}>Export CSV</button>
+            <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleDeleteTargets(selectedList, `${selectedCount} selected candidate record${selectedCount === 1 ? '' : 's'}`)}>Delete Selected</button>
+          </div>
+        </div>
+      ) : null}
       <div className="nm-candidate-layout">
       <div className="nm-table-wrap">
         <table className="nm-table nm-candidate-table">
@@ -1189,6 +1258,52 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           </div>
         )}
       </aside>
+      </div>
+      <div className="nm-print-layout" aria-hidden="true">
+        <div className="nm-print-header">
+          <img src="/assets/branding/mts-logo-white.svg" alt="MTS Logo" className="nm-print-logo" />
+          <h1>Candidate Tracking Report</h1>
+        </div>
+        <div className="nm-print-meta">
+          <div><strong>Generated:</strong> {new Date().toLocaleString()}</div>
+          <div><strong>Selected Records:</strong> {selectedCount}</div>
+          {searchText && <div><strong>Search:</strong> {searchText}</div>}
+        </div>
+        <table className="nm-print-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Attempts</th>
+              <th>Tester</th>
+              <th>Date</th>
+              <th>Result</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {selectedList.map((key) => {
+              const entry = visibleEntries.find((e) => e.key === key);
+              if (!entry) return null;
+              const row = entry.row;
+              const meta = computeRowMeta(row);
+              return (
+                <tr key={key}>
+                  <td>{row.candidate_name || 'Unknown'}</td>
+                  <td>{meta.statusUpper}</td>
+                  <td>{meta.attempts.length}</td>
+                  <td>{row.tester_name || meta.attempts[0]?.tester_name || 'Unknown'}</td>
+                  <td>{row.updated_at || meta.attempts[0]?.completed_at || 'Unknown'}</td>
+                  <td>{meta.results}</td>
+                  <td>{meta.notes}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="nm-print-footer">
+          Mock Testing Suite / Smart Alert Manager
+        </div>
       </div>
     </section>
   );
@@ -2133,25 +2248,25 @@ export default function NotificationManagerApp() {
         return;
       }
       const actionLabels = {
-        grant_extra_attempt: 'Extra attempt granted in the shared Google Sheet. MTS should allow this candidate again after refresh.',
-        withdraw: 'Candidate withdrawn in the shared Google Sheet. MTS should block this candidate after refresh.',
-        restore_withdrawal: 'Candidate restored in the shared Google Sheet. MTS should allow lookup again after refresh.',
-        cancel_pending: 'Pending supervisor transfer cancelled in the shared Google Sheet.',
-        delete_candidate_history: 'Candidate history deleted from the shared Google Sheet. It will no longer appear in SAM or MTS lookup/autocomplete after refresh.',
-        archive_candidate: 'Candidate archived in the shared Google Sheet. It now appears in Archived Candidates.',
-        mark_passed: 'Candidate manually marked as passed in the shared Google Sheet.',
-        mark_failed: 'Candidate manually marked as failed in the shared Google Sheet.',
-        mark_incomplete: 'Candidate manually marked as incomplete in the shared Google Sheet.',
-        move_pending_sup_transfer: 'Candidate moved to Pending Sup Transfers in the shared Google Sheet.',
-        remove_pending_sup_transfer: 'Candidate removed from Pending Sup Transfers and marked incomplete in the shared Google Sheet.',
+        grant_extra_attempt: 'An extra attempt was successfully granted. MTS will now allow this candidate to re-certify.',
+        withdraw: 'The candidate was successfully marked as withdrawn. MTS will block this candidate from further attempts.',
+        restore_withdrawal: 'The candidate was successfully restored. MTS will allow this candidate to certify again.',
+        cancel_pending: 'The pending supervisor transfer was successfully cancelled.',
+        delete_candidate_history: 'The candidate history was permanently deleted. The record has been removed from Candidate Tracking and MTS autocomplete.',
+        archive_candidate: 'The candidate was successfully archived and moved to the Archived view.',
+        mark_passed: 'The candidate was successfully marked as Passed Certification.',
+        mark_failed: 'The candidate was successfully marked as Failed Certification.',
+        mark_incomplete: 'The candidate was successfully marked as incomplete.',
+        move_pending_sup_transfer: 'The candidate was successfully moved to Pending Sup Transfers.',
+        remove_pending_sup_transfer: 'The candidate was successfully removed from Pending Sup Transfers and marked incomplete.',
       };
       setSheetState((current) => ({
         ...current,
         statusKind: 'success',
-        statusMessage: actionLabels[payload?.action] || 'Candidate tracking updated in the shared Google Sheet.',
+        statusMessage: actionLabels[payload?.action] || 'Candidate tracking successfully updated.',
       }));
       playSamActionSound('success');
-      showStatusModal(actionLabels[payload?.action] || 'Candidate tracking updated in the shared Google Sheet.', 'success');
+      showStatusModal(actionLabels[payload?.action] || 'Candidate tracking successfully updated.', 'success');
       await loadCandidateTracking({ silent: true });
     } catch (error) {
       const message = getErrorMessage(error, 'Candidate tracking update failed.');
@@ -3099,17 +3214,6 @@ export default function NotificationManagerApp() {
               <button type="button" className="nm-ops-action" onClick={handleExport}>
                 <Download size={15} aria-hidden="true" /> Export CSV
               </button>
-              <label className="nm-ops-action nm-file-label" htmlFor="nm-import-file">
-                <Upload size={15} aria-hidden="true" /> Import CSV
-                <input
-                  id="nm-import-file"
-                  ref={fileInputRef}
-                  className="nm-file-input"
-                  type="file"
-                  accept=".csv,text/csv"
-                  onChange={handleImport}
-                />
-              </label>
             </div>
           </div>
           <div className="nm-ops-quick-group">
@@ -3318,6 +3422,7 @@ export default function NotificationManagerApp() {
             onSearchChange={setCandidateSearch}
             actor={samSetupStatus.userName || samSetupStatus.userRole || 'SAM'}
             includeArchivedDefault={samSettings.includeArchivedInSearchDefault}
+            showStatusModal={showStatusModal}
           />
         ) : null}
         {activeSection === 'headsets' ? (

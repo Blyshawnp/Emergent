@@ -4,7 +4,7 @@ The VPN / Proxy Check feature is controlled by the app setting:
 
 ```json
 {
-  "vpnProxyCheckMode": "checker"
+  "vpnProxyCheckMode": "links"
 }
 ```
 
@@ -21,7 +21,7 @@ Runtime settings payload:
 
 ```json
 {
-  "vpnProxyCheckMode": "links"
+  "vpnProxyCheckMode": "checker"
 }
 ```
 
@@ -39,41 +39,71 @@ disabled
 
 Runs the built-in VPN / Proxy Check panel and backend provider lookup.
 
-This is the default behavior.
+This is an **optional administrator-enabled behavior**.
 
 Detector providers are used only when available or configured. Providers that need keys are optional and are skipped when the key is missing. Do not store API keys in source control.
 
-Metadata-only providers, such as `ipapi.co` or IPinfo responses without privacy fields, can show ISP, ASN, and location details, but they do not determine VPN/proxy verdicts.
+#### Supported Providers
+
+**Free/No-Key Providers (Run automatically without setup):**
+- **GetIPIntel** (Uses email address)
+- **IPinfo** (Free tier, proxy data may be limited)
+- **ip-api.com** (Provides ISP/hosting/proxy metadata on free tier)
+- **ipapi.co** (Metadata only, no proxy reputation)
+- **ipwho.is** (Metadata only, no proxy reputation)
+
+**Optional Key-Required Providers (Require API key in env or runtime_config.json):**
+- **vpnapi.io** (Requires `VPNAPI_IO_KEY`)
+- **IP2Location** (Requires `IP2LOCATION_API_KEY`)
+- **IPQualityScore** (Requires `IPQUALITYSCORE_API_KEY`)
+- **AbuseIPDB** (Requires `ABUSEIPDB_API_KEY`)
+- **ProxyCheck** (Requires `PROXYCHECK_API_KEY`)
+- **IPHub** (Requires `IPHUB_API_KEY`)
+- **Scamalytics** (Requires `SCAMALYTICS_USERNAME` and `SCAMALYTICS_API_KEY`)
+
+#### Verdict Language
+
+The system computes a consensus verdict based on all successful responses:
+
+- **CLEAR**: No providers detected VPN, proxy, hosting, or datacenter usage. (Requires at least 2 successful detector responses).
+- **CLEAR — LIMITED CHECK**: No providers detected risk, but only 1 detector provider responded. Verifying manually is recommended. Displays in amber/yellow styling.
+- **REVIEW**: Exactly 1 provider detected risk, OR a provider detected historical proxy activity on a residential ISP.
+- **MIXED SIGNAL — VERIFY MANUALLY**: Providers disagreed (at least one detected risk and at least one did not). Manual verification is required.
+- **VPN / PROXY LIKELY**: 2 or more providers detected active risk.
 
 ### links
 
-Restores legacy manual IP lookup behavior.
+Restores legacy manual IP lookup behavior. This is the **default release-safe mode**.
 
 The Basics screen shows external lookup buttons for:
 
 ```text
+GetIPIntel
+IPQualityScore
+proxycheck.io
 IP2Location
-IPinfo
-ip.teoh.io
 ```
 
 This mode does not call the built-in provider API and does not create automated CLEAR, REVIEW, or VPN / PROXY LIKELY verdicts.
 
-To switch to manual links mode, save this setting or change the default:
+**Why is this the default?**
+Integrated automated VPN checks require configured provider keys. To ensure security, **API keys should not be embedded in the installer or source code**. Provider keys should be configured externally only if administrators explicitly choose to enable integrated mode. Until then, manual lookup links are the safest and most reliable default.
+
+To switch back to integrated automated checks, an administrator must configure keys and change the default:
 
 ```json
 {
-  "vpnProxyCheckMode": "links"
+  "vpnProxyCheckMode": "checker"
 }
 ```
 
-Copy/paste default-code change:
+Copy/paste default-code change to explicitly enforce manual mode (the current default):
 
 ```python
 DEFAULT_SETTINGS["vpnProxyCheckMode"] = "links"
 ```
 
-Use this mode when administrators want to disable integrated VPN lookup without removing the VPN questions or the manual VPN autofail flow.
+Use this mode when administrators want to avoid integrated VPN lookups without removing the VPN questions or the manual VPN autofail flow.
 
 ### disabled
 

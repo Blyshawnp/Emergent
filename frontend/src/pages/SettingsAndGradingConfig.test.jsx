@@ -746,13 +746,13 @@ test('vpn proxy links mode shows external lookup buttons and does not call provi
   expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
   await act(async () => {
     setInputValue(view.container.querySelector('[data-testid="candidate-ip-manual-input"]'), '8.8.8.8');
-    view.container.querySelector('[data-testid="candidate-ip-link-ipinfo"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    view.container.querySelector('[data-testid="candidate-ip-link-ip2location"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
 
   expect(api.checkIpIntelligence).not.toHaveBeenCalled();
-  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://ipinfo.io/8.8.8.8');
-  expect(view.container.textContent).toContain('Manual links do not run provider lookups');
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.ip2location.com/demo/8.8.8.8');
+  expect(view.container.textContent).toContain('Integrated automated VPN verification may be available');
   await view.unmount();
 });
 
