@@ -105,6 +105,39 @@ class ReleaseBlockerTests(unittest.TestCase):
         self.assertNotIn(key, update["$unset"])
         self.assertNotIn(server._managed_custom_flag(key), update["$unset"])
 
+    def test_getipintel_skips_without_email_and_no_fallback(self):
+        provider = server.GetIpIntelProvider()
+        with mock.patch.dict(os.environ, {"GETIPINTEL_EMAIL": ""}, clear=True):
+            with mock.patch("server._load_backend_runtime_config", return_value={}):
+                with self.assertRaises(RuntimeError) as context:
+                    asyncio.run(provider.lookup("8.8.8.8"))
+                self.assertIn("missing contact email", str(context.exception))
+                self.assertNotIn("blyshawnp", str(context.exception))
+
+    def test_service_account_diagnostics_do_not_expose_secrets(self):
+        payload = server._runtime_diagnostics_payload()
+        payload_str = str(payload).lower()
+        self.assertNotIn("'private_key':", payload_str)
+        self.assertNotIn("'private_key_id':", payload_str)
+        self.assertNotIn("-----begin private key-----", payload_str)
+        self.assertNotIn("raw_credential", payload_str)
+        
+        # Ensure _public_service_account_file_diagnostics strips paths
+        diag = server._public_service_account_file_diagnostics({"activePath": "C:\\Secret\\Path\\google-service-account.json"})
+        self.assertEqual(diag.get("activeFile"), "google-service-account.json")
+        self.assertNotIn("C:\\Secret", str(diag))
+
+    def test_docs_mention_service_account_packaging_risk(self):
+        docs_dir = Path(server.ROOT_DIR).parent / "docs"
+        checklist_path = docs_dir / "release-checklist.md"
+        risk_path = docs_dir / "service-account-packaging-risk.md"
+        
+        self.assertTrue(checklist_path.exists())
+        self.assertTrue(risk_path.exists())
+        
+        checklist_content = checklist_path.read_text(encoding="utf-8")
+        self.assertIn("google-service-account.json", checklist_content)
+        self.assertIn("service-account-packaging-risk", checklist_content)
 
 if __name__ == "__main__":
     unittest.main()

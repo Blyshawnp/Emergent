@@ -30,6 +30,7 @@ Use this checklist before shipping a new MTS / SAM desktop app build.
 - [ ] Installer maps `frontend/build` (not source) for Electron loadURL
 - [ ] Auto-update metadata parses multiline notes
 - [ ] Uninstallers remove per-user data only (unless admin-confirmed wipe is selected)
+- [ ] `google-service-account.json` is intentionally packaged for v1.0.x (accepted security tradeoff, see `docs/service-account-packaging-risk.md`)
 
 ## Communication
 - [ ] Release notes mention: new VPN/manual-check behavior, headset approvals, and shared-sheet resilience

@@ -8661,7 +8661,7 @@ class GetIpIntelProvider(IpIntelligenceProvider):
             except Exception:
                 pass
         if not email:
-            email = "blyshawnp@gmail.com"  # fallback default
+            raise RuntimeError("GetIPIntel is not configured (missing contact email)")
             
         params = {
             "ip": ip_value,
