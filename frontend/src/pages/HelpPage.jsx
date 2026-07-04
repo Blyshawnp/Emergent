@@ -420,8 +420,11 @@ const HELP_TOPICS = [
     bullets: [
       'Open Discord Post from the sidebar.',
       'Use Category to filter grouped templates or screenshots when categories are configured. Search still works within the selected category.',
-      'Search templates and copy message text with one click. Copy buttons change to Copied for 3 seconds.',
-      'Template rows show the category above the blue post title, with the full message beside it.',
+      'The search box is focused automatically. Type to filter templates immediately.',
+      'Favorites keep common posts pinned near the top, and Recent shows the last copied posts from this device.',
+      'Suggested posts appear when the current session clearly points to headset, VPN, tech issue, no script pop, or supervisor-transfer needs.',
+      'Select a template to preview it on the right, then use Copy. Copy buttons change to Copied for 3 seconds.',
+      'Keyboard shortcuts: Ctrl+F or Cmd+F focuses search, Arrow Up/Down moves through templates, Enter copies the selected/top result, and Escape closes the modal.',
       'Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.',
       'Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.',
       'Use Screenshots -> Discord Posts to open the centralized Phonetics.png reference when supported.',

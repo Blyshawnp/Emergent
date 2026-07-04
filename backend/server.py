@@ -106,6 +106,16 @@ def _can_use_local_diagnostic_auth_fallback(request: Request):
     return _is_loopback_request(request) and _is_development_mode()
 
 
+def _safe_file_label(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return Path(text).name
+    except Exception:
+        return ""
+
+
 def _load_desktop_app_version():
     env_version = (os.getenv("APP_VERSION") or "").strip()
     if env_version:
@@ -369,16 +379,51 @@ class SQLiteDocumentStore:
     def _connect_with_recovery(self):
         try:
             conn = sqlite3.connect(self.path, check_same_thread=False)
-            conn.execute("PRAGMA integrity_check")
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or str(integrity[0]).lower() != "ok":
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return self._recover_confirmed_corrupt_database(integrity[0] if integrity else "unknown integrity failure")
             return conn
         except sqlite3.DatabaseError as exc:
-            self._backup_corrupt_database(exc)
-            try:
-                self.path.unlink(missing_ok=True)
-            except Exception as unlink_exc:
-                logger.error("[STARTUP] Failed to remove unreadable SQLite database %s: %s", self.path, unlink_exc)
+            if not self._corruption_confirmed_by_integrity_check(exc):
+                logger.error("[STARTUP] SQLite open failed without confirmed corruption. Database was not deleted: %s", exc)
                 raise
-            return sqlite3.connect(self.path, check_same_thread=False)
+            return self._recover_confirmed_corrupt_database(exc)
+
+    def _corruption_confirmed_by_integrity_check(self, original_exc):
+        if not self.path.exists():
+            return False
+        try:
+            probe = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, check_same_thread=False)
+            try:
+                integrity = probe.execute("PRAGMA integrity_check").fetchone()
+            finally:
+                probe.close()
+            return bool(integrity and str(integrity[0]).lower() != "ok")
+        except sqlite3.DatabaseError as probe_exc:
+            message = f"{original_exc} {probe_exc}".lower()
+            corruption_markers = (
+                "database disk image is malformed",
+                "file is not a database",
+                "database is corrupt",
+                "malformed database schema",
+            )
+            return any(marker in message for marker in corruption_markers)
+        except sqlite3.Error as probe_exc:
+            logger.error("[STARTUP] SQLite integrity check could not confirm corruption: %s", probe_exc)
+            return False
+
+    def _recover_confirmed_corrupt_database(self, reason):
+        self._backup_corrupt_database(reason)
+        try:
+            self.path.unlink(missing_ok=True)
+        except Exception as unlink_exc:
+            logger.error("[STARTUP] Failed to remove confirmed-corrupt SQLite database %s: %s", self.path, unlink_exc)
+            raise
+        return sqlite3.connect(self.path, check_same_thread=False)
 
     def _initialize_schema(self):
         with self.lock, self.conn:
@@ -549,9 +594,9 @@ _content_source_status = {}
 _google_sheet_auth_status = {
     "ok": False,
     "status": "not_attempted",
-    "path": "",
-    "client_email": "",
-    "private_key_id": "",
+    "credentials_configured": False,
+    "client_email_configured": False,
+    "private_key_id_configured": False,
     "last_tab": "",
     "last_error": "",
     "timestamp": "",
@@ -817,23 +862,24 @@ def _early_service_account_file():
 def _read_service_account_public_info(path):
     info = {
         "exists": False,
-        "path": str(path or ""),
-        "client_email": "",
-        "private_key_id": "",
+        "configured": bool(path),
+        "file": _safe_file_label(path),
+        "client_email_configured": False,
+        "private_key_id_configured": False,
         "error": "",
     }
     if not path:
         return info
     try:
         resolved = Path(path).expanduser()
-        info["path"] = str(resolved)
+        info["file"] = resolved.name
         info["exists"] = resolved.is_file()
         if not info["exists"]:
             return info
         with resolved.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        info["client_email"] = str(data.get("client_email") or "")
-        info["private_key_id"] = str(data.get("private_key_id") or "")
+        info["client_email_configured"] = bool(str(data.get("client_email") or "").strip())
+        info["private_key_id_configured"] = bool(str(data.get("private_key_id") or "").strip())
     except Exception as exc:
         info["error"] = str(exc)
     return info
@@ -844,9 +890,9 @@ def _record_google_sheet_auth_status(status, *, ok=False, path=None, tab_name=""
     _google_sheet_auth_status.update({
         "ok": bool(ok),
         "status": str(status or ""),
-        "path": str(path or public_info.get("path") or ""),
-        "client_email": public_info.get("client_email") or _google_sheet_auth_status.get("client_email") or "",
-        "private_key_id": public_info.get("private_key_id") or _google_sheet_auth_status.get("private_key_id") or "",
+        "credentials_configured": bool(path or public_info.get("configured")),
+        "client_email_configured": bool(public_info.get("client_email_configured") or _google_sheet_auth_status.get("client_email_configured")),
+        "private_key_id_configured": bool(public_info.get("private_key_id_configured") or _google_sheet_auth_status.get("private_key_id_configured")),
         "last_tab": str(tab_name or ""),
         "last_error": str(error or public_info.get("error") or ""),
         "timestamp": _status_timestamp(),
@@ -2234,6 +2280,18 @@ TICKER_MESSAGES = [
 ]
 
 DEFAULT_FORM_URL = "https://forms.office.com/pages/responsepage.aspx?id=3KFHNUeYz0mR2noZwaJeQnNAxP4sz6FBkEyNHMuYWT1URDZKWk1RWDU2VjRLTEZKNUxCWU1RRFlUVS4u&route=shorturl"
+TRUSTED_MICROSOFT_FORM_HOSTS = {
+    "forms.office.com",
+    "forms.microsoft.com",
+}
+
+
+def _validate_microsoft_form_url(form_url):
+    parsed = urlparse(str(form_url or "").strip())
+    host = (parsed.hostname or "").strip().lower()
+    if parsed.scheme != "https" or host not in TRUSTED_MICROSOFT_FORM_HOSTS:
+        return False, "Cert Form URL must use a trusted Microsoft Forms domain."
+    return True, ""
 
 DISCORD_SCREENSHOTS = [
     {"title": "Welcome New Agent", "image_url": "/welcome-new-agent.png"},
@@ -2758,20 +2816,17 @@ def _runtime_diagnostics_payload():
     payload = {
         "mode": _packaged_runtime_mode(),
         "isPackaged": _is_packaged_runtime(),
-        "sysExecutable": sys.executable,
-        "cwd": os.getcwd(),
-        "backendRoot": str(ROOT_DIR),
-        "appResourcesPath": resources_root,
-        "packagedLogPath": PACKAGED_BACKEND_LOG_PATH,
+        "appResourcesPathConfigured": bool(resources_root),
+        "packagedLogConfigured": bool(PACKAGED_BACKEND_LOG_PATH),
         "runtimeConfig": {
-            "candidates": [str(path) for path in _runtime_config_candidates()],
-            "path": _runtime_config_status.get("path") or "",
+            "candidateCount": len(_runtime_config_candidates()),
+            "file": _safe_file_label(_runtime_config_status.get("path") or ""),
             "exists": bool(_runtime_config_status.get("found")),
             "error": _runtime_config_status.get("error") or "",
         },
         "googleServiceAccount": {
-            "candidates": [
-                str(path)
+            "candidateCount": len([
+                path
                 for path in [
                     Path((os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE") or "").strip()).expanduser()
                     if (os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE") or "").strip() else None,
@@ -2780,19 +2835,19 @@ def _runtime_diagnostics_payload():
                     ROOT_DIR / "config" / "google-service-account.json",
                 ]
                 if path
-            ],
-            "path": credential_info.get("path") or "",
+            ]),
+            "file": credential_info.get("file") or "",
             "exists": bool(credential_info.get("exists")),
-            "client_email": credential_info.get("client_email") or "",
-            "private_key_id": credential_info.get("private_key_id") or "",
+            "clientEmailConfigured": bool(credential_info.get("client_email_configured")),
+            "privateKeyIdConfigured": bool(credential_info.get("private_key_id_configured")),
             "error": credential_info.get("error") or "",
         },
-        "spreadsheetId": master_spreadsheet_id,
+        "spreadsheetIdPresent": bool(master_spreadsheet_id),
         "spreadsheetIdMasked": _mask_config_value(master_spreadsheet_id),
         "notificationConfig": {
             "source": notification_config.get("source") or "",
             "configured": bool(notification_config.get("configured")),
-            "sheetId": notification_config.get("sheet_id") or "",
+            "sheetIdPresent": bool(notification_config.get("sheet_id")),
             "sheetIdMasked": _mask_config_value(notification_config.get("sheet_id")),
             "gid": notification_config.get("gid") or "",
             "error": notification_config.get("error") or "",
@@ -2817,28 +2872,26 @@ def _log_startup_runtime_diagnostics():
         for key, value in sorted(content_summary.items())
     )
     logger.info(
-        "[RUNTIME] mode=%s sys.executable=%s cwd=%s backend_root=%s resources=%s packaged_log=%s",
+        "[RUNTIME] mode=%s packaged=%s resources_configured=%s packaged_log_configured=%s",
         diagnostics.get("mode"),
-        diagnostics.get("sysExecutable"),
-        diagnostics.get("cwd"),
-        diagnostics.get("backendRoot"),
-        diagnostics.get("appResourcesPath"),
-        diagnostics.get("packagedLogPath"),
+        diagnostics.get("isPackaged"),
+        diagnostics.get("appResourcesPathConfigured"),
+        diagnostics.get("packagedLogConfigured"),
     )
     logger.info(
-        "[RUNTIME] runtime_config exists=%s path=%s spreadsheet=%s notification_source=%s notification_sheet=%s",
+        "[RUNTIME] runtime_config exists=%s file=%s spreadsheet=%s notification_source=%s notification_sheet=%s",
         runtime_config.get("exists"),
-        runtime_config.get("path"),
+        runtime_config.get("file"),
         diagnostics.get("spreadsheetIdMasked"),
         notification.get("source"),
         notification.get("sheetIdMasked"),
     )
     logger.info(
-        "[RUNTIME] google_service_account exists=%s path=%s client_email_configured=%s private_key_id_configured=%s",
+        "[RUNTIME] google_service_account exists=%s file=%s client_email_configured=%s private_key_id_configured=%s",
         credential.get("exists"),
-        credential.get("path"),
-        bool(credential.get("client_email")),
-        bool(credential.get("private_key_id")),
+        credential.get("file"),
+        bool(credential.get("clientEmailConfigured")),
+        bool(credential.get("privateKeyIdConfigured")),
     )
     logger.info("[RUNTIME] content_source_summary=%s", compact_sources)
     return diagnostics
@@ -3121,11 +3174,7 @@ def normalize_settings_payload(payload: dict) -> dict:
             if value == "checker":
                 sanitized["vpnProxyCheckMode_admin_confirmed"] = True
             else:
-                unset_defaults["vpnProxyCheckMode_admin_confirmed"] = ""
-        if key in DEFAULT_MANAGED_SETTINGS_KEYS and _content_values_equal(value, DEFAULT_SETTINGS.get(key)):
-            unset_defaults[key] = ""
-            unset_defaults[_managed_custom_flag(key)] = ""
-            continue
+                sanitized["vpnProxyCheckMode_admin_confirmed"] = False
         sanitized[key] = value
         if key in DEFAULT_MANAGED_SETTINGS_KEYS:
             sanitized[_managed_custom_flag(key)] = True
@@ -7739,7 +7788,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_origins=os.environ.get(
         "CORS_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,file://,null",
+        "http://localhost:3000,http://127.0.0.1:3000,file://",
     ).split(","),
     allow_methods=["*"],
     allow_headers=["*"],
@@ -8621,7 +8670,7 @@ class GetIpIntelProvider(IpIntelligenceProvider):
             "flags": "m",
         }
         async with httpx.AsyncClient(timeout=8.0) as client:
-            response = await client.get("http://check.getipintel.net/check.php", params=params)
+            response = await client.get("https://check.getipintel.net/check.php", params=params)
             response.raise_for_status()
             data = response.json()
             
@@ -10013,6 +10062,33 @@ def _service_account_file_diagnostics():
     }
 
 
+def _public_service_account_file_diagnostics(info):
+    info = info or {}
+    return {
+        "activeFile": _safe_file_label(info.get("activePath")),
+        "activeCredentialsFound": bool(info.get("activePath")),
+        "activeClientEmailConfigured": bool(info.get("activeClientEmail")),
+        "packagedFile": _safe_file_label(info.get("packagedPath")),
+        "packagedCredentialsFound": bool(info.get("packagedPath")),
+        "packagedClientEmailConfigured": bool(info.get("packagedClientEmail")),
+        "devFile": _safe_file_label(info.get("devPath")),
+        "devCredentialsFound": bool(info.get("devPath")),
+        "devClientEmailConfigured": bool(info.get("devClientEmail")),
+        "packagedFiles": [
+            {
+                "file": _safe_file_label((candidate or {}).get("path")),
+                "exists": bool((candidate or {}).get("exists")),
+                "clientEmailConfigured": bool((candidate or {}).get("clientEmail")),
+            }
+            for candidate in (info.get("packagedFiles") or [])
+        ],
+        "packagedAndDevSamePath": bool(info.get("packagedAndDevSamePath")),
+        "packagedAndDevSameClientEmail": bool(info.get("packagedAndDevSameClientEmail")),
+        "appResourcesPathConfigured": bool(info.get("appResourcesPath")),
+        "frozen": bool(info.get("frozen")),
+    }
+
+
 def _get_notification_sheet_write_status():
     config = _get_admin_notification_sheet_config()
     creds_path = _resolve_notification_service_account_file()
@@ -10038,11 +10114,7 @@ def _get_notification_sheet_write_status():
             ),
         }
     client_email = _read_service_account_client_email(creds_path)
-    logger.info(
-        "[SHEETS] Active Google service account file=%s client_email_configured=%s",
-        creds_path,
-        bool(client_email),
-    )
+    logger.info("[SHEETS] Active Google service account file=%s client_email_configured=%s", _safe_file_label(creds_path), bool(client_email))
     return {"ready": True, "credentials_path": str(creds_path), "client_email": client_email}
 
 
@@ -10121,7 +10193,7 @@ def _run_google_sheet_permission_check():
                 "enabled": True,
                 "status": "ready" if ping_ok else "error",
                 "message": "Apps Script API is online." if ping_ok else f"Apps Script ping failed: {ping_error}",
-                "path": apps_script_status.get("path") or "",
+                "file": _safe_file_label(apps_script_status.get("path") or ""),
             },
             "masterMtsContentCandidateSheetConfig": {
                 "spreadsheetId": _shared_tracking_sheet_id() or "",
@@ -10185,13 +10257,12 @@ def _run_google_sheet_permission_check():
     def apply_context():
         result["spreadsheetId"] = master_sheet_id or result.get("spreadsheetId") or ""
         result["activeSpreadsheetId"] = result["spreadsheetId"]
-        result["serviceAccountEmail"] = (
-            (credential_info or {}).get("activeClientEmail")
-            or result.get("serviceAccountEmail")
-            or ""
-        )
+        service_email_configured = bool((credential_info or {}).get("activeClientEmail") or result.get("serviceAccountEmail"))
+        result["serviceAccountEmail"] = "configured" if service_email_configured else ""
+        result["serviceAccountEmailConfigured"] = service_email_configured
         result["activeServiceAccountEmail"] = result["serviceAccountEmail"]
-        result["credentialFiles"] = credential_info or {}
+        result["activeServiceAccountEmailConfigured"] = service_email_configured
+        result["credentialFiles"] = _public_service_account_file_diagnostics(credential_info)
         result["masterMtsContentCandidateSheetConfig"]["spreadsheetId"] = result["spreadsheetId"]
         if notification_config:
             result["notificationSheetConfig"].update({
@@ -10259,7 +10330,7 @@ def _run_google_sheet_permission_check():
         "[SHEETS-DIAG] Starting permission check. master_spreadsheet_id=%s notification_spreadsheet_id=%s service_account_configured=%s",
         _mask_config_value(master_sheet_id),
         _mask_config_value(notification_config.get("sheet_id")),
-        bool(result["activeServiceAccountEmail"]),
+        bool((credential_info or {}).get("activeClientEmail")),
     )
 
     if not master_sheet_id:
@@ -10299,9 +10370,12 @@ def _run_google_sheet_permission_check():
                 "permissionNeeded": "Valid service account JSON with Google Sheets API enabled.",
             })
             return result
-        result["serviceAccountEmail"] = service_result.get("serviceAccountEmail") or result.get("serviceAccountEmail") or ""
+        service_email_configured = bool(service_result.get("serviceAccountEmail") or result.get("serviceAccountEmailConfigured"))
+        result["serviceAccountEmail"] = "configured" if service_email_configured else ""
+        result["serviceAccountEmailConfigured"] = service_email_configured
         result["activeServiceAccountEmail"] = result["serviceAccountEmail"]
-        record_success("load_credentials", credentialsPath=(credential_info or {}).get("activePath") or "")
+        result["activeServiceAccountEmailConfigured"] = service_email_configured
+        record_success("load_credentials", credentialsConfigured=service_email_configured)
     except Exception as exc:
         record_failure("load_credentials", exc, permission_needed="Valid service account JSON with Google Sheets API enabled.")
         return result
@@ -11129,10 +11203,10 @@ async def get_config_status():
         }
 
     return {
-        "configPathUsed": _runtime_config_status.get("path") or "",
+        "configFileUsed": _safe_file_label(_runtime_config_status.get("path") or ""),
         "configFound": bool(_runtime_config_status.get("found")),
         "configError": _runtime_config_status.get("error") or "",
-        "defaultsPathUsed": str(defaults_dir or _defaults_status.get("path") or ""),
+        "defaultsFileUsed": _safe_file_label(defaults_dir or _defaults_status.get("path") or ""),
         "defaultsFound": bool(defaults_dir or _defaults_status.get("found")),
         "tickerSheetUrlSource": config.get("source") or "",
         "tickerSheetConfigured": bool(config.get("configured")),
@@ -11146,7 +11220,7 @@ async def get_config_status():
         "samNotificationTab": SAM_NOTIFICATIONS_TAB,
         "legacyNotificationSheetConfigured": bool(config.get("configured")),
         "googleCredentialsFound": bool(credentials_path),
-        "googleCredentialsPath": str(credentials_path or ""),
+        "googleCredentialsFile": _safe_file_label(credentials_path),
         "tickerSource": _ticker_fetch_status.get("source") or "builtin",
         "lastTickerFetchStatus": _ticker_fetch_status.get("status") or "",
         "lastTickerFetchTimestamp": _ticker_fetch_status.get("timestamp") or "",
@@ -11161,11 +11235,7 @@ async def get_config_status():
 
 @api_router.get("/admin/runtime-diagnostics")
 async def get_admin_runtime_diagnostics(request: Request):
-    try:
-        _require_admin_token(request)
-    except HTTPException:
-        if not _can_use_local_diagnostic_auth_fallback(request):
-            raise
+    _require_admin_token(request)
     return _runtime_diagnostics_payload()
 
 
@@ -11444,6 +11514,9 @@ async def fill_form(payload: dict, request: Request):
     form_url = (settings.get("form_url") or DEFAULT_FORM_URL or "").strip()
     if not form_url:
         return {"ok": False, "message": "No Cert Form URL is configured in Settings."}
+    form_url_ok, form_url_error = _validate_microsoft_form_url(form_url)
+    if not form_url_ok:
+        return {"ok": False, "message": form_url_error}
 
     form_payload = build_form_fill_payload(
         session,

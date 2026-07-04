@@ -126,7 +126,8 @@ test('help page renders current help topics and configured faq entries', async (
   expect(view.container.textContent).toContain('Payment Settings starts with 3 Credit Card defaults and 3 EFT defaults');
   expect(view.container.textContent).toContain('H390 or H650e');
   expect(view.container.textContent).toContain('Sound Volume supports Off, Low, Medium, and High');
-  expect(view.container.textContent).toContain('Template rows show the category above the blue post title');
+  expect(view.container.textContent).toContain('Favorites keep common posts pinned near the top');
+  expect(view.container.textContent).toContain('Keyboard shortcuts: Ctrl+F or Cmd+F focuses search');
   expect(view.container.textContent).toContain('Final Readiness Judgment lets the evaluator keep the calculated result');
   expect(view.container.textContent).toContain('Optional tutorial videos are local files only');
   expect(view.container.textContent).toContain('Use Category to filter grouped templates or screenshots');

@@ -1351,7 +1351,7 @@ function AppShell() {
           </main>
         </div>
 
-        {discordOpen && <DiscordModal settings={settings} defaults={defaults} onClose={() => setDiscordOpen(false)} />}
+        {discordOpen && <DiscordModal settings={settings} defaults={defaults} currentSession={currentSession} onClose={() => setDiscordOpen(false)} />}
         <ElectronEventBridge navigate={navigate} setUpdateState={setUpdateState} setMtsUpdateModal={setMtsUpdateModal} />
         {mtsUpdateModal && (
           <MtsUpdateModal
@@ -1365,11 +1365,86 @@ function AppShell() {
   );
 }
 
-function DiscordModal({ settings, defaults, onClose }) {
+const DISCORD_FAVORITES_KEY = 'mts-discord-favorite-template-keys';
+const DISCORD_RECENT_KEY = 'mts-discord-recent-template-keys';
+const DEFAULT_DISCORD_FAVORITES = [
+  'wrong headset',
+  'vpn fail',
+  'technical issue',
+  'no script pop',
+  'sup transfer failed',
+  'failed 1st sup transfer',
+];
+
+function discordTemplateKey(item) {
+  return `${String(item?.category || '').trim().toLowerCase()}::${String(item?.title || '').trim().toLowerCase()}`;
+}
+
+function readStoredDiscordKeys(storageKey) {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(storageKey) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean).map(String) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function saveStoredDiscordKeys(storageKey, keys) {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(keys));
+  } catch (_error) {}
+}
+
+function titleMatchesAny(title, needles) {
+  const normalized = String(title || '').toLowerCase();
+  return needles.some((needle) => normalized.includes(needle));
+}
+
+function getDefaultFavoriteKeys(templates) {
+  return templates
+    .filter((item) => titleMatchesAny(item.title, DEFAULT_DISCORD_FAVORITES))
+    .map(discordTemplateKey)
+    .slice(0, 8);
+}
+
+function getSuggestedDiscordKeys(templates, currentSession) {
+  const session = currentSession?.session || currentSession || {};
+  const haystack = [
+    session.auto_fail_reason,
+    session.tech_issue,
+    session.fail_summary,
+    session.reason_for_fail_summary,
+    session.headset_brand,
+    session.sup_transfer_1?.result,
+    session.sup_transfer_2?.result,
+    session.sup_transfer_1_result,
+    session.sup_transfer_2_result,
+    session.vpn_on === true ? 'vpn' : '',
+    session.vpn_off === false ? 'vpn fail' : '',
+  ].join(' ').toLowerCase();
+  const suggestions = [];
+  const addMatch = (needles) => {
+    const match = templates.find((item) => titleMatchesAny(item.title, needles));
+    if (match) suggestions.push(discordTemplateKey(match));
+  };
+  if (/headset|noise|usb/.test(haystack)) addMatch(['wrong headset', 'headset']);
+  if (/vpn|proxy/.test(haystack)) addMatch(['vpn fail', 'vpn failed', 'vpn']);
+  if (/tech|technical|internet|speed|discord|script|route/.test(haystack)) addMatch(['technical issue', 'tech issue']);
+  if (/no script/.test(haystack)) addMatch(['no script pop']);
+  if (/sup|supervisor/.test(haystack) && /fail/.test(haystack)) addMatch(['sup transfer failed', 'failed 1st sup transfer', 'supervisor']);
+  return Array.from(new Set(suggestions)).slice(0, 5);
+}
+
+function DiscordModal({ settings, defaults, currentSession, onClose }) {
   const defaultCategory = 'Uncategorized';
   const [modalDefaults, setModalDefaults] = useState(defaults || emptyDefaults());
   const [defaultsLoadStatus, setDefaultsLoadStatus] = useState('idle');
   const defaultsFetchStartedRef = useRef(false);
+  const searchRef = useRef(null);
+  const [copiedKey, setCopiedKey] = useState('');
+  const [favoriteKeys, setFavoriteKeys] = useState(() => readStoredDiscordKeys(DISCORD_FAVORITES_KEY));
+  const [recentKeys, setRecentKeys] = useState(() => readStoredDiscordKeys(DISCORD_RECENT_KEY));
+  const [selectedKey, setSelectedKey] = useState('');
 
   useEffect(() => {
     setModalDefaults(defaults || emptyDefaults());
@@ -1444,7 +1519,15 @@ function DiscordModal({ settings, defaults, onClose }) {
       return { category: String(category || defaultCategory), title: String(title), message: String(message) };
     }
     return null;
-  }).filter(Boolean);
+  }).filter(Boolean).map((item) => ({ ...item, key: discordTemplateKey(item) }));
+
+  useEffect(() => {
+    if (favoriteKeys.length || !templates.length) return;
+    const defaults = getDefaultFavoriteKeys(templates);
+    if (!defaults.length) return;
+    setFavoriteKeys(defaults);
+    saveStoredDiscordKeys(DISCORD_FAVORITES_KEY, defaults);
+  }, [favoriteKeys.length, templates]);
 
   useEffect(() => {
     console.log('[DISCORD DEFAULTS] templates', {
@@ -1486,6 +1569,10 @@ function DiscordModal({ settings, defaults, onClose }) {
   }, [tab]);
 
   useEffect(() => {
+    searchRef.current?.focus();
+  }, [tab]);
+
+  useEffect(() => {
     if (categoryFilter !== 'all' && !categories.includes(categoryFilter)) {
       setCategoryFilter('all');
     }
@@ -1500,6 +1587,48 @@ function DiscordModal({ settings, defaults, onClose }) {
     )
   );
 
+  const suggestedKeys = useMemo(() => getSuggestedDiscordKeys(templates, currentSession), [templates, currentSession]);
+  const favoriteKeySet = useMemo(() => new Set(favoriteKeys), [favoriteKeys]);
+  const recentKeySet = useMemo(() => new Set(recentKeys), [recentKeys]);
+  const filteredKeySet = useMemo(() => new Set(filteredTemplates.map((item) => item.key)), [filteredTemplates]);
+  const byKey = useMemo(() => new Map(templates.map((item) => [item.key, item])), [templates]);
+  const sectionedTemplates = useMemo(() => {
+    const used = new Set();
+    const pick = (keys, avoid = new Set()) => keys
+      .map((key) => byKey.get(key))
+      .filter((item) => item && filteredKeySet.has(item.key) && !used.has(item.key) && !avoid.has(item.key))
+      .map((item) => {
+        used.add(item.key);
+        return item;
+      });
+    const sections = [];
+    const suggested = pick(suggestedKeys);
+    if (suggested.length) sections.push({ label: 'Suggested', items: suggested });
+    const favorites = pick(favoriteKeys);
+    if (favorites.length) sections.push({ label: 'Favorites', items: favorites });
+    const recent = pick(recentKeys, favoriteKeySet);
+    if (recent.length) sections.push({ label: 'Recent', items: recent });
+    const all = filteredTemplates.filter((item) => !used.has(item.key));
+    if (all.length) sections.push({ label: search || categoryFilter !== 'all' ? 'Matching Posts' : 'All Posts', items: all });
+    return sections;
+  }, [byKey, categoryFilter, favoriteKeySet, favoriteKeys, filteredKeySet, filteredTemplates, recentKeys, search, suggestedKeys]);
+  const visibleTemplates = useMemo(() => sectionedTemplates.flatMap((section) => section.items), [sectionedTemplates]);
+  const selectedTemplate = useMemo(() => {
+    if (!visibleTemplates.length) return null;
+    return visibleTemplates.find((item) => item.key === selectedKey) || visibleTemplates[0];
+  }, [selectedKey, visibleTemplates]);
+
+  useEffect(() => {
+    if (tab !== 'templates') return;
+    if (!visibleTemplates.length) {
+      setSelectedKey('');
+      return;
+    }
+    if (!visibleTemplates.some((item) => item.key === selectedKey)) {
+      setSelectedKey(visibleTemplates[0].key);
+    }
+  }, [selectedKey, tab, visibleTemplates]);
+
   const filteredScreenshots = screenshots.filter(s =>
     (categoryFilter === 'all' || s.category === categoryFilter) &&
     (
@@ -1508,9 +1637,67 @@ function DiscordModal({ settings, defaults, onClose }) {
     )
   );
 
+  const copyTemplate = useCallback(async (template) => {
+    if (!template?.message) return;
+    await navigator.clipboard.writeText(template.message);
+    setCopiedKey(template.key);
+    window.setTimeout(() => setCopiedKey((current) => (current === template.key ? '' : current)), 3000);
+    setRecentKeys((current) => {
+      const next = [template.key, ...current.filter((key) => key !== template.key && !favoriteKeySet.has(key))].slice(0, 8);
+      saveStoredDiscordKeys(DISCORD_RECENT_KEY, next);
+      return next;
+    });
+  }, [favoriteKeySet]);
+
+  const toggleFavorite = useCallback((template) => {
+    if (!template?.key) return;
+    setFavoriteKeys((current) => {
+      const exists = current.includes(template.key);
+      const next = exists ? current.filter((key) => key !== template.key) : [template.key, ...current].slice(0, 12);
+      saveStoredDiscordKeys(DISCORD_FAVORITES_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const moveSelection = useCallback((direction) => {
+    if (!visibleTemplates.length) return;
+    const index = Math.max(0, visibleTemplates.findIndex((item) => item.key === (selectedTemplate?.key || selectedKey)));
+    const nextIndex = Math.max(0, Math.min(visibleTemplates.length - 1, index + direction));
+    setSelectedKey(visibleTemplates[nextIndex].key);
+  }, [selectedKey, selectedTemplate?.key, visibleTemplates]);
+
+  const handleKeyDown = useCallback((event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (tab !== 'templates') return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveSelection(1);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveSelection(-1);
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      copyTemplate(selectedTemplate || visibleTemplates[0]);
+    }
+  }, [copyTemplate, moveSelection, onClose, selectedTemplate, tab, visibleTemplates]);
+
   return (
     <div className="modal-overlay open" onClick={e => { if (e.target.classList.contains('modal-overlay')) onClose(); }} data-testid="discord-modal">
-      <div className="modal discord-modal" onClick={e => e.stopPropagation()}>
+      <div className="modal discord-modal" onClick={e => e.stopPropagation()} onKeyDown={handleKeyDown}>
         <div className="modal-header">
           <h2>Discord Post</h2>
           <button className="modal-close" onClick={onClose}>&times;</button>
@@ -1520,7 +1707,7 @@ function DiscordModal({ settings, defaults, onClose }) {
           <button className={`tab-btn ${tab === 'screenshots' ? 'active' : ''}`} onClick={() => setTab('screenshots')}>Screenshots</button>
         </div>
         <div className="discord-modal-search">
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={tab === 'templates' ? 'Search templates...' : 'Search screenshots...'} data-testid="discord-search" style={{ width: '100%' }} />
+          <input ref={searchRef} type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={tab === 'templates' ? 'Search templates...' : 'Search screenshots...'} data-testid="discord-search" style={{ width: '100%' }} />
           {categories.length > 0 && (
             <label className="discord-category-filter">
               <span>Category</span>
@@ -1534,19 +1721,46 @@ function DiscordModal({ settings, defaults, onClose }) {
         <div className="modal-body discord-modal-list">
           {tab === 'templates' ? (
             filteredTemplates.length === 0 ? (
-              <p className="text-muted" style={{ padding: 20 }}>
+              <p className="text-muted discord-empty-state">
                 {defaultsLoadStatus === 'loading'
                   ? 'Loading templates...'
                   : defaultsLoadStatus === 'failed'
                     ? 'Discord templates could not be loaded.'
-                    : 'No templates match your search.'}
+                    : 'No Discord posts match this search.'}
               </p>
-            ) : filteredTemplates.map(({ category, title, message }, i) => (
-              <DiscordRow key={i} category={category} title={title} message={message} />
-            ))
+            ) : (
+              <div className="discord-template-workspace">
+                <div className="discord-template-list" role="listbox" aria-label="Discord post templates">
+                  {sectionedTemplates.map((section) => (
+                    <div className="discord-template-section" key={section.label}>
+                      <div className="discord-section-title">{section.label}</div>
+                      {section.items.map((template) => (
+                        <DiscordTemplateListItem
+                          key={template.key}
+                          template={template}
+                          selected={selectedTemplate?.key === template.key}
+                          favorite={favoriteKeySet.has(template.key)}
+                          copied={copiedKey === template.key}
+                          onSelect={() => setSelectedKey(template.key)}
+                          onCopy={() => copyTemplate(template)}
+                          onToggleFavorite={() => toggleFavorite(template)}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <DiscordTemplatePreview
+                  template={selectedTemplate}
+                  favorite={selectedTemplate ? favoriteKeySet.has(selectedTemplate.key) : false}
+                  copied={selectedTemplate ? copiedKey === selectedTemplate.key : false}
+                  onCopy={() => copyTemplate(selectedTemplate)}
+                  onToggleFavorite={() => toggleFavorite(selectedTemplate)}
+                />
+              </div>
+            )
           ) : (
             filteredScreenshots.length === 0 ? (
-              <p className="text-muted" style={{ padding: 20 }}>
+              <p className="text-muted discord-empty-state">
                 {defaultsLoadStatus === 'loading'
                   ? 'Loading screenshots...'
                   : defaultsLoadStatus === 'failed'
@@ -1563,21 +1777,50 @@ function DiscordModal({ settings, defaults, onClose }) {
   );
 }
 
-function DiscordRow({ category, title, message }) {
-  const [copied, setCopied] = useState(false);
+function DiscordTemplateListItem({ template, selected, favorite, copied, onSelect, onCopy, onToggleFavorite }) {
   return (
-    <div className="discord-row discord-template-row">
-      <div className="discord-template-meta">
-        {category && <span className="discord-category-badge">{category}</span>}
-        <div className="discord-title discord-template-title">{title}</div>
+    <button
+      type="button"
+      className={`discord-template-list-item ${selected ? 'selected' : ''}`}
+      onClick={onSelect}
+      role="option"
+      aria-selected={selected}
+    >
+      <div className="discord-template-list-head">
+        <span className="discord-title discord-template-title">{template.title}</span>
+        <span className="discord-favorite-indicator" aria-label={favorite ? 'Favorite' : 'Not favorite'}>{favorite ? '★' : '☆'}</span>
       </div>
-      <div className="discord-msg">{message}</div>
-      <button className={`discord-copy ${copied ? 'copied' : ''}`} onClick={() => {
-        navigator.clipboard.writeText(message);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 3000);
-      }}>{copied ? 'Copied' : 'Copy'}</button>
-    </div>
+      <div className="discord-template-list-meta">
+        {template.category && <span className="discord-category-badge">{template.category}</span>}
+        <span>{copied ? 'Copied' : 'Ready'}</span>
+      </div>
+      <div className="discord-template-list-preview">{template.message}</div>
+      <div className="discord-template-quick-actions" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className={`discord-copy ${copied ? 'copied' : ''}`} onClick={onCopy}>{copied ? 'Copied' : 'Copy'}</button>
+        <button type="button" className="discord-mini-btn" onClick={onToggleFavorite}>{favorite ? 'Unfavorite' : 'Favorite'}</button>
+      </div>
+    </button>
+  );
+}
+
+function DiscordTemplatePreview({ template, favorite, copied, onCopy, onToggleFavorite }) {
+  if (!template) {
+    return <div className="discord-template-preview-panel discord-template-preview-empty">Select a Discord post to preview it.</div>;
+  }
+  return (
+    <aside className="discord-template-preview-panel">
+      <div className="discord-preview-top">
+        <div>
+          {template.category && <span className="discord-category-badge">{template.category}</span>}
+          <h3>{template.title}</h3>
+        </div>
+        <button type="button" className="discord-mini-btn" onClick={onToggleFavorite}>{favorite ? '★ Favorite' : '☆ Favorite'}</button>
+      </div>
+      <div className="discord-preview-message">{template.message}</div>
+      <div className="discord-preview-actions">
+        <button type="button" className={`discord-copy discord-preview-copy ${copied ? 'copied' : ''}`} onClick={onCopy}>{copied ? 'Copied' : 'Copy'}</button>
+      </div>
+    </aside>
   );
 }
 
