@@ -544,24 +544,59 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
 
 /* ---- Section tabs (segmented) ---- */
 .nm-ops-tabs {
-  display: flex; flex-wrap: wrap; gap: 4px;
-  padding: 6px;
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 8px;
   border-radius: 12px;
-  background: rgba(9, 16, 30, 0.55);
-  border: 1px solid rgba(56, 189, 248, 0.08);
+  background: rgba(9, 16, 30, 0.68);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 10px 26px rgba(0,0,0,0.18);
+}
+
+.sam-exit-buttons .nm-btn-danger {
+  background: #dc2626 !important;
+  border-color: #ef4444 !important;
+  color: #ffffff !important;
+}
+
+.sam-exit-buttons .nm-btn-danger:hover:not(:disabled) {
+  background: #b91c1c !important;
+  border-color: #f87171 !important;
+  color: #ffffff !important;
+  box-shadow: 0 10px 22px rgba(239, 68, 68, 0.32);
+}
+
+.sam-exit-buttons .nm-btn-danger:disabled {
+  background: rgba(127, 29, 29, 0.62) !important;
+  border-color: rgba(248, 113, 113, 0.26) !important;
+  color: rgba(255, 255, 255, 0.62) !important;
+  cursor: not-allowed;
+  opacity: 1;
 }
 .nm-ops-tab {
   display: inline-flex; align-items: center; gap: 8px;
-  height: 38px; padding: 0 16px;
-  border: 1px solid transparent; border-radius: 9px; cursor: pointer;
+  min-height: 40px; padding: 0 16px;
+  border: 1px solid rgba(148, 163, 184, 0.22); border-radius: 8px; cursor: pointer;
   font-size: 13px; font-weight: 700; letter-spacing: 0.01em;
-  color: #93a4bd; background: transparent;
-  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+  color: #cbd5e1; background: rgba(30,41,59,0.52);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.04);
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
-.nm-ops-tab:hover { color: #e2e8f0; background: rgba(30,41,59,0.5); }
+.nm-ops-tab:hover {
+  color: #f8fafc;
+  background: rgba(30,41,59,0.82);
+  border-color: rgba(125,211,252,0.48);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.22);
+  transform: translateY(-1px);
+}
+.nm-ops-tab:focus-visible {
+  outline: none;
+  border-color: #7dd3fc;
+  box-shadow: 0 0 0 3px rgba(56,189,248,0.28), 0 8px 18px rgba(0,0,0,0.22);
+}
 .nm-ops-tab.is-active {
-  color: #0b1220; background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-  box-shadow: 0 4px 14px rgba(14,165,233,0.28);
+  color: #07111f; background: linear-gradient(135deg, #7dd3fc, #0ea5e9);
+  border-color: rgba(125,211,252,0.8);
+  box-shadow: 0 10px 24px rgba(14,165,233,0.3), inset 0 1px 0 rgba(255,255,255,0.38);
 }
 .nm-ops-tab-badge {
   min-width: 20px; height: 20px; padding: 0 6px;
@@ -790,7 +825,8 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
   min-width: 0;
 }
 .nm-detail-panel {
-  flex: 0 0 320px; /* Reduced details pane width */
+  flex: 0 0 300px;
+  max-width: 30%;
 }
 .nm-candidate-table {
   table-layout: fixed;
@@ -800,6 +836,60 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.nm-candidate-table .nm-select-column { width: 42px; }
+.nm-candidate-table th:nth-child(2) { width: 20%; }
+.nm-candidate-table th:nth-child(3) { width: 12%; }
+.nm-candidate-table th:nth-child(4) { width: 72px; }
+.nm-candidate-table th:nth-child(5) { width: 13%; }
+.nm-candidate-table th:nth-child(6) { width: 132px; }
+.nm-candidate-table th:nth-child(7) { width: 15%; }
+.nm-candidate-table th:nth-child(8) { width: 18%; }
+.nm-candidate-table .nm-actions-column { width: 176px; }
+
+.nm-candidate-table td:nth-child(2),
+.nm-row-title {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.25;
+}
+
+.nm-row-title {
+  max-width: 22ch;
+  overflow-wrap: anywhere;
+}
+
+.nm-notes-preview {
+  max-height: 3.9em;
+  white-space: normal;
+  overflow: hidden;
+}
+
+.nm-row-actions {
+  align-items: center;
+}
+
+.nm-detail-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148,163,184,0.16);
+  border-radius: 8px;
+  background: rgba(15,23,42,0.32);
+  white-space: normal;
+}
+
+.nm-detail-card + .nm-detail-card {
+  margin-top: 10px;
+}
+
+.nm-detail-card > strong {
+  color: #e2e8f0;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 /* Empty State Polish */

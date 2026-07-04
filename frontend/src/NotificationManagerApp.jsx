@@ -76,9 +76,14 @@ const SAM_BANNER_DURATION_OPTIONS = [
 ];
 const SAM_HELP_SECTIONS = [
   {
+    id: 'dashboard',
+    title: 'Dashboard',
+    body: 'Dashboard gives admins a quick count of active notifications, pending headset reviews, pending supervisor transfers, and the last sync time. Use it first to decide where attention is needed.',
+  },
+  {
     id: 'notifications',
     title: 'Notifications',
-    body: 'Create, edit, enable, disable, import, export, and refresh alert rows from sam-notifications. Success and error feedback appears in the status banner and can play sounds when enabled.',
+    body: 'Create, edit, enable, disable, archive, withdraw, delete, import, export, and refresh alert rows from sam-notifications. Success and error feedback appears in the status banner and can play sounds when enabled.',
   },
   {
     id: 'live-preview',
@@ -86,14 +91,39 @@ const SAM_HELP_SECTIONS = [
     body: 'Preview ticker, banner, and popup output for the selected notification before saving it to the sheet.',
   },
   {
+    id: 'headset-review',
+    title: 'Headset Review',
+    body: 'Headset Review shows unknown headset submissions from MTS. Approve only when the model is confirmed USB with a noise-cancelling microphone, deny models that should not be used, archive completed rows, and refresh if the queue looks stale.',
+  },
+  {
     id: 'candidate-tracking',
     title: 'Candidate Tracking',
-    body: 'Review pending transfers, incomplete candidates, failed attempts, withdrawn candidates, passed certifications, archived candidates, and all active candidates. Use Archive for history cleanup and Delete only when a shared row must be removed.',
+    body: 'Review pending transfers, incomplete candidates, failed attempts, withdrawn candidates, passed certifications, archived candidates, and all active candidates. Use View Details for the reading pane, Copy Selected for a quick handoff, Print Report for a paper review, Archive for history cleanup, Withdraw when a candidate leaves certification, Extra Attempt when admin approval allows another try, and Delete only when a shared row must be removed.',
   },
   {
     id: 'pending-sup-transfers',
     title: 'Pending Sup Transfers',
     body: 'Pending transfer rows show candidates whose mock calls were saved but whose supervisor transfer still needs completion or correction.',
+  },
+  {
+    id: 'diagnostics',
+    title: 'Diagnostics and System Health',
+    body: 'System Health shows sync, backend, source, and version information. Open it when refresh or sync behavior looks wrong; otherwise keep it collapsed so normal SAM work stays focused.',
+  },
+  {
+    id: 'sync-offline',
+    title: 'Refresh, Sync, and Offline behavior',
+    body: 'Refresh reloads shared Google Sheet data. If shared data is temporarily unavailable, wait about 60 seconds and retry. SAM keeps the current screen usable where possible and avoids showing raw provider or API error text.',
+  },
+  {
+    id: 'export-print-copy',
+    title: 'Export, Print, and Copy Selected',
+    body: 'Export CSV saves visible or selected candidate rows for offline review. Print Report prints selected rows. Copy Selected places selected candidate details on the clipboard for admin handoff.',
+  },
+  {
+    id: 'candidate-admin-actions',
+    title: 'Archive, Withdraw, Delete, and Extra Attempt',
+    body: 'Archive hides closed history from active views. Withdraw blocks certification until restored or an extra attempt is granted. Delete removes shared candidate history and should be rare. Extra Attempt allows a candidate to continue after admin approval.',
   },
   {
     id: 'import-export-csv',
@@ -172,6 +202,33 @@ function getErrorMessage(error, fallback) {
   if (error.code === 'ECONNABORTED') return 'Connecting is taking longer than expected. Please try again in a moment.';
   if (/network error/i.test(error.message || '')) return 'Unable to reach live content. Please try Refresh or contact support.';
   return error.message || fallback;
+}
+
+function isSharedDataTemporaryError(value) {
+  const text = String(value || '').toLowerCase();
+  return /quota|429|rate limit|too many requests|auth|credential|unauthori[sz]ed|forbidden|google|sheet|temporary|temporarily|timeout|unavailable|api/.test(text);
+}
+
+function getSharedDataErrorMessage(error, fallback = 'Shared data is temporarily unavailable.\n\nPlease wait about 60 seconds and try again.') {
+  const raw = getErrorMessage(error, fallback);
+  if (isSharedDataTemporaryError(raw)) {
+    console.warn('[SAM] Shared data request failed; user-facing details were sanitized.', raw);
+    return 'Shared data is temporarily unavailable.\n\nPlease wait about 60 seconds and try again.';
+  }
+  return raw || fallback;
+}
+
+function formatSamTimestamp(value) {
+  if (!value) return 'Unknown';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function normalizeSamSettings(settings = {}) {
@@ -708,7 +765,7 @@ function SamSetupWizard({ status, onComplete }) {
       }
       onComplete?.(result);
     } catch (setupError) {
-      setError(getErrorMessage(setupError, 'SAM setup requires access to the admin configuration sheet.'));
+      setError(getSharedDataErrorMessage(setupError, 'SAM setup requires access to the admin configuration sheet.'));
     } finally {
       setSubmitting(false);
     }
@@ -808,8 +865,9 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     index,
     key: getCandidateRowKey(row) || `${row.candidate_name || 'candidate'}-${index}`,
   }));
+  const selectedKeys = Object.keys(selectedTargets);
   const selectedList = Object.values(selectedTargets);
-  const selectedCount = selectedList.length;
+  const selectedCount = selectedKeys.length;
   const allVisibleSelected = visibleEntries.length > 0 && visibleEntries.every((entry) => selectedTargets[entry.key]);
   const setup = data?.setup || {};
   const requiredSetup = Object.entries(setup)
@@ -836,7 +894,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
         escapeCsv(meta.statusUpper),
         escapeCsv(meta.attempts.length),
         escapeCsv(row.tester_name || meta.attempts[0]?.tester_name || ''),
-        escapeCsv(row.updated_at || meta.attempts[0]?.completed_at || ''),
+        escapeCsv(formatSamTimestamp(row.updated_at || meta.attempts[0]?.completed_at || '')),
         escapeCsv(meta.results),
         escapeCsv(meta.notes)
       ].join(','));
@@ -850,12 +908,12 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   };
 
   const handleExportSelected = () => {
-    const csvContent = serializeCandidatesToCsv(selectedList.map(key => visibleEntries.find(e => e.key === key)?.row).filter(Boolean));
+    const csvContent = serializeCandidatesToCsv(selectedKeys.map(key => visibleEntries.find(e => e.key === key)?.row).filter(Boolean));
     downloadCsv('candidate-tracking-selected.csv', csvContent);
   };
 
   const handleCopySelected = async () => {
-    const rows = selectedList.map(key => visibleEntries.find(e => e.key === key)?.row).filter(Boolean);
+    const rows = selectedKeys.map(key => visibleEntries.find(e => e.key === key)?.row).filter(Boolean);
     if (!rows.length) return;
     const textLines = [];
     for (const row of rows) {
@@ -864,7 +922,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
       textLines.push(`Status: ${meta.statusUpper}`);
       textLines.push(`Attempts: ${meta.attempts.length}`);
       textLines.push(`Tester: ${row.tester_name || meta.attempts[0]?.tester_name || ''}`);
-      textLines.push(`Date: ${row.updated_at || meta.attempts[0]?.completed_at || ''}`);
+      textLines.push(`Date: ${formatSamTimestamp(row.updated_at || meta.attempts[0]?.completed_at || '')}`);
       textLines.push(`Result: ${meta.results}`);
       textLines.push(`Notes: ${meta.notes}`);
       textLines.push('------------------------');
@@ -1045,12 +1103,24 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     const { notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts } = computeRowMeta(row);
     return (
       <div className="nm-candidate-details">
-        <div><strong>Notes:</strong> {notes}</div>
-        <div><strong>Coaching:</strong> {row.coaching_summary || 'N/A'}</div>
-        <div><strong>Fail Summary:</strong> {row.fail_summary || 'N/A'}</div>
-        <div><strong>Basics:</strong> Headset {row.headset_brand || 'N/A'}; USB {row.headset_usb === true ? 'Yes' : row.headset_usb === false ? 'No' : 'N/A'}; Noise cancelling {row.noise_cancel === true ? 'Yes' : row.noise_cancel === false ? 'No' : 'N/A'}; VPN {row.vpn_on === true ? 'Yes' : row.vpn_on === false ? 'No' : 'N/A'}</div>
-        <div><strong>Call Results:</strong> {[row.call_1_result, row.call_2_result, row.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
-        <div><strong>Sup Transfer Results:</strong> {[row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+        <section className="nm-detail-card">
+          <strong>Session Notes</strong>
+          <div>{notes}</div>
+          <div><strong>Coaching:</strong> {row.coaching_summary || 'N/A'}</div>
+          <div><strong>Fail Summary:</strong> {row.fail_summary || 'N/A'}</div>
+        </section>
+        <section className="nm-detail-card">
+          <strong>Basics</strong>
+          <div>Headset: {row.headset_brand || 'N/A'}</div>
+          <div>USB: {row.headset_usb === true ? 'Yes' : row.headset_usb === false ? 'No' : 'N/A'}</div>
+          <div>Noise cancelling: {row.noise_cancel === true ? 'Yes' : row.noise_cancel === false ? 'No' : 'N/A'}</div>
+          <div>VPN: {row.vpn_on === true ? 'Yes' : row.vpn_on === false ? 'No' : 'N/A'}</div>
+        </section>
+        <section className="nm-detail-card">
+          <strong>Results</strong>
+          <div>Calls: {[row.call_1_result, row.call_2_result, row.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
+          <div>Sup Transfers: {[row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+        </section>
         {hasFinalNotes ? (
           <div className="nm-final-notes-section">
             <strong className="nm-final-notes-heading">Final Evaluator Notes</strong>
@@ -1061,7 +1131,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             {row.final_notes_needs_coaching ? <div><strong>Needs Coaching:</strong> {row.final_notes_needs_coaching}</div> : null}
             {row.final_notes_other ? <div><strong>Other:</strong> {row.final_notes_other}</div> : null}
             {row.evaluator_notes_summary ? <div><strong>Evaluator Summary:</strong> {row.evaluator_notes_summary}</div> : null}
-            {row.final_notes_created_at ? <div className="nm-meta"><strong>Notes Created:</strong> {row.final_notes_created_at}</div> : null}
+            {row.final_notes_created_at ? <div className="nm-meta"><strong>Notes Created:</strong> {formatSamTimestamp(row.final_notes_created_at)}</div> : null}
           </div>
         ) : null}
         {attempts.length ? (
@@ -1069,7 +1139,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             <strong>Attempt History</strong>
             {attempts.map((attempt, attemptIndex) => (
               <details key={`${attempt.session_id || attemptIndex}`} className="nm-attempt-detail">
-                <summary>{attempt.completed_at || attempt.created_at || `Attempt ${attemptIndex + 1}`} - {attempt.status || 'Unknown'} - {attempt.tester_name || 'Unknown tester'}</summary>
+                <summary>{formatSamTimestamp(attempt.completed_at || attempt.created_at) || `Attempt ${attemptIndex + 1}`} - {attempt.status || 'Unknown'} - {attempt.tester_name || 'Unknown tester'}</summary>
                 <div>Final attempt: {sheetTruthy(attempt.final_attempt) ? 'Yes' : 'No'}</div>
                 <div>Coaching: {attempt.coaching_summary || 'N/A'}</div>
                 <div>Fail: {attempt.fail_summary || 'N/A'}</div>
@@ -1208,7 +1278,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                     <td>{row.status || row.latest_status || 'Unknown'}</td>
                     <td>{row.attempt_count ?? row.attempt_number ?? attempts.length ?? '0'}</td>
                     <td>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
-                    <td className="nm-meta">{row.completed_at || row.last_session_date || row.created_at || 'Unknown'}</td>
+                    <td className="nm-meta">{formatSamTimestamp(row.completed_at || row.last_session_date || row.created_at)}</td>
                     <td className="nm-meta">{results}</td>
                     <td className="nm-meta nm-notes-cell">
                       <div className="nm-notes-preview">{notes}</div>
@@ -1240,7 +1310,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             <dl className="nm-detail-grid">
               <div><dt>Attempts</dt><dd>{detailRow.attempt_count ?? detailRow.attempt_number ?? detailMeta.attempts.length ?? '0'}</dd></div>
               <div><dt>Tester</dt><dd>{detailRow.original_tester_name || detailRow.tester_name || 'Unknown'}</dd></div>
-              <div><dt>Date</dt><dd>{detailRow.completed_at || detailRow.last_session_date || detailRow.created_at || 'Unknown'}</dd></div>
+              <div><dt>Date</dt><dd>{formatSamTimestamp(detailRow.completed_at || detailRow.last_session_date || detailRow.created_at)}</dd></div>
               <div><dt>Results</dt><dd>{detailMeta.results}</dd></div>
             </dl>
             <div className="nm-detail-section">
@@ -1265,7 +1335,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           <h1>Candidate Tracking Report</h1>
         </div>
         <div className="nm-print-meta">
-          <div><strong>Generated:</strong> {new Date().toLocaleString()}</div>
+          <div><strong>Generated:</strong> {formatSamTimestamp(new Date().toISOString())}</div>
           <div><strong>Selected Records:</strong> {selectedCount}</div>
           {searchText && <div><strong>Search:</strong> {searchText}</div>}
         </div>
@@ -1282,7 +1352,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             </tr>
           </thead>
           <tbody>
-            {selectedList.map((key) => {
+            {selectedKeys.map((key) => {
               const entry = visibleEntries.find((e) => e.key === key);
               if (!entry) return null;
               const row = entry.row;
@@ -1293,7 +1363,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                   <td>{meta.statusUpper}</td>
                   <td>{meta.attempts.length}</td>
                   <td>{row.tester_name || meta.attempts[0]?.tester_name || 'Unknown'}</td>
-                  <td>{row.updated_at || meta.attempts[0]?.completed_at || 'Unknown'}</td>
+                  <td>{formatSamTimestamp(row.updated_at || meta.attempts[0]?.completed_at)}</td>
                   <td>{meta.results}</td>
                   <td>{meta.notes}</td>
                 </tr>
@@ -1916,7 +1986,6 @@ export default function NotificationManagerApp() {
   const [candidateTrackingLoading, setCandidateTrackingLoading] = useState(false);
   const [headsetReviews, setHeadsetReviews] = useState({ ok: true, pending: [], approved: [], denied: [], error: '' });
   const [headsetReviewsLoading, setHeadsetReviewsLoading] = useState(false);
-  const [headsetReviewNoticeOpen, setHeadsetReviewNoticeOpen] = useState(false);
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
   const showStatusModal = useCallback((message, kind = 'info') => {
     setStatusModal({ message, kind });
@@ -2166,10 +2235,11 @@ export default function NotificationManagerApp() {
         setup: result?.setup || null,
       });
     } catch (error) {
+      const message = getSharedDataErrorMessage(error);
       setCandidateTracking((current) => ({
         ...current,
         ok: false,
-        error: error instanceof Error ? error.message : 'Unable to load shared candidate tracking.',
+        error: message,
       }));
     } finally {
       setCandidateTrackingLoading(false);
@@ -2190,11 +2260,15 @@ export default function NotificationManagerApp() {
       setHeadsetReviews(next);
       if (showPendingNotice && next.pending.length > 0 && !headsetPendingNoticeShownRef.current) {
         headsetPendingNoticeShownRef.current = true;
-        setHeadsetReviewNoticeOpen(true);
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'info',
+          statusMessage: 'Headset review queue updated.',
+        }));
       }
       return next;
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to load headset reviews.');
+      const message = getSharedDataErrorMessage(error, 'Unable to load headset reviews.');
       setHeadsetReviews((current) => ({ ...current, ok: false, error: message }));
       return null;
     } finally {
@@ -2206,7 +2280,7 @@ export default function NotificationManagerApp() {
     try {
       const result = await api.updateHeadsetReview(payload);
       if (!result?.ok) {
-        const message = result?.error || 'Unable to save the headset review decision.';
+        const message = getSharedDataErrorMessage({ message: result?.error }, 'Unable to save the headset review decision.');
         setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
         playSamActionSound('error');
         showStatusModal(message, 'error');
@@ -2229,7 +2303,7 @@ export default function NotificationManagerApp() {
       }
       return result;
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to save the headset review decision.');
+      const message = getSharedDataErrorMessage(error, 'Unable to save the headset review decision.');
       setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
       playSamActionSound('error');
       showStatusModal(message, 'error');
@@ -2241,7 +2315,7 @@ export default function NotificationManagerApp() {
     try {
       const result = await api.updateSharedAdminCandidate(payload);
       if (!result?.ok) {
-        const message = result?.error || 'Candidate tracking update failed.';
+        const message = getSharedDataErrorMessage({ message: result?.error }, 'Candidate tracking update failed.');
         setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
         playSamActionSound('error');
         showStatusModal(message, 'error');
@@ -2269,7 +2343,7 @@ export default function NotificationManagerApp() {
       showStatusModal(actionLabels[payload?.action] || 'Candidate tracking successfully updated.', 'success');
       await loadCandidateTracking({ silent: true });
     } catch (error) {
-      const message = getErrorMessage(error, 'Candidate tracking update failed.');
+      const message = getSharedDataErrorMessage(error, 'Candidate tracking update failed.');
       setSheetState((current) => ({
         ...current,
         statusKind: 'error',
@@ -2517,7 +2591,7 @@ export default function NotificationManagerApp() {
       setSamSetupStatus(nextStatus);
       return nextStatus;
     } catch (error) {
-      const message = getErrorMessage(error, 'SAM setup requires access to the admin configuration sheet.');
+      const message = getSharedDataErrorMessage(error, 'SAM setup requires access to the admin configuration sheet.');
       const nextStatus = { loading: false, setupComplete: false, userName: '', userRole: '', ok: false, error: message };
       setSamSetupStatus(nextStatus);
       return nextStatus;
@@ -2551,14 +2625,14 @@ export default function NotificationManagerApp() {
         backendStatus: 'connected',
         writeReady: Boolean(response?.write?.ready),
         writeError: response?.write?.error || '',
-        readError: response?.ok === false ? (response?.error || 'Unable to read the master sam-notifications tab.') : '',
+        readError: response?.ok === false ? getSharedDataErrorMessage({ message: response?.error }, 'Unable to read the master sam-notifications tab.') : '',
         sheetId: response?.sheet?.sheetId || '',
         statusKind: response?.ok === false ? 'warning' : current.statusKind,
-        statusMessage: response?.ok === false ? (response?.error || 'Unable to read the master sam-notifications tab.') : current.statusMessage,
+        statusMessage: response?.ok === false ? getSharedDataErrorMessage({ message: response?.error }, 'Unable to read the master sam-notifications tab.') : current.statusMessage,
       }));
       refreshDiagnostics();
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to read the master sam-notifications tab.');
+      const message = getSharedDataErrorMessage(error, 'Unable to read the master sam-notifications tab.');
       setSheetState((current) => ({
         ...current,
         isLoading: false,
@@ -2609,7 +2683,7 @@ export default function NotificationManagerApp() {
       await loadSheetItems({ silent: false });
       await loadCandidateTracking({ silent: true });
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to connect to live data right now. Please try again in a moment.');
+      const message = getSharedDataErrorMessage(error, 'Unable to connect to live data right now. Please try again in a moment.');
       scheduleBackendStartupRetry(message);
     }
   }, [clearBackendStartupRetryTimer, loadCandidateTracking, loadSamSetupStatus, loadSheetItems, refreshDiagnostics, scheduleBackendStartupRetry]);
@@ -2674,7 +2748,7 @@ export default function NotificationManagerApp() {
         const elapsed = Date.now() - startedAt;
         const timedOut = elapsed >= BACKEND_READY_TIMEOUT_MS;
         const message = timedOut
-          ? getErrorMessage(error, 'Live content is still unavailable. We will keep retrying in the background.')
+          ? getSharedDataErrorMessage(error, 'Live content is still unavailable. We will keep retrying in the background.')
           : 'Connecting to live data...';
         setSheetState((current) => ({
           ...current,
@@ -2762,7 +2836,7 @@ export default function NotificationManagerApp() {
       showStatusModal(successMessage || 'Notification saved. MTS should update within about a minute.', 'success');
       return savedItem;
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to submit the notification to Google Sheets.');
+      const message = getSharedDataErrorMessage(error, 'Unable to submit the notification to Google Sheets.');
       setSheetState((current) => ({
         ...current,
         isSaving: false,
@@ -2859,7 +2933,7 @@ export default function NotificationManagerApp() {
         return;
       }
     } catch (error) {
-      const message = getErrorMessage(error, 'Unable to delete the notification from Google Sheets.');
+      const message = getSharedDataErrorMessage(error, 'Unable to delete the notification from Google Sheets.');
       setSheetState((current) => ({
         ...current,
         isSaving: false,
@@ -3525,21 +3599,6 @@ export default function NotificationManagerApp() {
         onConfirm={(value) => resolveConfirm(value)}
         onCancel={() => resolveConfirm(false)}
       />
-      {headsetReviewNoticeOpen ? (
-        <div className="modal-overlay open">
-          <div className="modal" style={{ width: 500, maxWidth: '92vw' }}>
-            <div className="modal-header"><h2>Headset Review</h2></div>
-            <div className="modal-body">
-              <p>New headsets are ready to review.</p>
-              <p className="text-muted">You can review pending headsets at anytime by clicking Headset Review on the dashboard.</p>
-              <div className="nm-row-actions" style={{ marginTop: 18 }}>
-                <button type="button" className="nm-btn nm-btn-primary" onClick={() => { setActiveSection('headsets'); setHeadsetReviewNoticeOpen(false); }}>Review Now</button>
-                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setHeadsetReviewNoticeOpen(false)}>OK</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
       {showExitConfirm && (
         <div className="sam-exit-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) resolveExitConfirm(false); }}>
           <section className="sam-exit-modal" role="dialog" aria-modal="true">

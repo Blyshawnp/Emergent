@@ -7,6 +7,7 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 const HEADSET_LIST_VERSION_KEY = 'mts_approved_headset_list_seen_hash';
+const HEADSET_SYNC_ACK_KEY = 'mts_headset_sync_ack_signature';
 const HEADSET_HELPER_TEXT = 'Search approved headsets by brand or model number, such as Logitech, H390, or H650e.';
 const HEADSET_RESEARCH_PREFIX = 'Does the headset';
 const HEADSET_RESEARCH_SUFFIX = 'have a noise cancelling microphone and connect via USB?';
@@ -193,6 +194,33 @@ export function computeApprovedHeadsetHash(groups) {
   return `${rows.length}:${(hash >>> 0).toString(16)}`;
 }
 
+export function computeHeadsetSyncSignature(groups, denied = []) {
+  const approvedRows = (Array.isArray(groups) ? groups : [])
+    .flatMap((group) => (group?.models || []).map((model) => ({
+      status: 'approved',
+      brand: normalizeHeadsetSearchValue(group?.brand || ''),
+      model: normalizeHeadsetSearchValue(model || ''),
+      note: '',
+    })));
+  const deniedRows = (Array.isArray(denied) ? denied : []).map((item) => ({
+    status: 'denied',
+    brand: normalizeHeadsetSearchValue(item?.brand || ''),
+    model: normalizeHeadsetSearchValue(item?.model || ''),
+    note: normalizeHeadsetSearchValue(item?.note || ''),
+  }));
+  const rows = [...approvedRows, ...deniedRows]
+    .filter((row) => row.brand || row.model)
+    .sort((a, b) => `${a.status} ${a.brand} ${a.model} ${a.note}`.localeCompare(`${b.status} ${b.brand} ${b.model} ${b.note}`));
+  if (!rows.length) return '';
+  const text = JSON.stringify(rows);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${rows.length}:${(hash >>> 0).toString(16)}`;
+}
+
 function openExternalUrl(url) {
   if (window.electronAPI?.openExternal) {
     return window.electronAPI.openExternal(url);
@@ -240,7 +268,6 @@ export default function BasicsPage({ onNavigate }) {
   const [candidateIpIntelligence, setCandidateIpIntelligence] = useState(() => loadStoredCandidateIpIntelligence());
   const vpnProxyCheckMode = normalizeVpnProxyCheckMode(settings?.vpnProxyCheckMode);
   const activeCandidateIpIntelligence = vpnProxyCheckMode === 'checker' ? candidateIpIntelligence : null;
-  const headsetUpdateNoticeShownRef = useRef(false);
   const [form, setForm] = useState({
     candidate_name: '', tester_name: '', final_attempt: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
@@ -306,37 +333,27 @@ export default function BasicsPage({ onNavigate }) {
   }, []);
 
   useEffect(() => {
-    if (!hydratedRef.current || headsetLookupLoading || headsetLookupError || headsetUpdateNoticeShownRef.current) return;
-    const hash = computeApprovedHeadsetHash(approvedHeadsets);
-    if (!hash) return;
-    const previous = window.localStorage.getItem(HEADSET_LIST_VERSION_KEY) || '';
-    if (!previous) {
-      window.localStorage.setItem(HEADSET_LIST_VERSION_KEY, hash);
+    if (!hydratedRef.current || headsetLookupLoading || headsetLookupError) return;
+    const approvedHash = computeApprovedHeadsetHash(approvedHeadsets);
+    const signature = computeHeadsetSyncSignature(approvedHeadsets, deniedHeadsets);
+    if (!signature) return;
+
+    const previousSignature = window.localStorage.getItem(HEADSET_SYNC_ACK_KEY) || '';
+    if (!previousSignature) {
+      const previousApprovedHash = window.localStorage.getItem(HEADSET_LIST_VERSION_KEY) || '';
+      window.localStorage.setItem(HEADSET_SYNC_ACK_KEY, signature);
+      if (approvedHash) window.localStorage.setItem(HEADSET_LIST_VERSION_KEY, approvedHash);
+      if (previousApprovedHash && previousApprovedHash !== approvedHash) {
+        console.info('[MTS] Approved headset list updated silently.');
+      }
       return;
     }
-    if (previous === hash) return;
-    headsetUpdateNoticeShownRef.current = true;
-    (async () => {
-      const choice = await modal.showModal({
-        type: 'confirm',
-        title: 'Headset List Updated',
-        body: 'Approved headsets have been added or updated since your last session. The headset list has been refreshed.',
-        icon: 'headphones',
-        buttons: [
-          { label: 'View Headsets', cls: 'btn-primary', value: 'view' },
-          { label: 'Continue', cls: 'btn-muted', value: 'continue' },
-          { label: 'Skip', cls: 'btn-muted', value: 'skip' },
-        ],
-      });
-      window.localStorage.setItem(HEADSET_LIST_VERSION_KEY, hash);
-      if (choice === 'view') {
-        setHeadsetLookupOpen(true);
-        window.setTimeout(() => {
-          document.querySelector('[data-tour="basics-headset-section"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-        }, 0);
-      }
-    })();
-  }, [approvedHeadsets, headsetLookupError, headsetLookupLoading, modal]);
+    if (previousSignature === signature) return;
+
+    window.localStorage.setItem(HEADSET_SYNC_ACK_KEY, signature);
+    if (approvedHash) window.localStorage.setItem(HEADSET_LIST_VERSION_KEY, approvedHash);
+    console.info('[MTS] Headset lookup data changed and was acknowledged silently.');
+  }, [approvedHeadsets, deniedHeadsets, headsetLookupError, headsetLookupLoading]);
 
   useEffect(() => {
     if (!hydratedRef.current || !hasBasicsDraft(form)) {
@@ -651,10 +668,33 @@ export default function BasicsPage({ onNavigate }) {
       return;
     }
     await openExternalUrl(buildHeadsetResearchUrl(headsetModel));
-    await modal.alert(
-      'Research Headset',
-      'This headset appears likely to meet the USB/noise-cancelling requirement only if the search results support both requirements, but it still requires admin review before being added to the approved list.'
-    );
+    const usb = form.headset_usb === true;
+    const noise = form.noise_cancel === true;
+    const likelyMeetsRequirements = usb && noise;
+    await modal.showModal({
+      type: likelyMeetsRequirements ? 'success' : 'warning',
+      title: likelyMeetsRequirements ? 'Research Review' : 'Requirement Review Needed',
+      body: likelyMeetsRequirements
+        ? '<div class="headset-research-result"><div class="headset-research-icon success">✓</div><p>This headset appears likely to meet the USB and noise-cancelling microphone requirements.</p><p>Administrator review is still required before adding it to the approved list.</p></div>'
+        : '<div class="headset-research-result"><div class="headset-research-icon warning">!</div><p>This headset may not meet one or more headset requirements.</p><p>Review the research results before allowing it.</p></div>',
+      buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
+    });
+  };
+
+  const useUnknownHeadsetForNow = () => {
+    set('headset_usb', null);
+    set('noise_cancel', null);
+    setDropdownOpen(false);
+  };
+
+  const clearHeadsetEntry = () => {
+    setForm((current) => ({
+      ...current,
+      headset_brand: '',
+      headset_usb: null,
+      noise_cancel: null,
+    }));
+    setDropdownOpen(false);
   };
 
   const buildBasicsRecoveredForm = (source, candidateName, finalAttempt, blockResult) => ({
@@ -1167,8 +1207,15 @@ export default function BasicsPage({ onNavigate }) {
                     className="dropdown-menu headset-dropdown-menu"
                   >
                     {filteredDropdownOptions.length === 0 ? (
-                      <li className="headset-dropdown-empty-item">
-                        No matching approved headsets
+                      <li className="headset-dropdown-empty-item headset-not-found-card">
+                        <div className="headset-not-found-title">Headset not found</div>
+                        <div className="headset-not-found-copy">This headset is not currently on the approved headset list.</div>
+                        <div className="headset-not-found-copy">Research it before deciding whether it may be used.</div>
+                        <div className="headset-not-found-actions">
+                          <button type="button" className="btn btn-primary btn-sm headset-research-primary" onMouseDown={e => e.preventDefault()} onClick={researchUnknownHeadset}>Research Headset</button>
+                          <button type="button" className="btn btn-muted btn-sm" onMouseDown={e => e.preventDefault()} onClick={useUnknownHeadsetForNow}>Use This Headset For Now</button>
+                          <button type="button" className="btn btn-ghost btn-sm" onMouseDown={e => e.preventDefault()} onClick={clearHeadsetEntry}>Clear Entry</button>
+                        </div>
                       </li>
                     ) : (
                       filteredDropdownOptions.map((label, index) => {
@@ -1200,7 +1247,7 @@ export default function BasicsPage({ onNavigate }) {
             )}
             {String(form.headset_brand || '').trim() && !currentHeadsetIsApproved && (
               <div className="basics-headset-research">
-                <button type="button" className="btn btn-ghost btn-sm" onClick={researchUnknownHeadset} data-testid="headset-research-btn">
+                <button type="button" className="btn btn-primary btn-sm headset-research-primary" onClick={researchUnknownHeadset} data-testid="headset-research-btn">
                   Research Headset
                 </button>
                 <span className="text-xs text-muted">
@@ -1275,7 +1322,7 @@ export default function BasicsPage({ onNavigate }) {
             }
           }}
         >
-          <div className="modal" style={{ width: 640, maxWidth: '92vw' }}>
+          <div className="modal headset-lookup-modal" style={{ width: 640, maxWidth: '92vw' }}>
             <div className="modal-header">
               <h2>Approved Headset Lookup</h2>
               <button className="modal-close" onClick={() => setHeadsetLookupOpen(false)}>&times;</button>

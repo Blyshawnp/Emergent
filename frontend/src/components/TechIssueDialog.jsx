@@ -292,6 +292,34 @@ function OtherNotesStep({ notes, onNotesChange, onNotResolved, onResolved }) {
   );
 }
 
+function OtherIssueAfterSpeedStep({ notes, onNotesChange, onBack, onContinue }) {
+  const hasNotes = Boolean(notes.trim());
+  return (
+    <div>
+      <h3 className="ti-title">Other Technical Issue</h3>
+      <p className="ti-subtitle">Describe the technical issue still affecting this session:</p>
+      <textarea className="ti-textarea" value={notes} onChange={e => onNotesChange(e.target.value)} placeholder="Describe the issue that remains..." rows={4} data-testid="speed-other-notes-input" />
+      <div className="ti-actions">
+        <button className="btn btn-muted" onClick={onBack}>Back</button>
+        <button className="btn btn-primary" onClick={onContinue} disabled={!hasNotes} data-testid="speed-other-continue">Continue</button>
+      </div>
+    </div>
+  );
+}
+
+function SpeedOtherIssueAskStep({ onNo, onYes }) {
+  return (
+    <div>
+      <h3 className="ti-title">Speed Test Passed</h3>
+      <p className="ti-body">Are there still other technical issues affecting this session?</p>
+      <div className="ti-actions">
+        <button className="btn btn-muted" onClick={onNo} data-testid="speed-other-no">No</button>
+        <button className="btn btn-primary" onClick={onYes} data-testid="speed-other-yes">Yes</button>
+      </div>
+    </div>
+  );
+}
+
 function CompleteAskStep({ onEndSession, onContinue }) {
   return (
     <div>
@@ -315,6 +343,16 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
   const [currentIssue, setCurrentIssue] = useState(null);
   const isSupervisorTransfer = context === 'suptransfer';
   const isSupervisorRoutingIssue = isSupervisorTransfer && currentIssue === 'calls';
+
+  const candidateReachedSupervisorTransfer = useCallback((session = {}) => Boolean(
+    isSupervisorTransfer
+    || session.supervisor_only
+    || session.sup_transfer_1
+    || session.sup_transfer_1_result
+    || session.current_sup_transfer_num
+    || session.needs_sup_transfer
+    || session.pending_sup_transfer_id
+  ), [isSupervisorTransfer]);
 
   const reset = useCallback(() => {
     setStep('select');
@@ -377,6 +415,32 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
     onNavigate('newbieshift');
   }, [currentIssue, handleClose, onBeforeNavigate, onNavigate]);
 
+  const routeUnfinishedSpeedOtherIssue = useCallback(async () => {
+    const issue = `Other: ${otherNotes || 'Unresolved technical issue'}`;
+    await logIssue(issue, false, { other_technical_issue: otherNotes || 'Unresolved technical issue' });
+    const current = await api.getCurrentSession().catch(() => null);
+    const session = current?.session || {};
+    if (candidateReachedSupervisorTransfer(session) && !isFinalAttempt) {
+      await api.updateSession({
+        tech_issue: issue,
+        other_technical_issue: otherNotes || 'Unresolved technical issue',
+        tech_issue_ended_session: true,
+        tech_issue_summary_required: true,
+      }).catch(() => {});
+      handleClose();
+      onNavigate('newbieshift');
+      return;
+    }
+    await finalizeTechIssueToReview({
+      auto_fail_reason: 'Technical issue unresolved',
+      final_status: 'Fail',
+      tech_issue: issue,
+      other_technical_issue: otherNotes || 'Unresolved technical issue',
+      tech_issue_ended_session: true,
+      tech_issue_summary_required: true,
+    }, issue, false);
+  }, [candidateReachedSupervisorTransfer, finalizeTechIssueToReview, handleClose, isFinalAttempt, onNavigate, otherNotes]);
+
   useEffect(() => {
     if (open) {
       playSound('warning');
@@ -419,8 +483,14 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
         return <SpeedInputStep speedDown={speedDown} speedUp={speedUp} onDownChange={setSpeedDown} onUpChange={setSpeedUp} onBack={() => setStep('speed-ask')} onSubmit={() => {
           const dl = parseFloat(speedDown); const ul = parseFloat(speedUp);
           if (isNaN(dl) || isNaN(ul)) return;
-          if (dl < 25 || ul < 10) { setStep('speed-fail'); } else { logIssue('Internet speed issues - speeds OK', true); continueToNextIssue(); }
+          if (dl < 25 || ul < 10) { setStep('speed-fail'); } else { logIssue('Internet speed issues - speeds OK', true); setStep('speed-other-ask'); }
         }} />;
+      case 'speed-other-ask':
+        return <SpeedOtherIssueAskStep onNo={continueToNextIssue} onYes={() => setStep('speed-other-notes')} />;
+      case 'speed-other-notes':
+        return <OtherIssueAfterSpeedStep notes={otherNotes} onNotesChange={setOtherNotes} onBack={() => setStep('speed-other-ask')} onContinue={() => setStep('speed-complete-ask')} />;
+      case 'speed-complete-ask':
+        return <CompleteAskStep onEndSession={routeUnfinishedSpeedOtherIssue} onContinue={async () => { await logIssue(`Other: ${otherNotes}`, true, { other_technical_issue: otherNotes }); continueToNextIssue(); }} />;
       case 'speed-fail':
         return <SpeedFailStep speedDown={speedDown} speedUp={speedUp} isFinalAttempt={isFinalAttempt} onGoToReview={async () => {
           await finalizeTechIssueToReview({ auto_fail_reason: 'Internet speed too low', final_status: 'Fail', tech_issue_ended_session: true, tech_issue_summary_required: true }, 'Internet speed issues - failed speed test', false);

@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import SettingsPage from './SettingsPage';
 import CallsPage from './CallsPage';
 import SupTransferPage from './SupTransferPage';
-import BasicsPage, { buildHeadsetResearchUrl, computeApprovedHeadsetHash } from './BasicsPage';
+import BasicsPage, { buildHeadsetResearchUrl, computeApprovedHeadsetHash, computeHeadsetSyncSignature } from './BasicsPage';
 import api from '../api';
 
 const mockModal = {
@@ -485,38 +485,44 @@ test('basics headset search matches brand and model portions while preserving un
     setInputValue(input, 'Not Approved 123');
     await flushPromises();
   });
-  expect(view.container.textContent).toContain('No matching approved headsets');
+  expect(view.container.textContent).toContain('Headset not found');
   expect(view.container.textContent).not.toContain('Approved headset selected. USB and Noise Cancelling are marked Yes automatically.');
 
   await view.unmount();
 });
 
-test('basics shows headset list update popup once for a changed approved-list hash', async () => {
+test('basics records changed approved-list hash without interrupting the trainer', async () => {
   const oldGroups = [{ brand: 'Logitech', models: ['H390'] }];
   const newGroups = [{ brand: 'Logitech', models: ['H390', 'H650e'] }];
+  window.localStorage.setItem('mts_headset_sync_ack_signature', computeHeadsetSyncSignature(oldGroups, []));
   window.localStorage.setItem('mts_approved_headset_list_seen_hash', computeApprovedHeadsetHash(oldGroups));
-  mockModal.showModal.mockResolvedValue('skip');
+  const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
   api.getCurrentSession.mockResolvedValue({ session: null });
   api.getSettings.mockResolvedValue({});
   api.getDefaults.mockResolvedValue({});
-  api.getApprovedHeadsets.mockResolvedValue({ groups: newGroups });
+  api.getApprovedHeadsets.mockResolvedValue({ groups: newGroups, denied: [] });
 
   const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
   await act(async () => {
     await flushPromises();
   });
 
-  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
-    title: 'Headset List Updated',
-    body: 'Approved headsets have been added or updated since your last session. The headset list has been refreshed.',
-    buttons: expect.arrayContaining([
-      expect.objectContaining({ label: 'View Headsets' }),
-      expect.objectContaining({ label: 'Continue' }),
-      expect.objectContaining({ label: 'Skip' }),
-    ]),
-  }));
+  expect(mockModal.showModal).not.toHaveBeenCalled();
+  expect(infoSpy).toHaveBeenCalledWith('[MTS] Headset lookup data changed and was acknowledged silently.');
+  expect(window.localStorage.getItem('mts_headset_sync_ack_signature')).toBe(computeHeadsetSyncSignature(newGroups, []));
   expect(window.localStorage.getItem('mts_approved_headset_list_seen_hash')).toBe(computeApprovedHeadsetHash(newGroups));
+  infoSpy.mockClear();
   await view.unmount();
+
+  const secondView = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).not.toHaveBeenCalled();
+  expect(infoSpy).not.toHaveBeenCalled();
+  await secondView.unmount();
+  infoSpy.mockRestore();
 });
 
 test('unknown headset research opens the required search query without approving the headset', async () => {
@@ -536,10 +542,10 @@ test('unknown headset research opens the required search query without approving
   });
 
   expect(window.electronAPI.openExternal).toHaveBeenCalledWith(buildHeadsetResearchUrl('Acme USB 100'));
-  expect(mockModal.alert).toHaveBeenCalledWith(
-    'Research Headset',
-    expect.stringContaining('still requires admin review')
-  );
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Requirement Review Needed',
+    body: expect.stringContaining('This headset may not meet one or more headset requirements.'),
+  }));
   expect(view.container.textContent).not.toContain('Approved headset selected');
   await view.unmount();
 });
@@ -570,7 +576,7 @@ test('vpn proxy review verdict requires explicit manual-review decision before c
       },
     },
   });
-  api.getSettings.mockResolvedValue({ tester_name: 'Tester' });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'checker' });
   api.getDefaults.mockResolvedValue({});
   api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
 
@@ -620,12 +626,15 @@ test('vpn proxy checker mode runs the built-in provider lookup and keeps clear p
   });
 
   expect(api.checkIpIntelligence).toHaveBeenCalledWith('8.8.8.8');
+  expect(view.container.textContent).toContain('Integrated Check');
+  expect(view.container.textContent).toContain('CLEAR — LIMITED CHECK');
   expect(view.container.textContent).toContain('Confidence: Medium');
   expect(view.container.textContent).toContain('Detectors: 1');
   expect(view.container.textContent).toContain('Metadata sources: 1');
   expect(view.container.textContent).toContain('ISP: Comcast Cable Communications, LLC');
   expect(view.container.textContent).toContain('Connection: Residential');
   expect(view.container.textContent).toContain('Only one VPN/proxy detector is currently available. Verify manually if this result is important.');
+  expect(view.container.querySelector('[data-testid="candidate-ip-manual-links"]')).not.toBeNull();
   const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
   expect(providerDetails?.hasAttribute('open') || false).toBe(false);
   expect(view.container.textContent).not.toContain('Trainer Notes');
@@ -656,7 +665,7 @@ test('vpn proxy technical details show simplified columns and keep advanced meta
   const details = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
   expect(details?.hasAttribute('open') || false).toBe(true);
   const simpleHeaders = Array.from(view.container.querySelectorAll('.ip-provider-table-simple th')).map((cell) => cell.textContent);
-  expect(simpleHeaders).toEqual(expect.arrayContaining(['Provider', 'Result', 'Capability', 'Confidence']));
+  expect(simpleHeaders).toEqual(expect.arrayContaining(['Provider', 'Result', 'Capability', 'Last Seen', 'Confidence']));
   expect(simpleHeaders).not.toEqual(expect.arrayContaining(['ISP', 'ASN', 'City', 'Region', 'Connection Type']));
   expect(view.container.textContent).toContain('Detector providers');
   expect(view.container.textContent).toContain('Metadata providers');
@@ -675,7 +684,7 @@ test('vpn proxy technical details show simplified columns and keep advanced meta
   await view.unmount();
 });
 
-test('vpn proxy non-clear verdicts keep technical details collapsed by default', async () => {
+test('vpn proxy non-clear verdicts open technical details by default', async () => {
   const scenarios = [
     { verdict: 'REVIEW', level: 'yellow' },
     { verdict: 'VPN / PROXY LIKELY', level: 'red' },
@@ -730,10 +739,24 @@ test('vpn proxy non-clear verdicts keep technical details collapsed by default',
     });
 
     const providerDetails = view.container.querySelector('.candidate-ip-card-embedded .ip-provider-details');
-    expect(providerDetails?.hasAttribute('open') || false).toBe(false);
-    expect(providerDetails.textContent).toContain('Show technical details');
+    expect(providerDetails?.hasAttribute('open') || false).toBe(true);
+    expect(providerDetails.textContent).toContain('Hide technical details');
     await view.unmount();
   }
+});
+
+test('vpn proxy defaults to manual links when settings omit mode', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester' });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
+  expect(view.container.textContent).toContain('Manual Verification');
+  expect(view.container.textContent).toContain('Manual lookup is the release-safe default.');
+  expect(api.checkIpIntelligence).not.toHaveBeenCalled();
+  await view.unmount();
 });
 
 test('vpn proxy links mode shows external lookup buttons and does not call provider API', async () => {
@@ -744,6 +767,7 @@ test('vpn proxy links mode shows external lookup buttons and does not call provi
 
   const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
   expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
+  expect(view.container.textContent).toContain('Manual Verification');
   await act(async () => {
     setInputValue(view.container.querySelector('[data-testid="candidate-ip-manual-input"]'), '8.8.8.8');
     view.container.querySelector('[data-testid="candidate-ip-link-ip2location"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -753,6 +777,36 @@ test('vpn proxy links mode shows external lookup buttons and does not call provi
   expect(api.checkIpIntelligence).not.toHaveBeenCalled();
   expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.ip2location.com/demo/8.8.8.8');
   expect(view.container.textContent).toContain('Integrated automated VPN verification may be available');
+  await view.unmount();
+});
+
+test('settings exposes vpn proxy mode and saves integrated selection', async () => {
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'links' });
+  api.getDefaults.mockResolvedValue({});
+  api.saveSettings.mockResolvedValue({ ok: true });
+
+  const view = await renderComponent(
+    <SettingsPage
+      onNavigate={jest.fn()}
+      updateState={{}}
+      refreshUpdateState={jest.fn()}
+      appVersion="1.0.1"
+    />
+  );
+
+  const modeSelect = view.container.querySelector('[data-testid="settings-vpn-proxy-mode"]');
+  expect(modeSelect).not.toBeNull();
+  expect(modeSelect.value).toBe('links');
+  await act(async () => {
+    setSelectValue(modeSelect, 'checker');
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-save"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ vpnProxyCheckMode: 'checker' }));
   await view.unmount();
 });
 
@@ -800,6 +854,7 @@ test('vpn proxy unable-to-turn-off choice uses existing VPN autofail session pat
   });
   api.getSettings.mockResolvedValue({
     tester_name: 'Tester',
+    vpnProxyCheckMode: 'checker',
     discord_templates: [{ category: 'Failure Outcomes', title: 'VPN Fail', message: 'VPN fail post' }],
   });
   api.getDefaults.mockResolvedValue({});
@@ -855,7 +910,7 @@ test('vpn proxy recheck choice does not autofail or start session', async () => 
       },
     },
   });
-  api.getSettings.mockResolvedValue({ tester_name: 'Tester' });
+  api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'checker' });
   api.getDefaults.mockResolvedValue({});
   api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
 

@@ -3060,7 +3060,7 @@ def _normalize_welcome_voice(value):
 
 def _normalize_vpn_proxy_check_mode(value):
     mode = str(value or "").strip().lower()
-    return mode if mode in {"checker", "links", "disabled"} else "checker"
+    return mode if mode in {"checker", "links", "disabled"} else "links"
 
 
 def sanitize_settings(doc: Optional[dict]) -> dict:
@@ -3069,6 +3069,12 @@ def sanitize_settings(doc: Optional[dict]) -> dict:
         for key, value in doc.items():
             if key in ALLOWED_SETTINGS_KEYS or key in SENSITIVE_SETTINGS_KEYS:
                 if key in DEFAULT_MANAGED_SETTINGS_KEYS and not doc.get(_managed_custom_flag(key)):
+                    continue
+                if (
+                    key == "vpnProxyCheckMode"
+                    and _normalize_vpn_proxy_check_mode(value) == "checker"
+                    and not doc.get("vpnProxyCheckMode_admin_confirmed")
+                ):
                     continue
                 base[key] = _sanitize_content_setting(key, value, "saved")
     base["sound_volume"] = _normalize_sound_volume(base.get("sound_volume"), base.get("enable_sounds"))
@@ -3112,6 +3118,10 @@ def normalize_settings_payload(payload: dict) -> dict:
             value = _normalize_welcome_voice(value)
         elif key == "vpnProxyCheckMode":
             value = _normalize_vpn_proxy_check_mode(value)
+            if value == "checker":
+                sanitized["vpnProxyCheckMode_admin_confirmed"] = True
+            else:
+                unset_defaults["vpnProxyCheckMode_admin_confirmed"] = ""
         if key in DEFAULT_MANAGED_SETTINGS_KEYS and _content_values_equal(value, DEFAULT_SETTINGS.get(key)):
             unset_defaults[key] = ""
             unset_defaults[_managed_custom_flag(key)] = ""
@@ -8802,7 +8812,6 @@ def _configured_ip_intelligence_providers():
         ScamalyticsProvider(),
         GetIpIntelProvider(),
         VpnApiIoProvider(),
-        IpApiComProvider(),
         IpApiCoProvider(),
         IpWhoIsProvider(),
     ]
@@ -8961,6 +8970,14 @@ async def _run_ip_intelligence_lookup(ip_value):
         enabled, reason = provider.enabled()
         if not enabled:
             skipped.append({"provider": provider.name, "reason": reason})
+            reason_key = str(reason or "").strip().lower().replace(" ", "_")
+            provider_results.append(_empty_ip_provider_result(
+                provider.name,
+                "not configured" if reason_key == "missing_api_key" else reason or "not configured",
+                "Provider is not configured." if reason_key == "missing_api_key" else "Provider is disabled.",
+                provider.reputation_capable,
+                provider.capability,
+            ))
             continue
         started = time.perf_counter()
         try:
@@ -8968,6 +8985,10 @@ async def _run_ip_intelligence_lookup(ip_value):
             duration_ms = int((time.perf_counter() - started) * 1000)
             logger.info("[IP-INTEL] provider=%s duration_ms=%s success=true failure=", provider.name, duration_ms)
             provider_results.append({**result, "durationMs": duration_ms})
+        except httpx.TimeoutException:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            logger.warning("[IP-INTEL] provider=%s duration_ms=%s success=false failure=TimeoutException", provider.name, duration_ms)
+            provider_results.append(_empty_ip_provider_result(provider.name, "timeout", "Provider lookup timed out.", provider.reputation_capable, provider.capability))
         except Exception as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
             logger.warning("[IP-INTEL] provider=%s duration_ms=%s success=false failure=%s", provider.name, duration_ms, exc.__class__.__name__)

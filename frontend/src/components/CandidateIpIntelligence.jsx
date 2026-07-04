@@ -56,7 +56,7 @@ export function validateIpAddress(value) {
 
 export function normalizeVpnProxyCheckMode(value) {
   const mode = String(value || '').trim().toLowerCase();
-  return Object.values(VPN_PROXY_CHECK_MODES).includes(mode) ? mode : VPN_PROXY_CHECK_MODES.CHECKER;
+  return Object.values(VPN_PROXY_CHECK_MODES).includes(mode) ? mode : VPN_PROXY_CHECK_MODES.LINKS;
 }
 
 export function buildManualLookupLinks(ipValue) {
@@ -112,6 +112,10 @@ export function vpnProxyNeedsTesterDecision(result) {
 
 function riskText(result) {
   if (!result) return 'Unknown';
+  if (result.status === 'not configured') return 'Not configured';
+  if (result.status === 'timeout') return 'Timeout';
+  if (result.status === 'failed') return 'Failed';
+  if (result.status === 'disabled') return 'Disabled';
   if (result.capability === 'metadata_only' || result.reputationCapable === false) return 'Metadata only';
   if (result.vpnProxy) return result.vpnProxy;
   const flags = result.flags || {};
@@ -152,11 +156,81 @@ function summaryConfidence(result, detectorCount, metadataCount) {
   return metadataCount ? 'Low' : 'Unknown';
 }
 
+function displayVerdictText(result) {
+  if (!result) return 'UNABLE TO VERIFY';
+  const rows = Array.isArray(result.providerResults) ? result.providerResults : [];
+  const detectorCount = Number.isFinite(Number(result.detectorProviderCount)) ? Number(result.detectorProviderCount) : successfulDetectorCount(rows);
+  if (String(result.verdict || '').toUpperCase() === 'CLEAR' && detectorCount < 2) {
+    return 'CLEAR — LIMITED CHECK';
+  }
+  return result.verdict || 'UNABLE TO VERIFY';
+}
+
 function primaryWarningText(result, detectorCount) {
   if (detectorCount <= 0) return 'No VPN/proxy reputation provider is currently available. Manual verification required.';
   if (result?.warning) return result.warning;
   if (detectorCount < 2) return 'Only one VPN/proxy detector is currently available. Verify manually if this result is important.';
   return '';
+}
+
+function shouldShowManualFallback(result) {
+  if (!result) return false;
+  const verdict = String(result.verdict || '').toUpperCase();
+  const detectorCount = Number(result.detectorProviderCount || 0);
+  return detectorCount < 2
+    || verdict.includes('LIMITED')
+    || verdict.includes('VERIFY')
+    || verdict === 'REVIEW'
+    || verdict === 'UNABLE TO VERIFY'
+    || Boolean(result.warning);
+}
+
+function shouldOpenTechnicalDetails(result) {
+  if (!result) return false;
+  const verdict = String(result.verdict || '').toUpperCase();
+  return verdict === 'REVIEW' || verdict === 'VPN / PROXY LIKELY' || verdict === 'UNABLE TO VERIFY' || verdict.includes('MIXED');
+}
+
+function ModeBadge({ mode }) {
+  const label = mode === VPN_PROXY_CHECK_MODES.CHECKER ? 'Integrated Check' : mode === VPN_PROXY_CHECK_MODES.DISABLED ? 'Disabled' : 'Manual Verification';
+  return <span className={`candidate-ip-mode-badge candidate-ip-mode-${mode}`}>{label}</span>;
+}
+
+function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact = false }) {
+  return (
+    <div className={`ip-manual-lookup ${compact ? 'ip-manual-lookup-compact' : ''}`} data-testid="candidate-ip-manual-links">
+      <div className="ip-manual-header">
+        <div>
+          <div className="ip-manual-title">Recommended manual lookup links</div>
+          <div className="ip-manual-subtitle">Copy the candidate IP, then verify with one or more external services.</div>
+        </div>
+        <button type="button" className="btn btn-muted btn-sm" onClick={onCopyIp} disabled={!ip}>
+          {copiedIp ? 'Copied!' : 'Copy IP'}
+        </button>
+      </div>
+      <div className="ip-manual-services-list">
+        {links.map((link) => (
+          <div key={link.label} className="ip-manual-service-row">
+            <div className="ip-manual-service-copy">
+              <span className="ip-manual-service-badge">{link.badge}</span>
+              <div>
+                <div className="ip-manual-service-name">{link.label}</div>
+                <div className="ip-manual-service-desc">{link.desc}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => onOpenLink(link.url)}
+              data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+            >
+              Open Lookup
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function ProviderSummaryTable({ title, rows = [] }) {
@@ -171,7 +245,8 @@ function ProviderSummaryTable({ title, rows = [] }) {
               <th style={{ width: '35%' }}>Provider</th>
               <th style={{ width: '20%' }}>Result</th>
               <th style={{ width: '25%' }}>Capability</th>
-              <th style={{ width: '20%' }}>Confidence</th>
+              <th style={{ width: '12%' }}>Last Seen</th>
+              <th style={{ width: '8%' }}>Confidence</th>
             </tr>
           </thead>
           <tbody>
@@ -183,6 +258,7 @@ function ProviderSummaryTable({ title, rows = [] }) {
                   <td style={{ whiteSpace: 'nowrap', minWidth: '120px' }}>{result.provider || 'Unknown'}</td>
                   <td>{riskText(result)}</td>
                   <td>{providerCapabilityText(result)}</td>
+                  <td>{result.lastSeen || 'N/A'}</td>
                   <td>{result.confidence || 'Unknown'}</td>
                 </tr>
               );
@@ -258,18 +334,24 @@ export function CandidateIpResultSummary({ result }) {
   const rows = Array.isArray(result.providerResults) ? result.providerResults : [];
   const detectorCount = Number.isFinite(Number(result.detectorProviderCount)) ? Number(result.detectorProviderCount) : successfulDetectorCount(rows);
   const metadataCount = Number.isFinite(Number(result.metadataProviderCount)) ? Number(result.metadataProviderCount) : successfulMetadataCount(rows);
+  const limitedClear = String(result.verdict || '').toUpperCase() === 'CLEAR' && detectorCount < 2;
+  const displayVerdict = limitedClear ? 'CLEAR — LIMITED CHECK' : (result.verdict || 'UNABLE TO VERIFY');
+  const displayLevel = limitedClear ? 'yellow' : result.level;
+  const displaySummary = limitedClear
+    ? 'No VPN or proxy signals detected, but fewer than two detector providers responded. Verify manually if this result is important.'
+    : (result.summary || 'No summary available.');
   const primaryIsp = firstProviderValue(rows, 'isp', isDetectorResult) || firstProviderValue(rows, 'isp');
   const usageType = firstProviderValue(rows, 'usageType', isDetectorResult) || firstProviderValue(rows, 'usageType');
   const lastSeen = result.lastSeen || firstProviderValue(rows, 'lastSeen');
   const warning = primaryWarningText(result, detectorCount);
   return (
-    <div className={`ip-verdict-banner ${verdictClass(result.level)}`} data-testid="candidate-ip-verdict">
+    <div className={`ip-verdict-banner ${verdictClass(displayLevel)}`} data-testid="candidate-ip-verdict">
       <div className="ip-verdict-heading">
         <div className="ip-verdict-label">Verdict</div>
-        <div className="ip-verdict-value">{result.verdict || 'UNABLE TO VERIFY'}</div>
+        <div className="ip-verdict-value">{displayVerdict}</div>
       </div>
       <div className="ip-verdict-summary">
-        <div className="ip-summary-copy">{result.summary || 'No summary available.'}</div>
+        <div className="ip-summary-copy">{displaySummary}</div>
         <div className="ip-summary-list">
           <div className="ip-summary-row"><span className="ip-summary-label">Confidence:</span> <strong>{summaryConfidence(result, detectorCount, metadataCount)}</strong></div>
           <div className="ip-summary-row"><span className="ip-summary-label">Providers checked:</span> <strong>{detectorCount + metadataCount} of {rows.length}</strong></div>
@@ -321,7 +403,7 @@ export function CandidateIpReviewBlock({ result, notes, onNotesChange, readOnly 
   );
 }
 
-export default function CandidateIpIntelligencePanel({ initialResult, onResultChange, mode = VPN_PROXY_CHECK_MODES.CHECKER }) {
+export default function CandidateIpIntelligencePanel({ initialResult, onResultChange, mode = VPN_PROXY_CHECK_MODES.LINKS }) {
   const resolvedMode = normalizeVpnProxyCheckMode(mode);
   const [open, setOpen] = useState(false);
   const [ip, setIp] = useState(initialResult?.ip || '');
@@ -351,7 +433,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   }, [initialResult]);
 
   useEffect(() => {
-    setProviderOpen(false);
+    setProviderOpen(shouldOpenTechnicalDetails(result));
   }, [result]);
 
   const persist = async (nextResult) => {
@@ -380,7 +462,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
       }
       const next = { ...response };
       setResult(next);
-      setProviderOpen(false);
+      setProviderOpen(shouldOpenTechnicalDetails(next));
       await persist(next);
     } catch (_error) {
       setValidationMessage('No VPN/proxy reputation provider available. Manual verification required.');
@@ -409,6 +491,9 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
     return (
       <div className="candidate-ip-card candidate-ip-card-embedded candidate-ip-card-disabled" data-testid="candidate-ip-disabled">
         <div className="candidate-ip-static-title">{VPN_PROXY_CHECK_LABEL}</div>
+        <div className="candidate-ip-mode-row">
+          <ModeBadge mode={resolvedMode} />
+        </div>
         <div className="text-sm text-muted">Built-in VPN / Proxy Check is disabled. Use manual verification if needed.</div>
       </div>
     );
@@ -417,7 +502,11 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   if (resolvedMode === VPN_PROXY_CHECK_MODES.LINKS) {
     return (
       <div className="candidate-ip-card candidate-ip-card-embedded candidate-ip-card-links" data-testid="candidate-ip-links">
-        <div className="candidate-ip-static-title">VPN & Proxy Verification</div>
+        <div className="candidate-ip-static-title">{VPN_PROXY_CHECK_LABEL}</div>
+        <div className="candidate-ip-mode-row">
+          <ModeBadge mode={resolvedMode} />
+          <span className="candidate-ip-mode-helper">Manual lookup is the release-safe default.</span>
+        </div>
         
         <div className="text-sm text-muted" style={{ marginBottom: '1rem', lineHeight: '1.4' }}>
           Use one or more trusted lookup services below to verify whether the candidate IP is associated with:
@@ -452,29 +541,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
           </button>
         </div>
 
-        <div className="ip-manual-services-list" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-          {manualLinks.map((link) => (
-            <div key={link.label} className="ip-manual-service-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', backgroundColor: 'var(--bg-muted, #f8f9fa)', borderRadius: '6px', border: '1px solid var(--border-color, #eaeaea)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', textTransform: 'uppercase', backgroundColor: 'var(--primary-color, #0056b3)', color: '#fff', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>
-                  {link.badge}
-                </span>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{link.label}</div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted, #666)' }}>{link.desc}</div>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => openManualLink(link.url)}
-                data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
-              >
-                Open Lookup
-              </button>
-            </div>
-          ))}
-        </div>
+        <ManualLookupBlock ip={ip} links={manualLinks} onOpenLink={openManualLink} onCopyIp={handleCopyIp} copiedIp={copiedIp} />
 
         <div className="text-xs text-muted" style={{ fontStyle: 'italic' }}>
           Integrated automated VPN verification may be available if configured by your administrator.
@@ -491,19 +558,20 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
       >
-        <span>{VPN_PROXY_CHECK_LABEL}</span>
+        <span>{VPN_PROXY_CHECK_LABEL} <ModeBadge mode={resolvedMode} /></span>
         <span>{open ? 'Collapse' : 'Expand'}</span>
       </button>
       {!open && result && (
         <div className="candidate-ip-collapsed-summary">
           <span><strong>Last Checked:</strong> {lastChecked}</span>
-          <span><strong>Current Verdict:</strong> {result.verdict || 'UNABLE TO VERIFY'}</span>
+          <span><strong>Current Verdict:</strong> {displayVerdictText(result)}</span>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(true)}>Check Again</button>
           <button type="button" className="btn btn-muted btn-sm" onClick={handleClear}>Clear</button>
         </div>
       )}
       {open && (
         <div className="candidate-ip-body">
+          <div className="candidate-ip-mode-helper">Integrated checks require configured providers. Manual links appear whenever coverage is limited.</div>
           <div className="candidate-ip-input-row">
             <label>
               <span>Candidate Public IP Address</span>
@@ -530,9 +598,12 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
             <>
               <div className="candidate-ip-meta-row">
                 <span><strong>Last Checked:</strong> {lastChecked}</span>
-                <span><strong>Current Verdict:</strong> {result.verdict || 'UNABLE TO VERIFY'}</span>
+                <span><strong>Current Verdict:</strong> {displayVerdictText(result)}</span>
               </div>
               <CandidateIpResultSummary result={result} />
+              {shouldShowManualFallback(result) ? (
+                <ManualLookupBlock ip={ip || result.ip} links={manualLinks} onOpenLink={openManualLink} onCopyIp={handleCopyIp} copiedIp={copiedIp} compact />
+              ) : null}
               {vpnProxyNeedsTesterDecision(result) ? (
                 <div className="ip-decision-reminder" data-testid="candidate-ip-decision-reminder">
                   If the candidate turns off a VPN/proxy, wait 2-3 minutes before checking again. Reputation and routing services may take a few minutes to reflect the change.

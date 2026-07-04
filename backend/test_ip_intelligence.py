@@ -113,6 +113,8 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertEqual(result["detectorProviderCount"], 0)
         self.assertEqual(result["metadataProviderCount"], 0)
         self.assertEqual(result["confidence"], "Unknown")
+        self.assertEqual(result["providerResults"][0]["status"], "not configured")
+        self.assertEqual(result["providerResults"][1]["status"], "failed")
 
     def test_metadata_only_provider_is_unable_to_verify(self):
         result = run_lookup("8.8.8.8", [
@@ -258,10 +260,16 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(server._ip_result_has_risk(result))
 
     def test_settings_normalize_vpn_proxy_check_mode(self):
+        self.assertEqual(server.sanitize_settings({})["vpnProxyCheckMode"], "links")
         self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "links", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "links")
         self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "disabled", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "disabled")
-        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "bad", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "checker")
-        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "checker", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "checker")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "bad", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "links")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "checker", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "links")
+        self.assertEqual(server.sanitize_settings({
+            "vpnProxyCheckMode": "checker",
+            "vpnProxyCheckMode_customized": True,
+            "vpnProxyCheckMode_admin_confirmed": True,
+        })["vpnProxyCheckMode"], "checker")
 
 
 if __name__ == "__main__":

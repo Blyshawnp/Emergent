@@ -15,7 +15,13 @@ backend/server.py
 DEFAULT_SETTINGS["vpnProxyCheckMode"]
 ```
 
-The setting is also returned by `/api/settings`, so a saved app setting can override the default without deleting any code. If runtime settings are available, update the saved setting through the normal settings API or settings storage. Otherwise, change the default above and restart the app.
+The setting is also returned by `/api/settings`, and the desktop Settings screen exposes it under:
+
+```text
+Settings -> General -> VPN / Proxy Check
+```
+
+A saved app setting can override the default without deleting any code. Older hidden `checker` values are treated as manual links unless the administrator re-saves Integrated provider check from Settings. This prevents stale development settings from silently forcing the integrated checker.
 
 Runtime settings payload:
 
@@ -46,20 +52,21 @@ Detector providers are used only when available or configured. Providers that ne
 #### Supported Providers
 
 **Free/No-Key Providers (Run automatically without setup):**
-- **GetIPIntel** (Uses email address)
-- **IPinfo** (Free tier, proxy data may be limited)
-- **ip-api.com** (Provides ISP/hosting/proxy metadata on free tier)
+- **GetIPIntel** if enabled by the backend provider list
 - **ipapi.co** (Metadata only, no proxy reputation)
 - **ipwho.is** (Metadata only, no proxy reputation)
 
 **Optional Key-Required Providers (Require API key in env or runtime_config.json):**
 - **vpnapi.io** (Requires `VPNAPI_IO_KEY`)
-- **IP2Location** (Requires `IP2LOCATION_API_KEY`)
-- **IPQualityScore** (Requires `IPQUALITYSCORE_API_KEY`)
+- **IPinfo privacy fields** (Requires `IPINFO_TOKEN`)
+- **IP2Location/IP2Proxy** (Requires `IP2PROXY_API_KEY`)
+- **IPQualityScore** (Requires `IPQUALITYSCORE_KEY`)
 - **AbuseIPDB** (Requires `ABUSEIPDB_API_KEY`)
-- **ProxyCheck** (Requires `PROXYCHECK_API_KEY`)
+- **ProxyCheck** (Optional `PROXYCHECK_IO_KEY`; can run without a key subject to provider limits)
 - **IPHub** (Requires `IPHUB_API_KEY`)
 - **Scamalytics** (Requires `SCAMALYTICS_USERNAME` and `SCAMALYTICS_API_KEY`)
+
+Do not use or add `ip-api.com` for candidate IP verification. Its free endpoint is HTTP-only.
 
 #### Verdict Language
 
@@ -89,7 +96,13 @@ This mode does not call the built-in provider API and does not create automated 
 **Why is this the default?**
 Integrated automated VPN checks require configured provider keys. To ensure security, **API keys should not be embedded in the installer or source code**. Provider keys should be configured externally only if administrators explicitly choose to enable integrated mode. Until then, manual lookup links are the safest and most reliable default.
 
-To switch back to integrated automated checks, an administrator must configure keys and change the default:
+To switch back to integrated automated checks, an administrator can use Settings:
+
+```text
+Settings -> General -> VPN / Proxy Check -> Integrated provider check -> Save Settings
+```
+
+Or save this runtime setting:
 
 ```json
 {
@@ -113,7 +126,13 @@ Hides built-in provider lookup UI and shows:
 Built-in VPN / Proxy Check is disabled. Use manual verification if needed.
 ```
 
-To fully hide provider lookups, save this setting or change the default:
+To fully hide provider lookups, use Settings:
+
+```text
+Settings -> General -> VPN / Proxy Check -> Disabled message only -> Save Settings
+```
+
+Or save this setting or change the default:
 
 ```json
 {
