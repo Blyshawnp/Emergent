@@ -668,7 +668,7 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
   border-radius: 12px;
   background: rgba(9, 16, 30, 0.45);
   border: 1px solid rgba(148,163,184,0.1);
-  overflow: hidden;
+  overflow: visible;
 }
 .nm-ops-diag-toggle {
   width: 100%; display: flex; align-items: center; gap: 12px;

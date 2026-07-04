@@ -1046,21 +1046,7 @@ export default function BasicsPage({ onNavigate }) {
               />
               {candidateLookup.matches.length > 0 && (
                 <div 
-                  className="dropdown-menu candidate-suggestions-dropdown" 
-                  style={{
-                    position: 'absolute',
-                    top: '100%',
-                    left: 0,
-                    right: 0,
-                    backgroundColor: 'var(--bg-card)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-                    zIndex: 1000,
-                    maxHeight: '250px',
-                    overflowY: 'auto',
-                    marginTop: '4px'
-                  }}
+                  className="dropdown-menu candidate-suggestions-dropdown"
                   data-testid="candidate-suggestions-dropdown"
                 >
                   {candidateLookup.matches.map((match, idx) => {
@@ -1072,42 +1058,22 @@ export default function BasicsPage({ onNavigate }) {
                     return (
                       <div
                         key={match.session_id || idx}
-                        className="suggestion-item"
-                        style={{
-                          padding: '10px 14px',
-                          borderBottom: idx < candidateLookup.matches.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          fontSize: '13px',
-                          borderLeft: isExactMatch ? '4px solid var(--color-primary, #3b82f6)' : 'none',
-                          backgroundColor: isExactMatch ? 'rgba(59, 130, 246, 0.05)' : 'transparent'
-                        }}
+                        className={`suggestion-item${isExactMatch ? ' is-exact' : ''}`}
                         onClick={async () => {
                           await startConfirmedCandidate(match);
                           setCandidateLookup(curr => ({ ...curr, matches: [] }));
                         }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-card-hover)'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isExactMatch ? 'rgba(59, 130, 246, 0.05)' : 'transparent'}
                       >
-                        <div style={{ textAlign: 'left' }}>
-                          <div style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>
-                            {match.candidate_name} {isExactMatch ? <span className="text-xs" style={{ marginLeft: 6, color: '#3b82f6' }}>(Best Match)</span> : ''}
+                        <div className="suggestion-main">
+                          <div className="suggestion-name">
+                            {match.candidate_name} {isExactMatch ? <span className="suggestion-best">(Best Match)</span> : ''}
                           </div>
-                          <div style={{ color: 'var(--text-secondary)', fontSize: '11px', marginTop: '2px' }}>
+                          <div className="suggestion-meta">
                             Date: {displayDate} | Tester: {match.tester_name || 'N/A'} | Campaign: {match.session_type || 'N/A'}
                           </div>
                         </div>
                         <span 
-                          className="badge"
-                          style={{
-                            fontSize: '11px',
-                            padding: '2px 6px',
-                            borderRadius: '3px',
-                            backgroundColor: String(match.status || '').toLowerCase().includes('pass') ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                            color: String(match.status || '').toLowerCase().includes('pass') ? '#10b981' : '#ef4444'
-                          }}
+                          className={`badge suggestion-badge${String(match.status || '').toLowerCase().includes('pass') ? ' suggestion-badge-pass' : ' suggestion-badge-fail'}`}
                         >
                           {match.status || 'Active'}
                         </span>

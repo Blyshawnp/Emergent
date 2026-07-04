@@ -549,7 +549,8 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
 
   return (
     <div className="cmodal-overlay open" data-testid="tech-issue-dialog">
-      <div className="cmodal" style={{ maxWidth: 520, width: '90vw', textAlign: 'left' }}>
+      <div className="cmodal ti-modal" style={{ maxWidth: 520, width: '90vw', textAlign: 'left' }}>
+        <button type="button" className="modal-close" onClick={onClose} aria-label="Close">&times;</button>
         <img className="cmodal-graphic" src={techGraphic} alt="" />
         {renderContent()}
       </div>

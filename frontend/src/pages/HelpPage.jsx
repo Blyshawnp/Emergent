@@ -514,6 +514,22 @@ const FAQ_FALLBACK = [
     question: 'What if Gemini says the test response was blocked or empty?',
     blocks: [{ type: 'paragraph', text: 'That means the API key connected, but Gemini did not return usable text for the test. Try again later, use a simpler prompt, or check Gemini safety/API settings.' }],
   },
+  {
+    question: 'What if VPN/Proxy Check is unavailable or blocked?',
+    blocks: [{ type: 'paragraph', text: 'If the integrated VPN/proxy check cannot run, the app falls back to manual verification. Use the manual lookup links on Basics to check the candidate IP yourself, or have the candidate turn off their VPN and recheck after a few minutes.' }],
+  },
+  {
+    question: 'The candidate\'s headset is not on the approved list. What should I do?',
+    blocks: [{ type: 'paragraph', text: 'If the headset is not listed, confirm it is USB and has a noise-cancelling microphone. Use Research Headset to look up the requirements, or type it manually if it meets the criteria. Unlisted but approved headsets are reviewed by admins every 7-10 days.' }],
+  },
+  {
+    question: 'How do I manually look up a candidate\'s VPN/proxy status?',
+    blocks: [{ type: 'paragraph', text: 'On the Basics screen, expand VPN / Proxy Check. If the integrated checker is unavailable, use the manual lookup links provided to verify the candidate\'s IP address and VPN/proxy status yourself.' }],
+  },
+  {
+    question: 'What happens if shared session data is temporarily unavailable?',
+    blocks: [{ type: 'paragraph', text: 'If shared Google Sheets data cannot be reached, the app shows a local-only notice and continues without blocking the workflow. Retry after a short wait, or refresh the app to attempt reconnecting. Local session data remains available during the outage.' }],
+  },
 ];
 
 function stripFaqMarkers(text) {

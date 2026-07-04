@@ -1519,6 +1519,89 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   text-align: left;
 }
 
+.candidate-suggestions-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  max-height: 250px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 4px 0;
+}
+
+.candidate-suggestions-dropdown .suggestion-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--font-size-sm);
+  transition: background-color 120ms ease;
+}
+
+.candidate-suggestions-dropdown .suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.candidate-suggestions-dropdown .suggestion-item:hover {
+  background-color: var(--bg-card-hover);
+}
+
+.candidate-suggestions-dropdown .suggestion-item.is-exact {
+  border-left: 4px solid var(--color-primary);
+  background-color: rgba(59, 130, 246, 0.05);
+}
+
+.candidate-suggestions-dropdown .suggestion-item.is-exact:hover {
+  background-color: var(--bg-card-hover);
+}
+
+.suggestion-main {
+  text-align: left;
+  min-width: 0;
+}
+
+.suggestion-name {
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.suggestion-best {
+  margin-left: 6px;
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+}
+
+.suggestion-meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.suggestion-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.suggestion-badge-pass {
+  background-color: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+}
+
+.suggestion-badge-fail {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
 .headset-not-found-card {
   display: grid;
   gap: 8px;
@@ -2810,7 +2893,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   }
 }
 
-/* ══════════ TECH ISSUE DIALOG ══════════ */
+/* Tech Issue Dialog */
+.cmodal.ti-modal {
+  position: relative;
+}
+.cmodal.ti-modal .modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+}
 .ti-title { font-size: var(--font-size-xl); font-weight: 700; margin-bottom: var(--space-md); color: var(--text-primary); }
 .ti-title.ti-warn { color: var(--color-warning); }
 .ti-subtitle { font-size: var(--font-size-sm); color: var(--text-secondary); margin-bottom: var(--space-md); }
@@ -3099,6 +3191,14 @@ body, .sidebar, .content-area, .card, .footer-bar, input, select, textarea, butt
   .settings-gemini-image {
     max-width: 160px;
     width: 42%;
+  }
+  .sticky-action-bar,
+  .sticky-action-footer {
+    left: var(--space-md);
+    right: var(--space-md);
+  }
+  :root {
+    --sticky-action-reserved-space: 100px;
   }
 }
 
