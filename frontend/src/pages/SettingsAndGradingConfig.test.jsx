@@ -754,7 +754,7 @@ test('vpn proxy defaults to manual links when settings omit mode', async () => {
   const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
   expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
   expect(view.container.textContent).toContain('Manual Verification');
-  expect(view.container.textContent).toContain('Manual lookup is the release-safe default.');
+  expect(view.container.textContent).toContain('Use manual lookup links to verify candidate VPN status.');
   expect(api.checkIpIntelligence).not.toHaveBeenCalled();
   await view.unmount();
 });
@@ -768,6 +768,11 @@ test('vpn proxy links mode shows external lookup buttons and does not call provi
   const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
   expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
   expect(view.container.textContent).toContain('Manual Verification');
+  await act(async () => {
+    const btn = Array.from(view.container.querySelectorAll('button')).find(b => b.textContent.includes('Expand'));
+    if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+
   await act(async () => {
     setInputValue(view.container.querySelector('[data-testid="candidate-ip-manual-input"]'), '8.8.8.8');
     view.container.querySelector('[data-testid="candidate-ip-link-ip2location"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));

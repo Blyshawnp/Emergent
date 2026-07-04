@@ -671,12 +671,24 @@ export default function BasicsPage({ onNavigate }) {
     const usb = form.headset_usb === true;
     const noise = form.noise_cancel === true;
     const likelyMeetsRequirements = usb && noise;
+
+    const usbText = usb ? 'Appears likely' : 'Not found / uncertain';
+    const noiseText = noise ? 'Appears likely' : 'Not found / uncertain';
+
     await modal.showModal({
       type: likelyMeetsRequirements ? 'success' : 'warning',
-      title: likelyMeetsRequirements ? 'Research Review' : 'Requirement Review Needed',
-      body: likelyMeetsRequirements
-        ? '<div class="headset-research-result"><div class="headset-research-icon success">✓</div><p>This headset appears likely to meet the USB and noise-cancelling microphone requirements.</p><p>Administrator review is still required before adding it to the approved list.</p></div>'
-        : '<div class="headset-research-result"><div class="headset-research-icon warning">!</div><p>This headset may not meet one or more headset requirements.</p><p>Review the research results before allowing it.</p></div>',
+      title: likelyMeetsRequirements ? 'Headset Research Result' : 'Requirement Review Needed',
+      body: `
+        <div class="headset-research-result" style="text-align: center;">
+          <div class="headset-research-icon ${likelyMeetsRequirements ? 'success' : 'warning'}" style="font-size: 32px; margin-bottom: 12px;">${likelyMeetsRequirements ? '✓' : '!'}</div>
+          <p>${likelyMeetsRequirements ? `<strong>${headsetModel}</strong> appears likely to meet the headset requirements.` : `This headset may not meet one or more headset requirements.`}</p>
+          <div style="margin: 16px 0; display: inline-block; text-align: left; background: rgba(0,0,0,0.1); padding: 12px 16px; border-radius: 8px;">
+            <div style="margin-bottom: 6px;"><strong>USB:</strong> ${usbText}</div>
+            <div><strong>Noise-cancelling microphone:</strong> ${noiseText}</div>
+          </div>
+          <p>${likelyMeetsRequirements ? 'Administrator review is still required before adding it to the approved list.' : 'Review the research results before allowing it.'}</p>
+        </div>
+      `,
       buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
     });
   };
