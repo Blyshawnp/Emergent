@@ -66,9 +66,6 @@
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { height: 100%; overflow: hidden; }
 body { font-family: var(--font-body); font-size: var(--font-size-base); color: var(--text-primary); background: var(--bg-app); -webkit-font-smoothing: antialiased; line-height: 1.5; }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-full); }
 ::selection { background: var(--color-primary); color: white; }
 h1 { font-size: var(--font-size-2xl); font-weight: 700; }
 h2 { font-size: var(--font-size-xl); font-weight: 700; }
@@ -959,12 +956,14 @@ a { color: var(--color-primary); text-decoration: none; }
 
 /* ══════════ COMMERCIAL POLISH ══════════ */
 /* Native-feeling scrollbars */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.28); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.45); background-clip: padding-box; border: 2px solid transparent; }
-[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.36); background-clip: padding-box; border: 2px solid transparent; }
-[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(37, 99, 235, 0.55); background-clip: padding-box; border: 2px solid transparent; }
+@media screen {
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.28); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.45); background-clip: padding-box; border: 2px solid transparent; }
+  [data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.36); background-clip: padding-box; border: 2px solid transparent; }
+  [data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(37, 99, 235, 0.55); background-clip: padding-box; border: 2px solid transparent; }
+}
 
 /* Status chips with colored dots */
 .status-chip {

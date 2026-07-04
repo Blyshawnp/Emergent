@@ -975,6 +975,10 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
     background: #eee;
     font-weight: bold;
   }
+  .nm-print-table tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
   .nm-print-footer {
     text-align: center;
     font-size: 10px;
