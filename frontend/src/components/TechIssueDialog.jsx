@@ -405,11 +405,32 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
   }, [context, handleClose, onBeforeNavigate, onNavigate]);
   const goToNewbie = useCallback(async () => {
     if (onBeforeNavigate) await onBeforeNavigate();
+    const current = await api.getCurrentSession().catch(() => null);
+    const session = current?.session || {};
     const issueType = currentIssue === 'calls' ? 'Calls would not route' : 'No script pop';
+    if (session.newbie_shift_data) {
+      await api.updateSession({
+        tech_issue: `${issueType} - unresolved after troubleshooting`,
+        tech_issue_ended_session: true,
+        tech_issue_summary_required: false,
+        final_status: 'Incomplete',
+        fail_summary: 'N/A',
+      }).catch(() => {});
+      handleClose();
+      onNavigate('review');
+      return;
+    }
     await api.updateSession({
       tech_issue: `${issueType} - unresolved after troubleshooting`,
       tech_issue_ended_session: true,
-      tech_issue_summary_required: true,
+      tech_issue_summary_required: false,
+      final_status: 'Incomplete',
+      fail_summary: 'N/A',
+      newbie_shift_prompt: {
+        trigger: 'technical_issue_sup_transfer',
+        status: 'accepted',
+        updated_at: new Date().toISOString(),
+      },
     }).catch(() => {});
     handleClose();
     onNavigate('newbieshift');
@@ -421,11 +442,31 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
     const current = await api.getCurrentSession().catch(() => null);
     const session = current?.session || {};
     if (candidateReachedSupervisorTransfer(session) && !isFinalAttempt) {
+      if (session.newbie_shift_data) {
+        await api.updateSession({
+          tech_issue: issue,
+          other_technical_issue: otherNotes || 'Unresolved technical issue',
+          tech_issue_ended_session: true,
+          tech_issue_summary_required: false,
+          final_status: 'Incomplete',
+          fail_summary: 'N/A',
+        }).catch(() => {});
+        handleClose();
+        onNavigate('review');
+        return;
+      }
       await api.updateSession({
         tech_issue: issue,
         other_technical_issue: otherNotes || 'Unresolved technical issue',
         tech_issue_ended_session: true,
-        tech_issue_summary_required: true,
+        tech_issue_summary_required: false,
+        final_status: 'Incomplete',
+        fail_summary: 'N/A',
+        newbie_shift_prompt: {
+          trigger: 'technical_issue_sup_transfer',
+          status: 'accepted',
+          updated_at: new Date().toISOString(),
+        },
       }).catch(() => {});
       handleClose();
       onNavigate('newbieshift');
@@ -540,6 +581,39 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
       case 'complete-ask':
         return <CompleteAskStep onEndSession={async () => {
           const issue = currentIssue === 'discord' ? 'Discord issues - unresolved' : `Other: ${otherNotes || 'Unresolved technical issue'}`;
+          const current = await api.getCurrentSession().catch(() => null);
+          const session = current?.session || {};
+          if (candidateReachedSupervisorTransfer(session) && !isFinalAttempt) {
+            if (session.newbie_shift_data) {
+              await api.updateSession({
+                tech_issue: issue,
+                other_technical_issue: currentIssue === 'other' ? (otherNotes || 'Unresolved technical issue') : undefined,
+                tech_issue_ended_session: true,
+                tech_issue_summary_required: false,
+                final_status: 'Incomplete',
+                fail_summary: 'N/A',
+              }).catch(() => {});
+              handleClose();
+              onNavigate('review');
+              return;
+            }
+            await api.updateSession({
+              tech_issue: issue,
+              other_technical_issue: currentIssue === 'other' ? (otherNotes || 'Unresolved technical issue') : undefined,
+              tech_issue_ended_session: true,
+              tech_issue_summary_required: false,
+              final_status: 'Incomplete',
+              fail_summary: 'N/A',
+              newbie_shift_prompt: {
+                trigger: 'technical_issue_sup_transfer',
+                status: 'accepted',
+                updated_at: new Date().toISOString(),
+              },
+            }).catch(() => {});
+            handleClose();
+            onNavigate('newbieshift');
+            return;
+          }
           await finalizeTechIssueToReview({ auto_fail_reason: 'Technical issue unresolved', final_status: 'Fail', tech_issue: issue, tech_issue_ended_session: true, tech_issue_summary_required: true }, issue, false);
         }} onContinue={handleClose} />;
       default:

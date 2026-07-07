@@ -19,6 +19,16 @@ import {
   DEFAULT_NOTIFICATION_GROUPS,
   resolveTickerDurationSeconds,
 } from './utils/notifications';
+import { normalizeDiscordKeyList, nextDiscordFavoriteKeys } from './utils/discordFavorites';
+import {
+  DISCORD_CATEGORY_SHORTCUTS,
+  DISCORD_GLOBAL_SHORTCUTS,
+  getDefaultFavoriteShortcut,
+  getDiscordCommandSearchText,
+  getDiscordCategoryMeta,
+  normalizeDiscordProductivitySettings,
+  shortcutMatchesEvent,
+} from './utils/discordProductivity';
 import {
   BookOpenCheck,
   ClipboardList,
@@ -32,6 +42,7 @@ import {
   PhoneCall,
   Power,
   RefreshCw,
+  Search,
   Settings,
   Table2,
 } from 'lucide-react';
@@ -571,6 +582,8 @@ function AppShell() {
   const [notificationGroups, setNotificationGroups] = useState(DEFAULT_NOTIFICATION_GROUPS);
   const [dismissedBannerIds, setDismissedBannerIds] = useState(() => readStoredIds(DISMISSED_NOTIFICATION_BANNERS_KEY));
   const [discordOpen, setDiscordOpen] = useState(false);
+  const [discordInitialTab, setDiscordInitialTab] = useState('templates');
+  const [discordInitialPaletteOpen, setDiscordInitialPaletteOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('Starting app...');
   const [loadingProgress, setLoadingProgress] = useState(10);
@@ -578,8 +591,13 @@ function AppShell() {
   const popupSessionIdsRef = useRef(new Set());
   const popupFlowActiveRef = useRef(false);
   const tutorialAutoStartRef = useRef(false);
+  const discordAutoOpenRef = useRef(false);
   const modal = useModal();
   const [remoteContentVersion, setRemoteContentVersion] = useState(0);
+  const discordProductivity = useMemo(
+    () => normalizeDiscordProductivitySettings(settings?.discord_productivity),
+    [settings?.discord_productivity]
+  );
 
   useEffect(() => {
     const saved = localStorage.getItem('mts-theme') || 'dark';
@@ -597,6 +615,41 @@ function AppShell() {
   useEffect(() => {
     window.sessionStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!discordProductivity.enableShortcuts) return undefined;
+    const handleGlobalDiscordShortcuts = (event) => {
+      if (shortcutMatchesEvent(discordProductivity.globalShortcuts.openPosts, event)) {
+        event.preventDefault();
+        setDiscordInitialTab('templates');
+        setDiscordInitialPaletteOpen(false);
+        setDiscordOpen(true);
+        return;
+      }
+      if (shortcutMatchesEvent(discordProductivity.globalShortcuts.openScreenshots, event)) {
+        event.preventDefault();
+        setDiscordInitialTab('screenshots');
+        setDiscordInitialPaletteOpen(false);
+        setDiscordOpen(true);
+        return;
+      }
+      if (discordProductivity.enableCommandPalette && shortcutMatchesEvent(discordProductivity.globalShortcuts.openCommandPalette, event)) {
+        event.preventDefault();
+        setDiscordInitialTab('templates');
+        setDiscordInitialPaletteOpen(true);
+        setDiscordOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalDiscordShortcuts);
+    return () => window.removeEventListener('keydown', handleGlobalDiscordShortcuts);
+  }, [discordProductivity]);
+
+  useEffect(() => {
+    if (loading || discordAutoOpenRef.current || !discordProductivity.openAutomatically) return;
+    discordAutoOpenRef.current = true;
+    setDiscordInitialTab('templates');
+    setDiscordOpen(true);
+  }, [discordProductivity.openAutomatically, loading]);
 
   const refreshUpdateState = useCallback(async () => {
     if (!window.electronAPI?.getUpdateState) {
@@ -1285,7 +1338,7 @@ function AppShell() {
             </nav>
             <div className="sidebar-divider" />
             <div className="sidebar-actions">
-              <button className="action-btn action-discord" onClick={() => setDiscordOpen(true)} data-testid="link-discord" data-tour="sidebar-discord" title={sidebarCollapsed ? 'Discord Post' : 'Open Discord message templates'}>
+              <button className="action-btn action-discord" onClick={() => { setDiscordInitialTab('templates'); setDiscordInitialPaletteOpen(false); setDiscordOpen(true); }} data-testid="link-discord" data-tour="sidebar-discord" title={sidebarCollapsed ? 'Discord Post' : 'Open Discord message templates'}>
                 <span className="action-icon"><MessageSquareText size={17} strokeWidth={2.2} /></span><span className="action-label">Discord Post</span>
               </button>
               <button className="action-btn action-cert" onClick={() => { if (settings?.cert_sheet_url) window.open(settings.cert_sheet_url, '_blank'); }} data-testid="link-cert" data-tour="sidebar-cert-sheet" title={sidebarCollapsed ? 'Cert Spreadsheet' : 'Open Cert Spreadsheet'}>
@@ -1351,7 +1404,7 @@ function AppShell() {
           </main>
         </div>
 
-        {discordOpen && <DiscordModal settings={settings} defaults={defaults} currentSession={currentSession} onClose={() => setDiscordOpen(false)} />}
+        {discordOpen && <DiscordModal settings={settings} defaults={defaults} currentSession={currentSession} initialTab={discordInitialTab} initialPaletteOpen={discordInitialPaletteOpen} onPaletteHandled={() => setDiscordInitialPaletteOpen(false)} onClose={() => setDiscordOpen(false)} />}
         <ElectronEventBridge navigate={navigate} setUpdateState={setUpdateState} setMtsUpdateModal={setMtsUpdateModal} />
         {mtsUpdateModal && (
           <MtsUpdateModal
@@ -1366,6 +1419,7 @@ function AppShell() {
 }
 
 const DISCORD_FAVORITES_KEY = 'mts-discord-favorite-template-keys';
+const DISCORD_FAVORITES_INITIALIZED_KEY = 'mts-discord-favorite-template-keys-initialized';
 const DISCORD_RECENT_KEY = 'mts-discord-recent-template-keys';
 const DEFAULT_DISCORD_FAVORITES = [
   'wrong headset',
@@ -1380,10 +1434,24 @@ function discordTemplateKey(item) {
   return `${String(item?.category || '').trim().toLowerCase()}::${String(item?.title || '').trim().toLowerCase()}`;
 }
 
+function hasStoredDiscordKeys(storageKey) {
+  try {
+    return window.localStorage.getItem(storageKey) !== null;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function markStoredDiscordKeysInitialized(storageKey) {
+  try {
+    window.localStorage.setItem(storageKey, 'true');
+  } catch (_error) {}
+}
+
 function readStoredDiscordKeys(storageKey) {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(storageKey) || '[]');
-    return Array.isArray(parsed) ? parsed.filter(Boolean).map(String) : [];
+    return normalizeDiscordKeyList(parsed);
   } catch (_error) {
     return [];
   }
@@ -1391,7 +1459,7 @@ function readStoredDiscordKeys(storageKey) {
 
 function saveStoredDiscordKeys(storageKey, keys) {
   try {
-    window.localStorage.setItem(storageKey, JSON.stringify(keys));
+    window.localStorage.setItem(storageKey, JSON.stringify(normalizeDiscordKeyList(keys)));
   } catch (_error) {}
 }
 
@@ -1435,20 +1503,49 @@ function getSuggestedDiscordKeys(templates, currentSession) {
   return Array.from(new Set(suggestions)).slice(0, 5);
 }
 
-function DiscordModal({ settings, defaults, currentSession, onClose }) {
+function DiscordModal({ settings, defaults, currentSession, initialTab = 'templates', initialPaletteOpen = false, onPaletteHandled, onClose }) {
   const defaultCategory = 'Uncategorized';
   const [modalDefaults, setModalDefaults] = useState(defaults || emptyDefaults());
   const [defaultsLoadStatus, setDefaultsLoadStatus] = useState('idle');
   const defaultsFetchStartedRef = useRef(false);
   const searchRef = useRef(null);
+  const paletteSearchRef = useRef(null);
   const [copiedKey, setCopiedKey] = useState('');
+  const [copyToast, setCopyToast] = useState('');
+  const [showShortcutHelp, setShowShortcutHelp] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(Boolean(initialPaletteOpen));
+  const [paletteSearch, setPaletteSearch] = useState('');
+  const [paletteSelectedIndex, setPaletteSelectedIndex] = useState(0);
   const [favoriteKeys, setFavoriteKeys] = useState(() => readStoredDiscordKeys(DISCORD_FAVORITES_KEY));
+  const [favoritesInitialized, setFavoritesInitialized] = useState(() => (
+    hasStoredDiscordKeys(DISCORD_FAVORITES_KEY) || hasStoredDiscordKeys(DISCORD_FAVORITES_INITIALIZED_KEY)
+  ));
   const [recentKeys, setRecentKeys] = useState(() => readStoredDiscordKeys(DISCORD_RECENT_KEY));
   const [selectedKey, setSelectedKey] = useState('');
+  const [search, setSearch] = useState('');
+  const [tab, setTab] = useState(initialTab === 'screenshots' ? 'screenshots' : 'templates');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [showRecentOnly, setShowRecentOnly] = useState(false);
+  const productivity = useMemo(
+    () => normalizeDiscordProductivitySettings(settings?.discord_productivity),
+    [settings?.discord_productivity]
+  );
 
   useEffect(() => {
     setModalDefaults(defaults || emptyDefaults());
   }, [defaults]);
+
+  useEffect(() => {
+    setTab(initialTab === 'screenshots' ? 'screenshots' : 'templates');
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (!initialPaletteOpen) return;
+    setTab('templates');
+    setCommandPaletteOpen(true);
+    onPaletteHandled?.();
+  }, [initialPaletteOpen, onPaletteHandled]);
 
   const activeDefaults = modalDefaults || emptyDefaults();
   const hasDefaultDiscordData = Boolean(
@@ -1522,12 +1619,18 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
   }).filter(Boolean).map((item) => ({ ...item, key: discordTemplateKey(item) }));
 
   useEffect(() => {
-    if (favoriteKeys.length || !templates.length) return;
+    if (favoritesInitialized || favoriteKeys.length || !templates.length) return;
     const defaults = getDefaultFavoriteKeys(templates);
-    if (!defaults.length) return;
+    if (!defaults.length) {
+      markStoredDiscordKeysInitialized(DISCORD_FAVORITES_INITIALIZED_KEY);
+      setFavoritesInitialized(true);
+      return;
+    }
     setFavoriteKeys(defaults);
     saveStoredDiscordKeys(DISCORD_FAVORITES_KEY, defaults);
-  }, [favoriteKeys.length, templates]);
+    markStoredDiscordKeysInitialized(DISCORD_FAVORITES_INITIALIZED_KEY);
+    setFavoritesInitialized(true);
+  }, [favoriteKeys.length, favoritesInitialized, templates]);
 
   useEffect(() => {
     console.log('[DISCORD DEFAULTS] templates', {
@@ -1551,9 +1654,6 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
     return null;
   }).filter(Boolean);
 
-  const [search, setSearch] = useState('');
-  const [tab, setTab] = useState('templates');
-  const [categoryFilter, setCategoryFilter] = useState('all');
   const activeItems = tab === 'templates' ? templates : screenshots;
   const categories = useMemo(() => {
     const seen = new Set();
@@ -1566,6 +1666,8 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
 
   useEffect(() => {
     setCategoryFilter('all');
+    setShowFavoritesOnly(false);
+    setShowRecentOnly(false);
   }, [tab]);
 
   useEffect(() => {
@@ -1573,46 +1675,55 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
   }, [tab]);
 
   useEffect(() => {
+    if (!commandPaletteOpen) return;
+    setPaletteSearch('');
+    setPaletteSelectedIndex(0);
+    window.setTimeout(() => paletteSearchRef.current?.focus(), 0);
+  }, [commandPaletteOpen]);
+
+  useEffect(() => {
     if (categoryFilter !== 'all' && !categories.includes(categoryFilter)) {
       setCategoryFilter('all');
     }
   }, [categories, categoryFilter]);
 
-  const filteredTemplates = templates.filter(({ category, title, message }) =>
-    (categoryFilter === 'all' || category === categoryFilter) &&
-    (
-      category.toLowerCase().includes(search.toLowerCase()) ||
-      title.toLowerCase().includes(search.toLowerCase()) ||
-      message.toLowerCase().includes(search.toLowerCase())
-    )
-  );
-
-  const suggestedKeys = useMemo(() => getSuggestedDiscordKeys(templates, currentSession), [templates, currentSession]);
   const favoriteKeySet = useMemo(() => new Set(favoriteKeys), [favoriteKeys]);
-  const recentKeySet = useMemo(() => new Set(recentKeys), [recentKeys]);
-  const filteredKeySet = useMemo(() => new Set(filteredTemplates.map((item) => item.key)), [filteredTemplates]);
   const byKey = useMemo(() => new Map(templates.map((item) => [item.key, item])), [templates]);
-  const sectionedTemplates = useMemo(() => {
-    const used = new Set();
-    const pick = (keys, avoid = new Set()) => keys
-      .map((key) => byKey.get(key))
-      .filter((item) => item && filteredKeySet.has(item.key) && !used.has(item.key) && !avoid.has(item.key))
-      .map((item) => {
-        used.add(item.key);
-        return item;
-      });
-    const sections = [];
-    const suggested = pick(suggestedKeys);
-    if (suggested.length) sections.push({ label: 'Suggested', items: suggested });
-    const favorites = pick(favoriteKeys);
-    if (favorites.length) sections.push({ label: 'Favorites', items: favorites });
-    const recent = pick(recentKeys, favoriteKeySet);
-    if (recent.length) sections.push({ label: 'Recent', items: recent });
-    const all = filteredTemplates.filter((item) => !used.has(item.key));
-    if (all.length) sections.push({ label: search || categoryFilter !== 'all' ? 'Matching Posts' : 'All Posts', items: all });
-    return sections;
-  }, [byKey, categoryFilter, favoriteKeySet, favoriteKeys, filteredKeySet, filteredTemplates, recentKeys, search, suggestedKeys]);
-  const visibleTemplates = useMemo(() => sectionedTemplates.flatMap((section) => section.items), [sectionedTemplates]);
+  const filteredTemplates = useMemo(() => {
+    const query = search.toLowerCase();
+    const source = showRecentOnly
+      ? recentKeys.map((key) => byKey.get(key)).filter(Boolean)
+      : showFavoritesOnly
+        ? favoriteKeys.map((key) => byKey.get(key)).filter(Boolean)
+        : templates;
+    return source.filter(({ category, title, message }) =>
+      (categoryFilter === 'all' || category === categoryFilter) &&
+      (
+        category.toLowerCase().includes(query) ||
+        title.toLowerCase().includes(query) ||
+        message.toLowerCase().includes(query)
+      )
+    );
+  }, [byKey, categoryFilter, favoriteKeys, recentKeys, search, showFavoritesOnly, showRecentOnly, templates]);
+  const sectionTitle = useMemo(() => {
+    if (showRecentOnly) return `Showing Recent (${filteredTemplates.length})`;
+    if (showFavoritesOnly) return `Showing Favorites (${filteredTemplates.length})`;
+    if (search || categoryFilter !== 'all') return `Matching Posts (${filteredTemplates.length})`;
+    return `All Posts (${filteredTemplates.length})`;
+  }, [categoryFilter, filteredTemplates.length, search, showFavoritesOnly, showRecentOnly]);
+  const visibleTemplates = filteredTemplates;
+  const suggestedKeys = useMemo(() => getSuggestedDiscordKeys(templates, currentSession), [templates, currentSession]);
+  const paletteResults = useMemo(() => {
+    const query = paletteSearch.trim().toLowerCase();
+    if (!query) {
+      const suggested = suggestedKeys.map((key) => byKey.get(key)).filter(Boolean);
+      const suggestedSet = new Set(suggested.map((item) => item.key));
+      return [...suggested, ...templates.filter((item) => !suggestedSet.has(item.key))].slice(0, 12);
+    }
+    return templates
+      .filter((template) => getDiscordCommandSearchText(template).includes(query))
+      .slice(0, 12);
+  }, [byKey, paletteSearch, suggestedKeys, templates]);
   const selectedTemplate = useMemo(() => {
     if (!visibleTemplates.length) return null;
     return visibleTemplates.find((item) => item.key === selectedKey) || visibleTemplates[0];
@@ -1629,6 +1740,10 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
     }
   }, [selectedKey, tab, visibleTemplates]);
 
+  useEffect(() => {
+    setPaletteSelectedIndex((current) => Math.max(0, Math.min(current, Math.max(0, paletteResults.length - 1))));
+  }, [paletteResults.length]);
+
   const filteredScreenshots = screenshots.filter(s =>
     (categoryFilter === 'all' || s.category === categoryFilter) &&
     (
@@ -1641,19 +1756,24 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
     if (!template?.message) return;
     await navigator.clipboard.writeText(template.message);
     setCopiedKey(template.key);
+    if (productivity.showCopyToast) {
+      setCopyToast('✓ Copied to clipboard');
+      window.setTimeout(() => setCopyToast(''), 2200);
+    }
     window.setTimeout(() => setCopiedKey((current) => (current === template.key ? '' : current)), 3000);
     setRecentKeys((current) => {
-      const next = [template.key, ...current.filter((key) => key !== template.key && !favoriteKeySet.has(key))].slice(0, 8);
+      const next = [template.key, ...current.filter((key) => key !== template.key)].slice(0, 8);
       saveStoredDiscordKeys(DISCORD_RECENT_KEY, next);
       return next;
     });
-  }, [favoriteKeySet]);
+  }, [productivity.showCopyToast]);
 
   const toggleFavorite = useCallback((template) => {
     if (!template?.key) return;
+    markStoredDiscordKeysInitialized(DISCORD_FAVORITES_INITIALIZED_KEY);
+    setFavoritesInitialized(true);
     setFavoriteKeys((current) => {
-      const exists = current.includes(template.key);
-      const next = exists ? current.filter((key) => key !== template.key) : [template.key, ...current].slice(0, 12);
+      const next = nextDiscordFavoriteKeys(current, template.key);
       saveStoredDiscordKeys(DISCORD_FAVORITES_KEY, next);
       return next;
     });
@@ -1667,16 +1787,58 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
   }, [selectedKey, selectedTemplate?.key, visibleTemplates]);
 
   const handleKeyDown = useCallback((event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+    if (commandPaletteOpen) return;
+    if (productivity.enableShortcuts && productivity.enableCommandPalette && shortcutMatchesEvent(productivity.globalShortcuts.openCommandPalette, event)) {
+      event.preventDefault();
+      setTab('templates');
+      setCommandPaletteOpen(true);
+      return;
+    }
+    if (shortcutMatchesEvent(productivity.globalShortcuts.showFavorites, event)) {
+      event.preventDefault();
+      setTab('templates');
+      setShowRecentOnly(false);
+      setShowFavoritesOnly((current) => !current);
+      return;
+    }
+    if (shortcutMatchesEvent(productivity.globalShortcuts.focusSearch, event)) {
       event.preventDefault();
       searchRef.current?.focus();
       searchRef.current?.select();
       return;
     }
-    if (event.key === 'Escape') {
+    if (shortcutMatchesEvent(productivity.globalShortcuts.close, event) || event.key === 'Escape') {
       event.preventDefault();
       onClose();
       return;
+    }
+    if (productivity.enableShortcuts) {
+      const categoryShortcut = DISCORD_CATEGORY_SHORTCUTS.find((item) => shortcutMatchesEvent(productivity.categoryShortcuts[item.key] || item.shortcut, event));
+      if (categoryShortcut) {
+        event.preventDefault();
+        setTab('templates');
+        if (categoryShortcut.key === 'favorites') {
+          setShowFavoritesOnly(true);
+          setShowRecentOnly(false);
+          setCategoryFilter('all');
+        } else {
+          const matchingCategory = categories.find((category) => getDiscordCategoryMeta(category).key === categoryShortcut.key);
+          setCategoryFilter(matchingCategory || 'all');
+          setShowFavoritesOnly(false);
+          setShowRecentOnly(false);
+        }
+        return;
+      }
+      const shortcutMatch = templates.find((template) => shortcutMatchesEvent(productivity.favoriteShortcuts[template.key] || getDefaultFavoriteShortcut(template), event));
+      if (shortcutMatch) {
+        event.preventDefault();
+        setTab('templates');
+        setSelectedKey(shortcutMatch.key);
+        if (productivity.automaticCopy) {
+          copyTemplate(shortcutMatch);
+        }
+        return;
+      }
     }
     if (tab !== 'templates') return;
     if (event.key === 'ArrowDown') {
@@ -1691,33 +1853,97 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      copyTemplate(selectedTemplate || visibleTemplates[0]);
+      if (productivity.automaticCopy) {
+        copyTemplate(selectedTemplate || visibleTemplates[0]);
+      }
     }
-  }, [copyTemplate, moveSelection, onClose, selectedTemplate, tab, visibleTemplates]);
+  }, [categories, commandPaletteOpen, copyTemplate, moveSelection, onClose, productivity, selectedTemplate, tab, templates, visibleTemplates]);
+
+  const handlePaletteKeyDown = useCallback((event) => {
+    event.stopPropagation();
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setCommandPaletteOpen(false);
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setPaletteSelectedIndex((current) => Math.min(paletteResults.length - 1, current + 1));
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setPaletteSelectedIndex((current) => Math.max(0, current - 1));
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const template = paletteResults[paletteSelectedIndex] || paletteResults[0];
+      if (template) {
+        setSelectedKey(template.key);
+        copyTemplate(template);
+        setCommandPaletteOpen(false);
+      }
+    }
+  }, [copyTemplate, paletteResults, paletteSelectedIndex]);
+
+  const selectedScreenshot = useMemo(() => {
+    if (!selectedTemplate) return null;
+    const selectedMeta = getDiscordCategoryMeta(selectedTemplate.category, selectedTemplate.title);
+    return screenshots.find((screenshot) => {
+      const screenshotMeta = getDiscordCategoryMeta(screenshot.category, screenshot.title);
+      return screenshotMeta.key === selectedMeta.key || String(screenshot.title || '').toLowerCase().includes(String(selectedTemplate.title || '').toLowerCase());
+    }) || null;
+  }, [screenshots, selectedTemplate]);
+
+  const handleTabChange = (nextTab) => {
+    setTab(nextTab);
+    setSearch('');
+  };
 
   return (
     <div className="modal-overlay open" onClick={e => { if (e.target.classList.contains('modal-overlay')) onClose(); }} data-testid="discord-modal">
       <div className="modal discord-modal" onClick={e => e.stopPropagation()} onKeyDown={handleKeyDown}>
         <div className="modal-header">
-          <h2>Discord Post</h2>
+          <h2>Discord Posts</h2>
+          <div className="discord-header-actions">
+            {copyToast && <span className="discord-copy-toast" role="status">{copyToast}</span>}
+            <button type="button" className="discord-help-btn" onClick={() => setShowShortcutHelp(true)} aria-label="Open Discord shortcut reference">⌨ Shortcuts</button>
+          </div>
           <button className="modal-close" onClick={onClose}>&times;</button>
         </div>
-        <div className="discord-modal-tabs">
-          <button className={`tab-btn ${tab === 'templates' ? 'active' : ''}`} onClick={() => setTab('templates')}>Templates</button>
-          <button className={`tab-btn ${tab === 'screenshots' ? 'active' : ''}`} onClick={() => setTab('screenshots')}>Screenshots</button>
+        <div className="discord-toolbar" data-testid="discord-productivity-toolbar">
+          <label className="discord-search-field">
+            <span className="discord-search-label">Search Discord posts</span>
+            <span className="discord-search-input-wrap">
+              <Search size={16} strokeWidth={2.3} aria-hidden="true" />
+              <input ref={searchRef} className="discord-toolbar-search" type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={tab === 'templates' ? 'Search title, category, keyword, or alias...' : 'Search screenshots...'} data-testid="discord-search" />
+            </span>
+          </label>
+          <div className="discord-secondary-controls">
+            <div className="discord-modal-tabs">
+              <button className={`tab-btn ${tab === 'templates' ? 'active' : ''}`} onClick={() => handleTabChange('templates')}>Posts</button>
+              <button className={`tab-btn ${tab === 'screenshots' ? 'active' : ''}`} onClick={() => handleTabChange('screenshots')}>Screenshots</button>
+            </div>
+            {categories.length > 0 && (
+              <label className="discord-category-filter">
+                <span>Category</span>
+                <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} data-testid="discord-category-filter">
+                  <option value="all">All</option>
+                  {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+                </select>
+              </label>
+            )}
+            <button type="button" className={`discord-toolbar-toggle ${showFavoritesOnly ? 'active' : ''}`} onClick={() => { setTab('templates'); setShowFavoritesOnly((current) => !current); setShowRecentOnly(false); }}>★ Favorites <span>{favoriteKeys.length}</span></button>
+            <button type="button" className={`discord-toolbar-toggle ${showRecentOnly ? 'active' : ''}`} onClick={() => { setTab('templates'); setShowRecentOnly((current) => !current); setShowFavoritesOnly(false); }}>Recent <span>{recentKeys.length}</span></button>
+          </div>
         </div>
-        <div className="discord-modal-search">
-          <input ref={searchRef} type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder={tab === 'templates' ? 'Search templates...' : 'Search screenshots...'} data-testid="discord-search" style={{ width: '100%' }} />
-          {categories.length > 0 && (
-            <label className="discord-category-filter">
-              <span>Category</span>
-              <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} data-testid="discord-category-filter">
-                <option value="all">{tab === 'templates' ? 'All Templates' : 'All Screenshots'}</option>
-                {categories.map((category) => <option key={category} value={category}>{category}</option>)}
-              </select>
-            </label>
-          )}
-        </div>
+        {tab === 'templates' && (
+          <div className="discord-filter-status" data-testid="discord-filter-status">
+            <strong>{sectionTitle}</strong>
+            <span>{showRecentOnly ? 'Recent filter is active.' : showFavoritesOnly ? 'Favorites filter is active.' : 'Search is the fastest way to find a post.'}</span>
+          </div>
+        )}
         <div className="modal-body discord-modal-list">
           {tab === 'templates' ? (
             filteredTemplates.length === 0 ? (
@@ -1726,33 +1952,43 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
                   ? 'Loading templates...'
                   : defaultsLoadStatus === 'failed'
                     ? 'Discord templates could not be loaded.'
-                    : 'No Discord posts match this search.'}
+                    : showRecentOnly
+                      ? 'No recent Discord posts yet.'
+                      : showFavoritesOnly
+                        ? 'No favorite Discord posts match this view.'
+                        : 'No Discord posts match this search.'}
               </p>
             ) : (
               <div className="discord-template-workspace">
                 <div className="discord-template-list" role="listbox" aria-label="Discord post templates">
-                  {sectionedTemplates.map((section) => (
-                    <div className="discord-template-section" key={section.label}>
-                      <div className="discord-section-title">{section.label}</div>
-                      {section.items.map((template) => (
+                    <div className="discord-template-section" key={sectionTitle}>
+                      <div className="discord-section-title">{sectionTitle}</div>
+                      {visibleTemplates.map((template) => (
                         <DiscordTemplateListItem
                           key={template.key}
                           template={template}
                           selected={selectedTemplate?.key === template.key}
                           favorite={favoriteKeySet.has(template.key)}
                           copied={copiedKey === template.key}
+                          shortcut={productivity.favoriteShortcuts[template.key] || getDefaultFavoriteShortcut(template) || productivity.categoryShortcuts[getDiscordCategoryMeta(template.category, template.title).key] || getDiscordCategoryMeta(template.category, template.title).shortcut}
+                          categoryMeta={getDiscordCategoryMeta(template.category, template.title)}
                           onSelect={() => setSelectedKey(template.key)}
                           onCopy={() => copyTemplate(template)}
+                          onDoubleClick={() => {
+                            setSelectedKey(template.key);
+                            if (productivity.automaticCopy) copyTemplate(template);
+                          }}
                           onToggleFavorite={() => toggleFavorite(template)}
                         />
                       ))}
                     </div>
-                  ))}
                 </div>
                 <DiscordTemplatePreview
                   template={selectedTemplate}
                   favorite={selectedTemplate ? favoriteKeySet.has(selectedTemplate.key) : false}
                   copied={selectedTemplate ? copiedKey === selectedTemplate.key : false}
+                  shortcut={selectedTemplate ? productivity.favoriteShortcuts[selectedTemplate.key] || getDefaultFavoriteShortcut(selectedTemplate) : ''}
+                  screenshot={selectedScreenshot}
                   onCopy={() => copyTemplate(selectedTemplate)}
                   onToggleFavorite={() => toggleFavorite(selectedTemplate)}
                 />
@@ -1772,51 +2008,183 @@ function DiscordModal({ settings, defaults, currentSession, onClose }) {
             ))
           )}
         </div>
+        {showShortcutHelp && (
+          <div className="discord-shortcut-help" role="dialog" aria-label="Discord Productivity Help">
+            <div className="discord-shortcut-help-card">
+              <div className="discord-shortcut-help-header">
+                <h3>Discord Productivity Help</h3>
+                <button type="button" className="modal-close" onClick={() => setShowShortcutHelp(false)} aria-label="Close shortcut reference">&times;</button>
+              </div>
+              <div className="discord-shortcut-grid">
+                <ShortcutHelpGroup title="General" rows={DISCORD_GLOBAL_SHORTCUTS.map((item) => [productivity.globalShortcuts[item.key] || item.defaultShortcut, item.label])} />
+                <ShortcutHelpGroup title="Searching" rows={[[productivity.globalShortcuts.focusSearch || 'Ctrl+F', 'Focus search'], ['Type keywords, categories, or aliases', 'Filter instantly']]} />
+                <ShortcutHelpGroup title="Favorites" rows={[[productivity.globalShortcuts.showFavorites || 'Ctrl+Shift+F', 'Show Favorites'], ['★', 'Favorite or unfavorite a post']]} />
+                <ShortcutHelpGroup title="Command Palette" rows={[[productivity.globalShortcuts.openCommandPalette || 'Ctrl+Shift+P', 'Open palette'], ['Enter', 'Copy selected result and close palette']]} />
+                <ShortcutHelpGroup title="Navigation" rows={[['Arrow Up/Down', 'Move selection'], ['Double-click', 'Copy immediately']]} />
+                <ShortcutHelpGroup title="Categories" rows={DISCORD_CATEGORY_SHORTCUTS.map((item) => [productivity.categoryShortcuts[item.key] || item.shortcut, item.label])} />
+                <ShortcutHelpGroup title="Custom Shortcuts" rows={Object.entries(productivity.favoriteShortcuts).map(([key, shortcut]) => [shortcut, byKey.get(key)?.title || 'Favorite post'])} emptyText="Favorite shortcuts are assigned in Settings." />
+                <ShortcutHelpGroup title="Mouse Shortcuts" rows={[['Double Click', 'Copy selected post'], ['Copy', 'Copy previewed post']]} />
+                <ShortcutHelpGroup title="Double Click" rows={[['Double-click row', 'Copy immediately'], ['✓ Copied', 'Confirms clipboard update']]} />
+                <ShortcutHelpGroup title="Copy" rows={[['Enter', 'Copy selected post'], ['Shortcut', 'Copies when automatic copy is enabled']]} />
+                <ShortcutHelpGroup title="Screenshots" rows={[[productivity.globalShortcuts.openScreenshots || 'Ctrl+Shift+D', 'Open Screenshot Library'], ['Preview pane', 'Shows matching screenshot when configured']]} />
+              </div>
+            </div>
+          </div>
+        )}
+        {commandPaletteOpen && (
+          <DiscordCommandPalette
+            results={paletteResults}
+            query={paletteSearch}
+            selectedIndex={paletteSelectedIndex}
+            searchRef={paletteSearchRef}
+            onQueryChange={(value) => { setPaletteSearch(value); setPaletteSelectedIndex(0); }}
+            onKeyDown={handlePaletteKeyDown}
+            onClose={() => setCommandPaletteOpen(false)}
+            onSelect={(template, index) => {
+              setPaletteSelectedIndex(index);
+              setSelectedKey(template.key);
+            }}
+            onChoose={(template) => {
+              setSelectedKey(template.key);
+              copyTemplate(template);
+              setCommandPaletteOpen(false);
+            }}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-function DiscordTemplateListItem({ template, selected, favorite, copied, onSelect, onCopy, onToggleFavorite }) {
+function DiscordCommandPalette({ results, query, selectedIndex, searchRef, onQueryChange, onKeyDown, onClose, onSelect, onChoose }) {
+  return (
+    <div className="discord-command-palette-overlay" role="dialog" aria-label="Discord Command Palette">
+      <div className="discord-command-palette">
+        <div className="discord-command-palette-header">
+          <h3>Discord Command Palette</h3>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close Discord Command Palette">&times;</button>
+        </div>
+        <input
+          ref={searchRef}
+          className="discord-command-search"
+          type="text"
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Search Discord posts..."
+          data-testid="discord-command-palette-search"
+        />
+        <div className="discord-command-results" role="listbox" aria-label="Discord command results">
+          {results.length ? results.map((template, index) => {
+            const categoryMeta = getDiscordCategoryMeta(template.category, template.title);
+            return (
+              <button
+                key={template.key}
+                type="button"
+                className={`discord-command-result ${index === selectedIndex ? 'selected' : ''}`}
+                onMouseEnter={() => onSelect(template, index)}
+                onClick={() => onChoose(template)}
+                role="option"
+                aria-selected={index === selectedIndex}
+              >
+                <span className="discord-command-result-title">{template.title}</span>
+                <span className={`discord-category-badge badge-${categoryMeta.key}`}>{categoryMeta.label}</span>
+              </button>
+            );
+          }) : (
+            <p className="text-muted discord-command-empty">No Discord posts match this search.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShortcutHelpGroup({ title, rows, emptyText = 'No shortcuts configured.' }) {
+  return (
+    <div className="discord-shortcut-group">
+      <h4>{title}</h4>
+      {(rows || []).length ? rows.map(([keys, label]) => (
+        <div className="discord-shortcut-row" key={`${title}-${keys}-${label}`}>
+          <kbd>{keys}</kbd>
+          <span>{label}</span>
+        </div>
+      )) : <p className="text-muted text-sm">{emptyText}</p>}
+    </div>
+  );
+}
+
+function DiscordTemplateListItem({ template, selected, favorite, copied, shortcut, categoryMeta, onSelect, onCopy, onDoubleClick, onToggleFavorite }) {
   return (
     <button
       type="button"
       className={`discord-template-list-item ${selected ? 'selected' : ''}`}
       onClick={onSelect}
+      onDoubleClick={onDoubleClick}
       role="option"
       aria-selected={selected}
     >
-      <div className="discord-template-list-head">
+      <span className="discord-favorite-indicator" aria-label={favorite ? 'Favorite' : 'Not favorite'} onClick={(event) => { event.stopPropagation(); onToggleFavorite(); }}>{favorite ? '★' : '☆'}</span>
+      <span className="discord-template-list-main">
         <span className="discord-title discord-template-title">{template.title}</span>
-        <span className="discord-favorite-indicator" aria-label={favorite ? 'Favorite' : 'Not favorite'}>{favorite ? '★' : '☆'}</span>
-      </div>
-      <div className="discord-template-list-meta">
-        {template.category && <span className="discord-category-badge">{template.category}</span>}
-        <span>{copied ? 'Copied' : 'Ready'}</span>
-      </div>
-      <div className="discord-template-list-preview">{template.message}</div>
+        <span className="discord-template-list-meta">
+          {template.category && <span className={`discord-category-badge badge-${categoryMeta.key}`}>{categoryMeta.label}</span>}
+          {shortcut && <span className="discord-shortcut-badge">{shortcut}</span>}
+          {copied && <span className="discord-copied-inline">✓ Copied</span>}
+        </span>
+      </span>
       <div className="discord-template-quick-actions" onClick={(event) => event.stopPropagation()}>
         <button type="button" className={`discord-copy ${copied ? 'copied' : ''}`} onClick={onCopy}>{copied ? 'Copied' : 'Copy'}</button>
-        <button type="button" className="discord-mini-btn" onClick={onToggleFavorite}>{favorite ? 'Unfavorite' : 'Favorite'}</button>
       </div>
     </button>
   );
 }
 
-function DiscordTemplatePreview({ template, favorite, copied, onCopy, onToggleFavorite }) {
+function DiscordTemplatePreview({ template, favorite, copied, shortcut, screenshot, onCopy, onToggleFavorite }) {
+  const [screenshotCopied, setScreenshotCopied] = useState(false);
   if (!template) {
     return <div className="discord-template-preview-panel discord-template-preview-empty">Select a Discord post to preview it.</div>;
   }
+  const categoryMeta = getDiscordCategoryMeta(template.category, template.title);
+  const resolvedScreenshotUrl = screenshot?.imageUrl ? resolveScreenshotUrl(screenshot.imageUrl) : '';
+  const copyScreenshot = async () => {
+    if (!resolvedScreenshotUrl) return;
+    try {
+      const resp = await fetch(resolvedScreenshotUrl);
+      if (!resp.ok) throw new Error(`Image request failed with status ${resp.status}`);
+      const blob = await resp.blob();
+      if (!blob.type.startsWith('image/')) throw new Error('Referenced file is not an image.');
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+    } catch (_error) {
+      await navigator.clipboard.writeText(resolvedScreenshotUrl);
+    }
+    setScreenshotCopied(true);
+    window.setTimeout(() => setScreenshotCopied(false), 2500);
+  };
   return (
     <aside className="discord-template-preview-panel">
       <div className="discord-preview-top">
         <div>
-          {template.category && <span className="discord-category-badge">{template.category}</span>}
+          {template.category && <span className={`discord-category-badge badge-${categoryMeta.key}`}>{categoryMeta.label}</span>}
           <h3>{template.title}</h3>
+          {shortcut && <span className="discord-shortcut-badge">{shortcut}</span>}
         </div>
         <button type="button" className="discord-mini-btn" onClick={onToggleFavorite}>{favorite ? '★ Favorite' : '☆ Favorite'}</button>
       </div>
       <div className="discord-preview-message">{template.message}</div>
+      <div className="discord-preview-notes">
+        <h4>Notes</h4>
+        <p>Double-click the row or press Enter to copy the selected Discord post.</p>
+      </div>
+      {resolvedScreenshotUrl && (
+        <div className="discord-preview-screenshot">
+          <div className="discord-preview-screenshot-head">
+            <h4>Suggested Screenshot</h4>
+            <button type="button" className={`discord-copy ${screenshotCopied ? 'copied' : ''}`} onClick={copyScreenshot}>{screenshotCopied ? 'Copied' : 'Copy Screenshot'}</button>
+          </div>
+          <img src={resolvedScreenshotUrl} alt={screenshot.title || 'Discord screenshot preview'} />
+        </div>
+      )}
       <div className="discord-preview-actions">
         <button type="button" className={`discord-copy discord-preview-copy ${copied ? 'copied' : ''}`} onClick={onCopy}>{copied ? 'Copied' : 'Copy'}</button>
       </div>

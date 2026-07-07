@@ -17,6 +17,11 @@ const READINESS_OVERRIDE_REASONS = [
   'Other',
 ];
 const READINESS_OVERRIDE_RESULTS = ['Pass', 'Fail', READINESS_NEEDS_RETEST];
+const FAIL_SUMMARY_STATUSES = new Set(['Fail', 'FAIL-Final Attempt', 'NC/NS', READINESS_NEEDS_RETEST]);
+
+function shouldPopulateFailSummary(finalStatus) {
+  return FAIL_SUMMARY_STATUSES.has(finalStatus);
+}
 
 function computeCalculatedStatus(session) {
   if (!session) return 'Fail';
@@ -146,9 +151,9 @@ function getHistoricalCoachingSummary(session) {
 
 function getHistoricalFailSummary(session) {
   const saved = (session?.fail_summary || '').trim();
-  if (saved) return saved;
   const finalStatus = session?.final_status || computeFinalStatus(session);
-  if (['Pass', 'RESUMED-PASS', 'Incomplete'].includes(finalStatus)) return 'N/A';
+  if (!shouldPopulateFailSummary(finalStatus)) return 'N/A';
+  if (saved) return saved;
   return 'No saved fail summary is available for this historical record.';
 }
 
@@ -159,10 +164,32 @@ function getFallbackCoachingSummary(session) {
 
 function getFallbackFailSummary(session) {
   const saved = (session?.fail_summary || '').trim();
-  if (saved) return saved;
   const finalStatus = session?.final_status || computeFinalStatus(session);
-  if (['Pass', 'RESUMED-PASS', 'Incomplete'].includes(finalStatus)) return 'N/A';
+  if (!shouldPopulateFailSummary(finalStatus)) return 'N/A';
+  if (saved) return saved;
   return 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+}
+
+function getStatusSafeFailSummary(failText, finalStatus, judgment) {
+  if (!shouldPopulateFailSummary(finalStatus)) return 'N/A';
+  return appendReadinessOverrideSummary(failText, judgment);
+}
+
+function getIncompleteReason(session) {
+  if (!session) return '';
+  const techIssue = String(session.tech_issue || '').trim();
+  if (session.tech_issue_ended_session && techIssue && !['N/A', 'No', 'None'].includes(techIssue)) {
+    return 'Technical issue prevented completion during Supervisor Transfer. A Newbie Shift is needed to complete certification.';
+  }
+  if (session.time_for_sup === false) return 'Supervisor Transfer could not be completed during the current session. A Newbie Shift is needed to complete certification.';
+  if (session.newbie_shift_data) {
+    return 'Newbie Shift scheduled to complete certification.';
+  }
+  const supFailed = [session.sup_transfer_1, session.sup_transfer_2].some((transfer) => transfer?.result === 'Fail');
+  if (supFailed || session.needs_sup_transfer || session.pending_sup_transfer_id || session.supervisor_only) {
+    return 'Supervisor Transfer must be completed during a future Newbie Shift. A Newbie Shift is needed to complete certification.';
+  }
+  return 'Certification could not be completed in this session.';
 }
 
 const SUMMARY_PENDING_MESSAGE = 'Generating summaries...';
@@ -320,9 +347,12 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
 
         const savedCoaching = (s.coaching_summary || '').trim();
         const savedFail = (s.fail_summary || '').trim();
-        if (savedCoaching || savedFail) {
+        const statusSafeSavedFail = shouldPopulateFailSummary(finalStatus) ? savedFail : 'N/A';
+        const hasSavedCoaching = Boolean(savedCoaching && !isSummaryPlaceholder(savedCoaching));
+        const hasSavedFail = Boolean(statusSafeSavedFail && !isSummaryPlaceholder(statusSafeSavedFail));
+        if (hasSavedCoaching && hasSavedFail) {
           setCoaching(savedCoaching);
-          setFail(savedFail || (['Pass', 'RESUMED-PASS', 'Incomplete'].includes(finalStatus) ? 'N/A' : ''));
+          setFail(statusSafeSavedFail);
           setLoading(false);
           reviewHydratedRef.current = true;
           return;
@@ -335,8 +365,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         }
         summaryStartedRef.current = true;
 
-        setCoaching(getFallbackCoachingSummary(resolvedSession));
-        setFail(getFallbackFailSummary(resolvedSession));
+        setCoaching(hasSavedCoaching ? savedCoaching : getFallbackCoachingSummary(resolvedSession));
+        setFail(hasSavedFail ? statusSafeSavedFail : getFallbackFailSummary(resolvedSession));
         setLoading(false);
         setSummaryLoading(true);
         setSummaryNotice('Generating summaries...');
@@ -345,10 +375,16 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         api.generateSummaries(resolvedSession)
           .then((summaries) => {
             if (cancelled) return;
-            setCoaching(summaries.coaching || getFallbackCoachingSummary(resolvedSession));
-            setFail(summaries.fail || getFallbackFailSummary(resolvedSession));
+            const nextCoaching = hasSavedCoaching ? savedCoaching : (summaries.coaching || getFallbackCoachingSummary(resolvedSession));
+            const nextFail = hasSavedFail ? statusSafeSavedFail : (shouldPopulateFailSummary(finalStatus) ? (summaries.fail || getFallbackFailSummary(resolvedSession)) : 'N/A');
+            setCoaching(nextCoaching);
+            setFail(nextFail);
             setSummaryDiagnostics(summaries);
             setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
+            api.updateSession({
+              coaching_summary: getSafeSummaryForSubmit(nextCoaching, ''),
+              fail_summary: getSafeSummaryForSubmit(nextFail, ''),
+            }).catch(() => {});
           })
           .catch((error) => {
             if (cancelled) return;
@@ -356,6 +392,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             console.log('[REVIEW] summary generation failed', { message });
             setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
             setSummaryNotice(message);
+            setCoaching((current) => (hasSavedCoaching || !isSummaryPlaceholder(current) ? current : getFallbackCoachingSummary(resolvedSession)));
+            setFail((current) => (hasSavedFail || !isSummaryPlaceholder(current) ? current : getFallbackFailSummary(resolvedSession)));
           })
           .finally(() => {
             if (!cancelled) setSummaryLoading(false);
@@ -378,9 +416,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       if (!isSummaryPlaceholder(coaching) || !isSummaryPlaceholder(fail)) {
         const autosaveCalculated = computeCalculatedStatus(session);
         const autosaveJudgment = normalizeFinalReadinessJudgment(session.finalReadinessJudgment, autosaveCalculated);
+        const autosaveFinalStatus = computeFinalStatus({ ...session, finalReadinessJudgment: autosaveJudgment });
         api.updateSession({
           coaching_summary: getSafeSummaryForSubmit(appendReadinessOverrideSummary(coaching, autosaveJudgment), ''),
-          fail_summary: getSafeSummaryForSubmit(appendReadinessOverrideSummary(fail, autosaveJudgment), ''),
+          fail_summary: getSafeSummaryForSubmit(getStatusSafeFailSummary(fail, autosaveFinalStatus, autosaveJudgment), ''),
         }).catch(() => {});
       }
     }, 300);
@@ -404,7 +443,12 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const finalReadinessJudgment = normalizeFinalReadinessJudgment(s.finalReadinessJudgment, calculatedStatus);
   const finalStatus = computeFinalStatus({ ...s, finalReadinessJudgment });
   const coachingForDisplay = appendReadinessOverrideSummary(coaching, finalReadinessJudgment);
-  const failForDisplay = appendReadinessOverrideSummary(fail, finalReadinessJudgment);
+  const failForDisplay = getStatusSafeFailSummary(fail, finalStatus, finalReadinessJudgment);
+  const incompleteReason = finalStatus === 'Incomplete' ? getIncompleteReason(s) : '';
+  const newbieAlreadyScheduled = Boolean(newbie);
+  const newbieSchedulingAllowed = !isHistoricalReview && finalStatus === 'Incomplete' && !autoFail && !s.final_attempt;
+  const showNextActions = newbieSchedulingAllowed;
+  const canScheduleNewbie = newbieSchedulingAllowed && !newbieAlreadyScheduled;
   let bannerClass, bannerText;
   if (finalStatus === 'Pass' || finalStatus === 'RESUMED-PASS') { bannerClass = 'banner-pass'; bannerText = finalStatus === 'RESUMED-PASS' ? 'RESUMED SESSION PASSED' : 'SESSION PASSED'; }
   else if (finalStatus === 'Incomplete') { bannerClass = 'banner-incomplete'; bannerText = 'SESSION INCOMPLETE - Pending Newbie Shift'; }
@@ -431,7 +475,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     try {
       const summaries = await api.generateSummaries(nextSession);
       const nextCoaching = summaries.coaching || getFallbackCoachingSummary(nextSession);
-      const nextFail = summaries.fail || getFallbackFailSummary(nextSession);
+      const nextFinalStatus = computeFinalStatus(nextSession);
+      const nextFail = shouldPopulateFailSummary(nextFinalStatus) ? (summaries.fail || getFallbackFailSummary(nextSession)) : 'N/A';
       setCoaching(nextCoaching);
       setFail(nextFail);
       setCoachingEdited(false);
@@ -568,7 +613,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     try {
       const summaries = await api.generateSummaries(nextSession);
       setCoaching(summaries.coaching || getFallbackCoachingSummary(nextSession));
-      setFail(summaries.fail || getFallbackFailSummary(nextSession));
+      setFail(shouldPopulateFailSummary(computeFinalStatus(nextSession)) ? (summaries.fail || getFallbackFailSummary(nextSession)) : 'N/A');
       setSummaryDiagnostics(summaries);
       setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
     } catch (error) {
@@ -682,7 +727,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       const r = await api.generateSummaries(session);
       setSummaryDiagnostics(r);
       setCoaching(r.coaching || getFallbackCoachingSummary(session));
-      setFail(r.fail || getFallbackFailSummary(session));
+      setFail(shouldPopulateFailSummary(finalStatus) ? (r.fail || getFallbackFailSummary(session)) : 'N/A');
       setSummaryNotice(r.gemini_error ? getSummaryFailureMessage({ message: r.gemini_error }) : '');
     } catch (e) {
       const message = getSummaryFailureMessage(e);
@@ -823,6 +868,21 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     onNavigate('home');
   };
 
+  const handleScheduleNewbieShift = async () => {
+    if (!canScheduleNewbie) return;
+    await api.updateSession({
+      final_status: finalStatus,
+      finalReadinessJudgment,
+      fail_summary: 'N/A',
+      newbie_shift_prompt: {
+        trigger: 'review_backup_action',
+        status: 'accepted',
+        updated_at: new Date().toISOString(),
+      },
+    }).catch(() => {});
+    onNavigate('newbieshift');
+  };
+
   const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
   
   const getSummaryStatusText = () => {
@@ -879,6 +939,37 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         </div>
       )}
       <div className={`banner ${bannerClass}`} data-testid="review-banner">{bannerText}</div>
+
+      {showNextActions && (
+        <div className="card" style={{ marginTop: 16 }} data-testid="review-next-actions">
+          <h3 style={{ marginBottom: 12 }}>Next Actions</h3>
+          <p className="text-sm" style={{ marginTop: 0, marginBottom: 8 }}>
+            This certification session requires follow-up before it can be completed.
+          </p>
+          <p className="text-xs text-muted" style={{ marginTop: 0, marginBottom: 12 }}>
+            Use this if the automatic Newbie Shift prompt was skipped, dismissed, or the session was updated after review.
+          </p>
+          {newbieAlreadyScheduled ? (
+            <>
+              <button className="btn btn-muted" disabled data-testid="review-newbie-already-scheduled">
+                ✓ Newbie Shift Already Scheduled
+              </button>
+              <div className="text-xs text-muted" style={{ marginTop: 8 }}>
+                A Newbie Shift has already been scheduled for this candidate.
+              </div>
+            </>
+          ) : (
+            <button
+              className="btn btn-primary"
+              onClick={handleScheduleNewbieShift}
+              disabled={!canScheduleNewbie}
+              data-testid="review-schedule-newbie"
+            >
+              Schedule Newbie Shift
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="card final-readiness-card" data-testid="final-readiness-judgment">
         <div className="final-readiness-header">
@@ -1102,6 +1193,13 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           </>
         )}
       </div>
+
+      {incompleteReason && (
+        <div className="card" style={{ marginTop: 24 }} data-testid="review-incomplete-reason">
+          <h3 style={{ marginBottom: 8 }}>Incomplete Reason</h3>
+          <div className="text-sm">{incompleteReason}</div>
+        </div>
+      )}
 
       <div style={{ marginTop: 24 }}>
         <div className="review-summary-heading">

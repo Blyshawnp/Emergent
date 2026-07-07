@@ -1,6 +1,6 @@
 const SOUND_FILES = {
   popup: 'ding.mp3',
-  warning: 'error.mp3',
+  warning: 'error-sam.mp3',
   success: 'chimes.mp3',
   setup: 'setup-welcome.mp3',
   notificationApp: 'notification-app.mp3',
@@ -275,4 +275,5 @@ export const welcomeAudioInternals = {
   normalizeAudioKey,
   getWelcomeAudioKey,
   getWelcomeSoundUrls,
+  getSoundUrl,
 };

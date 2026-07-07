@@ -52,6 +52,7 @@ beforeEach(() => {
   api.getDefaults.mockResolvedValue(defaults);
   api.getSettings.mockResolvedValue({});
   api.updateSession.mockResolvedValue({ ok: true });
+  api.saveCall.mockResolvedValue({ ok: true });
   mockModal.confirmDanger.mockResolvedValue(false);
 });
 
@@ -163,5 +164,97 @@ test('Back preserves the current call payment selection in keyed drafts', async 
       2: expect.objectContaining({ payment_selection: { cardId: 'additional_1', eftId: 'additional_2' } }),
     }),
   }));
+  await view.unmount();
+});
+
+test('not enough time after passed calls prompts for Newbie Shift scheduling', async () => {
+  api.getDefaults.mockResolvedValue({
+    ...defaults,
+    call_types: ['Existing Member - One Time'],
+    donors_existing: [['Morgan', 'Member', '2 Main St', '', 'Town', 'NC', '555-0101', 'morgan@example.test']],
+  });
+  const view = await renderPage(2, {
+    call_1: { result: 'Pass', type: 'New Donor - One Time' },
+  });
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      final_attempt: false,
+      call_1: { result: 'Pass', type: 'New Donor - One Time' },
+      call_2: { result: 'Pass', type: 'Existing Member - One Time' },
+    },
+  });
+  mockModal.showModal
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(false)
+    .mockResolvedValueOnce(true);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-pass"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="calls-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Schedule Newbie Shift',
+  }));
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    time_for_sup: false,
+    final_status: 'Incomplete',
+    fail_summary: 'N/A',
+    newbie_shift_prompt: expect.objectContaining({
+      trigger: 'not_enough_time_sup_transfer',
+      status: 'accepted',
+    }),
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+
+  await view.unmount();
+});
+
+test('dismissed not-enough-time prompt routes to Review without nagging again', async () => {
+  api.getDefaults.mockResolvedValue({
+    ...defaults,
+    call_types: ['Existing Member - One Time'],
+    donors_existing: [['Morgan', 'Member', '2 Main St', '', 'Town', 'NC', '555-0101', 'morgan@example.test']],
+  });
+  const view = await renderPage(2, {
+    call_1: { result: 'Pass', type: 'New Donor - One Time' },
+  });
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      final_attempt: false,
+      call_1: { result: 'Pass', type: 'New Donor - One Time' },
+      call_2: { result: 'Pass', type: 'Existing Member - One Time' },
+      newbie_shift_prompt: { trigger: 'not_enough_time_sup_transfer', status: 'dismissed' },
+    },
+  });
+  mockModal.showModal
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(false);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-pass"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="calls-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).not.toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Schedule Newbie Shift',
+  }));
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    time_for_sup: false,
+    final_status: 'Incomplete',
+    fail_summary: 'N/A',
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('review');
+
   await view.unmount();
 });

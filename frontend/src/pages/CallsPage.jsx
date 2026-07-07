@@ -243,8 +243,41 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
       await apiRef.updateSession({ time_for_sup: true });
       onNavigate('suptransfer');
     } else {
-      await apiRef.updateSession({ time_for_sup: false });
-      onNavigate('newbieshift');
+      const promptSignature = 'not_enough_time_sup_transfer';
+      const existingPrompt = session.newbie_shift_prompt || {};
+      const alreadyScheduled = Boolean(session.newbie_shift_data);
+      if (alreadyScheduled) {
+        await apiRef.updateSession({ time_for_sup: false, final_status: 'Incomplete', fail_summary: 'N/A' });
+        onNavigate('review');
+        return 'navigated';
+      }
+      if (existingPrompt.trigger === promptSignature && existingPrompt.status === 'dismissed') {
+        await apiRef.updateSession({ time_for_sup: false, final_status: 'Incomplete', fail_summary: 'N/A' });
+        onNavigate('review');
+        return 'navigated';
+      }
+      const schedule = await modal.showModal({
+        type: 'confirm',
+        title: 'Schedule Newbie Shift',
+        body: 'This certification session requires follow-up before it can be completed.',
+        graphic: 'time',
+        buttons: [
+          { label: 'Schedule Newbie Shift', cls: 'btn-primary', value: true },
+          { label: 'Skip for Now', cls: 'btn-muted', value: false },
+        ],
+      });
+      const promptState = {
+        trigger: promptSignature,
+        status: schedule ? 'accepted' : 'dismissed',
+        updated_at: new Date().toISOString(),
+      };
+      await apiRef.updateSession({
+        time_for_sup: false,
+        final_status: 'Incomplete',
+        fail_summary: 'N/A',
+        newbie_shift_prompt: promptState,
+      });
+      onNavigate(schedule ? 'newbieshift' : 'review');
     }
     return 'navigated';
   }

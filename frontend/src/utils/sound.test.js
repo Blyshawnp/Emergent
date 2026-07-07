@@ -1,6 +1,6 @@
 import { welcomeAudioInternals } from './sound';
 
-const { getWelcomeAudioKey, getWelcomeSoundUrls, normalizeAudioKey } = welcomeAudioInternals;
+const { getSoundUrl, getWelcomeAudioKey, getWelcomeSoundUrls, normalizeAudioKey } = welcomeAudioInternals;
 
 test('normalizes welcome audio keys from display name or tester first name', () => {
   expect(normalizeAudioKey(' Debbie! ')).toBe('debbie');
@@ -36,4 +36,9 @@ test('orders male and female welcome audio fallbacks correctly', () => {
     './assets/sounds/welcome/welcome-debbie.mp3',
     './assets/sounds/welcome/welcome-default.mp3',
   ]);
+});
+
+test('standard warning sound uses the SAM error asset', () => {
+  expect(getSoundUrl('warning')).toBe('./assets/sounds/error-sam.mp3');
+  expect(getSoundUrl('samError')).toBe('./assets/sounds/error-sam.mp3');
 });

@@ -384,7 +384,41 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       if (result === 'Fail') {
         const { session } = await api.getCurrentSession();
         if (session && session.final_attempt) { await api.updateSession({ final_status: 'FAIL-Final Attempt' }); onNavigate('review'); }
-        else { onNavigate('newbieshift'); }
+        else {
+          const promptSignature = 'both_sup_transfers_failed';
+          const existingPrompt = session?.newbie_shift_prompt || {};
+          const alreadyScheduled = Boolean(session?.newbie_shift_data);
+          if (alreadyScheduled) {
+            await api.updateSession({ final_status: 'Incomplete', fail_summary: 'N/A' });
+            onNavigate('review');
+            return;
+          }
+          if (existingPrompt.trigger === promptSignature && existingPrompt.status === 'dismissed') {
+            await api.updateSession({ final_status: 'Incomplete', fail_summary: 'N/A' });
+            onNavigate('review');
+            return;
+          }
+          const schedule = await modal.showModal({
+            type: 'confirm',
+            title: 'Schedule Newbie Shift',
+            body: 'This certification session requires follow-up before it can be completed.',
+            graphic: 'calendar',
+            buttons: [
+              { label: 'Schedule Newbie Shift', cls: 'btn-primary', value: true },
+              { label: 'Skip for Now', cls: 'btn-muted', value: false },
+            ],
+          });
+          await api.updateSession({
+            final_status: 'Incomplete',
+            fail_summary: 'N/A',
+            newbie_shift_prompt: {
+              trigger: promptSignature,
+              status: schedule ? 'accepted' : 'dismissed',
+              updated_at: new Date().toISOString(),
+            },
+          });
+          onNavigate(schedule ? 'newbieshift' : 'review');
+        }
       } else { onNavigate('review'); }
     }
   };

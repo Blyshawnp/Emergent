@@ -8,6 +8,7 @@ const mockModal = {
   confirm: jest.fn(),
   confirmDanger: jest.fn(),
   warning: jest.fn(),
+  showModal: jest.fn(),
 };
 
 jest.mock('../api', () => ({
@@ -90,7 +91,9 @@ beforeEach(() => {
   mockModal.confirm.mockResolvedValue(true);
   mockModal.confirmDanger.mockResolvedValue(false);
   mockModal.warning.mockResolvedValue(true);
+  mockModal.showModal.mockResolvedValue(true);
   api.updateSession.mockResolvedValue({ ok: true });
+  api.saveSupTransfer.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -204,5 +207,133 @@ test('supervisor-only Back returns to Basics', async () => {
     await flushPromises();
   });
   expect(view.onNavigate).toHaveBeenCalledWith('basics');
+  await view.unmount();
+});
+
+test('second failed supervisor transfer prompts for Newbie Shift when not final attempt', async () => {
+  const view = await renderPage({
+    final_attempt: false,
+    call_1: { result: 'Pass' },
+    call_2: { result: 'Pass' },
+    sup_transfer_1: { result: 'Fail', fails: { 'Did not ask permission to transfer': true } },
+    sup_transfer_drafts: {
+      2: {
+        transfer_num: 2,
+        result: 'Fail',
+        fails: { 'Transferred to wrong queue': true },
+        coaching: { 'Minimize dead air': true },
+      },
+    },
+  }, { transferNum: 2 });
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      final_attempt: false,
+      call_1: { result: 'Pass' },
+      call_2: { result: 'Pass' },
+      sup_transfer_1: { result: 'Fail', fails: { 'Did not ask permission to transfer': true } },
+      sup_transfer_2: { result: 'Fail', fails: { 'Transferred to wrong queue': true } },
+    },
+  });
+  mockModal.showModal.mockResolvedValueOnce(true);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="sup-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Schedule Newbie Shift',
+  }));
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_status: 'Incomplete',
+    fail_summary: 'N/A',
+    newbie_shift_prompt: expect.objectContaining({
+      trigger: 'both_sup_transfers_failed',
+      status: 'accepted',
+    }),
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+
+  await view.unmount();
+});
+
+test('final-attempt second failed supervisor transfer fails with no Newbie Shift prompt', async () => {
+  const view = await renderPage({
+    final_attempt: true,
+    call_1: { result: 'Pass' },
+    call_2: { result: 'Pass' },
+    sup_transfer_1: { result: 'Fail', fails: { 'Did not ask permission to transfer': true } },
+    sup_transfer_drafts: {
+      2: {
+        transfer_num: 2,
+        result: 'Fail',
+        fails: { 'Transferred to wrong queue': true },
+        coaching: { 'Minimize dead air': true },
+      },
+    },
+  }, { transferNum: 2 });
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      final_attempt: true,
+      sup_transfer_1: { result: 'Fail' },
+      sup_transfer_2: { result: 'Fail' },
+    },
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="sup-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).not.toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Schedule Newbie Shift',
+  }));
+  expect(api.updateSession).toHaveBeenCalledWith({ final_status: 'FAIL-Final Attempt' });
+  expect(view.onNavigate).toHaveBeenCalledWith('review');
+
+  await view.unmount();
+});
+
+test('already scheduled Newbie Shift suppresses second-fail prompt and routes to Review', async () => {
+  const view = await renderPage({
+    final_attempt: false,
+    call_1: { result: 'Pass' },
+    call_2: { result: 'Pass' },
+    sup_transfer_1: { result: 'Fail', fails: { 'Did not ask permission to transfer': true } },
+    sup_transfer_drafts: {
+      2: {
+        transfer_num: 2,
+        result: 'Fail',
+        fails: { 'Transferred to wrong queue': true },
+        coaching: { 'Minimize dead air': true },
+      },
+    },
+  }, { transferNum: 2 });
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      final_attempt: false,
+      newbie_shift_data: { newbie_date: '06/23/2026', newbie_time: '10:00 AM', newbie_tz: 'ET' },
+      sup_transfer_1: { result: 'Fail' },
+      sup_transfer_2: { result: 'Fail' },
+    },
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="sup-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).not.toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Schedule Newbie Shift',
+  }));
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_status: 'Incomplete',
+    fail_summary: 'N/A',
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('review');
+
   await view.unmount();
 });

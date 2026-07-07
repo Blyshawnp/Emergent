@@ -4,6 +4,16 @@ import { useModal } from '../components/ModalProvider';
 import geminiSettingsGraphic from '../assets/images/Gemini.png';
 import { getPaymentOptionsFromSettings, syncLegacyPaymentFields } from '../utils/paymentOptions';
 import { VPN_PROXY_CHECK_MODES, normalizeVpnProxyCheckMode } from '../components/CandidateIpIntelligence';
+import {
+  DISCORD_CATEGORY_SHORTCUTS,
+  DISCORD_FAVORITE_SHORTCUT_DEFAULTS,
+  DISCORD_GLOBAL_SHORTCUTS,
+  findShortcutConflict,
+  getDefaultFavoriteShortcut,
+  normalizeDiscordProductivitySettings,
+  normalizeShortcut,
+  shortcutFromEvent,
+} from '../utils/discordProductivity';
 
 const TABS = [
   { key: 'general', label: 'General' },
@@ -1028,11 +1038,106 @@ function normalizeScreenshotItem(item) {
   return { title: '', image_url: '', category: 'Uncategorized' };
 }
 
+function discordSettingsTemplateKey(item) {
+  return `${String(item?.category || '').trim().toLowerCase()}::${String(item?.title || '').trim().toLowerCase()}`;
+}
+
+function ShortcutRecorder({ value, onChange, testId, recording, onRecordingChange }) {
+  const handleKeyDown = (event) => {
+    if (!recording) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const shortcut = shortcutFromEvent(event);
+    if (!shortcut) return;
+    onRecordingChange(false);
+    onChange(shortcut);
+  };
+
+  return (
+    <button
+      type="button"
+      className={`shortcut-recorder ${recording ? 'recording' : ''}`}
+      onClick={() => onRecordingChange(true)}
+      onKeyDown={handleKeyDown}
+      data-testid={testId}
+    >
+      {recording ? 'Press new shortcut...' : normalizeShortcut(value) || 'Press Shortcut'}
+    </button>
+  );
+}
+
+function ShortcutSettingsRow({ item, value, defaultShortcut, recordingKey, conflict, onEdit, onSave, onRestore, testId }) {
+  const isRecording = recordingKey === item.key;
+  return (
+    <div className="discord-shortcut-settings-row">
+      <div className="discord-shortcut-settings-meta">
+        <strong>{item.label}</strong>
+        {conflict && <span className="discord-shortcut-conflict">This shortcut is already assigned to: {conflict.label}</span>}
+      </div>
+      <span className="discord-current-shortcut">{normalizeShortcut(value) || 'Unassigned'}</span>
+      <ShortcutRecorder
+        value={value}
+        recording={isRecording}
+        onRecordingChange={(nextRecording) => onEdit(nextRecording ? item.key : '')}
+        onChange={onSave}
+        testId={testId}
+      />
+      <button type="button" className="btn btn-muted btn-sm" onClick={() => onRestore(defaultShortcut)}>Restore Default</button>
+    </div>
+  );
+}
+
 function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
   const modal = useModal();
   const [section, setSection] = useState('posts');
+  const [recordingShortcutKey, setRecordingShortcutKey] = useState('');
+  const [shortcutConflict, setShortcutConflict] = useState(null);
   const discord = (s.discord_templates || []).map(normalizeDiscordPost);
   const screenshots = (s.discord_screenshots || []).map(normalizeScreenshotItem);
+  const productivity = normalizeDiscordProductivitySettings(s.discord_productivity);
+  const shortcutAssignments = [
+    ...DISCORD_GLOBAL_SHORTCUTS.map((item) => ({ key: `global:${item.key}`, label: item.label, shortcut: productivity.globalShortcuts[item.key] || item.defaultShortcut })),
+    ...DISCORD_CATEGORY_SHORTCUTS.map((item) => ({ key: `category:${item.key}`, label: item.label, shortcut: productivity.categoryShortcuts[item.key] || item.shortcut })),
+    ...discord.map((item) => {
+      const templateKey = discordSettingsTemplateKey(item);
+      return {
+        key: `favorite:${templateKey}`,
+        label: item.title || 'Untitled Discord Post',
+        shortcut: productivity.favoriteShortcuts[templateKey] || getDefaultFavoriteShortcut(item),
+      };
+    }),
+  ];
+  const updateProductivity = (patch) => {
+    set('discord_productivity', normalizeDiscordProductivitySettings({ ...productivity, ...patch }));
+    onFeedback?.('discord', 'Updated. Click Save Settings to keep changes.');
+  };
+  const saveShortcut = (assignmentKey, label, shortcut, apply) => {
+    const normalized = normalizeShortcut(shortcut);
+    const conflict = findShortcutConflict(shortcutAssignments, normalized, assignmentKey);
+    if (conflict) {
+      setShortcutConflict({ key: assignmentKey, label: conflict.label });
+      onFeedback?.('discord', `This shortcut is already assigned to: ${conflict.label}. Choose another shortcut.`);
+      return;
+    }
+    setShortcutConflict(null);
+    apply(normalized);
+    onFeedback?.('discord', `${label} shortcut updated. Click Save Settings to keep changes.`);
+  };
+  const saveGlobalShortcut = (item, shortcut) => {
+    saveShortcut(`global:${item.key}`, item.label, shortcut, (normalized) => {
+      updateProductivity({ globalShortcuts: { ...productivity.globalShortcuts, [item.key]: normalized } });
+    });
+  };
+  const saveCategoryShortcut = (item, shortcut) => {
+    saveShortcut(`category:${item.key}`, item.label, shortcut, (normalized) => {
+      updateProductivity({ categoryShortcuts: { ...productivity.categoryShortcuts, [item.key]: normalized } });
+    });
+  };
+  const saveFavoriteShortcut = (templateKey, label, shortcut) => {
+    saveShortcut(`favorite:${templateKey}`, label, shortcut, (normalized) => {
+      updateProductivity({ favoriteShortcuts: { ...productivity.favoriteShortcuts, [templateKey]: normalized } });
+    });
+  };
   const update = (i, field, val) => {
     const next = discord.map((item, idx) => idx === i ? { ...item, [field]: val } : item);
     set('discord_templates', next);
@@ -1086,6 +1191,13 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
           data-testid="settings-discord-tab-screenshots"
         >
           Screenshots
+        </button>
+        <button
+          className={`tab-btn ${section === 'productivity' ? 'active' : ''}`}
+          onClick={() => setSection('productivity')}
+          data-testid="settings-discord-tab-productivity"
+        >
+          Productivity
         </button>
       </div>
 
@@ -1157,6 +1269,106 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
           <PendingListFeedback message={feedback} />
           <button className="btn btn-primary btn-sm" onClick={addSS} style={{ marginTop: 8 }} data-testid="settings-discord-ss-add">+ Add Screenshot</button>
         </>
+      )}
+
+      {section === 'productivity' && (
+        <div className="discord-productivity-settings" data-testid="settings-discord-productivity">
+          <h3 style={{ marginBottom: 16 }}>Discord Productivity</h3>
+          <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
+            Configure the Command Palette, keyboard shortcuts, automatic copy behavior, and favorite post shortcut assignments for the Discord Posts window.
+          </p>
+          <div className="settings-admin-field-grid">
+            <label className="checkbox-label">
+              <input type="checkbox" checked={productivity.enableShortcuts} onChange={e => updateProductivity({ enableShortcuts: e.target.checked })} />
+              <span>Enable keyboard shortcuts</span>
+            </label>
+            <label className="checkbox-label">
+              <input type="checkbox" checked={productivity.enableCommandPalette} onChange={e => updateProductivity({ enableCommandPalette: e.target.checked })} />
+              <span>Enable Command Palette</span>
+            </label>
+            <label className="checkbox-label">
+              <input type="checkbox" checked={productivity.automaticCopy} onChange={e => updateProductivity({ automaticCopy: e.target.checked })} />
+              <span>Automatically copy after shortcut</span>
+            </label>
+            <label className="checkbox-label">
+              <input type="checkbox" checked={productivity.showCopyToast} onChange={e => updateProductivity({ showCopyToast: e.target.checked })} />
+              <span>Show confirmation toast</span>
+            </label>
+            <label className="checkbox-label">
+              <input type="checkbox" checked={productivity.openAutomatically} onChange={e => updateProductivity({ openAutomatically: e.target.checked })} />
+              <span>Open Discord window automatically</span>
+            </label>
+          </div>
+          <div className="discord-shortcut-section-title">
+            <h4>Global Shortcuts</h4>
+            <span>Action / Current Shortcut / Edit / Restore Default</span>
+          </div>
+          <div className="discord-shortcut-settings-list">
+            {DISCORD_GLOBAL_SHORTCUTS.map((item) => (
+              <ShortcutSettingsRow
+                key={item.key}
+                item={item}
+                value={productivity.globalShortcuts[item.key] || item.defaultShortcut}
+                defaultShortcut={item.defaultShortcut}
+                recordingKey={recordingShortcutKey}
+                conflict={shortcutConflict?.key === `global:${item.key}` ? shortcutConflict : null}
+                onEdit={(key) => setRecordingShortcutKey(key)}
+                onSave={(shortcut) => saveGlobalShortcut(item, shortcut)}
+                onRestore={(shortcut) => saveGlobalShortcut(item, shortcut)}
+                testId={`settings-discord-global-shortcut-${item.key}`}
+              />
+            ))}
+          </div>
+          <div className="discord-shortcut-section-title">
+            <h4>Category Shortcuts</h4>
+            <span>Action / Current Shortcut / Edit / Restore Default</span>
+          </div>
+          <div className="discord-shortcut-settings-list">
+            {DISCORD_CATEGORY_SHORTCUTS.map((item) => (
+              <ShortcutSettingsRow
+                key={item.key}
+                item={item}
+                value={productivity.categoryShortcuts[item.key] || item.shortcut}
+                defaultShortcut={item.shortcut}
+                recordingKey={recordingShortcutKey}
+                conflict={shortcutConflict?.key === `category:${item.key}` ? shortcutConflict : null}
+                onEdit={(key) => setRecordingShortcutKey(key)}
+                onSave={(shortcut) => saveCategoryShortcut(item, shortcut)}
+                onRestore={(shortcut) => saveCategoryShortcut(item, shortcut)}
+                testId={`settings-discord-category-shortcut-${item.key}`}
+              />
+            ))}
+          </div>
+          <div className="discord-shortcut-section-title">
+            <h4>Favorite Shortcuts</h4>
+            <span>Defaults: Ctrl+1 Wrong Headset, Ctrl+2 VPN Failed, Ctrl+3 Change DTE, Ctrl+4 Supervisor Failed, Ctrl+5 Technical Issue</span>
+          </div>
+          <div className="discord-shortcut-settings-list">
+            {discord.length === 0 ? (
+              <p className="text-muted text-sm">Add Discord posts before assigning favorite shortcuts.</p>
+            ) : discord.map((item, index) => {
+              const templateKey = discordSettingsTemplateKey(item);
+              const defaultShortcut = getDefaultFavoriteShortcut(item);
+              const defaultInfo = DISCORD_FAVORITE_SHORTCUT_DEFAULTS.find((entry) => entry.defaultShortcut === defaultShortcut);
+              const label = item.title || defaultInfo?.label || 'Untitled Discord Post';
+              return (
+                <ShortcutSettingsRow
+                  key={`${templateKey}-${index}`}
+                  item={{ key: templateKey, label }}
+                  value={productivity.favoriteShortcuts[templateKey] || defaultShortcut}
+                  defaultShortcut={defaultShortcut}
+                  recordingKey={recordingShortcutKey}
+                  conflict={shortcutConflict?.key === `favorite:${templateKey}` ? shortcutConflict : null}
+                  onEdit={(key) => setRecordingShortcutKey(key)}
+                  onSave={(shortcut) => saveFavoriteShortcut(templateKey, label, shortcut)}
+                  onRestore={(shortcut) => saveFavoriteShortcut(templateKey, label, shortcut)}
+                  testId={`settings-discord-shortcut-${index}`}
+                />
+              );
+            })}
+          </div>
+          <PendingListFeedback message={feedback} />
+        </div>
       )}
     </div>
   );

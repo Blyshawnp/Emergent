@@ -26,7 +26,7 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertEqual(payload["sup_complete"], "No")
         self.assertEqual(payload["all_complete"], "No")
         self.assertEqual(payload["fail_reason"], "N/A")
-        self.assertIn("Call 1", server.build_clean_fail(session))
+        self.assertEqual(server.build_clean_fail(session), "N/A")
 
     def test_supervisor_only_newbie_shift_form_mapping(self):
         session = {
@@ -65,8 +65,71 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         resolved = {"candidate_name": "Candidate", "tech_issue": "Discord issues", "tech_issue_ended_session": False}
         ended = {**resolved, "tech_issue": "Discord issues - unresolved", "tech_issue_ended_session": True}
         self.assertEqual(server.generate_summaries(resolved)["fail"], "N/A")
-        self.assertIn("Technical Issues", server.generate_summaries(ended)["fail"])
+        self.assertEqual(server.compute_final_status(ended), "Incomplete")
+        self.assertEqual(server.generate_summaries(ended)["fail"], "N/A")
         self.assertEqual(server.build_form_fill_payload(ended, {})["tech_issue_choice"], "Discord issues")
+
+    def test_incomplete_technical_issue_ignores_stale_fail_summary(self):
+        session = {
+            "candidate_name": "Candidate",
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+            "tech_issue": "Discord issues - unresolved",
+            "tech_issue_ended_session": True,
+            "newbie_shift_data": {"newbie_date": "2026-06-23", "newbie_time": "10:00 AM", "newbie_tz": "ET"},
+        }
+        payload = server.build_form_fill_payload(session, {}, fail_summary="Stale generated fail summary.")
+        self.assertEqual(server.compute_final_status(session), "Incomplete")
+        self.assertEqual(server.generate_summaries(session)["fail"], "N/A")
+        self.assertEqual(payload["fail_reason"], "N/A")
+        self.assertEqual(payload["mock_complete"], "Yes")
+        self.assertEqual(payload["sup_complete"], "No")
+
+    def test_not_enough_time_for_supervisor_transfer_is_incomplete_form_payload(self):
+        session = {
+            "candidate_name": "Candidate",
+            "call_1": {"result": "Pass", "type": "New Donor - One Time"},
+            "call_2": {"result": "Pass", "type": "Existing Member - One Time"},
+            "time_for_sup": False,
+            "newbie_shift_prompt": {"trigger": "not_enough_time_sup_transfer", "status": "dismissed"},
+        }
+        payload = server.build_form_fill_payload(session, {}, fail_summary="Stale fail text")
+        self.assertEqual(server.compute_final_status(session), "Incomplete")
+        self.assertEqual(server.generate_summaries(session)["fail"], "N/A")
+        self.assertEqual(payload["fail_reason"], "N/A")
+        self.assertEqual(payload["mock_complete"], "Yes")
+        self.assertEqual(payload["sup_complete"], "No")
+        self.assertEqual(payload["all_complete"], "No")
+
+    def test_non_final_double_supervisor_transfer_failure_is_incomplete_form_payload(self):
+        session = {
+            "candidate_name": "Candidate",
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+            "sup_transfer_1": {"result": "Fail", "fails": {"Did not ask permission to transfer": True}},
+            "sup_transfer_2": {"result": "Fail", "fails": {"Transferred to wrong queue": True}},
+            "final_attempt": False,
+        }
+        payload = server.build_form_fill_payload(session, {})
+        self.assertEqual(server.compute_final_status(session), "Incomplete")
+        self.assertEqual(server.generate_summaries(session)["fail"], "N/A")
+        self.assertIn("Sup Transfer 1", server.build_clean_coaching(session))
+        self.assertIn("Sup Transfer 2", server.build_clean_coaching(session))
+        self.assertEqual(payload["fail_reason"], "N/A")
+
+    def test_failed_final_attempt_supervisor_transfer_populates_fail_summary(self):
+        session = {
+            "candidate_name": "Candidate",
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+            "sup_transfer_1": {"result": "Fail", "fails": {"Did not ask permission to transfer": True}},
+            "sup_transfer_2": {"result": "Fail", "fails": {"Transferred to wrong queue": True}},
+            "final_attempt": True,
+        }
+        payload = server.build_form_fill_payload(session, {})
+        self.assertEqual(server.compute_final_status(session), "FAIL-Final Attempt")
+        self.assertNotEqual(server.generate_summaries(session)["fail"], "N/A")
+        self.assertIn("Sup Transfer", payload["fail_reason"])
 
     def test_denied_headsets_are_excluded_from_approved_groups(self):
         rows = [

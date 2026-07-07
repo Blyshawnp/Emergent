@@ -71,7 +71,7 @@ const passingSession = {
   fail_summary: 'N/A',
 };
 
-async function renderReview(session = passingSession, navigationState = null) {
+async function renderReview(session = passingSession, navigationState = null, options = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -80,13 +80,17 @@ async function renderReview(session = passingSession, navigationState = null) {
   api.getCurrentSession.mockResolvedValue({ session });
   api.getSettings.mockResolvedValue({});
   api.updateSession.mockResolvedValue({ ok: true, session });
-  api.generateSummaries.mockResolvedValue({
-    coaching: 'Regenerated coaching summary.',
-    fail: 'Regenerated fail summary.',
-    used_gemini: false,
-    used_fallback: true,
-    gemini_error: '',
-  });
+  if (options.generateSummariesError) {
+    api.generateSummaries.mockRejectedValue(options.generateSummariesError);
+  } else {
+    api.generateSummaries.mockResolvedValue(options.generateSummariesResult || {
+      coaching: 'Regenerated coaching summary.',
+      fail: 'Regenerated fail summary.',
+      used_gemini: false,
+      used_fallback: true,
+      gemini_error: '',
+    });
+  }
   api.fillForm.mockResolvedValue({ ok: true, message: 'Filled' });
   api.finishSession.mockResolvedValue({ ok: true, message: 'Saved' });
   mockModal.alert.mockResolvedValue(true);
@@ -127,6 +131,162 @@ test('defaults final readiness judgment to calculated result', async () => {
   expect(view.container.textContent).toContain('Final Readiness Judgment');
   expect(view.container.textContent).toContain('Calculated result: Pass');
   expect(view.container.querySelector('[name="final-readiness-mode"]').checked).toBe(true);
+
+  await view.unmount();
+});
+
+test('review auto-populates missing coaching summary when only fail summary exists', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    coaching_summary: '',
+    fail_summary: 'N/A',
+  }, null, {
+    generateSummariesResult: {
+      coaching: 'Fallback coaching summary generated automatically.',
+      fail: 'Generated fail summary should not replace N/A for a passing session.',
+      used_gemini: false,
+      used_fallback: true,
+      gemini_error: '',
+    },
+  });
+
+  await act(async () => {
+    await flushPromises();
+    await flushPromises();
+  });
+
+  expect(api.generateSummaries).toHaveBeenCalledWith(expect.objectContaining({
+    candidate_name: 'Taylor Example',
+  }));
+  expect(view.container.querySelector('[data-testid="review-coaching"]').value).toBe('Fallback coaching summary generated automatically.');
+  expect(view.container.querySelector('[data-testid="review-fail"]').value).toBe('N/A');
+
+  await view.unmount();
+});
+
+test('review preserves existing coaching summary on initial load', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    coaching_summary: 'Existing trainer-approved coaching summary.',
+    fail_summary: 'N/A',
+  });
+
+  await act(async () => {
+    await flushPromises();
+  });
+
+  expect(api.generateSummaries).not.toHaveBeenCalled();
+  expect(view.container.querySelector('[data-testid="review-coaching"]').value).toBe('Existing trainer-approved coaching summary.');
+
+  await view.unmount();
+});
+
+test('review keeps automatic fallback visible when summary generation errors', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    coaching_summary: '',
+    fail_summary: 'N/A',
+  }, null, {
+    generateSummariesError: new Error('Gemini unavailable'),
+  });
+
+  await act(async () => {
+    await flushPromises();
+    await flushPromises();
+  });
+
+  expect(view.container.querySelector('[data-testid="review-coaching"]').value).toContain('No coaching summary was generated before Review loaded');
+  expect(view.container.querySelector('[data-testid="review-fail"]').value).toBe('N/A');
+  expect(view.container.querySelector('[data-testid="review-gemini-status"]').textContent).toContain('Gemini unavailable');
+
+  await view.unmount();
+});
+
+test('incomplete review keeps fail summary N/A and shows scheduling action', async () => {
+  const incompleteSession = {
+    ...passingSession,
+    sup_transfer_1: undefined,
+    tech_issue: 'Discord issues - unresolved',
+    tech_issue_ended_session: true,
+    coaching_summary: 'Candidate passed mock calls before the interruption.',
+    fail_summary: 'Stale generated fail summary.',
+  };
+  const view = await renderReview(incompleteSession);
+
+  expect(view.container.querySelector('[data-testid="review-banner"]').textContent).toContain('SESSION INCOMPLETE');
+  expect(view.container.querySelector('[data-testid="review-fail"]').value).toBe('N/A');
+  expect(view.container.querySelector('[data-testid="review-incomplete-reason"]').textContent).toContain('Technical issue prevented completion during Supervisor Transfer.');
+  expect(view.container.querySelector('[data-testid="review-incomplete-reason"]').textContent).toContain('A Newbie Shift is needed to complete certification.');
+  expect(view.container.querySelector('[data-testid="review-next-actions"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-testid="review-next-actions"]').textContent).toContain('This certification session requires follow-up before it can be completed.');
+  expect(view.container.querySelector('[data-testid="review-next-actions"]').textContent).toContain('Use this if the automatic Newbie Shift prompt was skipped, dismissed, or the session was updated after review.');
+  expect(view.container.querySelector('[data-testid="review-schedule-newbie"]')).not.toBeNull();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="review-fill-form"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.fillForm).toHaveBeenCalledWith(
+    expect.any(String),
+    'N/A',
+    expect.objectContaining({ final_status: 'Incomplete' })
+  );
+
+  await view.unmount();
+});
+
+test('schedule newbie action launches existing scheduler and existing appointment disables action', async () => {
+  const incompleteSession = {
+    ...passingSession,
+    sup_transfer_1: undefined,
+    coaching_summary: 'Candidate passed mock calls.',
+    fail_summary: '',
+  };
+  const view = await renderReview(incompleteSession);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="review-schedule-newbie"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_status: 'Incomplete',
+    fail_summary: 'N/A',
+    newbie_shift_prompt: expect.objectContaining({
+      trigger: 'review_backup_action',
+      status: 'accepted',
+    }),
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+
+  await view.unmount();
+
+  const scheduledView = await renderReview({
+    ...incompleteSession,
+    newbie_shift_data: { newbie_date: '06/23/2026', newbie_time: '10:00 AM', newbie_tz: 'ET' },
+  });
+
+  expect(scheduledView.container.querySelector('[data-testid="review-newbie-already-scheduled"]').textContent).toContain('Newbie Shift Already Scheduled');
+  expect(scheduledView.container.querySelector('[data-testid="review-next-actions"]').textContent).toContain('A Newbie Shift has already been scheduled for this candidate.');
+  expect(scheduledView.container.querySelector('[data-testid="review-schedule-newbie"]')).toBeNull();
+
+  await scheduledView.unmount();
+});
+
+test('failed final attempt does not show Newbie Shift backup action', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    final_attempt: true,
+    sup_transfer_1: { result: 'Fail', fails: { 'Did not ask permission to transfer': true } },
+    sup_transfer_2: { result: 'Fail', fails: { 'Transferred to wrong queue': true } },
+    coaching_summary: 'Supervisor transfer coaching.',
+    fail_summary: 'Supervisor Transfer 1 and 2 failed.',
+  });
+
+  expect(view.container.querySelector('[data-testid="review-banner"]').textContent).toContain('SESSION FAILED - FINAL ATTEMPT');
+  expect(view.container.querySelector('[data-testid="review-next-actions"]')).toBeNull();
+  expect(view.container.querySelector('[data-testid="review-fail"]').value).toContain('Supervisor Transfer');
 
   await view.unmount();
 });

@@ -196,17 +196,19 @@ function ModeBadge({ mode }) {
   return <span className={`candidate-ip-mode-badge candidate-ip-mode-${mode}`}>{label}</span>;
 }
 
-function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact = false }) {
+function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact = false, showCopyButton = true }) {
   return (
     <div className={`ip-manual-lookup ${compact ? 'ip-manual-lookup-compact' : ''}`} data-testid="candidate-ip-manual-links">
       <div className="ip-manual-header">
         <div>
-          <div className="ip-manual-title">Recommended manual lookup links</div>
-          <div className="ip-manual-subtitle">Copy the candidate IP, then verify with one or more external services.</div>
+          <div className="ip-manual-title">Manual lookup sites</div>
+          <div className="ip-manual-subtitle">Check the candidate IP using more than one lookup site because individual services can be stale or incomplete.</div>
         </div>
-        <button type="button" className="btn btn-muted btn-sm" onClick={onCopyIp} disabled={!ip}>
-          {copiedIp ? 'Copied!' : 'Copy IP'}
-        </button>
+        {showCopyButton && (
+          <button type="button" className="btn btn-muted btn-sm" onClick={onCopyIp} disabled={!ip}>
+            {copiedIp ? 'Copied!' : 'Copy IP'}
+          </button>
+        )}
       </div>
       <div className="ip-manual-services-list">
         {links.map((link) => (
@@ -220,7 +222,7 @@ function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact 
             </div>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-muted btn-sm"
               onClick={() => onOpenLink(link.url)}
               data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
             >
@@ -501,66 +503,57 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
 
   if (resolvedMode === VPN_PROXY_CHECK_MODES.LINKS) {
     return (
-      <div className="candidate-ip-card candidate-ip-card-embedded candidate-ip-card-links" data-testid="candidate-ip-links">
+      <div className="candidate-ip-card candidate-ip-card-embedded candidate-ip-card-links candidate-ip-manual-simple" data-testid="candidate-ip-links">
         <button
           type="button"
           className="candidate-ip-card-toggle"
           onClick={() => setOpen((current) => !current)}
           aria-expanded={open}
         >
-          <span>{VPN_PROXY_CHECK_LABEL} <ModeBadge mode={resolvedMode} /></span>
-          <span>{open ? 'Collapse' : 'Expand'}</span>
+          <span className="candidate-ip-toggle-title">{VPN_PROXY_CHECK_LABEL} <ModeBadge mode={resolvedMode} /></span>
+          <span className="candidate-ip-toggle-action">{open ? 'Collapse' : 'Expand'}</span>
         </button>
         {!open && (
           <div className="candidate-ip-collapsed-summary">
-            <span className="text-sm text-muted">Use manual lookup links to verify candidate VPN status.</span>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setOpen(true)}>Show details</button>
+            <span className="text-sm text-muted">Manual verification is the release-safe default.</span>
+            <button type="button" className="btn btn-muted btn-sm" onClick={() => setOpen(true)}>Expand</button>
           </div>
         )}
         {open && (
           <div className="candidate-ip-body">
-            <div className="candidate-ip-mode-helper">
-              Manual lookup is the release-safe default. Use one or more trusted lookup services below to verify if the candidate IP is associated with a VPN or proxy.
-            </div>
-
-            <div className="candidate-ip-input-row" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', margin: '1rem 0' }}>
-              <label style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontWeight: 600, marginBottom: '0.25rem', fontSize: '13px' }}>Candidate IP Address</span>
+            <div className="candidate-ip-input-row">
+              <label>
+                <span>Candidate Public IP Address</span>
                 <input
                   type="text"
                   value={ip}
                   onChange={(event) => setIp(event.target.value)}
                   placeholder="IPv4 or IPv6"
                   data-testid="candidate-ip-manual-input"
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #ccc)' }}
                 />
               </label>
               <button
                 type="button"
                 className="btn btn-muted"
                 onClick={handleCopyIp}
-                style={{ width: '100px', height: '36px' }}
                 disabled={!ip}
               >
                 {copiedIp ? 'Copied!' : 'Copy IP'}
               </button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {manualLinks.map((link) => (
-                <div key={link.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.05)', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--border-color, #eee)' }}>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: '14px' }}>{link.label}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{link.desc}</div>
-                  </div>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => openManualLink(link.url)} data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>Open</button>
-                </div>
-              ))}
+            <div className="candidate-ip-mode-helper">
+              Check the candidate IP using more than one lookup site because individual services can be stale or incomplete.
             </div>
 
-            <div className="text-xs text-muted" style={{ fontStyle: 'italic', marginTop: '1rem' }}>
-              Integrated automated VPN verification may be available if configured by your administrator.
-            </div>
+            <ManualLookupBlock
+              ip={ip}
+              links={manualLinks}
+              onOpenLink={openManualLink}
+              onCopyIp={handleCopyIp}
+              copiedIp={copiedIp}
+              showCopyButton={false}
+            />
           </div>
         )}
       </div>

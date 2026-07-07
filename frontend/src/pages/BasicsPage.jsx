@@ -668,29 +668,63 @@ export default function BasicsPage({ onNavigate }) {
       return;
     }
     await openExternalUrl(buildHeadsetResearchUrl(headsetModel));
-    const usb = form.headset_usb === true;
-    const noise = form.noise_cancel === true;
-    const likelyMeetsRequirements = usb && noise;
-
-    const usbText = usb ? 'Appears likely' : 'Not found / uncertain';
-    const noiseText = noise ? 'Appears likely' : 'Not found / uncertain';
-
-    await modal.showModal({
-      type: likelyMeetsRequirements ? 'success' : 'warning',
-      title: likelyMeetsRequirements ? 'Headset Research Result' : 'Requirement Review Needed',
+    const researchChoice = await modal.showModal({
+      type: 'confirm',
+      title: 'Research Complete',
       body: `
-        <div class="headset-research-result" style="text-align: center;">
-          <div class="headset-research-icon ${likelyMeetsRequirements ? 'success' : 'warning'}" style="font-size: 32px; margin-bottom: 12px;">${likelyMeetsRequirements ? '✓' : '!'}</div>
-          <p>${likelyMeetsRequirements ? `<strong>${headsetModel}</strong> appears likely to meet the headset requirements.` : `This headset may not meet one or more headset requirements.`}</p>
-          <div style="margin: 16px 0; display: inline-block; text-align: left; background: rgba(0,0,0,0.1); padding: 12px 16px; border-radius: 8px;">
-            <div style="margin-bottom: 6px;"><strong>USB:</strong> ${usbText}</div>
-            <div><strong>Noise-cancelling microphone:</strong> ${noiseText}</div>
-          </div>
-          <p>${likelyMeetsRequirements ? 'Administrator review is still required before adding it to the approved list.' : 'Review the research results before allowing it.'}</p>
+        <div class="headset-research-result">
+          <p>Did the research show that this headset has both a wired USB connection and a noise-cancelling microphone?</p>
         </div>
       `,
-      buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
+      graphic: 'info',
+      buttons: [
+        { label: 'Yes', cls: 'btn-primary', value: 'yes' },
+        { label: 'No', cls: 'btn-muted', value: 'no' },
+        { label: 'Cancel', cls: 'btn-ghost', value: 'cancel' },
+      ],
     });
+    if (researchChoice === 'yes') {
+      setForm((current) => ({
+        ...current,
+        headset_brand: headsetModel,
+        headset_usb: true,
+        noise_cancel: true,
+      }));
+      setDropdownOpen(false);
+      return;
+    }
+    if (researchChoice !== 'no') return;
+
+    const hasAnotherHeadset = await modal.showModal({
+      type: 'confirm',
+      title: 'Another Headset?',
+      body: '<div class="headset-research-result"><p>Does the candidate have another headset to try?</p></div>',
+      graphic: 'warning',
+      buttons: [
+        { label: 'Yes', cls: 'btn-primary', value: 'yes' },
+        { label: 'No', cls: 'btn-muted', value: 'no' },
+        { label: 'Cancel', cls: 'btn-ghost', value: 'cancel' },
+      ],
+    });
+    if (hasAnotherHeadset === 'yes') {
+      setForm((current) => ({
+        ...current,
+        headset_brand: '',
+        headset_usb: null,
+        noise_cancel: null,
+      }));
+      setDropdownOpen(true);
+      return;
+    }
+    if (hasAnotherHeadset === 'no') {
+      setForm((current) => ({
+        ...current,
+        headset_brand: headsetModel,
+        headset_usb: false,
+        noise_cancel: false,
+      }));
+      setDropdownOpen(false);
+    }
   };
 
   const useUnknownHeadsetForNow = () => {
@@ -1191,7 +1225,7 @@ export default function BasicsPage({ onNavigate }) {
                         <div className="headset-not-found-copy">Research it before deciding whether it may be used.</div>
                         <div className="headset-not-found-actions">
                           <button type="button" className="btn btn-primary btn-sm headset-research-primary" onMouseDown={e => e.preventDefault()} onClick={researchUnknownHeadset}>Research Headset</button>
-                          <button type="button" className="btn btn-muted btn-sm" onMouseDown={e => e.preventDefault()} onClick={useUnknownHeadsetForNow}>Use This Headset For Now</button>
+                          <button type="button" className="btn btn-muted btn-sm" onMouseDown={e => e.preventDefault()} onClick={useUnknownHeadsetForNow}>Use This Headset</button>
                           <button type="button" className="btn btn-ghost btn-sm" onMouseDown={e => e.preventDefault()} onClick={clearHeadsetEntry}>Clear Entry</button>
                         </div>
                       </li>

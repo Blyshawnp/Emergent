@@ -526,6 +526,7 @@ test('basics records changed approved-list hash without interrupting the trainer
 });
 
 test('unknown headset research opens the required search query without approving the headset', async () => {
+  mockModal.showModal.mockResolvedValueOnce('cancel');
   api.getCurrentSession.mockResolvedValue({ session: null });
   api.getSettings.mockResolvedValue({});
   api.getDefaults.mockResolvedValue({});
@@ -543,10 +544,62 @@ test('unknown headset research opens the required search query without approving
 
   expect(window.electronAPI.openExternal).toHaveBeenCalledWith(buildHeadsetResearchUrl('Acme USB 100'));
   expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
-    title: 'Requirement Review Needed',
-    body: expect.stringContaining('This headset may not meet one or more headset requirements.'),
+    title: 'Research Complete',
+    body: expect.stringContaining('Did the research show that this headset has both a wired USB connection and a noise-cancelling microphone?'),
   }));
+  expect(mockModal.showModal.mock.calls[0][0].body).not.toContain('<strong>USB:</strong>');
   expect(view.container.textContent).not.toContain('Approved headset selected');
+  await view.unmount();
+});
+
+test('unknown headset research yes marks USB and noise cancelling without approving the headset', async () => {
+  mockModal.showModal.mockResolvedValueOnce('yes');
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="basics-brand"]'), 'Acme USB 100');
+    await flushPromises();
+  });
+  expect(view.container.textContent).toContain('Use This Headset');
+  expect(view.container.textContent).not.toContain('Use This Headset For Now');
+  await act(async () => {
+    view.container.querySelector('[data-testid="headset-research-btn"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.querySelectorAll('input[name="b-usb"]')[0]?.checked).toBe(true);
+  expect(view.container.querySelectorAll('input[name="b-noise"]')[0]?.checked).toBe(true);
+  expect(view.container.querySelector('[data-testid="basics-brand"]').value).toBe('Acme USB 100');
+  expect(view.container.textContent).not.toContain('Approved headset selected');
+  await view.unmount();
+});
+
+test('unknown headset research no asks for another headset and returns to entry area', async () => {
+  mockModal.showModal.mockResolvedValueOnce('no').mockResolvedValueOnce('yes');
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  await act(async () => {
+    setInputValue(view.container.querySelector('[data-testid="basics-brand"]'), 'Acme USB 100');
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="headset-research-btn"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenLastCalledWith(expect.objectContaining({
+    title: 'Another Headset?',
+    body: expect.stringContaining('Does the candidate have another headset to try?'),
+  }));
+  expect(view.container.querySelector('[data-testid="basics-brand"]').value).toBe('');
   await view.unmount();
 });
 
@@ -754,7 +807,7 @@ test('vpn proxy defaults to manual links when settings omit mode', async () => {
   const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
   expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
   expect(view.container.textContent).toContain('Manual Verification');
-  expect(view.container.textContent).toContain('Use manual lookup links to verify candidate VPN status.');
+  expect(view.container.textContent).toContain('Manual verification is the release-safe default.');
   expect(api.checkIpIntelligence).not.toHaveBeenCalled();
   await view.unmount();
 });
@@ -781,7 +834,7 @@ test('vpn proxy links mode shows external lookup buttons and does not call provi
 
   expect(api.checkIpIntelligence).not.toHaveBeenCalled();
   expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.ip2location.com/demo/8.8.8.8');
-  expect(view.container.textContent).toContain('Integrated automated VPN verification may be available');
+  expect(view.container.textContent).toContain('Check the candidate IP using more than one lookup site because individual services can be stale or incomplete.');
   await view.unmount();
 });
 

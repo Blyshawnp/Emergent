@@ -6444,14 +6444,7 @@ def _tech_issue_ended_session(session):
 def _is_fail_na(session):
     """Return True unless the final session outcome requires a fail summary."""
     final_status = compute_final_status(session)
-    if final_status in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
-        return False
-    if _tech_issue_ended_session(session):
-        return False
-    for i in range(1, 3):
-        if (session.get(f"sup_transfer_{i}") or {}).get("result") == "Fail":
-            return False
-    return True
+    return final_status not in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}
 
 
 def compute_calculated_status(session):
@@ -6856,6 +6849,9 @@ def build_clean_coaching(session):
 
 
 def build_clean_fail(session):
+    if _is_fail_na(session):
+        return _append_readiness_override_note("N/A", session)
+
     auto_fail = session.get("auto_fail_reason")
     if auto_fail:
         base_fail = (

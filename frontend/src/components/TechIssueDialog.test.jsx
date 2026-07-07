@@ -34,14 +34,14 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-async function renderDialog() {
+async function renderDialog(props = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
   const onClose = jest.fn();
   const onNavigate = jest.fn();
   await act(async () => {
-    root.render(<TechIssueDialog open onClose={onClose} isFinalAttempt={false} onNavigate={onNavigate} context="calls" />);
+    root.render(<TechIssueDialog open onClose={onClose} isFinalAttempt={false} onNavigate={onNavigate} context="calls" {...props} />);
     await flushPromises();
   });
   return { container, onClose, onNavigate, unmount: async () => act(async () => root.unmount()) };
@@ -85,6 +85,85 @@ test('Discord troubleshooting can end the session with summary markers and route
     final_status: 'Fail',
   }));
   expect(view.onNavigate).toHaveBeenCalledWith('review', expect.any(Object));
+  await view.unmount();
+});
+
+test('Supervisor Transfer technical issue routes non-final attempt to Newbie Shift as incomplete', async () => {
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      tech_issues_log: [],
+      call_1: { result: 'Pass' },
+      call_2: { result: 'Pass' },
+      current_sup_transfer_num: 1,
+    },
+  });
+  const view = await renderDialog({ context: 'suptransfer' });
+  await act(async () => click(view.container.querySelector('[data-testid="tech-issue-discord"] input')));
+  await act(async () => click(view.container.querySelector('[data-testid="tech-issue-continue"]')));
+  await act(async () => click(view.container.querySelector('[data-testid="discord-steps-done"]')));
+  await act(async () => {
+    click(view.container.querySelector('[data-testid="browser-result-no"]'));
+    await flushPromises();
+  });
+  await act(async () => {
+    click(view.container.querySelector('[data-testid="complete-no"]'));
+    await flushPromises();
+  });
+
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    tech_issue: 'Discord issues - unresolved',
+    tech_issue_ended_session: true,
+    tech_issue_summary_required: false,
+    final_status: 'Incomplete',
+    fail_summary: 'N/A',
+    newbie_shift_prompt: expect.objectContaining({
+      trigger: 'technical_issue_sup_transfer',
+      status: 'accepted',
+    }),
+  }));
+  expect(api.startSession).not.toHaveBeenCalledWith(expect.objectContaining({ final_status: 'Fail' }));
+  expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+
+  await view.unmount();
+});
+
+test('Supervisor Transfer technical issue does not duplicate an already scheduled Newbie Shift', async () => {
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      tech_issues_log: [],
+      call_1: { result: 'Pass' },
+      call_2: { result: 'Pass' },
+      current_sup_transfer_num: 1,
+      newbie_shift_data: { newbie_date: '06/23/2026', newbie_time: '10:00 AM', newbie_tz: 'ET' },
+    },
+  });
+  const view = await renderDialog({ context: 'suptransfer' });
+  await act(async () => click(view.container.querySelector('[data-testid="tech-issue-discord"] input')));
+  await act(async () => click(view.container.querySelector('[data-testid="tech-issue-continue"]')));
+  await act(async () => click(view.container.querySelector('[data-testid="discord-steps-done"]')));
+  await act(async () => {
+    click(view.container.querySelector('[data-testid="browser-result-no"]'));
+    await flushPromises();
+  });
+  await act(async () => {
+    click(view.container.querySelector('[data-testid="complete-no"]'));
+    await flushPromises();
+  });
+
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    tech_issue: 'Discord issues - unresolved',
+    tech_issue_ended_session: true,
+    tech_issue_summary_required: false,
+    final_status: 'Incomplete',
+    fail_summary: 'N/A',
+  }));
+  expect(api.updateSession).not.toHaveBeenCalledWith(expect.objectContaining({
+    newbie_shift_prompt: expect.any(Object),
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('review');
+
   await view.unmount();
 });
 
