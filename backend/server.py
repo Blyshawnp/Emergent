@@ -7653,6 +7653,10 @@ def _auto_fail_review_summaries(session):
 
 
 def _map_tech_issue_for_form(session):
+    session = session or {}
+    if _is_resumed_sup_transfer_session(session) and not _shared_truthy(session.get("current_session_tech_issue")):
+        return {"choice": "N/A", "other_text": ""}
+
     current = session.get("tech_issue")
     logs = [entry.get("issue", "") for entry in session.get("tech_issues_log", []) if isinstance(entry, dict)]
     candidates = [current, *reversed(logs)]

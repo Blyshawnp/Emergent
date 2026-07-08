@@ -236,6 +236,43 @@ test('incomplete review keeps fail summary N/A and shows scheduling action', asy
   await view.unmount();
 });
 
+test('resumed supervisor transfer separates historical and current technical issues', async () => {
+  const resumedSession = {
+    ...passingSession,
+    supervisor_only: true,
+    resumed_sup_transfer_only: true,
+    resume_source_history_id: 'history-123',
+    sup_transfer_1: undefined,
+    tech_issue: 'Calls would not route - unresolved',
+    tech_issue_ended_session: true,
+    current_session_tech_issue: false,
+    historical_tech_issue: 'Calls would not route - unresolved',
+    coaching_summary: 'Candidate resumed for supervisor transfer.',
+    fail_summary: 'N/A',
+  };
+  const view = await renderReview(resumedSession);
+
+  expect(view.container.textContent).toContain('Current Session Technical Issue: N/A');
+  expect(view.container.textContent).toContain('Prior Session Technical Issue: Calls would not route - unresolved');
+  expect(view.container.querySelector('[data-testid="review-incomplete-reason"]').textContent).not.toContain('Technical issue prevented completion');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="review-fill-form"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.fillForm).toHaveBeenCalledWith(
+    expect.any(String),
+    'N/A',
+    expect.objectContaining({
+      final_status: 'Incomplete',
+      current_session_tech_issue: false,
+    })
+  );
+
+  await view.unmount();
+});
+
 test('schedule newbie action launches existing scheduler and existing appointment disables action', async () => {
   const incompleteSession = {
     ...passingSession,

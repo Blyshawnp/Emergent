@@ -521,6 +521,11 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
           </div>
         )}
       </div>
+      {isSupervisorOnly && (
+        <div className="banner banner-incomplete" style={{ fontSize: 'var(--font-size-sm)', marginBottom: 12 }} data-testid="sup-only-mode-banner">
+          Supervisor Transfer Only mode
+        </div>
+      )}
       <div className="card" style={{ textAlign: 'center', marginBottom: 16, padding: 16, background: 'var(--color-primary)', border: 'none' }} data-tour="sup-discord-banner">
         <div style={{ color: 'white', fontWeight: 700, fontSize: '1.125rem' }}>Call Corp WXYZ Test Transfer #: 1-828-630-7006</div>
       </div>

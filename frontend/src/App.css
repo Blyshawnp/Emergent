@@ -2703,6 +2703,14 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .discord-search-input-wrap { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 6px; min-height: 42px; padding: 0 10px; border: 1px solid rgba(96, 165, 250, 0.72); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--color-primary); }
 .discord-search-input-wrap:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.26); }
 .discord-toolbar-search { width: 100%; min-height: 38px; padding: 0; border: 0; background: transparent; color: var(--text-primary); font-size: var(--font-size-sm); outline: none; }
+.discord-search-input-wrap .discord-toolbar-search,
+.discord-search-input-wrap .discord-toolbar-search:focus,
+.discord-search-input-wrap .discord-toolbar-search:focus-visible {
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  background: transparent !important;
+}
 .discord-toolbar-search::placeholder { color: var(--text-secondary); opacity: 0.92; }
 .discord-toolbar-toggle { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-card); color: var(--text-secondary); font-size: var(--font-size-xs); font-weight: 900; cursor: pointer; white-space: nowrap; }
 .discord-toolbar-toggle span { min-width: 20px; padding: 1px 5px; border-radius: 999px; background: var(--bg-input); color: var(--text-primary); font-size: 10px; font-weight: 900; text-align: center; }

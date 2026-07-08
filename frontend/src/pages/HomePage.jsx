@@ -53,8 +53,22 @@ function applyBasicsToSession(session, basicsSource) {
   return mergeBasicsIntoSession(session, buildBasicsFromRecord(basicsSource));
 }
 
+function getHistoricalTechIssueFields(entry = {}) {
+  const issue = String(entry.tech_issue || '').trim();
+  const issueLogs = Array.isArray(entry.tech_issues_log) ? entry.tech_issues_log : [];
+  const hasHistoricalIssue = Boolean(issue && !['N/A', 'No', 'None'].includes(issue)) || issueLogs.length > 0;
+  return {
+    historical_tech_issue: hasHistoricalIssue ? issue || 'Technical issue recorded in original session' : 'N/A',
+    historical_tech_issues_log: issueLogs,
+    historical_tech_issue_ended_session: Boolean(entry.tech_issue_ended_session),
+    historical_tech_issue_summary_required: Boolean(entry.tech_issue_summary_required),
+    historical_other_technical_issue: entry.other_technical_issue || '',
+  };
+}
+
 function buildResumedSession(entry) {
   return {
+    ...getHistoricalTechIssueFields(entry),
     candidate_name: entry.candidate_name || entry.candidate || '',
     tester_name: entry.tester_name || '',
     pronoun: entry.pronoun || '',
@@ -67,7 +81,11 @@ function buildResumedSession(entry) {
     resume_source_tester: entry.tester_name || '',
     status: 'In Progress',
     auto_fail_reason: null,
-    tech_issue: entry.tech_issue || 'N/A',
+    tech_issue: 'N/A',
+    tech_issue_ended_session: false,
+    tech_issue_summary_required: false,
+    other_technical_issue: '',
+    current_session_tech_issue: false,
     headset_usb: entry.headset_usb ?? null,
     headset_brand: entry.headset_brand || '',
     noise_cancel: entry.noise_cancel ?? null,
@@ -108,6 +126,12 @@ function buildSharedPendingSession(entry, testerName, basicsSource = null) {
     status: 'In Progress',
     auto_fail_reason: null,
     tech_issue: 'N/A',
+    tech_issue_ended_session: false,
+    tech_issue_summary_required: false,
+    other_technical_issue: '',
+    current_session_tech_issue: false,
+    historical_tech_issue: 'N/A',
+    historical_tech_issues_log: [],
     headset_usb: null,
     headset_brand: '',
     noise_cancel: null,
@@ -270,7 +294,14 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   const name = settings.display_name || settings.tester_name || 'Tester';
   console.log("greeting computed: Welcome, " + name + "!");
   const recent = (history || []).slice(0, 5);
-  const badgeClass = (s) => ({ Pass: 'badge-pass', 'RESUMED-PASS': 'badge-pass', Fail: 'badge-fail', 'FAIL-Final Attempt': 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
+  const badgeClass = (s) => {
+    const status = String(s || '').trim().toLowerCase();
+    if (status.includes('pass')) return 'badge-pass';
+    if (status.includes('fail')) return 'badge-fail';
+    if (status.includes('incomplete') || status.includes('retest') || status.includes('coaching')) return 'badge-incomplete';
+    if (status.includes('nc/ns')) return 'badge-ncns';
+    return 'badge-incomplete';
+  };
 
   const startStandardSession = () => {
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -283,12 +314,30 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   };
 
   const handleSupTransferOnly = async () => {
-    const hasPriorSession = await modal.confirm(
-      'Supervisor Transfer Only',
+    const choice = await modal.showModal({
+      type: 'confirm',
+      title: 'Supervisor Transfer Only',
+      body: 'Choose how to start Supervisor Transfer. Use Smart Resume when this candidate has saved mock-call data. Use standalone mode for admin-directed or technical-issue follow-up without resume data.',
+      buttons: [
+        { label: 'Use Smart Resume', cls: 'btn-primary', value: 'smart-resume' },
+        { label: 'Start Supervisor Transfer Only', cls: 'btn-muted', value: 'standalone' },
+        { label: 'Cancel', cls: 'btn-ghost', value: 'cancel' },
+      ],
+      icon: 'repeat',
+    });
+
+    if (choice === 'standalone') {
+      startFreshSupTransferOnly();
+      return;
+    }
+    if (choice !== 'smart-resume') return;
+
+    const originalTester = await modal.confirm(
+      'Smart Resume Source',
       'Did you previously conduct the mock call session for this candidate?'
     );
 
-    if (!hasPriorSession) {
+    if (!originalTester) {
       try {
         const response = await api.getSharedPendingSupTransfers();
         if (!response?.ok) {

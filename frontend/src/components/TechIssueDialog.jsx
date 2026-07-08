@@ -22,7 +22,7 @@ async function logIssue(issue, resolved, extraSessionFields = {}) {
     const { session } = await api.getCurrentSession();
     const log = session?.tech_issues_log || [];
     log.push({ issue, resolved, timestamp: new Date().toISOString() });
-    await api.updateSession({ tech_issues_log: log, tech_issue: issue, ...extraSessionFields });
+    await api.updateSession({ tech_issues_log: log, tech_issue: issue, current_session_tech_issue: true, ...extraSessionFields });
   } catch (_err) {
     // Tech issue logging is best-effort; session continues regardless
   }
@@ -388,6 +388,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
       status: reviewFields.status || baseSession.status || 'In Progress',
       tech_issue: reviewFields.tech_issue || issueLabel || baseSession.tech_issue || 'Technical issue unresolved',
       tech_issues_log: log,
+      current_session_tech_issue: true,
     };
     console.info('[MTS] Tech issue finalize to Review', {
       type: issueLabel || reviewFields.tech_issue || 'Technical issue',
@@ -413,6 +414,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
         tech_issue: `${issueType} - unresolved after troubleshooting`,
         tech_issue_ended_session: true,
         tech_issue_summary_required: false,
+        current_session_tech_issue: true,
         final_status: 'Incomplete',
         fail_summary: 'N/A',
       }).catch(() => {});
@@ -424,6 +426,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
       tech_issue: `${issueType} - unresolved after troubleshooting`,
       tech_issue_ended_session: true,
       tech_issue_summary_required: false,
+      current_session_tech_issue: true,
       final_status: 'Incomplete',
       fail_summary: 'N/A',
       newbie_shift_prompt: {
@@ -448,6 +451,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
           other_technical_issue: otherNotes || 'Unresolved technical issue',
           tech_issue_ended_session: true,
           tech_issue_summary_required: false,
+          current_session_tech_issue: true,
           final_status: 'Incomplete',
           fail_summary: 'N/A',
         }).catch(() => {});
@@ -460,6 +464,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
         other_technical_issue: otherNotes || 'Unresolved technical issue',
         tech_issue_ended_session: true,
         tech_issue_summary_required: false,
+        current_session_tech_issue: true,
         final_status: 'Incomplete',
         fail_summary: 'N/A',
         newbie_shift_prompt: {
@@ -479,6 +484,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
       other_technical_issue: otherNotes || 'Unresolved technical issue',
       tech_issue_ended_session: true,
       tech_issue_summary_required: true,
+      current_session_tech_issue: true,
     }, issue, false);
   }, [candidateReachedSupervisorTransfer, finalizeTechIssueToReview, handleClose, isFinalAttempt, onNavigate, otherNotes]);
 
@@ -590,6 +596,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
                 other_technical_issue: currentIssue === 'other' ? (otherNotes || 'Unresolved technical issue') : undefined,
                 tech_issue_ended_session: true,
                 tech_issue_summary_required: false,
+                current_session_tech_issue: true,
                 final_status: 'Incomplete',
                 fail_summary: 'N/A',
               }).catch(() => {});
@@ -602,6 +609,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
               other_technical_issue: currentIssue === 'other' ? (otherNotes || 'Unresolved technical issue') : undefined,
               tech_issue_ended_session: true,
               tech_issue_summary_required: false,
+              current_session_tech_issue: true,
               final_status: 'Incomplete',
               fail_summary: 'N/A',
               newbie_shift_prompt: {
@@ -614,7 +622,7 @@ export default function TechIssueDialog({ open, onClose, isFinalAttempt, onNavig
             onNavigate('newbieshift');
             return;
           }
-          await finalizeTechIssueToReview({ auto_fail_reason: 'Technical issue unresolved', final_status: 'Fail', tech_issue: issue, tech_issue_ended_session: true, tech_issue_summary_required: true }, issue, false);
+          await finalizeTechIssueToReview({ auto_fail_reason: 'Technical issue unresolved', final_status: 'Fail', tech_issue: issue, tech_issue_ended_session: true, tech_issue_summary_required: true, current_session_tech_issue: true }, issue, false);
         }} onContinue={handleClose} />;
       default:
         return null;

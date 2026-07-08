@@ -69,6 +69,29 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertEqual(server.generate_summaries(ended)["fail"], "N/A")
         self.assertEqual(server.build_form_fill_payload(ended, {})["tech_issue_choice"], "Discord issues")
 
+    def test_resumed_supervisor_transfer_ignores_original_technical_issue_for_form(self):
+        stale_original_issue = {
+            "candidate_name": "Candidate",
+            "supervisor_only": True,
+            "resumed_sup_transfer_only": True,
+            "resume_source_history_id": "history-123",
+            "tech_issue": "Calls would not route - unresolved",
+            "tech_issue_ended_session": True,
+            "current_session_tech_issue": False,
+            "tech_issues_log": [{"issue": "Calls would not route - unresolved", "resolved": False}],
+            "historical_tech_issue": "Calls would not route - unresolved",
+        }
+        payload = server.build_form_fill_payload(stale_original_issue, {})
+        self.assertEqual(payload["tech_issue_choice"], "N/A")
+
+        current_issue = {
+            **stale_original_issue,
+            "tech_issue": "Discord issues - unresolved",
+            "current_session_tech_issue": True,
+            "tech_issues_log": [{"issue": "Discord issues - unresolved", "resolved": False}],
+        }
+        self.assertEqual(server.build_form_fill_payload(current_issue, {})["tech_issue_choice"], "Discord issues")
+
     def test_incomplete_technical_issue_ignores_stale_fail_summary(self):
         session = {
             "candidate_name": "Candidate",

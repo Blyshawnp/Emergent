@@ -1076,6 +1076,11 @@ export default function BasicsPage({ onNavigate }) {
     <div className="page-with-sticky-actions" data-testid="basics-page">
       <WorkflowProgress {...getWorkflowProgress({ page: 'basics', supervisorOnly: supervisorOnlyMode })} />
       <h1 style={{ marginBottom: 16 }}>The Basics</h1>
+      {supervisorOnlyMode && (
+        <div className="banner banner-incomplete" style={{ fontSize: 'var(--font-size-sm)', marginBottom: 12 }} data-testid="basics-sup-only-mode">
+          Supervisor Transfer Only mode
+        </div>
+      )}
       <div className="card" style={{ marginBottom: 8, padding: '16px 24px' }}>
         <h3 style={{ marginBottom: 8 }}>Session Information</h3>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', alignItems: 'center' }}>

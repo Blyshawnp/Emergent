@@ -23,6 +23,36 @@ function shouldPopulateFailSummary(finalStatus) {
   return FAIL_SUMMARY_STATUSES.has(finalStatus);
 }
 
+function isEmptyTechIssue(value) {
+  const text = String(value || '').trim();
+  return !text || ['N/A', 'No', 'None'].includes(text);
+}
+
+function latestIssueFromLog(log) {
+  if (!Array.isArray(log)) return '';
+  for (let index = log.length - 1; index >= 0; index -= 1) {
+    const issue = String(log[index]?.issue || '').trim();
+    if (issue) return issue;
+  }
+  return '';
+}
+
+function getCurrentSessionTechIssue(session) {
+  if (!session) return '';
+  const resumedSup = Boolean(session.resumed_sup_transfer_only || session.resume_source_history_id || session.resume_source_timestamp_iso);
+  if (resumedSup && !session.current_session_tech_issue) return '';
+  const issue = String(session.tech_issue || '').trim();
+  if (!isEmptyTechIssue(issue)) return issue;
+  return latestIssueFromLog(session.tech_issues_log);
+}
+
+function getHistoricalSessionTechIssue(session) {
+  if (!session) return '';
+  const issue = String(session.historical_tech_issue || '').trim();
+  if (!isEmptyTechIssue(issue)) return issue;
+  return latestIssueFromLog(session.historical_tech_issues_log);
+}
+
 function computeCalculatedStatus(session) {
   if (!session) return 'Fail';
 
@@ -177,8 +207,8 @@ function getStatusSafeFailSummary(failText, finalStatus, judgment) {
 
 function getIncompleteReason(session) {
   if (!session) return '';
-  const techIssue = String(session.tech_issue || '').trim();
-  if (session.tech_issue_ended_session && techIssue && !['N/A', 'No', 'None'].includes(techIssue)) {
+  const techIssue = getCurrentSessionTechIssue(session);
+  if (session.tech_issue_ended_session && techIssue) {
     return 'Technical issue prevented completion during Supervisor Transfer. A Newbie Shift is needed to complete certification.';
   }
   if (session.time_for_sup === false) return 'Supervisor Transfer could not be completed during the current session. A Newbie Shift is needed to complete certification.';
@@ -445,6 +475,9 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const coachingForDisplay = appendReadinessOverrideSummary(coaching, finalReadinessJudgment);
   const failForDisplay = getStatusSafeFailSummary(fail, finalStatus, finalReadinessJudgment);
   const incompleteReason = finalStatus === 'Incomplete' ? getIncompleteReason(s) : '';
+  const currentTechIssue = getCurrentSessionTechIssue(s);
+  const historicalTechIssue = getHistoricalSessionTechIssue(s);
+  const showTechIssueContext = Boolean(currentTechIssue || historicalTechIssue);
   const newbieAlreadyScheduled = Boolean(newbie);
   const newbieSchedulingAllowed = !isHistoricalReview && finalStatus === 'Incomplete' && !autoFail && !s.final_attempt;
   const showNextActions = newbieSchedulingAllowed;
@@ -1064,6 +1097,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           <strong>Extensions Off:</strong> {s.extensions_disabled === true ? 'Yes' : s.extensions_disabled === false ? 'No' : 'N/A'}<br />
           <strong>Pop-ups Allowed:</strong> {s.popups_allowed === true ? 'Yes' : s.popups_allowed === false ? 'No' : 'N/A'}<br />
           <strong>Skills:</strong> {supOnly ? 'Supervisor Transfer ONLY' : 'Mock Calls + Supervisor Transfer'}<br />
+          {showTechIssueContext && (<>
+            <strong>Current Session Technical Issue:</strong> {currentTechIssue || 'N/A'}<br />
+            {historicalTechIssue && <><strong>Prior Session Technical Issue:</strong> {historicalTechIssue} <span className="text-muted text-xs">(history only)</span><br /></>}
+          </>)}
           {autoFail && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{autoFail}</span><br /></>}
           {!supOnly && (<>
             <br /><strong>- CALL RESULTS -</strong><br />
