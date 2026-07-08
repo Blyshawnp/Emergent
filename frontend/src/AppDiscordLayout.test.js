@@ -8,6 +8,10 @@ import {
   normalizeShortcut,
   shortcutFromEvent,
 } from './utils/discordProductivity';
+import {
+  getBuiltInDiscordScreenshotSuggestions,
+  resolveDiscordSuggestedScreenshots,
+} from './utils/discordScreenshotSuggestions';
 
 test('discord post modal uses search-first two-pane template workflow', () => {
   const css = fs.readFileSync(path.join(__dirname, 'App.css'), 'utf8');
@@ -44,6 +48,26 @@ test('discord post modal uses search-first two-pane template workflow', () => {
   expect(app).toContain('✓ Copied to clipboard');
   expect(app).toContain('Discord Productivity Help');
   expect(app).toContain('No Discord posts match this search.');
+  expect(app).toContain('Copy Post');
+  expect(app).toContain('Screenshot {index + 1}');
+  expect(app).toContain('Copy the post and screenshot separately');
+});
+
+test('discord screenshot suggestions use strict title mappings', () => {
+  expect(getBuiltInDiscordScreenshotSuggestions('Welcome')).toEqual(['/Discord-Instructions.png']);
+  expect(getBuiltInDiscordScreenshotSuggestions('No Candidate')).toEqual([]);
+  expect(getBuiltInDiscordScreenshotSuggestions('Fail Session')).toEqual([]);
+  expect(getBuiltInDiscordScreenshotSuggestions('Fail Final Attempt')).toEqual([]);
+  expect(getBuiltInDiscordScreenshotSuggestions('Passed All')).toEqual(['/welcome-new-agent.png']);
+  expect(getBuiltInDiscordScreenshotSuggestions('Transfer Instructions #2')).toEqual(['/queue.png', '/transfer.png']);
+  expect(getBuiltInDiscordScreenshotSuggestions('Disposition')).toEqual(['/script-disposition.png', '/DTE-disposition.png']);
+  expect(getBuiltInDiscordScreenshotSuggestions('USB Fail')).toEqual(['/usb.png']);
+  expect(getBuiltInDiscordScreenshotSuggestions('Wrong Headset')).toEqual(['/usb.png']);
+  expect(getBuiltInDiscordScreenshotSuggestions('Welcome to Stars')).toEqual([]);
+  expect(resolveDiscordSuggestedScreenshots(
+    { title: 'Transfer Instructions #2' },
+    [{ title: 'Queue', imageUrl: '/queue.png' }, { title: 'Transfer', imageUrl: '/transfer.png' }],
+  ).map((item) => item.imageUrl)).toEqual(['/queue.png', '/transfer.png']);
 });
 
 test('discord favorite key helpers toggle by stable key and remove duplicates', () => {
@@ -89,4 +113,6 @@ test('discord productivity settings expose shortcut recorder and save field', ()
   expect(settings).toContain('settings-discord-tab-productivity');
   expect(settings).toContain('discord_productivity');
   expect(settings).toContain('favoriteShortcuts');
+  expect(settings).toContain('Suggested Screenshots');
+  expect(settings).toContain('settings-discord-suggested');
 });

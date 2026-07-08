@@ -133,6 +133,8 @@ test('help page renders current help topics and configured faq entries', async (
   expect(view.container.textContent).toContain('Favorite shortcuts are customized in Settings -> Discord -> Productivity');
   expect(view.container.textContent).toContain('25. Discord Productivity');
   expect(view.container.textContent).toContain('Command Palette: press Ctrl+Shift+P');
+  expect(view.container.textContent).toContain('Suggested screenshots: admins can link zero, one, two, or three screenshots');
+  expect(view.container.textContent).toContain('Copy Post copies only text');
   expect(view.container.textContent).toContain('Conflict detection: duplicate shortcut assignments are blocked');
   expect(view.container.textContent).toContain('Restoring defaults: use Restore Default');
   expect(view.container.textContent).toContain('Final Readiness Judgment lets the evaluator keep the calculated result');

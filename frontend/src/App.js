@@ -30,6 +30,10 @@ import {
   shortcutMatchesEvent,
 } from './utils/discordProductivity';
 import {
+  getDiscordPostSuggestedScreenshotPaths,
+  resolveDiscordSuggestedScreenshots,
+} from './utils/discordScreenshotSuggestions';
+import {
   BookOpenCheck,
   ClipboardList,
   CircleHelp,
@@ -1613,7 +1617,12 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
       const category = t.category || t.Category || t.group || t.Group || '';
       const title = t.title || t.Title || t.name || t.Name || t.label || t.Label || '';
       const message = t.message || t.Message || t.text || t.Text || t.content || t.Content || t.body || t.Body || '';
-      return { category: String(category || defaultCategory), title: String(title), message: String(message) };
+      const normalized = { category: String(category || defaultCategory), title: String(title), message: String(message) };
+      const explicitSuggestedScreenshots = getDiscordPostSuggestedScreenshotPaths(t);
+      if (explicitSuggestedScreenshots.length || Object.prototype.hasOwnProperty.call(t, 'suggestedScreenshots') || Object.prototype.hasOwnProperty.call(t, 'suggested_screenshots') || Object.prototype.hasOwnProperty.call(t, 'SuggestedScreenshots')) {
+        normalized.suggestedScreenshots = explicitSuggestedScreenshots;
+      }
+      return normalized;
     }
     return null;
   }).filter(Boolean).map((item) => ({ ...item, key: discordTemplateKey(item) }));
@@ -1887,13 +1896,9 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
     }
   }, [copyTemplate, paletteResults, paletteSelectedIndex]);
 
-  const selectedScreenshot = useMemo(() => {
-    if (!selectedTemplate) return null;
-    const selectedMeta = getDiscordCategoryMeta(selectedTemplate.category, selectedTemplate.title);
-    return screenshots.find((screenshot) => {
-      const screenshotMeta = getDiscordCategoryMeta(screenshot.category, screenshot.title);
-      return screenshotMeta.key === selectedMeta.key || String(screenshot.title || '').toLowerCase().includes(String(selectedTemplate.title || '').toLowerCase());
-    }) || null;
+  const selectedScreenshots = useMemo(() => {
+    if (!selectedTemplate) return [];
+    return resolveDiscordSuggestedScreenshots(selectedTemplate, screenshots);
   }, [screenshots, selectedTemplate]);
 
   const handleTabChange = (nextTab) => {
@@ -1988,7 +1993,7 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
                   favorite={selectedTemplate ? favoriteKeySet.has(selectedTemplate.key) : false}
                   copied={selectedTemplate ? copiedKey === selectedTemplate.key : false}
                   shortcut={selectedTemplate ? productivity.favoriteShortcuts[selectedTemplate.key] || getDefaultFavoriteShortcut(selectedTemplate) : ''}
-                  screenshot={selectedScreenshot}
+                  screenshots={selectedScreenshots}
                   onCopy={() => copyTemplate(selectedTemplate)}
                   onToggleFavorite={() => toggleFavorite(selectedTemplate)}
                 />
@@ -2026,7 +2031,7 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
                 <ShortcutHelpGroup title="Mouse Shortcuts" rows={[['Double Click', 'Copy selected post'], ['Copy', 'Copy previewed post']]} />
                 <ShortcutHelpGroup title="Double Click" rows={[['Double-click row', 'Copy immediately'], ['✓ Copied', 'Confirms clipboard update']]} />
                 <ShortcutHelpGroup title="Copy" rows={[['Enter', 'Copy selected post'], ['Shortcut', 'Copies when automatic copy is enabled']]} />
-                <ShortcutHelpGroup title="Screenshots" rows={[[productivity.globalShortcuts.openScreenshots || 'Ctrl+Shift+D', 'Open Screenshot Library'], ['Preview pane', 'Shows matching screenshot when configured']]} />
+                <ShortcutHelpGroup title="Screenshots" rows={[[productivity.globalShortcuts.openScreenshots || 'Ctrl+Shift+D', 'Open Screenshot Library'], ['Preview pane', 'Shows up to three configured screenshots'], ['Copy Screenshot', 'Copies each suggested image separately']]} />
               </div>
             </div>
           </div>
@@ -2140,14 +2145,14 @@ function DiscordTemplateListItem({ template, selected, favorite, copied, shortcu
   );
 }
 
-function DiscordTemplatePreview({ template, favorite, copied, shortcut, screenshot, onCopy, onToggleFavorite }) {
-  const [screenshotCopied, setScreenshotCopied] = useState(false);
+function DiscordTemplatePreview({ template, favorite, copied, shortcut, screenshots = [], onCopy, onToggleFavorite }) {
+  const [screenshotCopied, setScreenshotCopied] = useState({});
   if (!template) {
     return <div className="discord-template-preview-panel discord-template-preview-empty">Select a Discord post to preview it.</div>;
   }
   const categoryMeta = getDiscordCategoryMeta(template.category, template.title);
-  const resolvedScreenshotUrl = screenshot?.imageUrl ? resolveScreenshotUrl(screenshot.imageUrl) : '';
-  const copyScreenshot = async () => {
+  const copyScreenshot = async (screenshot, index) => {
+    const resolvedScreenshotUrl = screenshot?.imageUrl ? resolveScreenshotUrl(screenshot.imageUrl) : '';
     if (!resolvedScreenshotUrl) return;
     try {
       const resp = await fetch(resolvedScreenshotUrl);
@@ -2158,8 +2163,8 @@ function DiscordTemplatePreview({ template, favorite, copied, shortcut, screensh
     } catch (_error) {
       await navigator.clipboard.writeText(resolvedScreenshotUrl);
     }
-    setScreenshotCopied(true);
-    window.setTimeout(() => setScreenshotCopied(false), 2500);
+    setScreenshotCopied((current) => ({ ...current, [index]: true }));
+    window.setTimeout(() => setScreenshotCopied((current) => ({ ...current, [index]: false })), 2500);
   };
   return (
     <aside className="discord-template-preview-panel">
@@ -2174,19 +2179,33 @@ function DiscordTemplatePreview({ template, favorite, copied, shortcut, screensh
       <div className="discord-preview-message">{template.message}</div>
       <div className="discord-preview-notes">
         <h4>Notes</h4>
-        <p>Double-click the row or press Enter to copy the selected Discord post.</p>
+        <p>Double-click the row or press Enter to copy the selected Discord post. Copy the post and screenshot separately if Discord does not paste both together.</p>
       </div>
-      {resolvedScreenshotUrl && (
+      {screenshots.length ? (
         <div className="discord-preview-screenshot">
-          <div className="discord-preview-screenshot-head">
-            <h4>Suggested Screenshot</h4>
-            <button type="button" className={`discord-copy ${screenshotCopied ? 'copied' : ''}`} onClick={copyScreenshot}>{screenshotCopied ? 'Copied' : 'Copy Screenshot'}</button>
+          <h4>Suggested Screenshots</h4>
+          <div className="discord-suggested-screenshot-list">
+            {screenshots.map((screenshot, index) => {
+              const resolvedScreenshotUrl = screenshot?.imageUrl ? resolveScreenshotUrl(screenshot.imageUrl) : '';
+              if (!resolvedScreenshotUrl) return null;
+              return (
+                <div className="discord-suggested-screenshot" key={`${screenshot.imageUrl || screenshot.title}-${index}`}>
+                  <div className="discord-preview-screenshot-head">
+                    <div>
+                      <strong>Screenshot {index + 1}</strong>
+                      <span>{screenshot.title || 'Suggested screenshot'}</span>
+                    </div>
+                    <button type="button" className={`discord-copy ${screenshotCopied[index] ? 'copied' : ''}`} onClick={() => copyScreenshot(screenshot, index)}>{screenshotCopied[index] ? 'Copied' : 'Copy Screenshot'}</button>
+                  </div>
+                  <img src={resolvedScreenshotUrl} alt={screenshot.title || `Discord screenshot ${index + 1}`} />
+                </div>
+              );
+            })}
           </div>
-          <img src={resolvedScreenshotUrl} alt={screenshot.title || 'Discord screenshot preview'} />
         </div>
-      )}
+      ) : null}
       <div className="discord-preview-actions">
-        <button type="button" className={`discord-copy discord-preview-copy ${copied ? 'copied' : ''}`} onClick={onCopy}>{copied ? 'Copied' : 'Copy'}</button>
+        <button type="button" className={`discord-copy discord-preview-copy ${copied ? 'copied' : ''}`} onClick={onCopy}>{copied ? 'Copied' : 'Copy Post'}</button>
       </div>
     </aside>
   );

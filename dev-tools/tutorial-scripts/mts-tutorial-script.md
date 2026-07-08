@@ -26,11 +26,11 @@ Troubleshooting notes: If shared lookup is unavailable, continue in local sessio
 
 ## Scene 3 - Headset Lookup and Research
 
-Narration: "Search approved headsets by brand or model. If the model is not listed, research it before deciding whether the session can continue."
+Narration: "Search approved headsets by brand or model. If the model is not listed, use Research Headset and answer Yes or No before deciding whether the session can continue."
 
 Screen actions: Open Approved Headset Lookup, search a model, select an approved result, then demonstrate an unknown model showing Headset not found.
 
-Callouts: Research Headset is the recommended next step. Use This Headset For Now does not approve or add the headset.
+Callouts: Research Headset is the recommended next step. Yes marks the local session answers without approving the model. No routes the tester toward replacement or fail workflow.
 
 Troubleshooting notes: Confirm USB and noise-cancelling microphone support before allowing an unlisted headset. Administrator review is still required.
 
@@ -40,7 +40,7 @@ Narration: "VPN and proxy checks are decision support. Manual lookup is the rele
 
 Screen actions: Expand VPN & Proxy Verification, copy the candidate IP, open manual lookup links, and show integrated mode messaging when available.
 
-Callouts: The tester always makes the final decision. One provider cannot produce a confident clear result.
+Callouts: The tester always makes the final decision. One provider cannot produce a confident clear result. Manual VPN lookup remains available even when integrated providers are disabled.
 
 Troubleshooting notes: If providers are unavailable, use manual lookup and wait a few minutes after the candidate disables VPN before rechecking.
 
@@ -62,7 +62,17 @@ Screen actions: Show transfer reason, caller, show, payment option, pass/fail bu
 
 Callouts: Supervisor Transfer Only resumes candidates who already completed mock calls.
 
-Troubleshooting notes: If the candidate cannot complete the transfer today and it is not final attempt, route to Newbie Shift when prompted.
+Troubleshooting notes: If the candidate cannot complete the transfer today and it is not final attempt, use the automatic Newbie Shift prompt. Review also has a backup Next Actions scheduling option when the session is incomplete and no shift is scheduled.
+
+## Scene 6A - Discord Productivity
+
+Narration: "Discord Posts is keyboard-friendly. Search, favorites, recents, and the Command Palette help testers copy the right post and screenshot quickly."
+
+Screen actions: Open Discord Posts with Ctrl+D, search for a post, show Favorites and Recent filters, open the Command Palette with Ctrl+Shift+P, preview suggested screenshots, use Copy Post, use Copy Screenshot, and open Settings -> Discord -> Productivity to show shortcut customization.
+
+Callouts: Suggested screenshots can show up to three images per post. Copy Post and Copy Screenshot are separate actions because Discord and the platform clipboard may not paste both together reliably.
+
+Troubleshooting notes: If a shortcut conflicts, Settings shows the action already using it. Use the Screenshot Library or suggested screenshots when a post needs an image.
 
 ## Scene 7 - Tech Issues
 
@@ -108,6 +118,7 @@ Troubleshooting notes: If remote FAQ content fails, use the packaged fallback an
 
 - Tester identity and links are configured.
 - Candidate readiness, headset, VPN, and browser checks are complete.
+- Discord search, Command Palette, Favorites, Recent, Copy Post, Copy Screenshot, and shortcut customization were demonstrated.
 - Calls and supervisor transfers are scored with coaching/fail details.
 - Tech issues are documented when they affect the session.
 - Review summaries are checked before Fill Form.

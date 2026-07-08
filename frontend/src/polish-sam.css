@@ -808,9 +808,21 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
 
 /* Modal Close Button Alignment */
 .nm-modal-close {
-  display: flex;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  flex: 0 0 36px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  line-height: 1;
+  font-size: 0;
+}
+
+.nm-modal-close::after {
+  line-height: 1;
+  transform: translateY(-1px);
 }
 
 /* Candidate Tracking Layout */
@@ -836,6 +848,88 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.nm-candidate-panel .nm-search-row {
+  grid-template-columns: minmax(130px, 180px) minmax(220px, 1fr) max-content max-content;
+}
+
+.nm-sort-select-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.nm-sort-select-label select {
+  min-height: 36px;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: #111827;
+  color: #f8fafc;
+  padding: 0 34px 0 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.nm-sort-select-label select:focus-visible {
+  outline: none;
+  border-color: #7dd3fc;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.22);
+}
+
+.nm-sort-header {
+  width: 100%;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.nm-sort-header:hover,
+.nm-sort-header:focus-visible {
+  color: #e0f2fe;
+}
+
+.nm-sort-header:focus-visible {
+  outline: 2px solid rgba(125, 211, 252, 0.72);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.nm-sort-header.is-active {
+  color: #7dd3fc;
+}
+
+.nm-sort-indicator {
+  width: 1ch;
+  flex: 0 0 1ch;
+  text-align: center;
+  color: #7dd3fc;
+}
+
+@media (max-width: 980px) {
+  .nm-candidate-panel .nm-search-row {
+    grid-template-columns: 1fr;
+  }
+
+  .nm-sort-select-label {
+    margin-left: 0;
+    justify-content: space-between;
+  }
 }
 
 .nm-candidate-table .nm-select-column { width: 42px; }

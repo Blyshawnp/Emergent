@@ -2878,9 +2878,16 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .discord-preview-notes p { margin: 0; color: var(--text-tertiary); font-size: var(--font-size-xs); line-height: 1.45; }
 .discord-preview-screenshot-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-.discord-preview-screenshot-head h4 { margin: 0; }
+.discord-preview-screenshot-head h4,
+.discord-preview-screenshot-head strong { margin: 0; }
+.discord-preview-screenshot-head > div { display: grid; gap: 2px; min-width: 0; }
+.discord-preview-screenshot-head strong { color: var(--text-primary); font-size: var(--font-size-xs); font-weight: 900; text-transform: uppercase; }
+.discord-preview-screenshot-head span { color: var(--text-tertiary); font-size: var(--font-size-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .discord-preview-screenshot-head .discord-copy { min-width: 118px; }
 .discord-preview-screenshot img { display: block; width: 100%; max-height: 150px; object-fit: contain; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-card); }
+.discord-suggested-screenshot-list { display: grid; gap: 12px; }
+.discord-suggested-screenshot { display: grid; gap: 8px; }
+.discord-suggested-screenshot + .discord-suggested-screenshot { padding-top: 10px; border-top: 1px solid var(--border-subtle); }
 .discord-preview-actions {
   justify-content: flex-end;
   padding-top: 2px;
@@ -3251,6 +3258,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .discord-edit-category { min-width: 140px; max-width: 140px; }
 .discord-edit-trigger { min-width: 160px; max-width: 160px; }
 .discord-edit-msg { flex: 1; }
+.discord-edit-screenshots { width: min(240px, 100%); display: grid; gap: 6px; }
+.discord-screenshot-select-row { display: grid; gap: 3px; }
+.discord-screenshot-select-row select { width: 100%; min-height: 32px; padding: 5px 26px 5px 8px; font-size: var(--font-size-xs); }
 
 /* Allow right-click context menu on all inputs */
 input, textarea, select { user-select: text; -webkit-user-select: text; }

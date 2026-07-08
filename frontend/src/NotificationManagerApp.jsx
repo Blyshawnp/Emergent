@@ -828,6 +828,16 @@ const CANDIDATE_VIEW_LABELS = {
   allActive: 'All Active Candidates',
 };
 
+const CANDIDATE_SORT_OPTIONS = [
+  { key: 'candidate', direction: 'asc', label: 'Candidate A-Z' },
+  { key: 'candidate', direction: 'desc', label: 'Candidate Z-A' },
+  { key: 'date', direction: 'desc', label: 'Date newest first' },
+  { key: 'date', direction: 'asc', label: 'Date oldest first' },
+  { key: 'status', direction: 'asc', label: 'Status A-Z' },
+  { key: 'attempts', direction: 'desc', label: 'Attempts high to low' },
+  { key: 'attempts', direction: 'asc', label: 'Attempts low to high' },
+];
+
 const SECTION_NAV_ITEMS = [
   { key: 'notifications', label: 'Notifications', target: 'sam-notifications' },
   { key: 'preview', label: 'Live Preview', target: 'sam-live-preview' },
@@ -841,6 +851,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const [detailKey, setDetailKey] = useState(null);
   const [selectedTargets, setSelectedTargets] = useState({});
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
+  const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
   const rows = data?.views?.[view] || [];
   const searchText = search.trim().toLowerCase();
   const searchPool = searchText
@@ -849,6 +860,39 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const visibleRows = searchText
     ? searchPool.filter((row) => String(row.candidate_name || '').toLowerCase().includes(searchText))
     : rows;
+  const getCandidateSortValue = useCallback((row, key) => {
+    if (key === 'attempts') {
+      const attempts = Array.isArray(row.attempts) ? row.attempts : [];
+      return Number(row.attempt_count ?? row.attempt_number ?? attempts.length ?? 0) || 0;
+    }
+    if (key === 'date') {
+      const rawDate = row.completed_at || row.last_session_date || row.updated_at || row.created_at || '';
+      const timestamp = Date.parse(rawDate);
+      return Number.isNaN(timestamp) ? 0 : timestamp;
+    }
+    if (key === 'status') return String(row.status || row.latest_status || 'Unknown').toLowerCase();
+    if (key === 'tester') return String(row.original_tester_name || row.tester_name || 'Unknown').toLowerCase();
+    if (key === 'results') {
+      return String([row.call_1_result, row.call_2_result, row.call_3_result, row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || row.mock_call_summary || 'Recorded').toLowerCase();
+    }
+    return String(row.candidate_name || 'Unknown').toLowerCase();
+  }, []);
+  const sortedRows = useMemo(() => {
+    const direction = sortConfig.direction === 'asc' ? 1 : -1;
+    return visibleRows
+      .map((row, index) => ({ row, index }))
+      .sort((a, b) => {
+        const aValue = getCandidateSortValue(a.row, sortConfig.key);
+        const bValue = getCandidateSortValue(b.row, sortConfig.key);
+        if (typeof aValue === 'number' && typeof bValue === 'number') {
+          const numericCompare = aValue - bValue;
+          return numericCompare ? numericCompare * direction : a.index - b.index;
+        }
+        const textCompare = String(aValue).localeCompare(String(bValue), undefined, { sensitivity: 'base' });
+        return textCompare ? textCompare * direction : a.index - b.index;
+      })
+      .map((entry) => entry.row);
+  }, [visibleRows, sortConfig, getCandidateSortValue]);
   const getCandidateRowKey = (row) => [
     row.pending_id || '',
     row.session_id || row.latest_session_id || row.original_session_id || '',
@@ -860,7 +904,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     session_id: row.session_id || row.latest_session_id || row.original_session_id || '',
     pending_id: row.pending_id || '',
   });
-  const visibleEntries = visibleRows.map((row, index) => ({
+  const visibleEntries = sortedRows.map((row, index) => ({
     row,
     index,
     key: getCandidateRowKey(row) || `${row.candidate_name || 'candidate'}-${index}`,
@@ -877,6 +921,35 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   useEffect(() => {
     setIncludeArchivedSearch(Boolean(includeArchivedDefault));
   }, [includeArchivedDefault]);
+
+  const setSortFromHeader = (key) => {
+    setSortConfig((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+    }));
+  };
+
+  const setSortFromSelect = (value) => {
+    const [key, direction] = value.split(':');
+    setSortConfig({ key, direction: direction === 'desc' ? 'desc' : 'asc' });
+  };
+
+  const renderSortableHeader = (key, label) => {
+    const active = sortConfig.key === key;
+    const ariaSort = active ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : 'none';
+    return (
+      <th aria-sort={ariaSort}>
+        <button
+          type="button"
+          className={`nm-sort-header ${active ? 'is-active' : ''}`}
+          onClick={() => setSortFromHeader(key)}
+        >
+          <span>{label}</span>
+          <span className="nm-sort-indicator" aria-hidden="true">{active ? (sortConfig.direction === 'asc' ? '↑' : '↓') : ''}</span>
+        </button>
+      </th>
+    );
+  };
 
   const serializeCandidatesToCsv = (rowList) => {
     if (!rowList.length) return '';
@@ -1219,6 +1292,20 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           />
           Include archived candidates
         </label>
+        <label className="nm-sort-select-label" htmlFor="sam-candidate-sort">
+          Sort by
+          <select
+            id="sam-candidate-sort"
+            value={`${sortConfig.key}:${sortConfig.direction}`}
+            onChange={(event) => setSortFromSelect(event.target.value)}
+          >
+            {CANDIDATE_SORT_OPTIONS.map((option) => (
+              <option key={`${option.key}:${option.direction}`} value={`${option.key}:${option.direction}`}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       {selectedCount > 0 ? (
         <div className="nm-bulk-action-bar">
@@ -1244,12 +1331,12 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                   onChange={(event) => toggleVisibleSelection(event.target.checked)}
                 />
               </th>
-              <th>Candidate</th>
-              <th>Status</th>
-              <th>Attempts</th>
-              <th>Tester</th>
-              <th>Date</th>
-              <th>Results</th>
+              {renderSortableHeader('candidate', 'Candidate')}
+              {renderSortableHeader('status', 'Status')}
+              {renderSortableHeader('attempts', 'Attempts')}
+              {renderSortableHeader('tester', 'Tester')}
+              {renderSortableHeader('date', 'Date')}
+              {renderSortableHeader('results', 'Results')}
               <th>Notes</th>
               <th className="nm-actions-column">Actions</th>
             </tr>

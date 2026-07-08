@@ -17,7 +17,7 @@ The files in `backend/defaults/` are the packaged master defaults used when a us
 - `sup-coaching.csv`: supervisor-transfer coaching checkboxes.
 - `call-fail-reasons.csv`: call fail reason checkboxes.
 - `sup-fail-reasons.csv`: supervisor-transfer fail reason checkboxes.
-- `discord-posts.csv`: reusable Discord post templates with optional Category, Title, and Message columns.
+- `discord-posts.csv`: reusable Discord post templates with optional Category, Title, Message, and SuggestedScreenshots columns.
 - `screenshots.csv`: screenshot entries with optional Category plus Title and ImagePath columns.
 - `headsets.csv`: approved headset brands and models.
 - `help.md`: packaged help document fallback.
@@ -29,6 +29,7 @@ The files in `backend/defaults/` are the packaged master defaults used when a us
 - Keep the header row exactly as provided.
 - Preserve the existing column order.
 - In coaching CSV files, keep multiple sub-items in `ChildrenPipeDelimited` separated by `|`.
+- In `discord-posts.csv`, keep up to three suggested screenshot paths in `SuggestedScreenshots` separated by `|`.
 - In `callers.csv`, keep the `Category` column populated so records route to the correct caller group.
 
 ## Google Overrides

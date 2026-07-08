@@ -244,12 +244,16 @@ Settings controls your profile, integrations, and app preferences.
 The Discord panel keeps reusable Discord messages and screenshot images close at hand during a session.
 - Open Discord Post from the sidebar.
 - Use Category to filter grouped templates or screenshots when categories are configured. Search still works within the selected category.
-- Search templates and copy message text with one click. Copy buttons change to Copied for 3 seconds.
-- Template rows show the category above the blue post title, with the full message beside it.
+- Search is the fastest default workflow. The search box is focused automatically and filters as you type.
+- Favorites are accessed with the Favorites filter chip, and Recent posts are accessed with the Recent filter chip.
+- Select a template to preview the full post on the right with notes and up to three configured suggested screenshots.
+- Use Copy Post for the Discord text. Use Copy Screenshot on each suggested screenshot image. Copying both together depends on clipboard and Discord paste support, so copy the post and screenshot separately if needed.
+- Double-click a Discord post to copy it immediately. Copy buttons change to Copied when successful.
 - Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.
 - Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.
 - Use Screenshots -> Discord Posts to open the centralized Phonetics.png reference when supported.
-- Templates and screenshots are managed in Settings.
+- Templates, suggested screenshots, screenshot image rows, shortcut behavior, automatic copy, confirmation toast, and favorite shortcut assignments are managed in Settings.
+- Admins can link zero, one, two, or three screenshots to each Discord post in Settings -> Discord -> Posts.
 
 ## 25. Ticker and Notifications
 The ticker and notification system surfaces operational messages without blocking normal work.

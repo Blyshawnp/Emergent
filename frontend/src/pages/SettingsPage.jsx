@@ -14,6 +14,11 @@ import {
   normalizeShortcut,
   shortcutFromEvent,
 } from '../utils/discordProductivity';
+import {
+  DISCORD_SCREENSHOT_LIMIT,
+  getDiscordPostSuggestedScreenshotPaths,
+  getExplicitSuggestedScreenshots,
+} from '../utils/discordScreenshotSuggestions';
 
 const TABS = [
   { key: 'general', label: 'General' },
@@ -1018,11 +1023,16 @@ function normalizeDiscordPost(item) {
     return { title: String(item[0] || ''), message: String(item[1] || ''), category: String(item[2] || 'Uncategorized') };
   }
   if (item && typeof item === 'object') {
-    return {
+    const normalized = {
       title: String(item.title || item.Title || item.trigger || item.Trigger || item.name || item.Name || item.label || item.Label || ''),
       message: String(item.message || item.Message || item.text || item.Text || item.content || item.Content || item.body || item.Body || ''),
       category: String(item.category || item.Category || item.group || item.Group || 'Uncategorized'),
     };
+    const explicitScreenshots = getExplicitSuggestedScreenshots(item);
+    if (explicitScreenshots !== null) {
+      normalized.suggestedScreenshots = explicitScreenshots;
+    }
+    return normalized;
   }
   return { title: '', message: '', category: 'Uncategorized' };
 }
@@ -1143,6 +1153,17 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
     set('discord_templates', next);
     onFeedback?.('discord', 'Updated. Click Save Settings to keep changes.');
   };
+  const updateSuggestedScreenshot = (i, slot, value) => {
+    const next = discord.map((item, idx) => {
+      if (idx !== i) return item;
+      const current = getDiscordPostSuggestedScreenshotPaths(item);
+      const updated = Array.from({ length: DISCORD_SCREENSHOT_LIMIT }, (_, screenshotIndex) => current[screenshotIndex] || '');
+      updated[slot] = value;
+      return { ...item, suggestedScreenshots: updated.filter(Boolean).slice(0, DISCORD_SCREENSHOT_LIMIT) };
+    });
+    set('discord_templates', next);
+    onFeedback?.('discord', 'Suggested screenshots updated. Click Save Settings to keep changes.');
+  };
   const remove = (i) => {
     set('discord_templates', discord.filter((_, idx) => idx !== i));
     onFeedback?.('discord', 'Removed. Click Save Settings to keep changes.');
@@ -1205,7 +1226,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
         <>
           <h3 style={{ marginBottom: 16 }}>Discord Message Templates</h3>
           <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
-            Category, trigger, and message entries. The tester can copy these from the Discord panel during a session. Basics, Sup Transfer, and Newbie Shift copy buttons use these same template triggers when available.
+            Category, trigger, message, and optional suggested screenshots. Each post can link up to three screenshots from the Screenshots tab. Copy Post and Copy Screenshot are separate actions in the Discord panel; Copy Both depends on clipboard and Discord paste support.
           </p>
           {discord.map((item, i) => (
             <div key={i} className="discord-edit-row">
@@ -1220,6 +1241,25 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
               <div className="discord-edit-msg">
                 <label className="text-xs text-muted" style={{ display: 'block', marginBottom: 2 }}>Message</label>
                 <textarea value={item.message} onChange={e => update(i, 'message', e.target.value)} rows={3} style={{ width: '100%' }} />
+              </div>
+              <div className="discord-edit-screenshots">
+                <label className="text-xs text-muted" style={{ display: 'block', marginBottom: 4 }}>Suggested Screenshots</label>
+                {Array.from({ length: DISCORD_SCREENSHOT_LIMIT }, (_, slot) => {
+                  const values = getDiscordPostSuggestedScreenshotPaths(item);
+                  return (
+                    <label className="text-xs text-muted discord-screenshot-select-row" key={`${i}-suggested-${slot}`}>
+                      Screenshot {slot + 1}
+                      <select value={values[slot] || ''} onChange={(event) => updateSuggestedScreenshot(i, slot, event.target.value)} data-testid={`settings-discord-suggested-${i}-${slot}`}>
+                        <option value="">No screenshot</option>
+                        {screenshots.map((screenshot, screenshotIndex) => (
+                          <option key={`${screenshot.image_url}-${screenshotIndex}`} value={screenshot.image_url}>
+                            {screenshot.title || screenshot.image_url}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })}
               </div>
               <button className="btn btn-danger btn-sm" onClick={() => remove(i)} style={{ alignSelf: 'flex-start', marginTop: 18, flexShrink: 0 }} title="Remove template">X</button>
             </div>
@@ -1237,7 +1277,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
         <>
           <h3 style={{ marginBottom: 16 }}>Discord Screenshots</h3>
           <p className="text-muted text-sm" style={{ marginBottom: 16 }}>
-            Screenshots with titles that can be copied to clipboard from the Discord panel. Upload an image file to store it with your settings and preview it here.
+            Screenshots with titles that can be copied to clipboard from the Discord panel. Upload an image file to store it with your settings, then link up to three screenshots to each post from the Posts tab.
           </p>
           {screenshots.map((ss, i) => (
             <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border-subtle)' }}>

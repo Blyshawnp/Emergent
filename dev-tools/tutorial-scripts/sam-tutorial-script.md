@@ -48,9 +48,9 @@ Troubleshooting notes: Confirm USB and noise-cancelling microphone support befor
 
 Narration: "Candidate Tracking is the shared reading pane for pending transfers, incomplete candidates, failed attempts, withdrawn candidates, passed certifications, archived rows, and all active candidates."
 
-Screen actions: Switch views, search candidate name, select rows, open View Details, review grouped details, copy selected, print report, and export CSV.
+Screen actions: Switch views, search candidate name, sort by Candidate, Status, Attempts, Tester, Date, and Results, select rows, open View Details, review grouped details, copy selected, print report, and export CSV.
 
-Callouts: The reading pane shows details without leaving the table. Candidate names and dates should be readable.
+Callouts: The reading pane shows details without leaving the table. Candidate names and dates should be readable. Header sorting and the Sort by menu make dense queues easier to scan.
 
 Troubleshooting notes: If the table is crowded, use search and View Details instead of horizontal scrolling.
 
@@ -88,11 +88,11 @@ Troubleshooting notes: If nothing prints, select at least one candidate first.
 
 Narration: "System Health and status banners explain sync state without interrupting normal work."
 
-Screen actions: Expand System Health, review app version, sync state, source, and retry options.
+Screen actions: Expand System Health, review app version, sync state, source, help links, diagnostics, and retry options.
 
-Callouts: Routine headset updates use a small status message instead of a modal interruption.
+Callouts: Routine headset updates use a small status message instead of a modal interruption. Confirmation modals, close buttons, and action buttons should look centered and intentional.
 
-Troubleshooting notes: Shared data temporary failures should show a simple retry message. Technical details belong in logs and diagnostics.
+Troubleshooting notes: Shared data temporary failures should show a simple retry message. Offline behavior should explain what can still be reviewed. Technical details belong in logs and diagnostics.
 
 ## Scene 10 - Help and Exit
 
@@ -110,6 +110,7 @@ Troubleshooting notes: If Help is stale, refresh SAM after installing an update.
 - Notifications were previewed before saving.
 - Headset review decisions were confirmed before approval or denial.
 - Candidate tracking actions were verified in the reading pane.
+- Candidate Tracking sorting, Copy Selected, and Print Report were demonstrated.
 - Copy, print, and export workflows were demonstrated.
 - Diagnostics and offline handling were explained.
 - Exit confirmation was shown and cancelled.

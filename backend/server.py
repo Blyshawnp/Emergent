@@ -1117,6 +1117,12 @@ DISCORD_POST_MESSAGE_ALIASES = {
     "content",
 }
 
+DISCORD_POST_SUGGESTED_SCREENSHOTS_ALIASES = {
+    "suggestedscreenshots",
+    "suggestedscreenshot",
+    "screenshots",
+}
+
 CONTENT_CATEGORY_HEADER_ALIASES = {
     "category",
     "group",
@@ -1498,6 +1504,8 @@ def _normalize_discord_posts(rows):
     category_header = _find_csv_header(rows, CONTENT_CATEGORY_HEADER_ALIASES)
     title_header = _find_csv_header(rows, DISCORD_POST_HEADER_ALIASES)
     message_header = _find_csv_header(rows, DISCORD_POST_MESSAGE_ALIASES)
+    suggested_header = _find_csv_header(rows, DISCORD_POST_SUGGESTED_SCREENSHOTS_ALIASES)
+    header_map = _csv_header_lookup(rows)
     if not title_header or not message_header:
         logger.warning("[CONTENT] Discord posts rows require Title and Message columns.")
         return []
@@ -1510,7 +1518,20 @@ def _normalize_discord_posts(rows):
         title = str(row.get(title_header) or "").strip()
         message = str(row.get(message_header) or "")
         if title:
-            items.append({"category": category, "title": title, "message": message})
+            item = {"category": category, "title": title, "message": message}
+            suggested_values = []
+            has_suggested_columns = bool(suggested_header)
+            if suggested_header:
+                suggested_values.extend(str(row.get(suggested_header) or "").split("|"))
+            for index in range(1, 4):
+                aliases = {f"suggestedscreenshot{index}", f"screenshot{index}"}
+                if any(_normalize_content_header(alias) in header_map for alias in aliases):
+                    value = _row_value(row, header_map, aliases)
+                    has_suggested_columns = True
+                    suggested_values.append(value)
+            if has_suggested_columns:
+                item["suggested_screenshots"] = [str(value or "").strip() for value in suggested_values if str(value or "").strip()][:3]
+            items.append(item)
     return items
 
 
@@ -3035,6 +3056,7 @@ def _sanitize_discord_template_setting(value, source_label):
         return DEFAULT_SETTINGS["discord_templates"]
     rows = []
     for item in value:
+        suggested_source = None
         if isinstance(item, (list, tuple)) and len(item) >= 2:
             category = str(item[2] or "").strip() if len(item) >= 3 else ""
             title = str(item[0] or "").strip()
@@ -3063,11 +3085,34 @@ def _sanitize_discord_template_setting(value, source_label):
                 or item.get("Body")
                 or ""
             )
+            if "suggestedScreenshots" in item:
+                suggested_source = item.get("suggestedScreenshots")
+            elif "suggested_screenshots" in item:
+                suggested_source = item.get("suggested_screenshots")
+            elif "SuggestedScreenshots" in item:
+                suggested_source = item.get("SuggestedScreenshots")
+            else:
+                numbered = [
+                    item.get("suggestedScreenshot1") if "suggestedScreenshot1" in item else item.get("SuggestedScreenshot1"),
+                    item.get("suggestedScreenshot2") if "suggestedScreenshot2" in item else item.get("SuggestedScreenshot2"),
+                    item.get("suggestedScreenshot3") if "suggestedScreenshot3" in item else item.get("SuggestedScreenshot3"),
+                ]
+                if any(value is not None for value in numbered):
+                    suggested_source = numbered
         else:
             continue
         category = category or DEFAULT_CONTENT_CATEGORY
         if title:
-            rows.append({"category": category, "title": title, "message": message})
+            row = {"category": category, "title": title, "message": message}
+            if suggested_source is not None:
+                if isinstance(suggested_source, str):
+                    suggested_values = suggested_source.split("|")
+                elif isinstance(suggested_source, (list, tuple)):
+                    suggested_values = suggested_source
+                else:
+                    suggested_values = []
+                row["suggested_screenshots"] = [str(path or "").strip() for path in suggested_values if str(path or "").strip()][:3]
+            rows.append(row)
     return rows
 
 

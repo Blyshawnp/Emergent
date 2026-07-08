@@ -203,6 +203,8 @@ test('settings shows immediate feedback for Discord list changes and clear save 
 
   expect(view.container.textContent).toContain('Apply to List');
   expect(view.container.textContent).toContain('Reset Posts to Defaults');
+  expect(view.container.textContent).toContain('Suggested Screenshots');
+  expect(view.container.querySelector('[data-testid="settings-discord-suggested-0-0"]')).not.toBeNull();
   expect(view.container.textContent).toContain('Category');
   expect(view.container.querySelector('input[value="Sup Transfer"]')).not.toBeNull();
   expect(view.container.textContent).toContain('Added. Click Save Settings to keep changes.');

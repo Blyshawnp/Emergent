@@ -3,6 +3,7 @@ const path = require('path');
 
 const appSource = fs.readFileSync(path.join(__dirname, 'NotificationManagerApp.jsx'), 'utf8');
 const appCss = fs.readFileSync(path.join(__dirname, 'notification-manager.css'), 'utf8');
+const samPolishCss = fs.readFileSync(path.join(__dirname, 'polish-sam.css'), 'utf8');
 const soundSource = fs.readFileSync(path.join(__dirname, 'utils', 'sound.js'), 'utf8');
 const electronMain = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'src', 'main.js'), 'utf8');
 
@@ -20,6 +21,25 @@ test('SAM candidate archive and archived search controls are wired without using
   expect(appSource).toContain('isCandidateArchived');
   expect(appSource).toContain('nm-archive-badge');
   expect(appSource).toContain('Archived Candidates');
+});
+
+test('SAM candidate tracking exposes accessible sortable headers and sort menu', () => {
+  expect(appSource).toContain('CANDIDATE_SORT_OPTIONS');
+  expect(appSource).toContain('aria-sort={ariaSort}');
+  expect(appSource).toContain("renderSortableHeader('candidate', 'Candidate')");
+  expect(appSource).toContain("renderSortableHeader('attempts', 'Attempts')");
+  expect(appSource).toContain("renderSortableHeader('date', 'Date')");
+  expect(appSource).toContain('Date newest first');
+  expect(appSource).toContain('Attempts high to low');
+  expect(samPolishCss).toContain('.nm-sort-header');
+});
+
+test('SAM status modals keep close control and actions centered', () => {
+  expect(appCss).toContain('.nm-status-modal > .nm-help-header');
+  expect(appCss).toContain('.nm-status-modal > .nm-help-actions');
+  expect(appCss).toContain('.nm-modal-close::after');
+  expect(appCss).toContain('font-size: 0');
+  expect(appCss).toContain('box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.24)');
 });
 
 test('SAM settings and help include real controls and streamlined sections', () => {
