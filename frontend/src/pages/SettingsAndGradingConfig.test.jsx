@@ -493,6 +493,57 @@ test('basics headset search matches brand and model portions while preserving un
   await view.unmount();
 });
 
+test('shared candidate lookup retries after a temporary failure and recovers without restart', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [], denied: [] });
+  api.lookupSharedCandidate
+    .mockResolvedValueOnce({ ok: false, error: 'temporary google outage', matches: [] })
+    .mockResolvedValueOnce({
+      ok: true,
+      matches: [{ candidate_name: 'Candidate Example', matchConfirmed: true, status: 'Fail', completed_at: '2026-07-01T12:00:00Z' }],
+      finalAttempt: false,
+      finalAttemptUsed: false,
+      withdrawn: false,
+      extraAttemptGranted: false,
+    });
+  const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+  const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+
+  jest.useFakeTimers();
+  try {
+    await act(async () => {
+      setInputValue(view.container.querySelector('[data-testid="basics-candidate"]'), 'Candidate Example');
+      jest.advanceTimersByTime(650);
+      await Promise.resolve();
+    });
+
+    expect(api.lookupSharedCandidate).toHaveBeenCalledTimes(1);
+    expect(view.container.textContent).toContain('Shared candidate lookup unavailable. Using local session mode.');
+
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(650);
+      await Promise.resolve();
+    });
+
+    expect(api.lookupSharedCandidate).toHaveBeenCalledTimes(2);
+    expect(view.container.textContent).not.toContain('Shared candidate lookup unavailable. Using local session mode.');
+    expect(view.container.textContent).toContain('Candidate Example');
+    expect(infoSpy).toHaveBeenCalledWith('[MTS] Shared candidate lookup reconnected successfully.', expect.objectContaining({ previousFailures: 1 }));
+  } finally {
+    jest.useRealTimers();
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
+    await view.unmount();
+  }
+});
+
 test('basics records changed approved-list hash without interrupting the trainer', async () => {
   const oldGroups = [{ brand: 'Logitech', models: ['H390'] }];
   const newGroups = [{ brand: 'Logitech', models: ['H390', 'H650e'] }];

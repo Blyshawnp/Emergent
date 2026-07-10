@@ -92,6 +92,36 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         }
         self.assertEqual(server.build_form_fill_payload(current_issue, {})["tech_issue_choice"], "Discord issues")
 
+    def test_same_day_drop_uses_ncns_form_mapping_with_distinct_fail_summary(self):
+        session = {
+            "candidate_name": "Candidate",
+            "auto_fail_reason": "Same Day Drop",
+            "final_status": "Fail",
+        }
+        summaries = server.generate_summaries(session)
+        payload = server.build_form_fill_payload(session, {})
+        self.assertEqual(server.compute_final_status(session), "NC/NS")
+        self.assertEqual(payload["auto_fail"], "NC/NS")
+        self.assertIn("dropped the session within 24 hours", summaries["fail"])
+        self.assertIn("dropped the session within 24 hours", payload["fail_reason"])
+
+    def test_required_call_fail_and_dte_screenshot_defaults_are_present(self):
+        content = server._load_local_defaults_content()
+        self.assertIn("Did not search for member", content.get("call_fails") or [])
+        screenshots = content.get("discord_screenshots") or []
+        dte = {item.get("title"): item.get("image_url") for item in screenshots if item.get("category") == "DTE"}
+        self.assertEqual(dte.get("DTE Taskbar"), "/DTE-Taskbar.png")
+        self.assertEqual(dte.get("DTE Allow"), "/DTE-allow.png")
+        self.assertEqual(dte.get("DTE Permission"), "/DTE-permission.png")
+        self.assertEqual(dte.get("DTE Profile"), "/DTE-profile.png")
+        self.assertEqual(dte.get("DTE Ready"), "/DTE-ready.png")
+        posts = {item.get("title"): item for item in content.get("discord_templates") or []}
+        self.assertEqual(posts.get("Sup-Launch DTE #1", {}).get("suggested_screenshots"), ["/DTE-Taskbar.png"])
+        self.assertEqual(posts.get("Sup-Launch DTE #2", {}).get("suggested_screenshots"), ["/DTE-allow.png"])
+        self.assertEqual(posts.get("Sup-Launch DTE #3", {}).get("suggested_screenshots"), ["/DTE-permission.png"])
+        self.assertEqual(posts.get("Sup-Launch DTE #4", {}).get("suggested_screenshots"), ["/DTE-profile.png"])
+        self.assertEqual(posts.get("Change DTE Status", {}).get("suggested_screenshots"), ["/DTE-ready.png"])
+
     def test_incomplete_technical_issue_ignores_stale_fail_summary(self):
         session = {
             "candidate_name": "Candidate",

@@ -1490,6 +1490,24 @@ def _normalize_callers_for_category(rows, category):
     return grouped
 
 
+REQUIRED_DTE_SCREENSHOTS = [
+    {"category": "DTE", "title": "DTE Taskbar", "image_url": "/DTE-Taskbar.png"},
+    {"category": "DTE", "title": "DTE Allow", "image_url": "/DTE-allow.png"},
+    {"category": "DTE", "title": "DTE Permission", "image_url": "/DTE-permission.png"},
+    {"category": "DTE", "title": "DTE Profile", "image_url": "/DTE-profile.png"},
+    {"category": "DTE", "title": "DTE Ready", "image_url": "/DTE-ready.png"},
+]
+
+
+REQUIRED_DISCORD_SUGGESTED_SCREENSHOTS = {
+    "sup-launch dte #1": ["/DTE-Taskbar.png"],
+    "sup-launch dte #2": ["/DTE-allow.png"],
+    "sup-launch dte #3": ["/DTE-permission.png"],
+    "sup-launch dte #4": ["/DTE-profile.png"],
+    "change dte status": ["/DTE-ready.png"],
+}
+
+
 def _normalize_discord_posts(rows):
     rows = rows or []
     if not rows:
@@ -1531,6 +1549,8 @@ def _normalize_discord_posts(rows):
                     suggested_values.append(value)
             if has_suggested_columns:
                 item["suggested_screenshots"] = [str(value or "").strip() for value in suggested_values if str(value or "").strip()][:3]
+            elif title.strip().lower() in REQUIRED_DISCORD_SUGGESTED_SCREENSHOTS:
+                item["suggested_screenshots"] = REQUIRED_DISCORD_SUGGESTED_SCREENSHOTS[title.strip().lower()]
             items.append(item)
     return items
 
@@ -1562,6 +1582,11 @@ def _normalize_screenshots(rows):
         image_path = str(row.get(image_header) or "").strip()
         if title:
             items.append({"category": category, "title": title, "image_url": image_path})
+    existing_paths = {str(item.get("image_url") or "").strip().lower() for item in items}
+    for screenshot in REQUIRED_DTE_SCREENSHOTS:
+        if screenshot["image_url"].lower() not in existing_paths:
+            items.append(dict(screenshot))
+            existing_paths.add(screenshot["image_url"].lower())
     return items
 
 
@@ -2339,6 +2364,7 @@ CALL_FAILS = [
     "Background noise on call",
     "Paraphrased script",
     "Wrong thank you gift",
+    "Did not search for member",
     "Script navigation issues",
     "Other",
 ]
@@ -6020,9 +6046,16 @@ def _lookup_shared_candidate_sessions(candidate_name):
     query = " ".join(str(candidate_name or "").lower().split())
     if len(query) < 2:
         return {"ok": True, "matches": [], "finalAttempt": False, "finalAttemptUsed": False, "withdrawn": False, "extraAttemptGranted": False}
+    lookup_started = time.monotonic()
+    logger.info("[SHARED] Candidate lookup started query_len=%d", len(query))
     try:
         context = _shared_sheet_context()
         if not context.get("ok"):
+            logger.warning(
+                "[SHARED] Candidate lookup context unavailable query_len=%d error=%s",
+                len(query),
+                context.get("error"),
+            )
             return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
@@ -6047,7 +6080,12 @@ def _lookup_shared_candidate_sessions(candidate_name):
             sheets_api = context["service"].spreadsheets()
             rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
     except Exception as exc:
-        logger.warning("[SHARED] Candidate lookup unavailable; continuing local workflow: %s", exc)
+        logger.warning(
+            "[SHARED] Candidate lookup failed query_len=%d duration_ms=%d error=%s",
+            len(query),
+            int((time.monotonic() - lookup_started) * 1000),
+            exc,
+        )
         return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
     matches = []
     for row in rows:
@@ -6070,6 +6108,17 @@ def _lookup_shared_candidate_sessions(candidate_name):
     withdrawn = any(_candidate_row_withdrawn(row) or _shared_status_upper(row) == "WITHDREW FROM CERTIFICATION" for row in confirmed_matches)
     extra_attempt = any(_candidate_row_extra_attempt(row) for row in confirmed_matches)
     visible_matches = [row for row in active_matches if _shared_candidate_suggestion_visible(row)]
+    logger.info(
+        "[SHARED] Candidate lookup succeeded query_len=%d duration_ms=%d matches=%d visible=%d final_attempt=%s final_attempt_used=%s withdrawn=%s extra_attempt=%s",
+        len(query),
+        int((time.monotonic() - lookup_started) * 1000),
+        len(matches),
+        len(visible_matches),
+        len(qualifying_failures) >= 2 and not extra_attempt and not final_attempt_used,
+        final_attempt_used and not extra_attempt,
+        withdrawn,
+        extra_attempt,
+    )
     return {
         "ok": True,
         "matches": visible_matches[:20],
@@ -6140,7 +6189,6 @@ def _get_fail_items(data):
 DISCORD_SCREENSHOT_SUMMARY_TEXT = (
     "Coaching was provided using the standard screenshots and Discord chat."
 )
-
 
 AUTO_FAIL_MESSAGES = {
     "nc/ns": "was a No Call / No Show. Session did not occur.",
@@ -6505,7 +6553,7 @@ def compute_calculated_status(session):
 
     if auto_fail:
         auto_fail_text = str(auto_fail or "").strip().lower()
-        if auto_fail_text.startswith("nc"):
+        if auto_fail_text.startswith("nc") or "same day drop" in auto_fail_text or "dropped the session within 24 hours" in auto_fail_text:
             return "NC/NS"
         return "FAIL-Final Attempt" if final_attempt else "Fail"
 
@@ -6566,7 +6614,7 @@ def normalize_history_status(entry):
 
     if entry.get("auto_fail_reason"):
         auto_fail = (entry.get("auto_fail_reason") or "").strip().lower()
-        if auto_fail.startswith("nc"):
+        if auto_fail.startswith("nc") or "same day drop" in auto_fail or "dropped the session within 24 hours" in auto_fail:
             return "NC/NS"
         return "Fail"
 
@@ -7529,6 +7577,8 @@ def _map_auto_fail_for_form(auto_fail_reason):
     reason = (auto_fail_reason or "").strip().lower()
     if not reason:
         return "N/A"
+    if "same day drop" in reason or "dropped the session within 24 hours" in reason or "dropped within 24 hours" in reason:
+        return "NC/NS"
     if "nc/ns" in reason or "nc / ns" in reason:
         return "NC/NS"
     if "stopped responding" in reason:
@@ -7548,6 +7598,8 @@ def _classify_auto_fail_reason(auto_fail_reason):
     reason = " ".join(str(auto_fail_reason or "").strip().lower().split())
     if not reason:
         return ""
+    if "same day drop" in reason or "dropped the session within 24 hours" in reason or "dropped within 24 hours" in reason:
+        return "ncns"
     if "nc/ns" in reason or "nc / ns" in reason:
         return "ncns"
     if "stopped responding" in reason:
@@ -7623,7 +7675,9 @@ def _auto_fail_review_summaries(session):
             coaching_lines.append(line)
 
     if auto_fail_type == "ncns":
-        return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(f"{name} was a NC/NS.", session)}
+        auto_fail_text = str(auto_fail_reason or "").strip().lower()
+        fail_text = f"{name} dropped the session within 24 hours." if "same day drop" in auto_fail_text or "dropped" in auto_fail_text else f"{name} was a No Call No Show."
+        return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(fail_text, session)}
     if auto_fail_type == "not_ready":
         return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(f"{name} was not ready or prepared for the session.", session)}
     if auto_fail_type == "headset":

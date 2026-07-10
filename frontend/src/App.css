@@ -1955,6 +1955,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   min-width: 0;
   gap: 10px;
   padding: 8px 10px;
@@ -1967,6 +1968,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   display: flex;
   align-items: center;
   min-width: 0;
+  flex: 1 1 220px;
   gap: 8px;
 }
 

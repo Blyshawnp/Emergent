@@ -82,7 +82,7 @@ function computeCalculatedStatus(session) {
 
   if (autoFail) {
     const autoFailText = String(autoFail || '').trim().toLowerCase();
-    if (autoFailText.startsWith('nc')) return 'NC/NS';
+    if (autoFailText.startsWith('nc') || autoFailText.includes('same day drop') || autoFailText.includes('dropped the session within 24 hours')) return 'NC/NS';
     return finalAttempt ? 'FAIL-Final Attempt' : 'Fail';
   }
 
@@ -189,7 +189,44 @@ function getHistoricalFailSummary(session) {
 
 function getFallbackCoachingSummary(session) {
   return (session?.coaching_summary || '').trim()
-    || 'No coaching summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+    || buildLocalFallbackCoachingSummary(session);
+}
+
+function summarizeSectionForFallback(section, label) {
+  if (!section?.result) return '';
+  const coaching = Object.entries(section.coaching || {})
+    .filter(([, checked]) => checked)
+    .map(([item]) => item);
+  const fails = Object.entries(section.fails || {})
+    .filter(([, checked]) => checked)
+    .map(([item]) => item);
+  const parts = [`${label}: ${section.result}.`];
+  if (coaching.length) parts.push(`Coaching: ${coaching.join(', ')}.`);
+  if (fails.length) parts.push(`Fail reasons: ${fails.join(', ')}.`);
+  if (section.coach_notes) parts.push(`Notes: ${section.coach_notes}.`);
+  return parts.join(' ');
+}
+
+function buildLocalFallbackCoachingSummary(session) {
+  if (!session) return 'Session summary is being prepared.';
+  const lines = [];
+  if (!session.supervisor_only) {
+    for (let i = 1; i <= 3; i += 1) {
+      const line = summarizeSectionForFallback(session[`call_${i}`], `Call ${i}`);
+      if (line) lines.push(line);
+    }
+  }
+  for (let i = 1; i <= 2; i += 1) {
+    const line = summarizeSectionForFallback(session[`sup_transfer_${i}`], `Supervisor Transfer ${i}`);
+    if (line) lines.push(line);
+  }
+  if (session.auto_fail_reason) {
+    lines.push(`Session ended under auto-fail reason: ${session.auto_fail_reason}.`);
+  }
+  if (session.tech_issue && !isEmptyTechIssue(session.tech_issue)) {
+    lines.push(`Technical issue recorded: ${session.tech_issue}.`);
+  }
+  return lines.length ? lines.join('\n') : 'No coaching items were selected for this session.';
 }
 
 function getFallbackFailSummary(session) {

@@ -195,7 +195,7 @@ test('review keeps automatic fallback visible when summary generation errors', a
     await flushPromises();
   });
 
-  expect(view.container.querySelector('[data-testid="review-coaching"]').value).toContain('No coaching summary was generated before Review loaded');
+  expect(view.container.querySelector('[data-testid="review-coaching"]').value).toContain('Call 1: Pass.');
   expect(view.container.querySelector('[data-testid="review-fail"]').value).toBe('N/A');
   expect(view.container.querySelector('[data-testid="review-gemini-status"]').textContent).toContain('Gemini unavailable');
 

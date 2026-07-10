@@ -497,7 +497,7 @@ function MtsUpdateModal({ updateInfo, updaterStatus, onClose }) {
     .filter(Boolean);
 
   return (
-    <div className="cmodal-overlay open" onClick={(e) => { if ((manualMode || !required) && !isInstalling && e.target === e.currentTarget) onClose(); }}>
+    <div className="cmodal-overlay open">
       <div className="cmodal" style={{ maxWidth: '600px', width: '90%' }}>
         <img className="cmodal-graphic" src={updateGraphic} alt="" style={{ height: '60px', objectFit: 'contain' }} />
         <div className="cmodal-title" style={{ fontSize: '1.4rem', marginBottom: '8px' }}>
@@ -1907,7 +1907,7 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
   };
 
   return (
-    <div className="modal-overlay open" onClick={e => { if (e.target.classList.contains('modal-overlay')) onClose(); }} data-testid="discord-modal">
+    <div className="modal-overlay open" data-testid="discord-modal">
       <div className="modal discord-modal" onClick={e => e.stopPropagation()} onKeyDown={handleKeyDown}>
         <div className="modal-header">
           <h2>Discord Posts</h2>

@@ -119,6 +119,7 @@ test('does not show NC/NS and Not Ready buttons in regular supervisor transfer f
 });
 
 test('supervisor-only NC/NS button confirms, saves auto-fail, and routes to review', async () => {
+  mockModal.showModal.mockResolvedValueOnce('ncns');
   const view = await renderPage({ supervisor_only: true, candidate_name: 'Taylor Example' });
 
   await act(async () => {
@@ -128,9 +129,17 @@ test('supervisor-only NC/NS button confirms, saves auto-fail, and routes to revi
     await flushPromises();
   });
 
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Mark Session',
+    buttons: expect.arrayContaining([
+      expect.objectContaining({ label: 'Same Day Drop', value: 'same-day-drop' }),
+      expect.objectContaining({ label: 'NC/NS', value: 'ncns' }),
+      expect.objectContaining({ label: 'Cancel', value: 'cancel' }),
+    ]),
+  }));
   expect(mockModal.confirm).toHaveBeenCalledWith(
     'Confirm Auto-Fail',
-    'This will Automatically fail Taylor Example and mark as a NC/NS. Do you want to proceed?',
+    'This will automatically fail Taylor Example and mark as a No Call No Show. Do you want to continue?',
     'alert-triangle',
     'warning'
   );

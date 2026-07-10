@@ -66,7 +66,7 @@ function getCallCoachingForDisplay(items = []) {
 
 const DEFAULT_CALL_FAILS = [
   'Skipped parts of script', 'Volunteered info', 'Wrong donation', 'Background noise on call',
-  'Paraphrased script', 'Wrong thank you gift', 'Script navigation issues', 'Other',
+  'Paraphrased script', 'Wrong thank you gift', 'Did not search for member', 'Script navigation issues', 'Other',
 ];
 
 // --- Extracted helpers to reduce main component complexity ---

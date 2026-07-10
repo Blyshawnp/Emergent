@@ -26,6 +26,8 @@ function isStrongCandidateLookupQuery(value) {
   return normalized.length >= 3;
 }
 
+const SHARED_CANDIDATE_LOOKUP_RETRY_MS = 5000;
+
 function getCandidateDate(record) {
   return record?.completed_at || record?.created_at || record?.displayDate || '';
 }
@@ -257,6 +259,7 @@ export default function BasicsPage({ onNavigate }) {
   const [headsetLookupError, setHeadsetLookupError] = useState('');
   const [headsetLookupLoading, setHeadsetLookupLoading] = useState(true);
   const [candidateLookup, setCandidateLookup] = useState({ loading: false, skipped: false, matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false });
+  const [candidateLookupRetryTick, setCandidateLookupRetryTick] = useState(0);
   const [confirmedCandidateMatch, setConfirmedCandidateMatch] = useState(null);
   const [previousSessionOpen, setPreviousSessionOpen] = useState(false);
   const [finalAttemptNoticeShownFor, setFinalAttemptNoticeShownFor] = useState('');
@@ -265,6 +268,10 @@ export default function BasicsPage({ onNavigate }) {
   const dropdownRef = useRef(null);
   const containerRef = useRef(null);
   const itemRefs = useRef([]);
+  const candidateLookupRetryTimerRef = useRef(null);
+  const candidateLookupAttemptRef = useRef(0);
+  const candidateLookupFailureCountRef = useRef(0);
+  const candidateLookupLastQueryRef = useRef('');
   const [candidateIpIntelligence, setCandidateIpIntelligence] = useState(() => loadStoredCandidateIpIntelligence());
   const vpnProxyCheckMode = normalizeVpnProxyCheckMode(settings?.vpnProxyCheckMode);
   const activeCandidateIpIntelligence = vpnProxyCheckMode === 'checker' ? candidateIpIntelligence : null;
@@ -333,6 +340,14 @@ export default function BasicsPage({ onNavigate }) {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (candidateLookupRetryTimerRef.current) {
+        window.clearTimeout(candidateLookupRetryTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!hydratedRef.current || headsetLookupLoading || headsetLookupError) return;
     const approvedHash = computeApprovedHeadsetHash(approvedHeadsets);
     const signature = computeHeadsetSyncSignature(approvedHeadsets, deniedHeadsets);
@@ -374,6 +389,11 @@ export default function BasicsPage({ onNavigate }) {
 
   useEffect(() => {
     const candidateName = form.candidate_name.trim();
+    const normalizedLookupQuery = normalizeName(candidateName).toLowerCase();
+    if (candidateLookupRetryTimerRef.current) {
+      window.clearTimeout(candidateLookupRetryTimerRef.current);
+      candidateLookupRetryTimerRef.current = null;
+    }
     if (!hydratedRef.current) {
       return undefined;
     }
@@ -383,25 +403,79 @@ export default function BasicsPage({ onNavigate }) {
     }
 
     if (!isStrongCandidateLookupQuery(candidateName)) {
+      candidateLookupFailureCountRef.current = 0;
+      candidateLookupLastQueryRef.current = '';
       setCandidateLookup({ loading: false, skipped: Boolean(candidateName), matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false });
       return undefined;
     }
 
+    if (candidateLookupLastQueryRef.current !== normalizedLookupQuery) {
+      candidateLookupFailureCountRef.current = 0;
+      candidateLookupLastQueryRef.current = normalizedLookupQuery;
+    }
+
     setCandidateLookup((current) => ({ ...current, loading: true, skipped: false, error: '' }));
+    const scheduleRetry = (reason) => {
+      if (candidateLookupLastQueryRef.current !== normalizedLookupQuery) return;
+      candidateLookupRetryTimerRef.current = window.setTimeout(() => {
+        console.info('[MTS] Shared candidate lookup retrying automatically.', {
+          failureCount: candidateLookupFailureCountRef.current,
+          retryAfterMs: SHARED_CANDIDATE_LOOKUP_RETRY_MS,
+        });
+        setCandidateLookupRetryTick((tick) => tick + 1);
+      }, SHARED_CANDIDATE_LOOKUP_RETRY_MS);
+      console.warn('[MTS] Shared candidate lookup unavailable; scheduled retry.', {
+        failureCount: candidateLookupFailureCountRef.current,
+        retryAfterMs: SHARED_CANDIDATE_LOOKUP_RETRY_MS,
+        reason,
+      });
+    };
     const timer = window.setTimeout(async () => {
+      const attempt = candidateLookupAttemptRef.current + 1;
+      candidateLookupAttemptRef.current = attempt;
+      const wasRecovering = candidateLookupFailureCountRef.current > 0;
+      console.info('[MTS] Shared candidate lookup request started.', {
+        attempt,
+        retry: wasRecovering,
+        queryLength: candidateName.length,
+      });
       try {
         const response = await api.lookupSharedCandidate(candidateName);
+        if (response?.ok === false) {
+          candidateLookupFailureCountRef.current += 1;
+          setCandidateLookup({
+            loading: false,
+            skipped: false,
+            matches: [],
+            error: 'Shared candidate lookup unavailable. Using local session mode.',
+            finalAttempt: false,
+            finalAttemptUsed: false,
+            withdrawn: false,
+            extraAttemptGranted: false,
+          });
+          scheduleRetry(response?.error || 'backend returned ok=false');
+          return;
+        }
+        if (wasRecovering) {
+          console.info('[MTS] Shared candidate lookup reconnected successfully.', {
+            attempt,
+            previousFailures: candidateLookupFailureCountRef.current,
+            matchCount: Array.isArray(response?.matches) ? response.matches.length : 0,
+          });
+        }
+        candidateLookupFailureCountRef.current = 0;
         setCandidateLookup({
           loading: false,
           skipped: false,
           matches: Array.isArray(response?.matches) ? response.matches : [],
-          error: response?.ok === false ? 'Shared candidate lookup unavailable. Using local session mode.' : '',
+          error: '',
           finalAttempt: Boolean(response?.finalAttempt),
           finalAttemptUsed: Boolean(response?.finalAttemptUsed),
           withdrawn: Boolean(response?.withdrawn),
           extraAttemptGranted: Boolean(response?.extraAttemptGranted),
         });
       } catch (error) {
+        candidateLookupFailureCountRef.current += 1;
         setCandidateLookup({
           loading: false,
           skipped: false,
@@ -412,11 +486,12 @@ export default function BasicsPage({ onNavigate }) {
           withdrawn: false,
           extraAttemptGranted: false,
         });
+        scheduleRetry(error?.message || 'request failed');
       }
     }, 650);
 
     return () => window.clearTimeout(timer);
-  }, [confirmedCandidateMatch, form.candidate_name]);
+  }, [candidateLookupRetryTick, confirmedCandidateMatch, form.candidate_name]);
 
   useEffect(() => {
     const candidateName = normalizeName(form.candidate_name).toLowerCase();
@@ -844,17 +919,38 @@ export default function BasicsPage({ onNavigate }) {
 
   const autoFail = async (reason) => {
     if (!form.candidate_name.trim()) { await modal.warning('Missing Info', 'Enter the Candidate Name first.'); return; }
+    const candidateName = form.candidate_name.trim();
+    let resolvedReason = reason;
     let body = '';
     if (reason === 'NC/NS') {
-      body = `This will Automatically fail ${form.candidate_name.trim()} and mark as a NC/NS. Do you want to proceed?`;
+      const choice = await modal.showModal({
+        type: 'confirm',
+        title: 'Mark Session',
+        body: `How would you like to mark this session for <b>${candidateName}</b>?`,
+        graphic: 'warning',
+        buttons: [
+          { label: 'Same Day Drop', cls: 'btn-warning', value: 'same-day-drop' },
+          { label: 'NC/NS', cls: 'btn-danger', value: 'ncns' },
+          { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
+        ],
+      });
+      if (choice === 'same-day-drop') {
+        resolvedReason = 'Same Day Drop';
+        body = `This will automatically fail ${candidateName} and mark as session dropped within 24 hours. Do you want to continue?`;
+      } else if (choice === 'ncns') {
+        resolvedReason = 'NC/NS';
+        body = `This will automatically fail ${candidateName} and mark as a No Call No Show. Do you want to continue?`;
+      } else {
+        return;
+      }
     } else if (reason === 'Not Ready for Session') {
-      body = `This will Automatically fail ${form.candidate_name.trim()} and mark as Not Ready for Session. Do you want to proceed?`;
+      body = `This will Automatically fail ${candidateName} and mark as Not Ready for Session. Do you want to proceed?`;
     } else {
-      body = `This will Automatically fail ${form.candidate_name.trim()} and mark as Stopped Responding in Chat. Do you want to proceed?`;
+      body = `This will Automatically fail ${candidateName} and mark as Stopped Responding in Chat. Do you want to proceed?`;
     }
     const confirmed = await modal.confirm('Confirm Auto-Fail', body, 'alert-triangle', 'warning');
     if (!confirmed) return;
-    const data = { ...form, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: reason, final_status: 'Fail' };
+    const data = { ...form, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: resolvedReason, final_status: 'Fail' };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
     await logUnknownHeadsetIfNeeded(data);
     await api.startSession(data);
@@ -938,9 +1034,6 @@ export default function BasicsPage({ onNavigate }) {
       if (candidateBlockResult.override) {
         set('candidate_override_used', true);
       }
-    } else if (candidateLookup.withdrawn || candidateLookup.finalAttemptUsed) {
-      candidateBlockResult = await handleCandidateBlockOrOverride({ candidate_name: d.candidate_name });
-      if (!candidateBlockResult.allowed) return;
     }
     if (!d.headset_brand.trim()) { await modal.warning('Missing Info', 'Headset brand/model is required.'); return; }
     if (deniedHeadset) {
@@ -1100,6 +1193,19 @@ export default function BasicsPage({ onNavigate }) {
                   className="dropdown-menu candidate-suggestions-dropdown"
                   data-testid="candidate-suggestions-dropdown"
                 >
+                  <div
+                    className="suggestion-item is-typed-name"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setConfirmedCandidateMatch(null);
+                      setCandidateLookup(curr => ({ ...curr, matches: [] }));
+                    }}
+                  >
+                    <div className="suggestion-main">
+                      <div className="suggestion-name">Use typed name: {form.candidate_name.trim()}</div>
+                      <div className="suggestion-meta">Continue without linking to a shared candidate record.</div>
+                    </div>
+                  </div>
                   {candidateLookup.matches.map((match, idx) => {
                     const dateStr = getCandidateDate(match);
                     const displayDate = dateStr ? new Date(dateStr).toLocaleDateString() : 'N/A';
@@ -1164,7 +1270,7 @@ export default function BasicsPage({ onNavigate }) {
             Shared records indicate this is the candidate&apos;s final attempt.
           </div>
         )}
-        {candidateLookup.extraAttemptGranted && !candidateLookup.finalAttempt && (
+        {confirmedCandidateMatch && candidateLookup.extraAttemptGranted && !candidateLookup.finalAttempt && (
           <div className="banner banner-incomplete" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
             Shared records show an additional attempt was granted.
           </div>
@@ -1333,11 +1439,6 @@ export default function BasicsPage({ onNavigate }) {
       {headsetLookupOpen && (
         <div
           className="modal-overlay open"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setHeadsetLookupOpen(false);
-            }
-          }}
         >
           <div className="modal headset-lookup-modal" style={{ width: 640, maxWidth: '92vw' }}>
             <div className="modal-header">
@@ -1448,7 +1549,7 @@ function PreviousSessionModal({ matches, candidateName, onClose }) {
   const [expanded, setExpanded] = useState(0);
   const sessions = Array.isArray(matches) ? matches : [];
   return (
-    <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="modal-overlay open">
       <div className="modal" style={{ width: 760, maxWidth: '94vw', maxHeight: '86vh' }}>
         <div className="modal-header">
           <h2>Previous Candidate Sessions</h2>

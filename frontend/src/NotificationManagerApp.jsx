@@ -1965,7 +1965,7 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
       {activeTab === 'approved' ? renderRows(data?.approved || [], 'approved') : null}
       {activeTab === 'denied' ? renderRows(data?.denied || [], 'denied') : null}
       {lookupReview ? (
-        <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) setLookupReview(null); }}>
+        <div className="modal-overlay open">
           <div className="modal" style={{ width: 560, maxWidth: '92vw' }} role="dialog" aria-modal="true" aria-label="Headset lookup decision">
             <div className="modal-header"><h2>Review Headset</h2><button className="modal-close" onClick={() => setLookupReview(null)}>&times;</button></div>
             <div className="modal-body">
@@ -1981,7 +1981,7 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
         </div>
       ) : null}
       {denial ? (
-        <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) setDenial(null); }}>
+        <div className="modal-overlay open">
           <div className="modal" style={{ width: 560, maxWidth: '92vw' }}>
             <div className="modal-header"><h2>Deny Headset</h2><button className="modal-close" onClick={() => setDenial(null)}>&times;</button></div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -3739,7 +3739,7 @@ function CandidateSearchModal({ open, data, onClose, onViewInTracking, includeAr
     : [];
 
   return (
-    <div className="modal-overlay open" onClick={e => { if (e.target.classList.contains('modal-overlay')) onClose(); }}>
+    <div className="modal-overlay open">
       <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 600, maxHeight: '80vh' }}>
         <div className="modal-header">
           <h2>Candidate Search</h2>

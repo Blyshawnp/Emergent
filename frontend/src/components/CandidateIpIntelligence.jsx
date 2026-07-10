@@ -64,10 +64,10 @@ export function buildManualLookupLinks(ipValue) {
   const encoded = encodeURIComponent(ip);
   return [
     {
-      label: 'IPQualityScore',
-      desc: 'Strong VPN/proxy reputation',
+      label: 'WhatIsMyIP Proxy Check',
+      desc: 'Candidate-friendly proxy check page',
       badge: 'VPN',
-      url: ip ? `https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test/lookup/${encoded}` : 'https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test',
+      url: ip ? `https://www.whatismyip.com/proxy-check/?ip=${encoded}` : 'https://www.whatismyip.com/proxy-check/',
     },
     {
       label: 'ProxyCheck.io',
@@ -76,10 +76,10 @@ export function buildManualLookupLinks(ipValue) {
       url: 'https://proxycheck.io/',
     },
     {
-      label: 'GetIPIntel',
-      desc: 'Residential vs proxy reputation',
+      label: 'Teoh VPN Detection',
+      desc: 'VPN detection lookup',
       badge: 'Geo',
-      url: 'https://getipintel.net/',
+      url: ip ? `https://ip.teoh.io/vpn-detection?ip=${encoded}` : 'https://ip.teoh.io/vpn-detection',
     },
     {
       label: 'IP2Location',
@@ -197,6 +197,12 @@ function ModeBadge({ mode }) {
 }
 
 function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact = false, showCopyButton = true }) {
+  const [copiedUrl, setCopiedUrl] = useState('');
+  const copyUrl = async (url) => {
+    await navigator.clipboard.writeText(url);
+    setCopiedUrl(url);
+    window.setTimeout(() => setCopiedUrl(''), 1800);
+  };
   return (
     <div className={`ip-manual-lookup ${compact ? 'ip-manual-lookup-compact' : ''}`} data-testid="candidate-ip-manual-links">
       <div className="ip-manual-header">
@@ -227,6 +233,14 @@ function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact 
               data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
             >
               Open Lookup
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => copyUrl(link.url)}
+              data-testid={`candidate-ip-copy-url-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+            >
+              {copiedUrl === link.url ? 'Copied URL' : 'Copy URL'}
             </button>
           </div>
         ))}
@@ -516,7 +530,6 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
         {!open && (
           <div className="candidate-ip-collapsed-summary">
             <span className="text-sm text-muted">Manual verification is the release-safe default.</span>
-            <button type="button" className="btn btn-muted btn-sm" onClick={() => setOpen(true)}>Expand</button>
           </div>
         )}
         {open && (

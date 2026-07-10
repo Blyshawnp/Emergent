@@ -302,6 +302,13 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
     if (status.includes('nc/ns')) return 'badge-ncns';
     return 'badge-incomplete';
   };
+  const statusChips = (status) => {
+    const value = String(status || '?').trim();
+    if (value === 'Needs Retest / Additional Coaching') {
+      return ['Needs Retest', 'Additional Coaching'];
+    }
+    return [value || '?'];
+  };
 
   const startStandardSession = () => {
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -527,7 +534,11 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
               >
                 <span className="recent-date"><Clock3 size={14} strokeWidth={2} /> {s.timestamp || 'Unknown'}</span>
                 <span className="recent-name">{s.candidate || 'Unknown'}</span>
-                <span className={`badge ${badgeClass(s.status)}`}>{s.status || '?'}</span>
+                <span className="recent-status-chips" aria-label={`Status: ${s.status || 'Unknown'}`}>
+                  {statusChips(s.status).map((chip) => (
+                    <span key={chip} className={`badge recent-status-chip ${badgeClass(chip)}`}>{chip}</span>
+                  ))}
+                </span>
               </div>
             )) : (
               <div className="empty-state">
@@ -602,7 +613,7 @@ function ResumeSupTransferModal({ entries, selectedEntry, onSelect, onClose, onC
   }, [entries, search]);
 
   return (
-    <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="modal-overlay open">
       <div className="modal" style={{ width: 760, maxHeight: '85vh' }}>
         <div className="modal-header">
           <h2>Resume Supervisor Transfer</h2>
@@ -680,7 +691,7 @@ function SharedPendingSupTransferModal({ entries, selectedEntry, error, onSelect
   }, [entries, search]);
 
   return (
-    <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="modal-overlay open">
       <div className="modal" style={{ width: 860, maxHeight: '86vh' }}>
         <div className="modal-header">
           <h2>Shared Pending Supervisor Transfers</h2>

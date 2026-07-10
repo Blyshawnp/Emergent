@@ -125,7 +125,7 @@ export function ModalProvider({ children }) {
     <ModalContext.Provider value={contextValue}>
       {children}
       {modal && (
-        <div className="cmodal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) closeModal(false); }}>
+        <div className="cmodal-overlay open">
           <div className="cmodal">
             {modalGraphic ? (
               <img

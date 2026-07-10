@@ -207,7 +207,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       </div>
 
       {detail && (
-        <div className="modal-overlay open" onClick={e => { if (e.target === e.currentTarget) setDetail(null); }}>
+        <div className="modal-overlay open">
           <div className="modal" style={{ width: 700, maxHeight: '85vh' }}>
             <div className="modal-header">
               <h2>{detail.candidate || detail.candidate_name || 'Unknown'} - <span style={{ color: ({ Pass: 'var(--color-success)', 'RESUMED-PASS': 'var(--color-success)', Fail: 'var(--color-danger)', 'FAIL-Final Attempt': 'var(--color-danger)', Incomplete: 'var(--color-warning)' }[detail.status]) || 'var(--text-secondary)' }}>{(detail.status || '').toUpperCase()}</span></h2>

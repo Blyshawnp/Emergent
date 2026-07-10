@@ -442,9 +442,29 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       return;
     }
 
+    let resolvedReason = reason;
     let body = '';
     if (reason === 'NC/NS') {
-      body = `This will Automatically fail ${candidateName.trim()} and mark as a NC/NS. Do you want to proceed?`;
+      const choice = await modal.showModal({
+        type: 'confirm',
+        title: 'Mark Session',
+        body: `How would you like to mark this session for <b>${candidateName.trim()}</b>?`,
+        graphic: 'warning',
+        buttons: [
+          { label: 'Same Day Drop', cls: 'btn-warning', value: 'same-day-drop' },
+          { label: 'NC/NS', cls: 'btn-danger', value: 'ncns' },
+          { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
+        ],
+      });
+      if (choice === 'same-day-drop') {
+        resolvedReason = 'Same Day Drop';
+        body = `This will automatically fail ${candidateName.trim()} and mark as session dropped within 24 hours. Do you want to continue?`;
+      } else if (choice === 'ncns') {
+        resolvedReason = 'NC/NS';
+        body = `This will automatically fail ${candidateName.trim()} and mark as a No Call No Show. Do you want to continue?`;
+      } else {
+        return;
+      }
     } else {
       body = `This will Automatically fail ${candidateName.trim()} and mark as Not Ready for Session. Do you want to proceed?`;
     }
@@ -454,7 +474,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
 
     latestDraftPayloadRef.current = null;
     await api.updateSession({
-      auto_fail_reason: reason,
+      auto_fail_reason: resolvedReason,
       final_status: 'Fail',
       current_sup_transfer_draft: null,
       current_sup_transfer_num: null,

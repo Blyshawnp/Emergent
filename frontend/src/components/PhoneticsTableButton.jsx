@@ -52,7 +52,7 @@ export default function PhoneticsTableButton({ screenshots = [] }) {
         Phonetics Table
       </button>
       {open && (
-        <div className="modal-overlay open" onClick={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+        <div className="modal-overlay open">
           <div className="modal phonetics-modal" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header">
               <h2>Phonetics Table</h2>
