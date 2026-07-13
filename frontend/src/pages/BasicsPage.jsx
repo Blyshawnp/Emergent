@@ -1120,7 +1120,7 @@ export default function BasicsPage({ onNavigate }) {
     if (!headsetApproved && (d.headset_usb === null || d.noise_cancel === null)) { await modal.warning('Missing Info', 'USB and Noise Cancelling answers are required for headsets that are not on the approved list.'); return; }
     if (d.vpn_on === null) { await modal.warning('Missing Info', 'VPN question must be answered.'); return; }
     if (d.vpn_on && d.vpn_off === null) { await modal.warning('Missing Info', 'Please confirm if the candidate can turn off their VPN.'); return; }
-    if (d.chrome_default === null || d.extensions_disabled === null || d.popups_allowed === null) { await modal.warning('Missing Info', 'All Browser questions must be answered.'); return; }
+    if (d.chrome_default === null || d.extensions_disabled === null || d.popups_allowed === null) { await modal.warning('Missing Info', 'All Browser Checklist questions must be answered.'); return; }
 
     const vpnDecision = await handleVpnProxyDecision({ ...d, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode });
     if (!vpnDecision.shouldContinue) return;
@@ -1468,7 +1468,7 @@ export default function BasicsPage({ onNavigate }) {
           </div>
         </div>
         <div className="card" style={{ padding: '16px 24px' }} data-tour="basics-browser-section">
-          <h3 style={{ marginBottom: 8 }}>Browser</h3>
+          <h3 style={{ marginBottom: 8 }}>Browser Checklist</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <label className="text-sm font-bold" style={{ minWidth: 130 }}>Default browser?</label>

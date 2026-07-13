@@ -164,6 +164,7 @@ const api = {
   getHistoryStats: (timeout) => request('GET', '/history/stats', null, timeout),
   clearHistory: () => request('DELETE', '/history'),
   deleteHistorySession: (historyId) => request('DELETE', `/history/session/${encodeURIComponent(historyId)}`),
+  requestHistorySessionDeletion: (historyId) => request('POST', `/history/session/${encodeURIComponent(historyId)}/deletion-request`),
   lookupSharedCandidate: (name) => request('GET', `/shared/candidates/lookup?name=${encodeURIComponent(name || '')}`),
   getSharedPendingSupTransfers: () => request('GET', '/shared/pending-sup-transfers'),
   getSharedAdminCandidates: () => request('GET', '/shared/admin/candidates'),

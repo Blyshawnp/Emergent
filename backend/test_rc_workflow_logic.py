@@ -41,6 +41,75 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertEqual(payload["all_complete"], "No")
         self.assertEqual(payload["fail_reason"], "N/A")
 
+    def test_supervisor_transfer_only_ncns_form_and_summary(self):
+        session = {
+            "candidate_name": "Taylor Example",
+            "supervisor_only": True,
+            "final_attempt": True,
+            "auto_fail_reason": "NC/NS",
+            "headset_brand": "Approved USB",
+            "chrome_default": True,
+            "current_session_tech_issue": False,
+            "historical_tech_issue": "Discord issues",
+            "tech_issue": "N/A",
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+        }
+        summaries = server.generate_summaries(session)
+        self.assertEqual(server.compute_final_status(session), "NC/NS")
+        self.assertIn("Taylor Example was a No Call No Show for the supervisor transfer.", summaries["fail"])
+        self.assertIn("This session was their final attempt.", summaries["fail"])
+        payload = server.build_form_fill_payload(session, {}, summaries["coaching"], summaries["fail"])
+        self.assertEqual(payload["skills"], ["Supervisor Transfer"])
+        self.assertEqual(payload["mock_complete"], "Yes")
+        self.assertEqual(payload["sup_complete"], "No")
+        self.assertEqual(payload["all_complete"], "No")
+        self.assertEqual(payload["auto_fail"], "NC/NS")
+        self.assertEqual(payload["tech_issue_choice"], "N/A")
+
+    def test_newbie_reschedule_candidate_exactly_24_hours_not_attempt(self):
+        session = {
+            "candidate_name": "Taylor Example",
+            "newbie_shift_request_type": "reschedule",
+            "newbie_shift_requested_by": "candidate",
+            "newbie_shift_request_reason": "Scheduling conflict",
+            "newbie_shift_within_24_hours": False,
+            "newbie_shift_counts_as_attempt": False,
+            "newbie_shift_data": {"newbie_date": "07/15/2026", "newbie_time": "10:00 AM", "newbie_tz": "EST (Eastern)"},
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+        }
+        summaries = server.generate_summaries(session)
+        self.assertEqual(server.compute_final_status(session), "Incomplete")
+        self.assertIn("24 hours or more", summaries["coaching"])
+        self.assertEqual(summaries["fail"], "N/A")
+        payload = server.build_form_fill_payload(session, {}, summaries["coaching"], summaries["fail"])
+        self.assertEqual(payload["auto_fail"], "N/A")
+        self.assertEqual(payload["fail_reason"], "N/A")
+
+    def test_newbie_reschedule_candidate_under_24_hours_counts_as_ncns(self):
+        session = {
+            "candidate_name": "Taylor Example",
+            "newbie_shift_request_type": "reschedule",
+            "newbie_shift_requested_by": "candidate",
+            "newbie_shift_request_reason": "Internet outage",
+            "newbie_shift_within_24_hours": True,
+            "newbie_shift_counts_as_attempt": True,
+            "newbie_shift_data": {"newbie_date": "07/15/2026", "newbie_time": "10:00 AM", "newbie_tz": "EST (Eastern)"},
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+        }
+        summaries = server.generate_summaries(session)
+        self.assertEqual(server.compute_final_status(session), "NC/NS")
+        self.assertIn("less than 24 hours", summaries["coaching"])
+        self.assertIn("will count as an attempt", summaries["fail"])
+        payload = server.build_form_fill_payload(session, {}, summaries["coaching"], summaries["fail"])
+        self.assertEqual(payload["skills"], ["Mock Calls", "Supervisor Transfer"])
+        self.assertEqual(payload["mock_complete"], "Yes")
+        self.assertEqual(payload["sup_complete"], "No")
+        self.assertEqual(payload["all_complete"], "No")
+        self.assertEqual(payload["auto_fail"], "NC/NS")
+
     def test_final_readiness_fail_and_needs_retest_require_fail_summary(self):
         base = {
             "candidate_name": "Candidate",

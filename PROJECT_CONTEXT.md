@@ -376,6 +376,14 @@ Current release behavior:
 
 - Automatic Newbie Shift scheduling is the primary flow when a non-final-attempt session cannot complete Supervisor Transfer in the current session.
 - Review page backup action may appear only when status is Incomplete, scheduling is allowed, and no Newbie Shift is already scheduled.
+- Feature branch `feature/newbie-shift-request-workflows` adds MTS-side Newbie Shift rescheduling. Reschedule requests preserve the original scheduled timestamp, collect whether the tester or candidate requested the change, collect a structured reason/details, calculate the 24-hour rule from timezone-aware timestamps, and persist the new scheduled timestamp/timezone.
+- Candidate-requested reschedules received less than 24 hours before the original Newbie Shift count as an attempt and map to NC/NS form behavior. Candidate-requested reschedules received exactly 24 hours or more before the shift do not count as an attempt. Tester-requested reschedules do not penalize the candidate.
+- New shared contract fields include `form_fill_status`, `form_filled_at`, `newbie_shift_scheduled_at`, `newbie_shift_timezone`, `newbie_shift_request_id`, `newbie_shift_request_type`, `newbie_shift_request_status`, `newbie_shift_requested_by`, request reason/detail/timestamps, 24-hour flags, admin decision placeholders, and deletion request placeholders.
+- Shared Google Sheet contract tabs for follow-up workflow are `newbie-shift-requests` and `candidate-deletion-requests`. Required columns are defined in `backend/server.py`; private sheet IDs and URLs must not be documented here.
+- Form-fill state is tracked as `not_attempted`, `filled`, `skipped`, `failed`, or `not_recorded` for legacy display. The UI must say Form Filled, Form Skipped, Not Yet Filled, Fill Failed, or Not Recorded; it must not claim Form Submitted.
+- The canonical certification support email used by blocked/final-attempt reschedule wording is `certification@acddirect.com`.
+- The editable reschedule Discord post is temporary session UI text only. Trainer edits are copied to clipboard but are not written back to default Discord templates.
+- Local History deletion offers History Only or History & Candidate List Request. The request path removes local history immediately and writes a pending SAM review request without deleting shared candidate records directly.
 - The scheduling workflow should not directly create duplicate appointments without trainer confirmation.
 
 Verification needed: confirm external calendar integration behavior and duplicate-prevention behavior in a configured runtime environment.

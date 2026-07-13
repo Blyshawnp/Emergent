@@ -6,6 +6,7 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 import { displaySummaryLabel } from '../utils/summaryDisplayLabels';
+import { buildRescheduleFailSummary, buildRescheduleSummary, NEWBIE_REQUEST_TYPE } from '../utils/certificationWorkflow';
 
 const READINESS_NEEDS_RETEST = 'Needs Retest / Additional Coaching';
 const READINESS_OVERRIDE_REASONS = [
@@ -80,6 +81,10 @@ function computeCalculatedStatus(session) {
     (session.sup_transfer_2 || {}).result,
   ].filter((result) => result === 'Fail').length;
   const newbie = session.newbie_shift_data;
+
+  if (session.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE && session.newbie_shift_counts_as_attempt) {
+    return 'NC/NS';
+  }
 
   if (autoFail) {
     const autoFailText = String(autoFail || '').trim().toLowerCase();
@@ -193,6 +198,9 @@ function getHistoricalFailSummary(session) {
 }
 
 function getFallbackCoachingSummary(session) {
+  if (session?.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE) {
+    return buildRescheduleSummary(session);
+  }
   return (session?.coaching_summary || '').trim()
     || buildLocalFallbackCoachingSummary(session);
 }
@@ -240,6 +248,9 @@ function getFallbackFailSummary(session) {
   const saved = (session?.fail_summary || '').trim();
   const finalStatus = session?.final_status || computeFinalStatus(session);
   if (!shouldPopulateFailSummary(finalStatus)) return 'N/A';
+  if (session?.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE) {
+    return buildRescheduleFailSummary(session);
+  }
   if (saved) return saved;
   const generated = buildLocalFallbackFailSummary(session);
   return generated || 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
@@ -866,13 +877,18 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       const r = await api.fillForm(coachingForDisplay, failForDisplay, sessionForFill);
       if (r.ok) {
         setHasFilledForm(true);
+        await api.updateSession({ form_fill_status: 'filled', form_filled_at: new Date().toISOString(), form_fill_error_summary: '' }).catch(() => {});
         if (showSuccess) {
           await modal.alert('Form Filled', r.message, 'check-circle', 'success');
         }
         return true;
       }
+      await api.updateSession({ form_fill_status: 'failed', form_fill_error_summary: r.message || 'Form fill failed.' }).catch(() => {});
       await modal.error('Form Fill Failed', r.message || 'Error');
-    } catch (e) { await modal.error('Error', e.message); }
+    } catch (e) {
+      await api.updateSession({ form_fill_status: 'failed', form_fill_error_summary: e.message || 'Form fill failed.' }).catch(() => {});
+      await modal.error('Error', e.message);
+    }
     finally {
       setFilling(false);
     }
@@ -933,6 +949,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         finalReadinessJudgment,
         coaching_summary: getSafeSummaryForSubmit(coachingForDisplay, ''),
         fail_summary: getSafeSummaryForSubmit(failForDisplay, ''),
+        form_fill_status: hasFilledForm ? 'filled' : 'skipped',
       }).catch(() => {});
       const r = await api.finishSession(coachingForDisplay, failForDisplay);
       if (r.ok) {
@@ -1195,7 +1212,9 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           <strong>Transfer 2:</strong> {colorResult(s2r)}<br />
           {newbie && (<>
             <br /><strong>- NEWBIE SHIFT -</strong><br />
-            <strong>Date/Time:</strong> {newbie.newbie_date || ''} at {newbie.newbie_time || ''} {newbie.newbie_tz || ''}<br />
+            <strong>{s.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE ? 'Rescheduled Newbie Shift' : 'Date/Time'}:</strong> {newbie.newbie_date || ''} at {newbie.newbie_time || ''} {newbie.newbie_tz || ''}<br />
+            {s.newbie_shift_original_scheduled_at && <><strong>Original Scheduled At:</strong> {s.newbie_shift_original_scheduled_at}<br /></>}
+            {s.newbie_shift_request_status && <><strong>Reschedule Status:</strong> {s.newbie_shift_request_status}<br /></>}
           </>)}
         </div>
       </div>

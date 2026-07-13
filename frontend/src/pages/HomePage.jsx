@@ -4,6 +4,7 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionDateOf, sessionIdOf } from '../utils/sessionBasics';
+import { formFillStatusLabel, formFillStatusTone, formatNewbieSchedule } from '../utils/certificationWorkflow';
 
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 
@@ -300,6 +301,11 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
     }
     return [value || '?'];
   };
+  const formBadgeClass = (record) => ({
+    success: 'badge-pass',
+    danger: 'badge-fail',
+    warning: 'badge-incomplete',
+  }[formFillStatusTone(record?.form_fill_status, { legacy: !record?.form_fill_status })] || 'badge-incomplete');
 
   const startStandardSession = () => {
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -529,6 +535,14 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
                   {statusChips(s.status).map((chip) => (
                     <span key={chip} className={`badge recent-status-chip ${badgeClass(chip)}`}>{chip}</span>
                   ))}
+                  <span className={`badge recent-status-chip ${formBadgeClass(s)}`} title={formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}>
+                    {formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}
+                  </span>
+                  {s.newbie_shift_data && (
+                    <span className="badge recent-status-chip badge-incomplete" title={`Newbie Shift: ${formatNewbieSchedule(s.newbie_shift_data)}`}>
+                      {s.newbie_shift_request_status || 'Pending'}
+                    </span>
+                  )}
                 </span>
               </div>
             )) : (

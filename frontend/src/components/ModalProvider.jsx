@@ -119,6 +119,12 @@ export function ModalProvider({ children }) {
     playSound('popup');
   }, [modal]);
 
+  useEffect(() => {
+    if (!modal || typeof modal.onMount !== 'function') return undefined;
+    const cleanup = modal.onMount();
+    return typeof cleanup === 'function' ? cleanup : undefined;
+  }, [modal]);
+
   const modalGraphic = getModalGraphic(modal);
 
   return (

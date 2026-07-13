@@ -224,7 +224,7 @@ const HELP_TOPICS = [
     summary: 'The Calls screen scores up to three mock calls.',
     bullets: [
       'For each call pick Call Type, Show, Caller, and Donation amount.',
-      'Browser checks on Basics confirm the default browser, extensions, and pop-up settings before calls begin.',
+      'Browser Checklist checks on Basics confirm the default browser, extensions, and pop-up settings before calls begin.',
       'Payment Simulation uses the saved Credit Card and EFT options from Settings.',
       'Each new call starts payment dropdowns on Default even if you changed the prior call.',
       'Settings starts with 3 Credit Card defaults and 3 EFT defaults, and admins or evaluators can add or remove options.',
@@ -302,7 +302,8 @@ const HELP_TOPICS = [
     bullets: [
       'Enter the follow-up date, start time, AM/PM, and timezone.',
       'Use Add to Google Calendar to open a prefilled calendar event.',
-      'Use the Discord copy button next to Add to Google Calendar to copy the Out of Time (Needs Sup) post.',
+      'Use the Supervisor Transfer time-check popup to copy the Out of Time (Needs Sup) Discord post when there is not enough time to complete Supervisor Transfers.',
+      'Rescheduled Newbie Shifts collect who requested the change, the reason, and exact request timing before a new date/time is selected.',
       'Continue to Review to save the Newbie Shift details on the session.',
     ],
   },

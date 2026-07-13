@@ -23,6 +23,23 @@ const DEFAULT_CALL_COACHING = [
 
 const OTHER_COACHING_RE = /^other$/i;
 
+function findDiscordTemplateMessageLocal(settings = {}, defaults = {}, title = '') {
+  const needle = String(title || '').trim().toLowerCase();
+  const source = settings?.discord_override && Array.isArray(settings.discord_templates) && settings.discord_templates.length
+    ? settings.discord_templates
+    : Array.isArray(defaults?.discord_templates) && defaults.discord_templates.length
+      ? defaults.discord_templates
+      : settings?.discord_templates || [];
+  const match = (Array.isArray(source) ? source : []).find((item) => {
+    const itemTitle = Array.isArray(item)
+      ? item[0]
+      : item?.title || item?.Title || item?.trigger || item?.Trigger || '';
+    return String(itemTitle || '').trim().toLowerCase() === needle;
+  });
+  if (!match) return '';
+  return Array.isArray(match) ? String(match[1] || '') : String(match.message || match.Message || match.text || match.Text || '');
+}
+
 function moveOtherCoachingLast(items = []) {
   const ordered = [];
   const otherItems = [];
@@ -203,7 +220,7 @@ function ScenarioCard({ currentCaller, callSetup, randFlags, donations, onRegene
   );
 }
 
-async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
+async function evaluateCallRouting(session, modal, onNavigate, apiRef, workflowContent = {}) {
   let passes = [];
   let failCount = 0;
   for (let i = 1; i <= 3; i++) {
@@ -236,15 +253,31 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
   }
 
   if (passes.length >= 2) {
+    const outOfTimeMessage = findDiscordTemplateMessageLocal(workflowContent.settings || {}, workflowContent.defaults || {}, 'Out of Time (Needs Sup)');
     const hasTime = await modal.showModal({
       type: 'confirm',
       title: 'Supervisor Transfer Time Check',
-      body: 'Is there enough time for Supervisor Transfers?',
+      body: `Is there enough time for Supervisor Transfers?<br /><br /><div class="inline-discord-copy"><span>Out of Time (Needs Sup) Discord Post</span> <button type="button" class="discord-copy" data-copy-out-of-time="true">Copy</button></div>`,
       graphic: 'time',
       buttons: [
         { label: 'No', cls: 'btn-muted', value: false },
         { label: 'Yes', cls: 'btn-primary', value: true },
       ],
+      onMount: () => {
+        const button = document.querySelector('[data-copy-out-of-time="true"]');
+        if (!button) return;
+        button.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!String(outOfTimeMessage || '').trim()) {
+            button.textContent = 'Unavailable';
+            return;
+          }
+          await navigator.clipboard.writeText(outOfTimeMessage);
+          button.textContent = 'Copied';
+        });
+        return () => button.replaceWith(button.cloneNode(true));
+      },
     });
     if (hasTime) {
       await apiRef.updateSession({ time_for_sup: true });
@@ -546,7 +579,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
     await api.updateSession({ current_call_draft: null, current_call_num: null, call_drafts: nextDrafts });
 
     const { session } = await api.getCurrentSession();
-    const routeResult = await evaluateCallRouting(session, modal, onNavigate, api);
+    const routeResult = await evaluateCallRouting(session, modal, onNavigate, api, { settings, defaults });
     if (routeResult === 'next') {
       const nextCallNum = callNum + 1;
       const nextDraft = callDraftsRef.current?.[nextCallNum] || callDraftsRef.current?.[String(nextCallNum)] || null;
@@ -574,7 +607,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
       const el = document.querySelector('[data-testid="page-content"]');
       if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [result, fails, failReasonDetails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, randFlags, paymentSelection, modal, onNavigate, resetCall]);
+  }, [result, fails, failReasonDetails, failNotes, coaching, callNum, callSetup, currentCaller, donations, coachNotes, randFlags, paymentSelection, modal, onNavigate, resetCall, settings, defaults]);
 
   const handleDiscardSession = useCallback(async () => {
     const confirmed = await modal.confirmDanger('Discard Session', 'Discard the current session draft and lose all progress? This cannot be undone.');

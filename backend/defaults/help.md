@@ -157,7 +157,8 @@ Use this when mock calls were already completed earlier and only the transfer po
 Newbie Shift schedules follow-up work when a candidate cannot complete the flow today.
 - Enter the follow-up date, start time, AM/PM, and timezone.
 - Use Add to Google Calendar to open a prefilled calendar event.
-- Use the Discord copy button next to Add to Google Calendar to copy the Out of Time (Needs Sup) post.
+- Use the Supervisor Transfer time-check popup to copy the Out of Time (Needs Sup) Discord post when there is not enough time to complete Supervisor Transfers.
+- Rescheduled Newbie Shifts collect who requested the change, the reason, and exact request timing before a new date/time is selected.
 - Continue to Review to save the Newbie Shift details on the session.
 
 ## 17. Review Screen

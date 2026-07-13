@@ -446,31 +446,22 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
     let resolvedReason = reason;
     let body = '';
     if (reason === 'NC/NS') {
-      const choice = await modal.showModal({
-        type: 'confirm',
-        title: 'Mark Session',
-        body: `How would you like to mark this session for <b>${candidateName.trim()}</b>?`,
-        graphic: 'warning',
-        buttons: [
-          { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
-          { label: 'Same Day Drop', cls: 'btn-warning', value: 'same-day-drop' },
-          { label: 'NC/NS', cls: 'btn-danger', value: 'ncns' },
-        ],
-      });
-      if (choice === 'same-day-drop') {
-        resolvedReason = 'Same Day Drop';
-        body = `This will automatically fail ${candidateName.trim()} and mark as session dropped within 24 hours. Do you want to continue?`;
-      } else if (choice === 'ncns') {
-        resolvedReason = 'NC/NS';
-        body = `This will automatically fail ${candidateName.trim()} and mark as a No Call No Show. Do you want to continue?`;
-      } else {
-        return;
-      }
+      resolvedReason = 'NC/NS';
+      body = `This will automatically fail ${candidateName.trim()} and mark the supervisor transfer as a No Call No Show. Do you want to continue?`;
     } else {
       body = `This will Automatically fail ${candidateName.trim()} and mark as Not Ready for Session. Do you want to proceed?`;
     }
 
-    const confirmed = await modal.confirm('Confirm Auto-Fail', body, 'alert-triangle', 'warning');
+    const confirmed = await modal.showModal({
+      type: 'confirm',
+      title: reason === 'NC/NS' ? 'Confirm Supervisor Transfer NC/NS' : 'Confirm Auto-Fail',
+      body,
+      graphic: 'warning',
+      buttons: [
+        { label: 'Cancel', cls: 'btn-muted', value: false },
+        { label: reason === 'NC/NS' ? 'Mark NC/NS' : 'Yes', cls: 'btn-danger', value: true },
+      ],
+    });
     if (!confirmed) return;
 
     latestDraftPayloadRef.current = null;

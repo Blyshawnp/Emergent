@@ -3328,6 +3328,29 @@ def empty_session():
         "sup_transfer_2": None,
         "time_for_sup": None,
         "newbie_shift_data": None,
+        "form_fill_status": "not_attempted",
+        "form_filled_at": "",
+        "form_fill_error_summary": "",
+        "newbie_shift_scheduled_at": "",
+        "newbie_shift_timezone": "",
+        "newbie_shift_calendar_created": False,
+        "newbie_shift_request_id": "",
+        "newbie_shift_request_type": "initial",
+        "newbie_shift_request_status": "pending",
+        "newbie_shift_requested_by": "",
+        "newbie_shift_request_reason": "",
+        "newbie_shift_request_details": "",
+        "newbie_shift_request_created_at": "",
+        "newbie_shift_original_scheduled_at": "",
+        "newbie_shift_rescheduled_at": "",
+        "newbie_shift_within_24_hours": False,
+        "newbie_shift_counts_as_attempt": False,
+        "newbie_shift_admin_decision_at": "",
+        "newbie_shift_admin_decision_by": "",
+        "newbie_shift_denial_reason": "",
+        "deletion_request_id": "",
+        "deletion_request_status": "",
+        "deletion_request_created_at": "",
         "final_status": None,
         "last_saved": None,
         "tech_issues_log": [],
@@ -3338,8 +3361,63 @@ def empty_session():
     }
 
 
+FORM_FILL_STATUSES = {"not_attempted", "filled", "skipped", "failed", "not_recorded"}
+FORM_FILL_NOT_ATTEMPTED = "not_attempted"
+FORM_FILL_FILLED = "filled"
+FORM_FILL_SKIPPED = "skipped"
+FORM_FILL_FAILED = "failed"
+NEWBIE_REQUEST_INITIAL = "initial"
+NEWBIE_REQUEST_RESCHEDULE = "reschedule"
+NEWBIE_REQUEST_STATUSES = {"pending", "approved", "denied"}
+NEWBIE_REQUEST_PENDING = "pending"
+NEWBIE_REQUESTED_BY_TESTER = "tester"
+NEWBIE_REQUESTED_BY_CANDIDATE = "candidate"
+DELETION_REQUEST_PENDING = "pending"
+CERTIFICATION_SUPPORT_EMAIL = "certification@acddirect.com"
+
+
+def _normalize_form_fill_status(value):
+    status = str(value or "").strip().lower()
+    return status if status in FORM_FILL_STATUSES else FORM_FILL_NOT_ATTEMPTED
+
+
+def _normalize_newbie_request_status(value):
+    status = str(value or "").strip().lower()
+    return status if status in NEWBIE_REQUEST_STATUSES else NEWBIE_REQUEST_PENDING
+
+
+def _session_with_workflow_defaults(session):
+    doc = dict(session or {})
+    doc["form_fill_status"] = _normalize_form_fill_status(doc.get("form_fill_status"))
+    doc.setdefault("form_filled_at", "")
+    doc.setdefault("form_fill_error_summary", "")
+    doc.setdefault("newbie_shift_scheduled_at", "")
+    doc.setdefault("newbie_shift_timezone", "")
+    doc.setdefault("newbie_shift_calendar_created", False)
+    doc.setdefault("newbie_shift_request_id", "")
+    doc.setdefault("newbie_shift_request_type", NEWBIE_REQUEST_INITIAL)
+    doc["newbie_shift_request_status"] = _normalize_newbie_request_status(doc.get("newbie_shift_request_status"))
+    doc.setdefault("newbie_shift_requested_by", "")
+    doc.setdefault("newbie_shift_request_reason", "")
+    doc.setdefault("newbie_shift_request_details", "")
+    doc.setdefault("newbie_shift_request_created_at", "")
+    doc.setdefault("newbie_shift_original_scheduled_at", "")
+    doc.setdefault("newbie_shift_rescheduled_at", "")
+    doc.setdefault("newbie_shift_within_24_hours", False)
+    doc.setdefault("newbie_shift_counts_as_attempt", False)
+    doc.setdefault("newbie_shift_admin_decision_at", "")
+    doc.setdefault("newbie_shift_admin_decision_by", "")
+    doc.setdefault("newbie_shift_denial_reason", "")
+    doc.setdefault("deletion_request_id", "")
+    doc.setdefault("deletion_request_status", "")
+    doc.setdefault("deletion_request_created_at", "")
+    return doc
+
+
 SHARED_CANDIDATE_SESSIONS_TAB = "Candidate Sessions"
 SHARED_PENDING_SUP_TRANSFERS_TAB = "Pending Sup Transfers"
+SHARED_NEWBIE_SHIFT_REQUESTS_TAB = "newbie-shift-requests"
+SHARED_CANDIDATE_DELETION_REQUESTS_TAB = "candidate-deletion-requests"
 SAM_AUTHORIZED_USERS_TAB = "sam-authorized-users"
 SAM_NOTIFICATIONS_TAB = "sam-notifications"
 HEADSET_REVIEW_LOG_TAB = "headset-review-log"
@@ -3419,6 +3497,27 @@ SHARED_CANDIDATE_SESSION_HEADERS = [
     "readiness_override_result",
     "readiness_override_reason",
     "readiness_override_explanation",
+    "form_fill_status",
+    "form_filled_at",
+    "newbie_shift_scheduled_at",
+    "newbie_shift_timezone",
+    "newbie_shift_request_id",
+    "newbie_shift_request_type",
+    "newbie_shift_request_status",
+    "newbie_shift_requested_by",
+    "newbie_shift_request_reason",
+    "newbie_shift_request_details",
+    "newbie_shift_request_created_at",
+    "newbie_shift_original_scheduled_at",
+    "newbie_shift_rescheduled_at",
+    "newbie_shift_within_24_hours",
+    "newbie_shift_counts_as_attempt",
+    "newbie_shift_admin_decision_at",
+    "newbie_shift_admin_decision_by",
+    "newbie_shift_denial_reason",
+    "deletion_request_id",
+    "deletion_request_status",
+    "deletion_request_created_at",
 ]
 
 SHARED_PENDING_SUP_TRANSFER_HEADERS = [
@@ -3459,6 +3558,62 @@ SHARED_PENDING_SUP_TRANSFER_HEADERS = [
     "readiness_override_result",
     "readiness_override_reason",
     "readiness_override_explanation",
+    "form_fill_status",
+    "form_filled_at",
+    "newbie_shift_scheduled_at",
+    "newbie_shift_timezone",
+    "newbie_shift_request_id",
+    "newbie_shift_request_type",
+    "newbie_shift_request_status",
+    "newbie_shift_requested_by",
+    "newbie_shift_request_reason",
+    "newbie_shift_request_details",
+    "newbie_shift_request_created_at",
+    "newbie_shift_original_scheduled_at",
+    "newbie_shift_rescheduled_at",
+    "newbie_shift_within_24_hours",
+    "newbie_shift_counts_as_attempt",
+]
+
+SHARED_NEWBIE_SHIFT_REQUEST_HEADERS = [
+    "request_id",
+    "session_id",
+    "candidate_name",
+    "candidate_first_name",
+    "candidate_last_initial",
+    "tester_name",
+    "request_type",
+    "request_status",
+    "requested_by",
+    "request_reason",
+    "request_details",
+    "request_created_at",
+    "original_scheduled_at",
+    "rescheduled_at",
+    "scheduled_at",
+    "timezone",
+    "within_24_hours",
+    "counts_as_attempt",
+    "final_attempt",
+    "admin_decision_at",
+    "admin_decision_by",
+    "denial_reason",
+]
+
+SHARED_CANDIDATE_DELETION_REQUEST_HEADERS = [
+    "request_id",
+    "session_id",
+    "candidate_name",
+    "candidate_first_name",
+    "candidate_last_initial",
+    "tester_name",
+    "created_at",
+    "status",
+    "local_history_deleted",
+    "reason",
+    "session_status",
+    "completed_at",
+    "audit_summary",
 ]
 
 UPDATE_MTS_TAB = "update-MTS"
@@ -5813,6 +5968,7 @@ def _readiness_tracking_values(session):
 
 def _candidate_session_row(session, existing_rows=None):
     existing_rows = existing_rows or []
+    session = _session_with_workflow_defaults(session)
     status = compute_final_status(session)
     shared_status = _shared_status(status)
     session_id = str(session.get("history_id") or session.get("resume_source_history_id") or uuid.uuid4())
@@ -5878,10 +6034,32 @@ def _candidate_session_row(session, existing_rows=None):
         _get_evaluator_notes_summary(session),
         (session.get("finalEvaluatorNotes") or {}).get("createdAt") or "",
         *_readiness_tracking_values(session),
+        session.get("form_fill_status") or FORM_FILL_NOT_ATTEMPTED,
+        session.get("form_filled_at") or "",
+        session.get("newbie_shift_scheduled_at") or "",
+        session.get("newbie_shift_timezone") or "",
+        session.get("newbie_shift_request_id") or "",
+        session.get("newbie_shift_request_type") or NEWBIE_REQUEST_INITIAL,
+        session.get("newbie_shift_request_status") or NEWBIE_REQUEST_PENDING,
+        session.get("newbie_shift_requested_by") or "",
+        session.get("newbie_shift_request_reason") or "",
+        session.get("newbie_shift_request_details") or "",
+        session.get("newbie_shift_request_created_at") or "",
+        session.get("newbie_shift_original_scheduled_at") or "",
+        session.get("newbie_shift_rescheduled_at") or "",
+        _shared_bool(session.get("newbie_shift_within_24_hours")),
+        _shared_bool(session.get("newbie_shift_counts_as_attempt")),
+        session.get("newbie_shift_admin_decision_at") or "",
+        session.get("newbie_shift_admin_decision_by") or "",
+        session.get("newbie_shift_denial_reason") or "",
+        session.get("deletion_request_id") or "",
+        session.get("deletion_request_status") or "",
+        session.get("deletion_request_created_at") or "",
     ], pending_id, needs_sup
 
 
 def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=False):
+    session = _session_with_workflow_defaults(session)
     status = compute_final_status(session)
     candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
     first, last_initial = _split_candidate_name(candidate_name)
@@ -5941,7 +6119,100 @@ def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=
         _final_notes_field(session, "other"),
         _get_evaluator_notes_summary(session),
         *_readiness_tracking_values(session),
+        session.get("form_fill_status") or FORM_FILL_NOT_ATTEMPTED,
+        session.get("form_filled_at") or "",
+        session.get("newbie_shift_scheduled_at") or "",
+        session.get("newbie_shift_timezone") or "",
+        session.get("newbie_shift_request_id") or "",
+        session.get("newbie_shift_request_type") or NEWBIE_REQUEST_INITIAL,
+        session.get("newbie_shift_request_status") or NEWBIE_REQUEST_PENDING,
+        session.get("newbie_shift_requested_by") or "",
+        session.get("newbie_shift_request_reason") or "",
+        session.get("newbie_shift_request_details") or "",
+        session.get("newbie_shift_request_created_at") or "",
+        session.get("newbie_shift_original_scheduled_at") or "",
+        session.get("newbie_shift_rescheduled_at") or "",
+        _shared_bool(session.get("newbie_shift_within_24_hours")),
+        _shared_bool(session.get("newbie_shift_counts_as_attempt")),
     ]
+
+
+def _newbie_shift_request_row(session):
+    session = _session_with_workflow_defaults(session)
+    session_id = str(session.get("history_id") or session.get("resume_source_history_id") or session.get("session_id") or "").strip()
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
+    first, last_initial = _split_candidate_name(candidate_name)
+    request_id = str(session.get("newbie_shift_request_id") or f"newbie-{session_id}").strip()
+    return [
+        request_id,
+        session_id,
+        candidate_name,
+        first,
+        last_initial,
+        session.get("tester_name") or "",
+        session.get("newbie_shift_request_type") or NEWBIE_REQUEST_INITIAL,
+        session.get("newbie_shift_request_status") or NEWBIE_REQUEST_PENDING,
+        session.get("newbie_shift_requested_by") or "",
+        session.get("newbie_shift_request_reason") or "",
+        session.get("newbie_shift_request_details") or "",
+        session.get("newbie_shift_request_created_at") or "",
+        session.get("newbie_shift_original_scheduled_at") or "",
+        session.get("newbie_shift_rescheduled_at") or "",
+        session.get("newbie_shift_scheduled_at") or "",
+        session.get("newbie_shift_timezone") or "",
+        _shared_bool(session.get("newbie_shift_within_24_hours")),
+        _shared_bool(session.get("newbie_shift_counts_as_attempt")),
+        _shared_bool(session.get("final_attempt")),
+        session.get("newbie_shift_admin_decision_at") or "",
+        session.get("newbie_shift_admin_decision_by") or "",
+        session.get("newbie_shift_denial_reason") or "",
+    ], request_id
+
+
+def _candidate_deletion_request_row(record, request_id):
+    record = _session_with_workflow_defaults(record)
+    session_id = str(record.get("history_id") or record.get("resume_source_history_id") or "").strip()
+    candidate_name = str(record.get("candidate_name") or record.get("candidate") or "").strip()
+    first, last_initial = _split_candidate_name(candidate_name)
+    completed_at = str(record.get("completed_at") or record.get("timestamp_iso") or record.get("timestamp") or "").strip()
+    audit_parts = [
+        f"status={record.get('status') or record.get('final_status') or ''}",
+        f"final_attempt={_shared_bool(record.get('final_attempt'))}",
+        f"form_fill_status={record.get('form_fill_status') or FORM_FILL_NOT_ATTEMPTED}",
+    ]
+    return [
+        request_id,
+        session_id,
+        candidate_name,
+        first,
+        last_initial,
+        record.get("tester_name") or "",
+        record.get("deletion_request_created_at") or datetime.now(timezone.utc).isoformat(),
+        record.get("deletion_request_status") or DELETION_REQUEST_PENDING,
+        _shared_bool(True),
+        "Trainer requested local history deletion plus SAM candidate-list review.",
+        record.get("status") or record.get("final_status") or "",
+        completed_at,
+        "; ".join(audit_parts),
+    ]
+
+
+def _sync_newbie_shift_request(session, sheets_api, sheet_id):
+    session = _session_with_workflow_defaults(session)
+    if not session.get("newbie_shift_request_id"):
+        return ""
+    row_values, request_id = _newbie_shift_request_row(session)
+    return _shared_update_or_append_row(
+        sheets_api,
+        sheet_id,
+        SHARED_NEWBIE_SHIFT_REQUESTS_TAB,
+        SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
+        "request_id",
+        request_id,
+        row_values,
+    )
 
 
 def _sync_shared_candidate_tracking(session):
@@ -6013,7 +6284,9 @@ def _sync_shared_candidate_tracking(session):
                 pending_row,
             )
 
-        return {"ok": True, "candidateAction": candidate_action, "pendingAction": pending_action}
+        newbie_request_action = _sync_newbie_shift_request(session, sheets_api, sheet_id)
+
+        return {"ok": True, "candidateAction": candidate_action, "pendingAction": pending_action, "newbieRequestAction": newbie_request_action}
     except Exception as exc:
         reason = _shared_permission_hint(exc)
         logger.exception("[SHARED] Failed to sync candidate tracking during %s. reason=%s error=%s", current_operation, reason, exc)
@@ -6765,6 +7038,9 @@ def compute_calculated_status(session):
     newbie = session.get("newbie_shift_data")
     final_attempt = bool(session.get("final_attempt"))
     resumed_sup = _is_resumed_sup_transfer_session(session)
+
+    if _is_newbie_reschedule(session) and session.get("newbie_shift_counts_as_attempt"):
+        return "NC/NS"
 
     if auto_fail:
         auto_fail_text = str(auto_fail or "").strip().lower()
@@ -7582,6 +7858,19 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
     import time
     start_time = time.perf_counter()
 
+    if _is_newbie_reschedule(session):
+        return {
+            "coaching": _build_reschedule_coaching_summary(session),
+            "fail": _build_reschedule_fail_summary(session),
+            "used_gemini": False,
+            "used_fallback": True,
+            "gemini_enabled": False,
+            "gemini_key_configured": False,
+            "coaching_prompt_source": "deterministic-reschedule",
+            "fail_prompt_source": "deterministic-reschedule",
+            "gemini_error": "",
+        }
+
     auto_fail_summaries = _auto_fail_review_summaries(session)
     use_gemini = bool(settings and settings.get("enable_gemini"))
     api_key = (api_key or "").strip()
@@ -7788,6 +8077,54 @@ def _format_newbie_shift_for_form(session):
     return " ".join(part for part in parts if part).strip() or "N/A"
 
 
+def _candidate_first_name(session):
+    name = str((session or {}).get("candidate_name") or (session or {}).get("candidate") or "").strip()
+    return name.split()[0] if name.split() else "The candidate"
+
+
+def _reschedule_reason_sentence(session):
+    reason = str((session or {}).get("newbie_shift_request_reason") or "").strip()
+    details = str((session or {}).get("newbie_shift_request_details") or "").strip().strip(".")
+    if not reason and not details:
+        return "the schedule needed to change"
+    if reason.lower() == "other":
+        return details or "another reason"
+    if details:
+        return f"{reason[:1].lower()}{reason[1:]} ({details})"
+    return f"{reason[:1].lower()}{reason[1:]}"
+
+
+def _is_newbie_reschedule(session):
+    return str((session or {}).get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE
+
+
+def _build_reschedule_coaching_summary(session):
+    first = _candidate_first_name(session)
+    reason = _reschedule_reason_sentence(session)
+    schedule = _format_newbie_shift_for_form(session)
+    requested_by = str((session or {}).get("newbie_shift_requested_by") or "").strip().lower()
+    within_24 = bool((session or {}).get("newbie_shift_within_24_hours"))
+    if requested_by == NEWBIE_REQUESTED_BY_TESTER:
+        return f"This form was filled to document a Newbie Shift reschedule. The tester requested that {first}'s supervisor transfer test calls be rescheduled because {reason}. The new date and time is {schedule}. This tester-requested change should not count as a candidate attempt."
+    if within_24:
+        text = f"This form was filled to document a Newbie Shift reschedule. {first} requested that their supervisor transfer test calls be rescheduled because {reason}. The new tentative date and time is {schedule}. The request was received less than 24 hours before the Newbie Shift and will count as an attempt."
+        if (session or {}).get("final_attempt"):
+            text = f"{text} This session was their final attempt. {first} was instructed to email {CERTIFICATION_SUPPORT_EMAIL}; rescheduling approval is not guaranteed."
+        return text
+    return f"This form was filled to document a Newbie Shift reschedule. {first} requested that their supervisor transfer test calls be rescheduled because {reason}. The new date and time is {schedule}. The request was received 24 hours or more before the Newbie Shift and should not count as an attempt."
+
+
+def _build_reschedule_fail_summary(session):
+    requested_by = str((session or {}).get("newbie_shift_requested_by") or "").strip().lower()
+    if requested_by != NEWBIE_REQUESTED_BY_CANDIDATE or not (session or {}).get("newbie_shift_within_24_hours"):
+        return "N/A"
+    first = _candidate_first_name(session)
+    text = f"{first} requested that their supervisor transfer test calls be rescheduled. The request was received less than 24 hours before the Newbie Shift and will count as an attempt."
+    if (session or {}).get("final_attempt"):
+        text = f"{text} This session was their final attempt. {first} was instructed to email {CERTIFICATION_SUPPORT_EMAIL}; rescheduling approval is not guaranteed."
+    return text
+
+
 def _map_auto_fail_for_form(auto_fail_reason):
     reason = (auto_fail_reason or "").strip().lower()
     if not reason:
@@ -7829,6 +8166,13 @@ def _classify_auto_fail_reason(auto_fail_reason):
 
 
 def _auto_fail_completion_flags(session):
+    if _is_newbie_reschedule(session) and session.get("newbie_shift_counts_as_attempt"):
+        return {
+            "mock_complete": "Yes" if _count_results(session, "call", 3, "Pass") >= 2 or session.get("supervisor_only", False) else "No",
+            "sup_complete": "No",
+            "all_complete": "No",
+        }
+
     if not session.get("auto_fail_reason"):
         return None
 
@@ -7892,6 +8236,10 @@ def _auto_fail_review_summaries(session):
     if auto_fail_type == "ncns":
         auto_fail_text = str(auto_fail_reason or "").strip().lower()
         fail_text = f"{name} dropped the session within 24 hours." if "same day drop" in auto_fail_text or "dropped" in auto_fail_text else f"{name} was a No Call No Show."
+        if session.get("supervisor_only") and "same day drop" not in auto_fail_text and "dropped" not in auto_fail_text:
+            fail_text = f"{name} was a No Call No Show for the supervisor transfer."
+        if session.get("final_attempt"):
+            fail_text = f"{fail_text} This session was their final attempt."
         return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(fail_text, session)}
     if auto_fail_type == "not_ready":
         return {"coaching": _append_readiness_override_note("N/A", session), "fail": _append_readiness_override_note(f"{name} was not ready or prepared for the session.", session)}
@@ -7951,12 +8299,17 @@ def _map_tech_issue_for_form(session):
 
 
 def build_form_fill_payload(session, settings, coaching_summary="", fail_summary=""):
+    session = _session_with_workflow_defaults(session)
     sup_only = session.get("supervisor_only", False)
     tech_issue = _map_tech_issue_for_form(session)
     summaries = generate_summaries(session)
     completion_flags = _completion_flags_for_form(session)
 
     fail_reason = "N/A"
+    if _is_newbie_reschedule(session):
+        coaching_summary = coaching_summary or _build_reschedule_coaching_summary(session)
+        fail_summary = fail_summary or _build_reschedule_fail_summary(session)
+
     if not _is_fail_na(session):
         fail_reason = (fail_summary or "").strip() or summaries["fail"]
 
@@ -7968,13 +8321,48 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
         "sup_complete": completion_flags["sup_complete"],
         "all_complete": completion_flags["all_complete"],
         "newbie_shift": _format_newbie_shift_for_form(session),
-        "auto_fail": _map_auto_fail_for_form(session.get("auto_fail_reason")),
+        "auto_fail": "NC/NS" if _is_newbie_reschedule(session) and session.get("newbie_shift_counts_as_attempt") else _map_auto_fail_for_form(session.get("auto_fail_reason")),
         "headset": (session.get("headset_brand") or "N/A").strip() or "N/A",
         "tech_issue_choice": tech_issue["choice"],
         "tech_issue_other": tech_issue["other_text"],
         "coaching": (coaching_summary or "").strip() or summaries["coaching"],
         "fail_reason": fail_reason,
     }
+
+
+async def _record_form_fill_status(session, status, error_summary=""):
+    status = _normalize_form_fill_status(status)
+    now = datetime.now(timezone.utc).isoformat()
+    update = {
+        "form_fill_status": status,
+        "form_fill_error_summary": str(error_summary or "")[:500],
+    }
+    if status == FORM_FILL_FILLED:
+        update["form_filled_at"] = now
+
+    active = await db.sessions.find_one({"_id": "active_session"})
+    active_matches = False
+    if active:
+        active_id = str(active.get("history_id") or active.get("resume_source_history_id") or "").strip()
+        session_id = str((session or {}).get("history_id") or (session or {}).get("resume_source_history_id") or "").strip()
+        active_matches = not session_id or active_id == session_id or str(active.get("candidate_name") or "") == str((session or {}).get("candidate_name") or (session or {}).get("candidate") or "")
+    if active_matches:
+        await db.sessions.update_one({"_id": "active_session"}, {"$set": update}, upsert=False)
+
+    history_id = str((session or {}).get("history_id") or "").strip()
+    if history_id:
+        rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC")
+        for row in rows:
+            existing = SQLiteCollection.decode(row["data"])
+            if not _history_record_matches_identifier(existing, history_id):
+                continue
+            existing.update(update)
+            db.history.store.execute(
+                "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+                (SQLiteCollection.encode(existing), existing.get("timestamp") or "", row["id"]),
+            )
+            break
+    return update
 
 
 async def import_sqlite_seed_if_requested():
@@ -9638,12 +10026,14 @@ async def discard_session(request: Request):
 @api_router.get("/history")
 async def get_history():
     docs = _recent_history_docs(await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500))
-    for doc in docs:
+    for index, doc in enumerate(docs):
+        doc = _session_with_workflow_defaults(doc)
         normalized_status = normalize_history_status(doc)
         doc["status"] = normalized_status
         if normalized_status != "NC/NS":
             doc["final_status"] = normalized_status
         doc["history_id"] = doc.get("history_id") or _history_identity(doc)
+        docs[index] = doc
     return docs
 
 
@@ -9678,6 +10068,62 @@ async def delete_history_session(history_id: str, request: Request):
         "ok": True,
         "deleted_history_id": deleted_record.get("history_id") or _history_identity(deleted_record),
         "cleanup": cleanup,
+    }
+
+
+@api_router.post("/history/session/{history_id:path}/deletion-request")
+async def request_history_session_deletion(history_id: str, request: Request):
+    db.backup("before-delete-history-session-request")
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC")
+    target = None
+    for row in rows:
+        existing = SQLiteCollection.decode(row["data"])
+        if _history_record_matches_identifier(existing, history_id):
+            target = existing
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail="History session not found.")
+
+    session_id = str(target.get("history_id") or _history_identity(target))
+    request_id = str(target.get("deletion_request_id") or f"delete-{session_id}").strip()
+    target = _session_with_workflow_defaults({
+        **target,
+        "deletion_request_id": request_id,
+        "deletion_request_status": DELETION_REQUEST_PENDING,
+        "deletion_request_created_at": target.get("deletion_request_created_at") or datetime.now(timezone.utc).isoformat(),
+    })
+
+    shared_result = {"ok": False, "error": "Shared candidate deletion request sync unavailable."}
+    context = _shared_sheet_context()
+    if context.get("ok"):
+        try:
+            sheets_api = context["service"].spreadsheets()
+            row_values = _candidate_deletion_request_row(target, request_id)
+            action = _shared_update_or_append_row(
+                sheets_api,
+                context["sheet_id"],
+                SHARED_CANDIDATE_DELETION_REQUESTS_TAB,
+                SHARED_CANDIDATE_DELETION_REQUEST_HEADERS,
+                "request_id",
+                request_id,
+                row_values,
+            )
+            shared_result = {"ok": True, "action": action}
+        except Exception as exc:
+            logger.warning("[SHARED] Candidate deletion request sync failed: %s", exc)
+            shared_result = {"ok": False, "error": _google_sheet_error_message(exc), "setup": _shared_tracking_required_setup()}
+    else:
+        shared_result = {"ok": False, "error": context.get("error"), "setup": context.get("setup")}
+
+    deleted_record, cleanup = await _delete_history_record_by_identifier(history_id)
+    return {
+        "ok": True,
+        "request_id": request_id,
+        "status": DELETION_REQUEST_PENDING,
+        "deleted_history_id": (deleted_record or target).get("history_id") or session_id,
+        "cleanup": cleanup,
+        "sharedRequest": shared_result,
+        "message": "Removed from local history. Candidate-list deletion request is pending SAM review.",
     }
 
 # ══════════════════════════════════════════════════════════════════
@@ -11797,6 +12243,9 @@ async def finish_all(payload: dict, request: Request):
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if not doc:
         return {"ok": False, "error": "No active session"}
+    doc = _session_with_workflow_defaults(doc)
+    if doc.get("form_fill_status") == FORM_FILL_NOT_ATTEMPTED:
+        doc["form_fill_status"] = FORM_FILL_SKIPPED
     final_status = compute_final_status(doc)
     timestamp_fields = _format_local_history_timestamp(datetime.now(timezone.utc))
     record = {
@@ -11862,7 +12311,12 @@ async def fill_form(payload: dict, request: Request):
         payload.get("coaching", ""),
         payload.get("fail_reason", ""),
     )
-    return fill_cert_form(form_url, form_payload, settings.get("form_fill_browser", "auto"))
+    result = fill_cert_form(form_url, form_payload, settings.get("form_fill_browser", "auto"))
+    if result.get("ok"):
+        await _record_form_fill_status(session, FORM_FILL_FILLED)
+    else:
+        await _record_form_fill_status(session, FORM_FILL_FAILED, result.get("message") or result.get("error") or "Form fill failed.")
+    return result
 
 
 @api_router.get("/")

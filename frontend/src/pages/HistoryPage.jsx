@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
+import {
+  formFillStatusLabel,
+  formFillStatusTone,
+  formatNewbieSchedule,
+  NEWBIE_REQUEST_STATUS,
+  NEWBIE_REQUEST_TYPE,
+} from '../utils/certificationWorkflow';
 
 function adminHistoryControlsEnabled() {
   try {
@@ -46,6 +53,11 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
 
   const filtered = history.filter(s => ((s.candidate || s.candidate_name || '')).toLowerCase().includes(search.toLowerCase()));
   const badgeClass = (s) => ({ Pass: 'badge-pass', 'RESUMED-PASS': 'badge-pass', Fail: 'badge-fail', 'FAIL-Final Attempt': 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
+  const formBadgeClass = (record) => ({
+    success: 'badge-pass',
+    danger: 'badge-fail',
+    warning: 'badge-incomplete',
+  }[formFillStatusTone(record?.form_fill_status, { legacy: !record?.form_fill_status })] || 'badge-incomplete');
 
   const getHistoryIdentity = (record) => {
     if (record?.history_id) return record.history_id;
@@ -70,6 +82,42 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       || record?.resume_source_history_id
       || record?.resume_source_timestamp_iso
   );
+
+  const canReschedule = (record) => {
+    const status = record?.status || record?.final_status;
+    const prompt = record?.newbie_shift_prompt || {};
+    return status === 'Incomplete' && (
+      record?.time_for_sup === false
+      || record?.newbie_shift_data
+      || record?.needs_sup_transfer
+      || record?.pending_sup_transfer_id
+      || prompt.trigger === 'not_enough_time_sup_transfer'
+      || prompt.trigger === 'both_sup_transfers_failed'
+    );
+  };
+
+  const handleRescheduleSession = async (record) => {
+    const identity = getHistoryIdentity(record);
+    const existingNewbie = record?.newbie_shift_data || {};
+    const originalScheduledAt = record?.newbie_shift_original_scheduled_at
+      || record?.newbie_shift_scheduled_at
+      || '';
+    await api.startSession({
+      ...record,
+      status: 'In Progress',
+      final_status: 'Incomplete',
+      history_id: record.history_id || identity,
+      newbie_shift_request_type: NEWBIE_REQUEST_TYPE.RESCHEDULE,
+      newbie_shift_request_status: NEWBIE_REQUEST_STATUS.PENDING,
+      newbie_shift_requested_by: '',
+      newbie_shift_request_reason: '',
+      newbie_shift_request_details: '',
+      newbie_shift_original_scheduled_at: originalScheduledAt,
+      newbie_shift_scheduled_at: record?.newbie_shift_scheduled_at || originalScheduledAt,
+      newbie_shift_data: existingNewbie,
+    });
+    onNavigate('newbieshift');
+  };
 
   const colorResult = (r) => {
     if (r === 'Pass') return <span style={{ color: 'var(--color-success)', fontWeight: 700 }}>PASS</span>;
@@ -119,25 +167,27 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
     const linkedWarning = isLinkedResumeSession(record)
       ? '<br /><br /><strong>This session is linked to a resumed supervisor-transfer session. Deleting it will remove the linked session relationship.</strong>'
       : '';
-    const confirmed = await modal.showModal({
+    const choice = await modal.showModal({
       type: 'danger',
       title: 'Delete Session?',
-      body: `
-        <strong>Candidate:</strong> ${escapeHtml(candidate)}<br />
-        <strong>Date:</strong> ${escapeHtml(record.timestamp || record.timestamp_iso || 'Unknown')}<br />
-        <strong>Status:</strong> ${escapeHtml(status)}
-        ${linkedWarning}
-        <br /><br />This action cannot be undone.
-      `,
+      body: `Would you like to remove this session from your history only, or submit a request to delete it from the certification candidate list as well?<br /><br /><strong>Candidate:</strong> ${escapeHtml(candidate)}<br /><strong>Date:</strong> ${escapeHtml(record.timestamp || record.timestamp_iso || 'Unknown')}<br /><strong>Status:</strong> ${escapeHtml(status)}${linkedWarning}`,
       icon: 'trash-2',
       graphic: 'warning',
       buttons: [
-        { label: 'Delete Session', cls: 'btn-danger', value: true },
-        { label: 'Cancel', cls: 'btn-muted', value: false },
+        { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
+        { label: 'History & Candidate List Request', cls: 'btn-warning', value: 'request' },
+        { label: 'History Only', cls: 'btn-danger', value: 'history-only' },
       ],
     });
-    if (!confirmed) return;
+    if (choice === 'cancel' || !choice) return;
     try {
+      if (choice === 'request') {
+        const response = await api.requestHistorySessionDeletion(identity);
+        if (detail && getHistoryIdentity(detail) === identity) setDetail(null);
+        await load();
+        await modal.alert('Deletion Request Pending', response.message || 'The session was removed from local history. SAM review is pending.');
+        return;
+      }
       await api.deleteHistorySession(identity);
       if (detail && getHistoryIdentity(detail) === identity) setDetail(null);
       await load();
@@ -181,7 +231,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
           <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-tertiary)' }}>No session history yet.</div>
         ) : (
           <table className="hist-table">
-            <thead><tr><th>Date</th><th>Candidate</th><th>Tester</th><th>Status</th><th style={{ width: 150 }}>Actions</th></tr></thead>
+            <thead><tr><th>Date</th><th>Candidate</th><th>Tester</th><th>Status</th><th>Follow-up</th><th>Form</th><th style={{ width: 210 }}>Actions</th></tr></thead>
             <tbody>
               {filtered.map((s, i) => (
                 <tr key={getHistoryIdentity(s) || i} className="hist-row">
@@ -189,9 +239,22 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   <td className="hist-name">{s.candidate || s.candidate_name || 'Unknown'}</td>
                   <td className="hist-tester">{s.tester_name || ''}</td>
                   <td><span className={`badge ${badgeClass(s.status)}`}>{s.status || '?'}</span></td>
+                  <td className="text-sm">
+                    {s.newbie_shift_data ? (
+                      <span title={`Approval status: ${s.newbie_shift_request_status || 'Pending'}`}>
+                        {formatNewbieSchedule(s.newbie_shift_data)} · {s.newbie_shift_request_status || 'Pending'}
+                      </span>
+                    ) : <span className="text-muted">-</span>}
+                  </td>
+                  <td>
+                    <span className={`badge ${formBadgeClass(s)}`} title={formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })} aria-label={formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}>
+                      {formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}
+                    </span>
+                  </td>
                   <td>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <button className="btn btn-primary btn-sm" onClick={() => setDetail(s)} data-testid={`history-view-${i}`}>View</button>
+                      {canReschedule(s) && <button className="btn btn-warning btn-sm" onClick={() => handleRescheduleSession(s)} data-testid={`history-reschedule-${i}`}>Reschedule</button>}
                       <button className="btn btn-danger btn-sm" onClick={() => handleDeleteSession(s)} data-testid={`history-delete-${i}`}>Delete</button>
                     </div>
                   </td>
@@ -227,6 +290,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 <div className="text-sm"><strong>Date:</strong> {detailDate(detail) || 'Unknown'}</div>
                 <div className="text-sm"><strong>Final Attempt:</strong> {detail.final_attempt ? 'Yes' : 'No'}</div>
                 {detail.headset_brand && <div className="text-sm"><strong>Headset:</strong> {detail.headset_brand}</div>}
+                <div className="text-sm"><strong>Form Fill:</strong> {formFillStatusLabel(detail.form_fill_status, { legacy: !detail.form_fill_status })}</div>
               </div>
               <strong>Tester:</strong> {detail.tester_name || 'N/A'}<br />
               {detail.auto_fail_reason && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{detail.auto_fail_reason}</span><br /></>}
@@ -258,7 +322,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 );
               })}
               {detail.newbie_shift_data && (
-                <><br /><strong>Newbie Shift:</strong> {detail.newbie_shift_data.newbie_date} at {detail.newbie_shift_data.newbie_time} {detail.newbie_shift_data.newbie_tz}</>
+                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data)}<br /><strong>Approval Status:</strong> {detail.newbie_shift_request_status || 'Pending'}{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}</>
               )}
               <div style={{ marginTop: 16 }}>
                 <div className="text-sm font-bold">Coaching Summary</div>

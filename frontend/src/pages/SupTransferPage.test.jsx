@@ -119,7 +119,7 @@ test('does not show NC/NS and Not Ready buttons in regular supervisor transfer f
 });
 
 test('supervisor-only NC/NS button confirms, saves auto-fail, and routes to review', async () => {
-  mockModal.showModal.mockResolvedValueOnce('ncns');
+  mockModal.showModal.mockResolvedValueOnce(true);
   const view = await renderPage({ supervisor_only: true, candidate_name: 'Taylor Example' });
 
   await act(async () => {
@@ -130,19 +130,14 @@ test('supervisor-only NC/NS button confirms, saves auto-fail, and routes to revi
   });
 
   expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
-    title: 'Mark Session',
+    title: 'Confirm Supervisor Transfer NC/NS',
+    body: 'This will automatically fail Taylor Example and mark the supervisor transfer as a No Call No Show. Do you want to continue?',
     buttons: [
-      expect.objectContaining({ label: 'Cancel', value: 'cancel' }),
-      expect.objectContaining({ label: 'Same Day Drop', value: 'same-day-drop' }),
-      expect.objectContaining({ label: 'NC/NS', value: 'ncns' }),
+      expect.objectContaining({ label: 'Cancel', value: false }),
+      expect.objectContaining({ label: 'Mark NC/NS', value: true }),
     ],
   }));
-  expect(mockModal.confirm).toHaveBeenCalledWith(
-    'Confirm Auto-Fail',
-    'This will automatically fail Taylor Example and mark as a No Call No Show. Do you want to continue?',
-    'alert-triangle',
-    'warning'
-  );
+  expect(mockModal.confirm).not.toHaveBeenCalled();
   expect(api.updateSession).toHaveBeenCalledWith({
     auto_fail_reason: 'NC/NS',
     final_status: 'Fail',
@@ -155,6 +150,7 @@ test('supervisor-only NC/NS button confirms, saves auto-fail, and routes to revi
 });
 
 test('supervisor-only Not Ready button confirms, saves auto-fail, and routes to review', async () => {
+  mockModal.showModal.mockResolvedValueOnce(true);
   const view = await renderPage({ supervisor_only: true, candidate_name: 'Taylor Example' });
 
   await act(async () => {
@@ -164,12 +160,14 @@ test('supervisor-only Not Ready button confirms, saves auto-fail, and routes to 
     await flushPromises();
   });
 
-  expect(mockModal.confirm).toHaveBeenCalledWith(
-    'Confirm Auto-Fail',
-    'This will Automatically fail Taylor Example and mark as Not Ready for Session. Do you want to proceed?',
-    'alert-triangle',
-    'warning'
-  );
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Confirm Auto-Fail',
+    body: 'This will Automatically fail Taylor Example and mark as Not Ready for Session. Do you want to proceed?',
+    buttons: [
+      expect.objectContaining({ label: 'Cancel', value: false }),
+      expect.objectContaining({ label: 'Yes', value: true }),
+    ],
+  }));
   expect(api.updateSession).toHaveBeenCalledWith({
     auto_fail_reason: 'Not Ready for Session',
     final_status: 'Fail',
