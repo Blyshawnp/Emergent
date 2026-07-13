@@ -56,7 +56,7 @@ export function validateIpAddress(value) {
 
 export function normalizeVpnProxyCheckMode(value) {
   const mode = String(value || '').trim().toLowerCase();
-  return Object.values(VPN_PROXY_CHECK_MODES).includes(mode) ? mode : VPN_PROXY_CHECK_MODES.LINKS;
+  return Object.values(VPN_PROXY_CHECK_MODES).includes(mode) ? mode : VPN_PROXY_CHECK_MODES.CHECKER;
 }
 
 export function buildManualLookupLinks(ipValue) {
@@ -196,7 +196,7 @@ function ModeBadge({ mode }) {
   return <span className={`candidate-ip-mode-badge candidate-ip-mode-${mode}`}>{label}</span>;
 }
 
-function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact = false, showCopyButton = true }) {
+function ManualLookupBlock({ links, onOpenLink, compact = false }) {
   const [copiedUrl, setCopiedUrl] = useState('');
   const copyUrl = async (url) => {
     await navigator.clipboard.writeText(url);
@@ -210,11 +210,6 @@ function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact 
           <div className="ip-manual-title">Manual lookup sites</div>
           <div className="ip-manual-subtitle">Check the candidate IP using more than one lookup site because individual services can be stale or incomplete.</div>
         </div>
-        {showCopyButton && (
-          <button type="button" className="btn btn-muted btn-sm" onClick={onCopyIp} disabled={!ip}>
-            {copiedIp ? 'Copied!' : 'Copy IP'}
-          </button>
-        )}
       </div>
       <div className="ip-manual-services-list">
         {links.map((link) => (
@@ -226,22 +221,24 @@ function ManualLookupBlock({ ip, links, onOpenLink, onCopyIp, copiedIp, compact 
                 <div className="ip-manual-service-desc">{link.desc}</div>
               </div>
             </div>
-            <button
-              type="button"
-              className="btn btn-muted btn-sm"
-              onClick={() => onOpenLink(link.url)}
-              data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
-            >
-              Open Lookup
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => copyUrl(link.url)}
-              data-testid={`candidate-ip-copy-url-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
-            >
-              {copiedUrl === link.url ? 'Copied URL' : 'Copy URL'}
-            </button>
+            <div className="ip-manual-service-actions">
+              <button
+                type="button"
+                className="btn btn-muted btn-sm"
+                onClick={() => onOpenLink(link.url)}
+                data-testid={`candidate-ip-link-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+              >
+                Lookup
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => copyUrl(link.url)}
+                data-testid={`candidate-ip-copy-url-${link.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+              >
+                {copiedUrl === link.url ? 'Copied URL' : 'Copy URL'}
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -427,21 +424,10 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   const [validationMessage, setValidationMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
-  const [copiedIp, setCopiedIp] = useState(false);
-
-  const handleCopyIp = async () => {
-    if (!ip) return;
-    try {
-      await navigator.clipboard.writeText(ip);
-      setCopiedIp(true);
-      setTimeout(() => setCopiedIp(false), 2000);
-    } catch (e) {
-      console.error('Failed to copy IP', e);
-    }
-  };
 
   const lastChecked = useMemo(() => formatTimestamp(result?.timestamp), [result]);
-  const manualLinks = useMemo(() => buildManualLookupLinks(ip), [ip]);
+  const activeIp = String(result?.ip || ip || '').trim();
+  const manualLinks = useMemo(() => buildManualLookupLinks(activeIp), [activeIp]);
 
   useEffect(() => {
     setResult(initialResult || null);
@@ -466,12 +452,12 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
   };
 
   const handleCheck = async () => {
-    const message = validateIpAddress(ip);
+    const message = validateIpAddress(activeIp);
     setValidationMessage(message);
     if (message) return;
     setLoading(true);
     try {
-      const response = await api.checkIpIntelligence(ip.trim());
+      const response = await api.checkIpIntelligence(activeIp);
       if (!response?.ok) {
         setValidationMessage(response?.error || 'IP lookup could not be completed.');
         return;
@@ -529,43 +515,14 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
         </button>
         {!open && (
           <div className="candidate-ip-collapsed-summary">
-            <span className="text-sm text-muted">Manual verification is the release-safe default.</span>
+            <span className="text-sm text-muted">Manual verification is available when automatic lookup is not needed.</span>
           </div>
         )}
         {open && (
           <div className="candidate-ip-body">
-            <div className="candidate-ip-input-row">
-              <label>
-                <span>Candidate Public IP Address</span>
-                <input
-                  type="text"
-                  value={ip}
-                  onChange={(event) => setIp(event.target.value)}
-                  placeholder="IPv4 or IPv6"
-                  data-testid="candidate-ip-manual-input"
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-muted"
-                onClick={handleCopyIp}
-                disabled={!ip}
-              >
-                {copiedIp ? 'Copied!' : 'Copy IP'}
-              </button>
-            </div>
-
-            <div className="candidate-ip-mode-helper">
-              Check the candidate IP using more than one lookup site because individual services can be stale or incomplete.
-            </div>
-
             <ManualLookupBlock
-              ip={ip}
               links={manualLinks}
               onOpenLink={openManualLink}
-              onCopyIp={handleCopyIp}
-              copiedIp={copiedIp}
-              showCopyButton={false}
             />
           </div>
         )}
@@ -594,23 +551,14 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
       )}
       {open && (
         <div className="candidate-ip-body">
-          <div className="candidate-ip-mode-helper">Integrated checks require configured providers. Manual links appear whenever coverage is limited.</div>
-          <div className="candidate-ip-input-row">
-            <label>
-              <span>Candidate Public IP Address</span>
-              <input
-                type="text"
-                value={ip}
-                onChange={(event) => {
-                  setIp(event.target.value);
-                  if (validationMessage) setValidationMessage('');
-                }}
-                placeholder="IPv4 or IPv6"
-                data-testid="candidate-ip-input"
-              />
-            </label>
+          <div className="candidate-ip-mode-helper">Automatic lookup checks configured providers. Manual lookup sites remain available when coverage is limited.</div>
+          <div className="candidate-ip-auto-row">
+            <div className="candidate-ip-auto-copy">
+              <strong>Automatic VPN / Proxy Check</strong>
+              <span>{activeIp ? `Ready to check saved IP ${activeIp}.` : 'No saved candidate IP is available for automatic lookup yet.'}</span>
+            </div>
             <div className="candidate-ip-actions">
-              <button type="button" className="btn btn-primary" onClick={handleCheck} disabled={loading}>
+              <button type="button" className="btn btn-primary" onClick={handleCheck} disabled={loading || !activeIp}>
                 {loading ? 'Checking...' : 'Check IP'}
               </button>
               <button type="button" className="btn btn-muted" onClick={handleClear} disabled={loading}>Clear</button>
@@ -625,7 +573,7 @@ export default function CandidateIpIntelligencePanel({ initialResult, onResultCh
               </div>
               <CandidateIpResultSummary result={result} />
               {shouldShowManualFallback(result) ? (
-                <ManualLookupBlock ip={ip || result.ip} links={manualLinks} onOpenLink={openManualLink} onCopyIp={handleCopyIp} copiedIp={copiedIp} compact />
+                <ManualLookupBlock links={manualLinks} onOpenLink={openManualLink} compact />
               ) : null}
               {vpnProxyNeedsTesterDecision(result) ? (
                 <div className="ip-decision-reminder" data-testid="candidate-ip-decision-reminder">

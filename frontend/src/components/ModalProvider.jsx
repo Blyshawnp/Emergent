@@ -76,11 +76,11 @@ export function ModalProvider({ children }) {
   }, [showModal]);
 
   const confirm = useCallback((title, body, icon = 'help-circle', sound = 'popup') => {
-    return showModal({ type: 'confirm', title, body, icon, sound, buttons: [{ label: 'Yes', cls: 'btn-primary', value: true }, { label: 'No', cls: 'btn-muted', value: false }] });
+    return showModal({ type: 'confirm', title, body, icon, sound, buttons: [{ label: 'No', cls: 'btn-muted', value: false }, { label: 'Yes', cls: 'btn-primary', value: true }] });
   }, [showModal]);
 
   const confirmDanger = useCallback((title, body) => {
-    return showModal({ type: 'danger', title, body, icon: 'trash-2', graphic: 'warning', buttons: [{ label: "Yes, I'm sure", cls: 'btn-danger', value: true }, { label: 'Cancel', cls: 'btn-muted', value: false }] });
+    return showModal({ type: 'danger', title, body, icon: 'trash-2', graphic: 'warning', buttons: [{ label: 'Cancel', cls: 'btn-muted', value: false }, { label: "Yes, I'm sure", cls: 'btn-danger', value: true }] });
   }, [showModal]);
 
   const contextValue = useMemo(() => ({
@@ -95,8 +95,8 @@ export function ModalProvider({ children }) {
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'Escape' && modal) {
-        const lastBtn = modal.buttons[modal.buttons.length - 1];
-        closeModal(lastBtn ? lastBtn.value : false);
+        const safeBtn = modal.buttons.find((btn) => btn.value === false || btn.value === 'cancel' || /cancel|back|no/i.test(btn.label || ''));
+        closeModal(safeBtn ? safeBtn.value : false);
       }
     };
     document.addEventListener('keydown', handler);

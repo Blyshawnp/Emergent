@@ -167,6 +167,116 @@ test('Back preserves the current call payment selection in keyed drafts', async 
   await view.unmount();
 });
 
+test('No Coaching confirmation renders safe action before continue action', async () => {
+  mockModal.showModal.mockResolvedValue(false);
+  const view = await renderPage(1);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-pass"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="calls-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'No Coaching',
+    buttons: [
+      expect.objectContaining({ label: 'No', value: false }),
+      expect.objectContaining({ label: 'Yes', value: true }),
+    ],
+  }));
+  expect(api.saveCall).not.toHaveBeenCalled();
+
+  await view.unmount();
+});
+
+test('Did not search for member appears only for failed calls and persists in save payload', async () => {
+  mockModal.showModal.mockResolvedValue(true);
+  const view = await renderPage(1);
+
+  expect(view.container.textContent).not.toContain('Did not search for member');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-pass"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.textContent).not.toContain('Did not search for member');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-fail"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const failLabel = Array.from(view.container.querySelectorAll('.fail-reason-checkbox'))
+    .find((label) => label.textContent.includes('Did not search for member'));
+  expect(failLabel).toBeTruthy();
+
+  await act(async () => {
+    failLabel.querySelector('input').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="calls-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+    await flushPromises();
+  });
+
+  expect(api.saveCall).toHaveBeenCalledWith(expect.objectContaining({
+    result: 'Fail',
+    fails: expect.objectContaining({
+      'Did not search for member': true,
+    }),
+  }));
+
+  await view.unmount();
+});
+
+test('required fail reason remains available when remote content is stale', async () => {
+  mockModal.showModal.mockResolvedValue(true);
+  api.getDefaults.mockResolvedValue({
+    ...defaults,
+    call_fails: ['Skipped parts of script', 'Other'],
+  });
+  api.getSettings.mockResolvedValue({
+    call_fails: ['Skipped parts of script', 'Other'],
+  });
+
+  const view = await renderPage(1);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-fail"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const matchingLabels = Array.from(view.container.querySelectorAll('.fail-reason-checkbox'))
+    .filter((label) => label.textContent.includes('Did not search for member'));
+  expect(matchingLabels).toHaveLength(1);
+
+});
+
+test('Fail Reasons remain hidden until Fail is selected', async () => {
+  const view = await renderPage(1);
+  expect(view.container.querySelector('[data-tour="calls-fail-reasons"]')).toBeNull();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-pass"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.querySelector('[data-tour="calls-fail-reasons"]')).toBeNull();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="call-fail"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.querySelector('[data-tour="calls-fail-reasons"]')).not.toBeNull();
+
+  await view.unmount();
+});
+
+
 test('not enough time after passed calls prompts for Newbie Shift scheduling', async () => {
   api.getDefaults.mockResolvedValue({
     ...defaults,

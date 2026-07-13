@@ -178,14 +178,6 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   );
 
   useEffect(() => {
-    console.log("HomePage first rendered");
-  }, []);
-
-  useEffect(() => {
-    console.log("history component mounted");
-  }, []);
-
-  useEffect(() => {
     if (initialSettings) setSettings(initialSettings);
   }, [initialSettings]);
 
@@ -292,7 +284,6 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   }, [settings]);
 
   const name = settings.display_name || settings.tester_name || 'Tester';
-  console.log("greeting computed: Welcome, " + name + "!");
   const recent = (history || []).slice(0, 5);
   const badgeClass = (s) => {
     const status = String(s || '').trim().toLowerCase();
@@ -324,11 +315,11 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
     const choice = await modal.showModal({
       type: 'confirm',
       title: 'Supervisor Transfer Only',
-      body: 'Choose how to start Supervisor Transfer. Use Smart Resume when this candidate has saved mock-call data. Use standalone mode for admin-directed or technical-issue follow-up without resume data.',
+      body: 'Choose how to start Supervisor Transfer.<br><br>Use Smart Resume when this candidate has saved mock-call data. Start Supervisor Transfer Only only when directed or when no resume record should be used.',
       buttons: [
-        { label: 'Use Smart Resume', cls: 'btn-primary', value: 'smart-resume' },
-        { label: 'Start Supervisor Transfer Only', cls: 'btn-muted', value: 'standalone' },
         { label: 'Cancel', cls: 'btn-ghost', value: 'cancel' },
+        { label: 'Start Supervisor Transfer Only', cls: 'btn-muted', value: 'standalone' },
+        { label: 'Use Smart Resume', cls: 'btn-primary', value: 'smart-resume' },
       ],
       icon: 'repeat',
     });

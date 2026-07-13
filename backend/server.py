@@ -1190,14 +1190,52 @@ DEFAULT_MANAGED_SETTINGS_KEYS = {
     "vpnProxyCheckMode",
 }
 
+REQUIRED_FAIL_REASONS = {
+    "call_fails": ["Did not search for member"],
+}
+
 
 def _managed_custom_flag(key):
     return f"{key}_customized"
 
 
+def _merge_required_fail_reasons(items, section_key):
+    merged = []
+    seen = set()
+    has_other = False
+    for item in items or []:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key == "other":
+            has_other = True
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(text)
+    for required in REQUIRED_FAIL_REASONS.get(section_key, []):
+        text = str(required or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key == "other":
+            has_other = True
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(text)
+    if has_other:
+        merged.append("Other")
+    return merged
+
+
+
 def _fail_reason_fallback(section_key):
     if section_key == "call_fails":
-        return list(CALL_FAILS)
+        return _merge_required_fail_reasons(CALL_FAILS, section_key)
     if section_key == "sup_fails":
         return list(SUP_FAILS)
     return []
@@ -1319,7 +1357,7 @@ def _normalize_fail_reasons(rows, section_key, source_label, use_builtin_fallbac
             fallback_label,
             section_key,
         )
-        return fallback
+        return _merge_required_fail_reasons(fallback, section_key)
 
     if _rows_have_headset_shape(rows):
         logger.warning(
@@ -1328,7 +1366,7 @@ def _normalize_fail_reasons(rows, section_key, source_label, use_builtin_fallbac
             section_key,
             fallback_label,
         )
-        return fallback
+        return _merge_required_fail_reasons(fallback, section_key)
 
     if _rows_have_coaching_shape(rows):
         logger.warning(
@@ -1337,7 +1375,7 @@ def _normalize_fail_reasons(rows, section_key, source_label, use_builtin_fallbac
             section_key,
             fallback_label,
         )
-        return fallback
+        return _merge_required_fail_reasons(fallback, section_key)
 
     items = []
     seen = set()
@@ -1358,7 +1396,7 @@ def _normalize_fail_reasons(rows, section_key, source_label, use_builtin_fallbac
             section_key,
             fallback_label,
         )
-        return fallback
+        return _merge_required_fail_reasons(fallback, section_key)
     if _values_match_other_section(items, section_key):
         logger.warning(
             "[CONTENT] %s produced values from the wrong fail-reason section for %s. Using %s fail reasons.",
@@ -1366,9 +1404,9 @@ def _normalize_fail_reasons(rows, section_key, source_label, use_builtin_fallbac
             section_key,
             fallback_label,
         )
-        return fallback
+        return _merge_required_fail_reasons(fallback, section_key)
 
-    return items
+    return _merge_required_fail_reasons(items, section_key)
 
 
 def _normalize_shows(rows):
@@ -2157,7 +2195,7 @@ async def _background_remote_content_task():
             CALL_COACHING = EXTERNAL_CONTENT["call_coaching"]
             DEFAULT_SETTINGS["call_coaching"] = CALL_COACHING
         if isinstance(EXTERNAL_CONTENT.get("call_fails"), list) and EXTERNAL_CONTENT["call_fails"]:
-            CALL_FAILS = EXTERNAL_CONTENT["call_fails"]
+            CALL_FAILS = _merge_required_fail_reasons(EXTERNAL_CONTENT["call_fails"], "call_fails")
             DEFAULT_SETTINGS["call_fails"] = CALL_FAILS
         if isinstance(EXTERNAL_CONTENT.get("sup_coaching"), list) and EXTERNAL_CONTENT["sup_coaching"]:
             SUP_COACHING = EXTERNAL_CONTENT["sup_coaching"]
@@ -2776,7 +2814,7 @@ if isinstance(EXTERNAL_CONTENT.get("call_coaching"), list) and EXTERNAL_CONTENT[
     CALL_COACHING = EXTERNAL_CONTENT["call_coaching"]
 
 if isinstance(EXTERNAL_CONTENT.get("call_fails"), list) and EXTERNAL_CONTENT["call_fails"]:
-    CALL_FAILS = EXTERNAL_CONTENT["call_fails"]
+    CALL_FAILS = _merge_required_fail_reasons(EXTERNAL_CONTENT["call_fails"], "call_fails")
 
 if isinstance(EXTERNAL_CONTENT.get("sup_coaching"), list) and EXTERNAL_CONTENT["sup_coaching"]:
     SUP_COACHING = EXTERNAL_CONTENT["sup_coaching"]
@@ -2959,7 +2997,7 @@ DEFAULT_SETTINGS = {
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
     "support_form_url": DEFAULT_SUPPORT_FORM_URL,
-    "vpnProxyCheckMode": "links",
+    "vpnProxyCheckMode": "checker",
     "ticker_speed": "normal",
     "enable_sounds": True,
     "sound_volume": "medium",
@@ -3184,7 +3222,7 @@ def _normalize_welcome_voice(value):
 
 def _normalize_vpn_proxy_check_mode(value):
     mode = str(value or "").strip().lower()
-    return mode if mode in {"checker", "links", "disabled"} else "links"
+    return mode if mode in {"checker", "links", "disabled"} else "checker"
 
 
 def sanitize_settings(doc: Optional[dict]) -> dict:
@@ -3205,6 +3243,9 @@ def sanitize_settings(doc: Optional[dict]) -> dict:
     base["enable_sounds"] = base["sound_volume"] != "off"
     base["welcome_voice"] = _normalize_welcome_voice(base.get("welcome_voice"))
     base["vpnProxyCheckMode"] = _normalize_vpn_proxy_check_mode(base.get("vpnProxyCheckMode"))
+    base["call_fails"] = _merge_required_fail_reasons(base.get("call_fails"), "call_fails")
+    for key in DEFAULT_MANAGED_SETTINGS_KEYS:
+        base[_managed_custom_flag(key)] = bool(doc and doc.get(_managed_custom_flag(key)))
     for key in SENSITIVE_SETTINGS_KEYS:
         base[key] = ""
         if key == GEMINI_API_KEY_SETTING:
@@ -4196,13 +4237,21 @@ def _readiness_override_applied(session):
     return bool(judgment.get("overrideApplied")) and str(judgment.get("overrideResult") or "").strip() in FINAL_READINESS_ALLOWED_RESULTS
 
 
+def _normalize_readiness_override_reason(value):
+    reason = str(value or "").strip()
+    prefix = "Evaluator Override Applied:"
+    if reason.lower().startswith(prefix.lower()):
+        reason = reason[len(prefix):].strip()
+    return reason
+
+
 def _readiness_override_note(session):
     if not _readiness_override_applied(session):
         return ""
     judgment = _readiness_judgment(session)
     calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
     final_result = str(judgment.get("overrideResult") or "").strip()
-    reason = str(judgment.get("primaryReason") or "").strip()
+    reason = _normalize_readiness_override_reason(judgment.get("primaryReason"))
     explanation = str(judgment.get("explanation") or "").strip()
     parts = [
         f"Evaluator Override Applied: calculated result was {calculated or 'N/A'} and final result is {final_result}.",
@@ -4219,6 +4268,10 @@ def _append_readiness_override_note(text, session):
     if not note:
         return text
     base = str(text or "").strip()
+    base_norm = " ".join(base.lower().replace("\n", " ").split())
+    note_norm = " ".join(note.lower().replace("\n", " ").split())
+    if note_norm and (note_norm in base_norm or base_norm.endswith(note_norm)):
+        return base
     return f"{base}\n\n{note}" if base else note
 
 
@@ -4226,7 +4279,7 @@ def _readiness_context_text(session):
     judgment = _readiness_judgment(session)
     calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
     final_result = compute_final_status(session)
-    reason = str(judgment.get("primaryReason") or "").strip()
+    reason = _normalize_readiness_override_reason(judgment.get("primaryReason"))
     explanation = str(judgment.get("explanation") or "").strip()
     parts = [
         f"Final Readiness Judgment: calculated result is {calculated or 'N/A'}; final result is {final_result or 'N/A'}.",
@@ -4950,7 +5003,7 @@ def _shared_sheet_gid(sheets_api, sheet_id, tab_name):
 def _shared_admin_candidate_snapshot():
     context = _shared_sheet_context()
     if not context.get("ok"):
-        return {"ok": False, "error": context.get("error"), "setup": context.get("setup"), "candidates": [], "pending": []}
+        return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
 
     try:
         apps_script_client = context.get("appsScriptClient")
@@ -5007,10 +5060,7 @@ def _shared_admin_candidate_snapshot():
                 for row in (raw_pending or [])
                 if isinstance(row, dict)
             ]
-            pending_active = [
-                row for row in pending
-                if str(row.get("status") or "").strip().lower() in {"pending", "resumed"}
-            ]
+            pending_active = _filter_current_pending_sup_transfers(pending, candidates)
 
             return {
                 "ok": True,
@@ -5052,8 +5102,11 @@ def _shared_admin_candidate_snapshot():
         ]
         auto_archived_count = _auto_archive_candidate_rows(sheets_api, sheet_id, candidate_rows)
     except Exception as exc:
-        logger.exception("[SHARED] Failed to read admin candidate tracking rows: %s", exc)
-        return {"ok": False, "error": f"Unable to read shared candidate tracking: {exc}", "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
+        if _google_sheet_quota_or_temporary_error(exc):
+            logger.warning("[SHARED] Candidate Tracking temporarily unavailable due to Google Sheets quota/rate limit: %s", exc)
+        else:
+            logger.exception("[SHARED] Failed to read admin candidate tracking rows: %s", exc)
+        return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
 
     def summarize_candidate_groups(rows_to_group):
         grouped = {}
@@ -5082,10 +5135,7 @@ def _shared_admin_candidate_snapshot():
     candidate_summaries = summarize_candidate_groups(active_candidates)
     archived_summaries = summarize_candidate_groups(archived_candidates)
 
-    pending_active = [
-        row for row in pending_rows
-        if str(row.get("status") or "").strip().lower() in {"pending", "resumed"}
-    ]
+    pending_active = _filter_current_pending_sup_transfers(pending_rows, candidate_summaries)
     failed_not_final = [
         row for row in candidate_summaries
         if str(row.get("latest_status") or "").upper() == "FAIL"
@@ -5160,7 +5210,7 @@ def _shared_admin_candidate_action(payload):
 
     context = _shared_sheet_context()
     if not context.get("ok"):
-        return {"ok": False, "error": context.get("error"), "setup": context.get("setup")}
+        return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup()}
 
     try:
         apps_script_client = context.get("appsScriptClient")
@@ -5471,8 +5521,11 @@ def _shared_admin_candidate_action(payload):
             return {"ok": False, "error": "No matching Candidate Sessions or Pending Sup Transfers rows were updated."}
         return {"ok": True, "updatedCandidates": updated_candidates, "updatedPending": updated_pending, "action": action}
     except Exception as exc:
-        logger.exception("[SHARED] Candidate admin action failed: %s", exc)
-        return {"ok": False, "error": f"Candidate tracking update failed: {exc}", "setup": _shared_tracking_required_setup()}
+        if _google_sheet_quota_or_temporary_error(exc):
+            logger.warning("[SHARED] Candidate admin action temporarily unavailable due to Google Sheets quota/rate limit: %s", exc)
+        else:
+            logger.exception("[SHARED] Candidate admin action failed: %s", exc)
+        return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup()}
 
 
 def _sam_master_sheet_context():
@@ -6042,10 +6095,90 @@ def _shared_candidate_suggestion_visible(row, now=None):
     return age_days <= 30
 
 
+def _latest_shared_candidate_rows(rows):
+    latest = {}
+    for row in rows or []:
+        key = " ".join(str(row.get("candidate_name") or "").lower().split())
+        if not key:
+            continue
+        current = latest.get(key)
+        if not current:
+            latest[key] = row
+            continue
+        current_date = _shared_row_date(current)
+        row_date = _shared_row_date(row)
+        current_ts = current_date.timestamp() if current_date else 0
+        row_ts = row_date.timestamp() if row_date else 0
+        if row_ts >= current_ts:
+            latest[key] = row
+    return list(latest.values())
+
+
+TERMINAL_PENDING_SUP_STATUSES = {
+    "PASS",
+    "PASSED",
+    "PASSED CERTIFICATION",
+    "RESUMED-PASS",
+    "RESUMED PASS",
+    "ARCHIVED",
+    "WITHDREW FROM CERTIFICATION",
+    "WITHDRAWN",
+    "FAIL-FINAL ATTEMPT",
+    "FAILED FINAL ATTEMPT",
+    "FAILED CERTIFICATION",
+    "NC/NS",
+    "STOPPED RESPONDING",
+}
+
+
+def _shared_pending_terminal_status(row):
+    status = str(
+        (row or {}).get("latest_status")
+        or (row or {}).get("final_result")
+        or (row or {}).get("final_status")
+        or (row or {}).get("status")
+        or ""
+    ).strip().upper()
+    return status in TERMINAL_PENDING_SUP_STATUSES or _candidate_row_withdrawn(row) or _shared_truthy((row or {}).get("archived"))
+
+
+def _filter_current_pending_sup_transfers(pending_rows, candidate_rows):
+    latest_candidates = {
+        _candidate_name_key(row.get("candidate_name")): row
+        for row in _latest_shared_candidate_rows(candidate_rows or [])
+        if _candidate_name_key(row.get("candidate_name"))
+    }
+    active_pending = [
+        row for row in (pending_rows or [])
+        if str(row.get("status") or "").strip().lower() in {"pending", "resumed"}
+        and not _shared_pending_terminal_status(row)
+    ]
+    latest_pending = {
+        _candidate_name_key(row.get("candidate_name")): row
+        for row in _latest_shared_candidate_rows(active_pending)
+        if _candidate_name_key(row.get("candidate_name"))
+    }
+    filtered = []
+    for key, row in latest_pending.items():
+        latest = latest_candidates.get(key)
+        if latest:
+            if _shared_pending_terminal_status(latest):
+                continue
+            if not _shared_truthy(latest.get("needs_sup_transfer")):
+                continue
+            latest_pending_id = str(latest.get("pending_sup_transfer_id") or "").strip()
+            row_pending_id = str(row.get("pending_id") or row.get("pending_sup_transfer_id") or "").strip()
+            if latest_pending_id and row_pending_id and latest_pending_id != row_pending_id:
+                continue
+        filtered.append(row)
+    filtered.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return filtered
+
+
 def _lookup_shared_candidate_sessions(candidate_name):
     query = " ".join(str(candidate_name or "").lower().split())
     if len(query) < 2:
-        return {"ok": True, "matches": [], "finalAttempt": False, "finalAttemptUsed": False, "withdrawn": False, "extraAttemptGranted": False}
+        return {"ok": True, "matches": [], "finalAttempt": False, "finalAttemptUsed": False, "withdrawn": False, "extraAttemptGranted": False, "passedCertification": False}
     lookup_started = time.monotonic()
     logger.info("[SHARED] Candidate lookup started query_len=%d", len(query))
     try:
@@ -6107,7 +6240,9 @@ def _lookup_shared_candidate_sessions(candidate_name):
     final_attempt_used = any(_shared_status_upper(row) == "FAIL-FINAL ATTEMPT" for row in confirmed_matches)
     withdrawn = any(_candidate_row_withdrawn(row) or _shared_status_upper(row) == "WITHDREW FROM CERTIFICATION" for row in confirmed_matches)
     extra_attempt = any(_candidate_row_extra_attempt(row) for row in confirmed_matches)
-    visible_matches = [row for row in active_matches if _shared_candidate_suggestion_visible(row)]
+    passed_certification = any(_shared_status_upper(row) in {"PASS", "PASSED", "RESUMED-PASS"} for row in confirmed_matches)
+    visible_matches = _latest_shared_candidate_rows([row for row in active_matches if _shared_candidate_suggestion_visible(row)])
+    visible_matches.sort(key=lambda row: (int(row.get("matchConfidence") or 0), str(row.get("completed_at") or row.get("created_at") or "")), reverse=True)
     logger.info(
         "[SHARED] Candidate lookup succeeded query_len=%d duration_ms=%d matches=%d visible=%d final_attempt=%s final_attempt_used=%s withdrawn=%s extra_attempt=%s",
         len(query),
@@ -6127,6 +6262,7 @@ def _lookup_shared_candidate_sessions(candidate_name):
         "qualifyingFailureCount": len(qualifying_failures),
         "withdrawn": withdrawn,
         "extraAttemptGranted": extra_attempt,
+        "passedCertification": passed_certification and not extra_attempt,
     }
 
 
@@ -6139,21 +6275,78 @@ def _get_shared_pending_sup_transfers():
             return {"ok": True, "items": []}
         sheets_api = context["service"].spreadsheets()
         rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
+        candidate_rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
     except Exception as exc:
         logger.warning("[SHARED] Pending supervisor transfer lookup unavailable; continuing local workflow: %s", exc)
         return {"ok": False, "items": [], "error": f"Shared pending supervisor transfers unavailable: {exc}", "setup": _shared_tracking_required_setup()}
-    items = [
-        _normalize_shared_row(row)
-        for row in rows
-        if str(row.get("status") or "").strip().lower() in {"pending", "resumed"}
-    ]
-    items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    items = _filter_current_pending_sup_transfers(
+        [_normalize_shared_row(row) for row in rows],
+        [_normalize_shared_row(row) for row in candidate_rows],
+    )
     return {"ok": True, "items": items}
 
 
 # ══════════════════════════════════════════════════════════════════
 # GEMINI SERVICE (summary generation)
 # ══════════════════════════════════════════════════════════════════
+SUMMARY_DISPLAY_LABELS_PATH = ROOT_DIR.parent / "frontend" / "src" / "utils" / "summaryDisplayLabels.json"
+
+
+@lru_cache(maxsize=1)
+def _summary_display_labels():
+    try:
+        with open(SUMMARY_DISPLAY_LABELS_PATH, "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict):
+            return {str(key): str(value) for key, value in loaded.items() if str(key or "").strip() and str(value or "").strip()}
+    except Exception as exc:
+        logger.warning("[SUMMARY] Unable to load summary display labels from %s: %s", SUMMARY_DISPLAY_LABELS_PATH, exc)
+    return {}
+
+
+def _normalize_summary_label_key(value):
+    return re.sub(r"[\s_/\-]+", " ", str(value or "").strip().lower()).strip()
+
+
+def _humanize_summary_label(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    labels = _summary_display_labels()
+    if raw in labels:
+        return labels[raw]
+    normalized = _normalize_summary_label_key(raw)
+    for key, label in labels.items():
+        if _normalize_summary_label_key(key) == normalized:
+            return label
+    text = " ".join(raw.replace("_", " ").replace("/", " / ").split()).strip()
+    preserved = {"ACD", "DTE", "VPN", "USB", "NC/NS", "EFT"}
+    words = [
+        part.upper() if part.upper() in preserved else part[:1].upper() + part[1:]
+        for part in text.split()
+    ]
+    fallback = " ".join(words).strip()
+    if fallback and not fallback.endswith("."):
+        fallback = f"{fallback}."
+    return fallback
+
+
+def _summary_parent_label(value):
+    raw = str(value or "").strip()
+    if raw and raw in _summary_display_labels().values():
+        return raw[:-1] if raw.endswith(".") else raw
+    label = _humanize_summary_label(value).strip()
+    return label[:-1] if label.endswith(".") else label
+
+
+def _summary_child_sentence(value):
+    raw = str(value or "").strip()
+    if raw and raw in _summary_display_labels().values():
+        return raw if raw.endswith(".") else f"{raw}."
+    label = _humanize_summary_label(value).strip()
+    return label if label.endswith(".") else f"{label}."
+
+
 def _get_coaching_items(data):
     if not data:
         return []
@@ -6161,9 +6354,13 @@ def _get_coaching_items(data):
     coaching = data.get("coaching", {})
     for key, checked in coaching.items():
         if checked and "_" not in key and key != "Other":
-            items.append(key.lower())
+            label = _summary_child_sentence(key)
+            if label:
+                items.append(label)
         elif checked and "_" in key:
-            items.append(key.split("_", 1)[1].lower())
+            label = _summary_child_sentence(key)
+            if label:
+                items.append(label)
     notes = data.get("coach_notes", "")
     if notes:
         items.append(notes)
@@ -6179,7 +6376,9 @@ def _get_fail_items(data):
     for key, checked in fails.items():
         if checked and key != "Other":
             detail = str(fail_details.get(key) or "").strip()
-            items.append(f"{key.lower()} (Detail: {detail})" if detail else key.lower())
+            label = _humanize_summary_label(key)
+            if label:
+                items.append(_format_fail_item_sentence(label, detail))
     notes = data.get("fail_notes", "")
     if notes:
         items.append(notes)
@@ -6353,25 +6552,25 @@ def _extract_coaching_summary_parts(section):
             continue
         if "_" in key:
             parent, child = key.split("_", 1)
-            parent = str(parent or "").strip()
-            child = str(child or "").strip()
+            parent = _summary_parent_label(parent)
+            child = _summary_child_sentence(key) or _summary_child_sentence(child)
             if not parent or not child:
                 continue
             grouped.setdefault(parent, [])
             if child not in grouped[parent]:
                 grouped[parent].append(child)
             continue
-        parent = str(key or "").strip()
+        parent = _summary_parent_label(key)
         if not parent:
             continue
         grouped.setdefault(parent, [])
 
     parts = []
     for parent, children in grouped.items():
-        parent_text = _sentence_case(parent)
-        child_values = [_sentence_case(child) for child in children if _sentence_case(child)]
+        parent_text = _summary_parent_label(parent)
+        child_values = [_summary_child_sentence(child) for child in children if _summary_child_sentence(child)]
         if child_values:
-            parts.append(f"{parent_text} ({'; '.join(child_values)})")
+            parts.append(f"{parent_text}: {' '.join(child_values)}")
         else:
             parts.append(parent_text)
     return _reject_headset_like_summary_parts(parts, "coaching")
@@ -6382,7 +6581,9 @@ def _extract_fail_summary_parts(section):
     parts = []
     for key, checked in fails.items():
         if checked and key:
-            parts.append(str(key).strip())
+            label = _humanize_summary_label(key)
+            if label:
+                parts.append(label.rstrip("."))
     return _reject_headset_like_summary_parts(_dedupe_preserve_order(parts), "fail")
 
 
@@ -6391,10 +6592,25 @@ def _extract_fail_reason_details(section):
     if not isinstance(details, dict):
         return {}
     return {
-        str(reason or "").strip(): _normalize_notes_sentence(value)
+        _humanize_summary_label(reason).rstrip("."): _normalize_notes_sentence(value)
         for reason, value in details.items()
-        if str(reason or "").strip() and _normalize_notes_sentence(value)
+        if _humanize_summary_label(reason) and _normalize_notes_sentence(value)
     }
+
+
+def _format_fail_item_sentence(item, detail=""):
+    label = str(item or "").strip().rstrip(".")
+    detail_text = _normalize_notes_sentence(detail)
+    if not label:
+        return ""
+    normalized = _normalize_summary_label_key(label)
+    if detail_text and "paraphrased" in normalized and "script" in normalized:
+        return f"Paraphrased the {detail_text} section of the script."
+    if detail_text and "skipped" in normalized and "script" in normalized:
+        return f"Skipped the {detail_text} section of the script."
+    if detail_text:
+        return f"{label}: {detail_text}."
+    return f"{label}."
 
 
 def _format_fail_reason_detail_lines(section):
@@ -6403,10 +6619,9 @@ def _format_fail_reason_detail_lines(section):
     lines = []
     for item in fail_items:
         detail = fail_details.get(item)
-        if detail:
-            lines.append(f"Fail reason: {item}. Detail: {detail}.")
-        else:
-            lines.append(f"Fail reason: {item}.")
+        sentence = _format_fail_item_sentence(item, detail)
+        if sentence:
+            lines.append(f"Fail reason: {sentence}")
     return lines
 
 
@@ -10249,6 +10464,30 @@ def _google_sheet_error_message(exc):
     except Exception:
         pass
     return str(exc)
+
+
+def _google_sheet_quota_or_temporary_error(exc):
+    text = _google_sheet_error_message(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "429",
+            "quota",
+            "rate_limit",
+            "rate limit",
+            "too many requests",
+            "resource exhausted",
+        )
+    )
+
+
+def _candidate_tracking_temporary_unavailable_message():
+    return (
+        "Candidate Tracking is temporarily unavailable. "
+        "Google Sheets is currently receiving too many requests. "
+        "SAM will retry automatically. "
+        "Please wait a moment and select Refresh if needed."
+    )
 
 
 def _google_sheet_error_type(exc):

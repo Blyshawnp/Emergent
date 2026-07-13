@@ -36,6 +36,10 @@ function candidateHasFinalAttemptUsed(record) {
   return String(record?.status || '').trim().toUpperCase() === 'FAIL-FINAL ATTEMPT';
 }
 
+function candidateHasPassed(record) {
+  return ['PASS', 'PASSED', 'RESUMED-PASS'].includes(String(record?.status || record?.latest_status || '').trim().toUpperCase());
+}
+
 function sheetTruthy(value) {
   if (typeof value === 'boolean') return value;
   if (value === null || value === undefined) return false;
@@ -57,6 +61,24 @@ function selectedHeadsetLabel(group, model) {
 
 function normalizeLookupValue(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function formatCandidateSessionType(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const normalized = raw.toLowerCase();
+  const labels = {
+    mock_session: 'Mock Session',
+    supervisor_transfer_only: 'Supervisor Transfer Only',
+    smart_resume: 'Smart Resume',
+    newbie_shift: 'Newbie Shift',
+  };
+  if (labels[normalized]) return labels[normalized];
+  return raw
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function normalizeHeadsetSearchValue(value) {
@@ -258,9 +280,10 @@ export default function BasicsPage({ onNavigate }) {
   const [deniedHeadsets, setDeniedHeadsets] = useState([]);
   const [headsetLookupError, setHeadsetLookupError] = useState('');
   const [headsetLookupLoading, setHeadsetLookupLoading] = useState(true);
-  const [candidateLookup, setCandidateLookup] = useState({ loading: false, skipped: false, matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false });
+  const [candidateLookup, setCandidateLookup] = useState({ loading: false, skipped: false, matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false, passedCertification: false });
   const [candidateLookupRetryTick, setCandidateLookupRetryTick] = useState(0);
   const [confirmedCandidateMatch, setConfirmedCandidateMatch] = useState(null);
+  const [suppressedCandidateLookupName, setSuppressedCandidateLookupName] = useState('');
   const [previousSessionOpen, setPreviousSessionOpen] = useState(false);
   const [finalAttemptNoticeShownFor, setFinalAttemptNoticeShownFor] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -401,17 +424,25 @@ export default function BasicsPage({ onNavigate }) {
     if (confirmedCandidateMatch && normalizeName(confirmedCandidateMatch.candidate_name).toLowerCase() !== normalizeName(candidateName).toLowerCase()) {
       setConfirmedCandidateMatch(null);
     }
+    if (suppressedCandidateLookupName && suppressedCandidateLookupName !== normalizedLookupQuery) {
+      setSuppressedCandidateLookupName('');
+    }
 
     if (!isStrongCandidateLookupQuery(candidateName)) {
       candidateLookupFailureCountRef.current = 0;
       candidateLookupLastQueryRef.current = '';
-      setCandidateLookup({ loading: false, skipped: Boolean(candidateName), matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false });
+      setCandidateLookup({ loading: false, skipped: Boolean(candidateName), matches: [], error: '', finalAttempt: false, finalAttemptUsed: false, withdrawn: false, extraAttemptGranted: false, passedCertification: false });
       return undefined;
     }
 
     if (candidateLookupLastQueryRef.current !== normalizedLookupQuery) {
       candidateLookupFailureCountRef.current = 0;
       candidateLookupLastQueryRef.current = normalizedLookupQuery;
+    }
+
+    if (suppressedCandidateLookupName === normalizedLookupQuery) {
+      setCandidateLookup((current) => ({ ...current, loading: false, skipped: false, matches: [], error: '' }));
+      return undefined;
     }
 
     setCandidateLookup((current) => ({ ...current, loading: true, skipped: false, error: '' }));
@@ -452,6 +483,7 @@ export default function BasicsPage({ onNavigate }) {
             finalAttemptUsed: false,
             withdrawn: false,
             extraAttemptGranted: false,
+            passedCertification: false,
           });
           scheduleRetry(response?.error || 'backend returned ok=false');
           return;
@@ -473,6 +505,7 @@ export default function BasicsPage({ onNavigate }) {
           finalAttemptUsed: Boolean(response?.finalAttemptUsed),
           withdrawn: Boolean(response?.withdrawn),
           extraAttemptGranted: Boolean(response?.extraAttemptGranted),
+          passedCertification: Boolean(response?.passedCertification),
         });
       } catch (error) {
         candidateLookupFailureCountRef.current += 1;
@@ -485,13 +518,14 @@ export default function BasicsPage({ onNavigate }) {
           finalAttemptUsed: false,
           withdrawn: false,
           extraAttemptGranted: false,
+          passedCertification: false,
         });
         scheduleRetry(error?.message || 'request failed');
       }
     }, 650);
 
     return () => window.clearTimeout(timer);
-  }, [candidateLookupRetryTick, confirmedCandidateMatch, form.candidate_name]);
+  }, [candidateLookupRetryTick, confirmedCandidateMatch, form.candidate_name, suppressedCandidateLookupName]);
 
   useEffect(() => {
     const candidateName = normalizeName(form.candidate_name).toLowerCase();
@@ -707,8 +741,8 @@ export default function BasicsPage({ onNavigate }) {
         body: `Are you sure that you want to continue testing ${candidateName} with an additional attempt?`,
         graphic: 'warning',
         buttons: [
-          { label: 'Yes', cls: 'btn-danger', value: true },
           { label: 'No', cls: 'btn-muted', value: false },
+          { label: 'Yes', cls: 'btn-danger', value: true },
         ],
       });
       if (!confirmed) return { allowed: false };
@@ -717,6 +751,18 @@ export default function BasicsPage({ onNavigate }) {
         'Override should only be used if there is an error or with permission from the Admin. If you have not yet done so, please notify Admin in the Discord Tester Room that an override was used for this candidate. This session will be logged as an override.'
       );
       return { allowed: true, override: true };
+    }
+
+    if ((candidateLookup.passedCertification || candidateHasPassed(match)) && !extraAttemptGranted) {
+      await modal.showModal({
+        type: 'warning',
+        title: 'Candidate Already Passed',
+        body: `<b>${candidateName}</b> already has a passed certification record. Testing cannot continue unless the record is archived or an admin grants an extra attempt in SAM. This session will be discarded.`,
+        graphic: 'warning',
+        buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
+      });
+      await discardWithoutConfirmation();
+      return { allowed: false };
     }
 
     return { allowed: true, override: false };
@@ -753,9 +799,9 @@ export default function BasicsPage({ onNavigate }) {
       `,
       graphic: 'info',
       buttons: [
-        { label: 'Yes', cls: 'btn-primary', value: 'yes' },
-        { label: 'No', cls: 'btn-muted', value: 'no' },
         { label: 'Cancel', cls: 'btn-ghost', value: 'cancel' },
+        { label: 'No', cls: 'btn-muted', value: 'no' },
+        { label: 'Yes', cls: 'btn-primary', value: 'yes' },
       ],
     });
     if (researchChoice === 'yes') {
@@ -776,9 +822,9 @@ export default function BasicsPage({ onNavigate }) {
       body: '<div class="headset-research-result"><p>Does the candidate have another headset to try?</p></div>',
       graphic: 'warning',
       buttons: [
-        { label: 'Yes', cls: 'btn-primary', value: 'yes' },
-        { label: 'No', cls: 'btn-muted', value: 'no' },
         { label: 'Cancel', cls: 'btn-ghost', value: 'cancel' },
+        { label: 'No', cls: 'btn-muted', value: 'no' },
+        { label: 'Yes', cls: 'btn-primary', value: 'yes' },
       ],
     });
     if (hasAnotherHeadset === 'yes') {
@@ -869,6 +915,8 @@ export default function BasicsPage({ onNavigate }) {
           candidate_override_reason: blockResult.override ? 'Tester override after shared final-attempt block.' : '',
         };
         setConfirmedCandidateMatch(match);
+        setSuppressedCandidateLookupName(normalizeName(candidateName).toLowerCase());
+        setCandidateLookup(curr => ({ ...curr, matches: [] }));
         setForm(linkedForm);
         await api.updateSession({ ...linkedForm, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, status: 'In Progress' }).catch(() => {});
         await modal.warning(
@@ -881,6 +929,8 @@ export default function BasicsPage({ onNavigate }) {
 
     const nextForm = buildBasicsRecoveredForm(basicsSource, candidateName, finalAttempt, blockResult);
     setConfirmedCandidateMatch(match);
+    setSuppressedCandidateLookupName(normalizeName(candidateName).toLowerCase());
+    setCandidateLookup(curr => ({ ...curr, matches: [] }));
     setForm(nextForm);
     if (finalAttempt && finalAttemptNoticeShownFor !== normalizeName(nextForm.candidate_name).toLowerCase()) {
       setFinalAttemptNoticeShownFor(normalizeName(nextForm.candidate_name).toLowerCase());
@@ -929,9 +979,9 @@ export default function BasicsPage({ onNavigate }) {
         body: `How would you like to mark this session for <b>${candidateName}</b>?`,
         graphic: 'warning',
         buttons: [
+          { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
           { label: 'Same Day Drop', cls: 'btn-warning', value: 'same-day-drop' },
           { label: 'NC/NS', cls: 'btn-danger', value: 'ncns' },
-          { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
         ],
       });
       if (choice === 'same-day-drop') {
@@ -1198,6 +1248,7 @@ export default function BasicsPage({ onNavigate }) {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
                       setConfirmedCandidateMatch(null);
+                      setSuppressedCandidateLookupName(normalizeName(form.candidate_name).toLowerCase());
                       setCandidateLookup(curr => ({ ...curr, matches: [] }));
                     }}
                   >
@@ -1209,6 +1260,7 @@ export default function BasicsPage({ onNavigate }) {
                   {candidateLookup.matches.map((match, idx) => {
                     const dateStr = getCandidateDate(match);
                     const displayDate = dateStr ? new Date(dateStr).toLocaleDateString() : 'N/A';
+                    const sessionTypeLabel = formatCandidateSessionType(match.session_type);
                     const isExactMatch = candidateLookup.matches.length === 1 && 
                       (match.matchConfidence >= 75 || 
                        match.candidate_name.toLowerCase() === form.candidate_name.trim().toLowerCase());
@@ -1226,7 +1278,7 @@ export default function BasicsPage({ onNavigate }) {
                             {match.candidate_name} {isExactMatch ? <span className="suggestion-best">(Best Match)</span> : ''}
                           </div>
                           <div className="suggestion-meta">
-                            Date: {displayDate} | Tester: {match.tester_name || 'N/A'} | Campaign: {match.session_type || 'N/A'}
+                            Date: {displayDate} | Tester: {match.tester_name || 'N/A'}{sessionTypeLabel ? ` | Session: ${sessionTypeLabel}` : ''}
                           </div>
                         </div>
                         <span 

@@ -245,14 +245,18 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
   }, [modal]);
 
   const handleResetSection = useCallback(async (section, label) => {
+    const isFailReasonReset = section === 'call_fails' || section === 'sup_fails';
+    const actionLabel = isFailReasonReset ? 'Use Google/admin content' : 'Reset';
     const confirmed = await modal.showModal({
       type: 'confirm',
-      title: `Reset ${label}`,
-      body: `Replace your saved ${label.toLowerCase()} with the current app defaults?`,
+      title: isFailReasonReset ? `Use Google/admin content for ${label}` : `Reset ${label}`,
+      body: isFailReasonReset
+        ? `Disable the local ${label.toLowerCase()} override and use the current Google/admin content or packaged fallback. This only affects ${label.toLowerCase()}.`
+        : `Replace your saved ${label.toLowerCase()} with the current app defaults?`,
       graphic: 'warning',
       buttons: [
-        { label: 'Reset', cls: 'btn-primary', value: true },
         { label: 'Cancel', cls: 'btn-muted', value: false },
+        { label: actionLabel, cls: 'btn-primary', value: true },
       ],
     });
     if (!confirmed) return;
@@ -263,7 +267,9 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
       setS(nextSettings);
       savedSnapshotRef.current = JSON.stringify(nextSettings);
       setHasUnsavedChanges(false);
-      markSectionFeedback('discord', `${label} reset to current defaults.`);
+      markSectionFeedback(isFailReasonReset ? 'failreasons' : 'discord', isFailReasonReset
+        ? `${label} now uses Google/admin content when available.`
+        : `${label} reset to current defaults.`);
     } catch (e) {
       await modal.error('Reset Failed', e.message);
     }
@@ -356,7 +362,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
       {tab === 'callers' && <CallersTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.callers} onFeedback={markSectionFeedback} />}
       {tab === 'supreasons' && <SupReasonsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.sup_reasons} onFeedback={markSectionFeedback} />}
       {tab === 'coaching' && <CoachingTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.coaching} onFeedback={markSectionFeedback} />}
-      {tab === 'failreasons' && <FailReasonsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.failreasons} onFeedback={markSectionFeedback} />}
+      {tab === 'failreasons' && <FailReasonsTab s={s} set={set} defaults={defaults} feedback={sectionFeedback.failreasons} onFeedback={markSectionFeedback} onResetSection={handleResetSection} />}
       {tab === 'discord' && <DiscordTab s={s} set={set} feedback={sectionFeedback.discord} onFeedback={markSectionFeedback} onResetSection={handleResetSection} />}
       {tab === 'payment' && <PaymentTab s={s} set={set} />}
       {tab === 'gemini' && <GeminiTab s={s} set={set} />}
@@ -452,12 +458,12 @@ function GeneralTab({ s, set }) {
             style={{ maxWidth: 260 }}
             data-testid="settings-vpn-proxy-mode"
           >
+            <option value={VPN_PROXY_CHECK_MODES.CHECKER}>Automatic lookup</option>
             <option value={VPN_PROXY_CHECK_MODES.LINKS}>Manual lookup links</option>
-            <option value={VPN_PROXY_CHECK_MODES.CHECKER}>Integrated provider check</option>
             <option value={VPN_PROXY_CHECK_MODES.DISABLED}>Disabled message only</option>
           </select>
           <div className="text-muted text-xs" style={{ marginTop: 6, maxWidth: 620 }}>
-            Manual lookup links are the release-safe default. Integrated checks require configured VPN/proxy reputation providers and show manual links when coverage is limited.
+            Automatic lookup is the default. Manual lookup links remain available and are shown whenever provider coverage is limited.
           </div>
         </div>
       </SettingsRow>
@@ -989,8 +995,20 @@ function CoachingTab({ s, set, defaults, feedback, onFeedback }) {
 /* ═══════════════════════════════════════════════════════════════ */
 /* FAIL REASONS TAB                                                */
 /* ═══════════════════════════════════════════════════════════════ */
-function FailReasonsTab({ s, set, defaults, feedback, onFeedback }) {
+function formatSettingsContentSource(source) {
+  const normalized = String(source || '').trim().toLowerCase();
+  if (normalized === 'google') return 'Google Sheet';
+  if (normalized === 'local_csv') return 'Packaged fallback';
+  if (normalized === 'builtin' || normalized === 'emergency_hardcoded') return 'Packaged fallback';
+  return 'Packaged fallback';
+}
+
+function FailReasonsTab({ s, set, defaults, feedback, onFeedback, onResetSection }) {
   const [scope, setScope] = useState('call_fails');
+  const title = scope === 'call_fails' ? 'Call Fail Reasons' : 'Supervisor Fail Reasons';
+  const customized = Boolean(s?.[`${scope}_customized`]);
+  const sourceInfo = defaults?._content_sources?.[scope] || {};
+  const sourceLabel = customized ? 'Local override' : formatSettingsContentSource(sourceInfo.source);
 
   return (
     <div data-testid="settings-failreasons">
@@ -998,9 +1016,21 @@ function FailReasonsTab({ s, set, defaults, feedback, onFeedback }) {
         <button className={`tab-btn ${scope === 'call_fails' ? 'active' : ''}`} onClick={() => setScope('call_fails')}>Call Fail Reasons</button>
         <button className={`tab-btn ${scope === 'sup_fails' ? 'active' : ''}`} onClick={() => setScope('sup_fails')}>Supervisor Fail Reasons</button>
       </div>
+      <div className="settings-source-status" data-testid={`settings-${scope}-source`}>
+        <span>Source: {sourceLabel}</span>
+        {customized && (
+          <button
+            type="button"
+            className="btn btn-muted btn-sm"
+            onClick={() => onResetSection?.(scope, title)}
+          >
+            Use Google/admin content
+          </button>
+        )}
+      </div>
       <TextListEditor
         key={scope}
-        title={scope === 'call_fails' ? 'Call Fail Reasons' : 'Supervisor Fail Reasons'}
+        title={title}
         description="Edit the fail reason options used when marking a section as failed."
         field={scope}
         addLabel="New Fail Reason"
@@ -1084,7 +1114,6 @@ function ShortcutSettingsRow({ item, value, defaultShortcut, recordingKey, confl
         <strong>{item.label}</strong>
         {conflict && <span className="discord-shortcut-conflict">This shortcut is already assigned to: {conflict.label}</span>}
       </div>
-      <span className="discord-current-shortcut">{normalizeShortcut(value) || 'Unassigned'}</span>
       <ShortcutRecorder
         value={value}
         recording={isRecording}
@@ -1341,7 +1370,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
           </div>
           <div className="discord-shortcut-section-title">
             <h4>Global Shortcuts</h4>
-            <span>Action / Current Shortcut / Edit / Restore Default</span>
+            <span>Action / Shortcut Editor / Restore Default</span>
           </div>
           <div className="discord-shortcut-settings-list">
             {DISCORD_GLOBAL_SHORTCUTS.map((item) => (
@@ -1361,7 +1390,7 @@ function DiscordTab({ s, set, feedback, onFeedback, onResetSection }) {
           </div>
           <div className="discord-shortcut-section-title">
             <h4>Category Shortcuts</h4>
-            <span>Action / Current Shortcut / Edit / Restore Default</span>
+            <span>Action / Shortcut Editor / Restore Default</span>
           </div>
           <div className="discord-shortcut-settings-list">
             {DISCORD_CATEGORY_SHORTCUTS.map((item) => (

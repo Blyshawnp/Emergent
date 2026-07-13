@@ -5,6 +5,7 @@ import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
 import { formatDonationAmountLabel, getPaymentOptionsFromSettings } from '../utils/paymentOptions';
+import { mergeAndOrderFailReasons } from '../utils/failReasons';
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
   { id: 'c-dontask', label: "Don't Ask, Just Verify Address and Phone Number", helper: 'Existing member already provided address and phone number' },
@@ -68,6 +69,12 @@ const DEFAULT_CALL_FAILS = [
   'Skipped parts of script', 'Volunteered info', 'Wrong donation', 'Background noise on call',
   'Paraphrased script', 'Wrong thank you gift', 'Did not search for member', 'Script navigation issues', 'Other',
 ];
+
+const REQUIRED_CALL_FAILS = ['Did not search for member'];
+
+function mergeRequiredCallFails(items = []) {
+  return mergeAndOrderFailReasons(items, REQUIRED_CALL_FAILS);
+}
 
 // --- Extracted helpers to reduce main component complexity ---
 function pickRandom(arr) {
@@ -235,8 +242,8 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
       body: 'Is there enough time for Supervisor Transfers?',
       graphic: 'time',
       buttons: [
-        { label: 'Yes', cls: 'btn-primary', value: true },
         { label: 'No', cls: 'btn-muted', value: false },
+        { label: 'Yes', cls: 'btn-primary', value: true },
       ],
     });
     if (hasTime) {
@@ -262,8 +269,8 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef) {
         body: 'This certification session requires follow-up before it can be completed.',
         graphic: 'time',
         buttons: [
-          { label: 'Schedule Newbie Shift', cls: 'btn-primary', value: true },
           { label: 'Skip for Now', cls: 'btn-muted', value: false },
+          { label: 'Schedule Newbie Shift', cls: 'btn-primary', value: true },
         ],
       });
       const promptState = {
@@ -408,7 +415,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
   const callTypes = settings.call_types || defaults.call_types || [];
   const shows = settings.shows || defaults.shows || [];
   const callCoaching = getCallCoachingForDisplay(settings.call_coaching || defaults.call_coaching || DEFAULT_CALL_COACHING);
-  const callFails = settings.call_fails || defaults.call_fails || DEFAULT_CALL_FAILS;
+  const callFails = mergeRequiredCallFails(settings.call_fails || defaults.call_fails || DEFAULT_CALL_FAILS);
   const callers = useMemo(() => getCallersForType(callSetup.type, settings, defaults), [callSetup.type, settings, defaults]);
   useEffect(() => {
     if (!callers.length) return;
@@ -517,8 +524,8 @@ export default function CallsPage({ onNavigate, navigationState }) {
         body: 'You did not select any coaching for this call. Continue anyway?',
         graphic: 'question',
         buttons: [
-          { label: 'Yes', cls: 'btn-primary', value: true },
           { label: 'No', cls: 'btn-muted', value: false },
+          { label: 'Yes', cls: 'btn-primary', value: true },
         ],
       });
       if (!cont) return;

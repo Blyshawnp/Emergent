@@ -5,6 +5,7 @@ import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
 import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
+import { mergeAndOrderFailReasons } from '../utils/failReasons';
 const DEFAULT_SUP_COACHING = [
   { label: 'Minimize dead air', helper: 'Maintain engagement throughout hold and transfer' },
   { label: 'Queue Not Changed', helper: 'Did not change queue to ACD Direct Supervisor' },
@@ -202,7 +203,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   const shows = useMemo(() => settings.shows || defaults.shows || [], [settings.shows, defaults.shows]);
   const supCoaching = getSupCoachingForDisplay(settings.sup_coaching || defaults.sup_coaching || DEFAULT_SUP_COACHING);
   const supCoachingSplit = Math.ceil(supCoaching.length / 2);
-  const supFails = settings.sup_fails || defaults.sup_fails || DEFAULT_SUP_FAILS;
+  const supFails = mergeAndOrderFailReasons(settings.sup_fails || defaults.sup_fails || DEFAULT_SUP_FAILS);
   const supReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;
   const callers = useMemo(() => {
     const allCallers = [
@@ -352,8 +353,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         body: 'You did not select any coaching for this transfer. Continue anyway?',
         graphic: 'question',
         buttons: [
-          { label: 'Yes', cls: 'btn-primary', value: true },
           { label: 'No', cls: 'btn-muted', value: false },
+          { label: 'Yes', cls: 'btn-primary', value: true },
         ],
       });
       if (!cont) return;
@@ -404,8 +405,8 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
             body: 'This certification session requires follow-up before it can be completed.',
             graphic: 'calendar',
             buttons: [
-              { label: 'Schedule Newbie Shift', cls: 'btn-primary', value: true },
               { label: 'Skip for Now', cls: 'btn-muted', value: false },
+              { label: 'Schedule Newbie Shift', cls: 'btn-primary', value: true },
             ],
           });
           await api.updateSession({
@@ -451,9 +452,9 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
         body: `How would you like to mark this session for <b>${candidateName.trim()}</b>?`,
         graphic: 'warning',
         buttons: [
+          { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
           { label: 'Same Day Drop', cls: 'btn-warning', value: 'same-day-drop' },
           { label: 'NC/NS', cls: 'btn-danger', value: 'ncns' },
-          { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
         ],
       });
       if (choice === 'same-day-drop') {

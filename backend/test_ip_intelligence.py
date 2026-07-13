@@ -260,11 +260,11 @@ class IpIntelligenceTests(unittest.TestCase):
         self.assertTrue(server._ip_result_has_risk(result))
 
     def test_settings_normalize_vpn_proxy_check_mode(self):
-        self.assertEqual(server.sanitize_settings({})["vpnProxyCheckMode"], "links")
+        self.assertEqual(server.sanitize_settings({})["vpnProxyCheckMode"], "checker")
         self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "links", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "links")
         self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "disabled", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "disabled")
-        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "bad", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "links")
-        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "checker", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "links")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "bad", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "checker")
+        self.assertEqual(server.sanitize_settings({"vpnProxyCheckMode": "checker", "vpnProxyCheckMode_customized": True})["vpnProxyCheckMode"], "checker")
         self.assertEqual(server.sanitize_settings({
             "vpnProxyCheckMode": "checker",
             "vpnProxyCheckMode_customized": True,

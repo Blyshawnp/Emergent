@@ -122,6 +122,123 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertEqual(posts.get("Sup-Launch DTE #4", {}).get("suggested_screenshots"), ["/DTE-profile.png"])
         self.assertEqual(posts.get("Change DTE Status", {}).get("suggested_screenshots"), ["/DTE-ready.png"])
 
+    def test_remote_fail_reasons_override_defaults_but_keep_required_items(self):
+        rows = [{"FailReason": "Remote Custom Fail"}, {"FailReason": "Did not search for member"}]
+        normalized = server._normalize_fail_reasons(rows, "call_fails", "unit remote")
+        self.assertEqual(normalized, ["Remote Custom Fail", "Did not search for member"])
+
+        missing_required = server._normalize_fail_reasons(
+            [{"FailReason": "Remote Custom Fail"}],
+            "call_fails",
+            "unit remote",
+        )
+        self.assertEqual(missing_required, ["Remote Custom Fail", "Did not search for member"])
+
+    def test_google_sheet_content_remote_rows_replace_local_defaults(self):
+        local_content = {
+            "call_fails": ["Local Fail", "Did not search for member"],
+            "discord_templates": [{"category": "Local", "title": "Local Trigger", "message": "Local message"}],
+        }
+
+        def fake_fetch(_sheet_id, tab_name):
+            if tab_name == "call-fail-reasons":
+                return "FailReason\nRemote Custom Fail\n"
+            if tab_name == "discord-posts":
+                return "Category,Title,Message\nRemote,Remote Trigger,Remote message\n"
+            raise RuntimeError("not available in unit test")
+
+        with mock.patch.object(server, "_resolve_content_sheet_id", return_value="configured"), \
+             mock.patch.object(server, "_fetch_google_sheet_tab_csv", side_effect=fake_fetch):
+            loaded = server._load_google_sheet_content({}, local_content)
+
+        self.assertEqual(loaded["call_fails"], ["Remote Custom Fail", "Did not search for member"])
+        self.assertEqual(loaded["discord_templates"], [{
+            "category": "Remote",
+            "title": "Remote Trigger",
+            "message": "Remote message",
+        }])
+
+    def test_google_sheet_content_failure_returns_no_remote_override(self):
+        with mock.patch.object(server, "_resolve_content_sheet_id", return_value="configured"), \
+             mock.patch.object(server, "_fetch_google_sheet_tab_csv", side_effect=RuntimeError("temporary outage")):
+            loaded = server._load_google_sheet_content({}, {
+                "call_fails": ["Local Fail", "Did not search for member"],
+                "discord_templates": [{"category": "Local", "title": "Local Trigger", "message": "Local message"}],
+            })
+        self.assertEqual(loaded, {})
+
+    def test_legacy_saved_call_fail_list_without_override_marker_follows_defaults(self):
+        original = list(server.DEFAULT_SETTINGS["call_fails"])
+        try:
+            server.DEFAULT_SETTINGS["call_fails"] = ["Remote Custom Fail", "Did not search for member"]
+            settings = server.sanitize_settings({
+                "call_fails": ["Legacy Local Fail"],
+            })
+        finally:
+            server.DEFAULT_SETTINGS["call_fails"] = original
+
+        self.assertEqual(settings["call_fails"], ["Remote Custom Fail", "Did not search for member"])
+        self.assertFalse(settings["call_fails_customized"])
+
+    def test_explicit_call_fail_override_wins_but_keeps_required_reason_once(self):
+        original = list(server.DEFAULT_SETTINGS["call_fails"])
+        try:
+            server.DEFAULT_SETTINGS["call_fails"] = ["Remote Custom Fail", "Did not search for member"]
+            settings = server.sanitize_settings({
+                "call_fails": ["Local Custom Fail", "Did not search for member", "Did not search for member"],
+                "call_fails_customized": True,
+            })
+        finally:
+            server.DEFAULT_SETTINGS["call_fails"] = original
+
+        self.assertEqual(settings["call_fails"], ["Local Custom Fail", "Did not search for member"])
+        self.assertTrue(settings["call_fails_customized"])
+
+    def test_merge_required_fail_reasons_ordering(self):
+        # 1. Other is last when remote data already contains it
+        items = ["Other", "Reason A", "Reason B"]
+        result = server._merge_required_fail_reasons(items, "call_fails")
+        self.assertEqual(result, ["Reason A", "Reason B", "Did not search for member", "Other"])
+
+        # 2. Other is last when required reasons are merged
+        items = ["Reason A", "Other"]
+        result = server._merge_required_fail_reasons(items, "call_fails")
+        self.assertEqual(result, ["Reason A", "Did not search for member", "Other"])
+
+        # 3. Did not search for member appears before Other
+        items = ["Reason A", "Other", "Reason B"]
+        result = server._merge_required_fail_reasons(items, "call_fails")
+        self.assertEqual(result, ["Reason A", "Reason B", "Did not search for member", "Other"])
+
+        # 4. no duplicate Other (case-insensitive)
+        items = ["other", "Reason A", "Other", "OTHER"]
+        result = server._merge_required_fail_reasons(items, "call_fails")
+        self.assertEqual(result, ["Reason A", "Did not search for member", "Other"])
+
+        # 5. no duplicate Did not search for member
+        items = ["Did not search for member", "Reason A", "Other"]
+        result = server._merge_required_fail_reasons(items, "call_fails")
+        self.assertEqual(result, ["Did not search for member", "Reason A", "Other"])
+
+        # 6. remote order is preserved for all other reasons
+        items = ["Reason B", "Reason A", "Reason C", "Other"]
+        result = server._merge_required_fail_reasons(items, "call_fails")
+        self.assertEqual(result, ["Reason B", "Reason A", "Reason C", "Did not search for member", "Other"])
+
+        # 7. stale local override path still produces correct final ordering
+        items = ["Legacy Local Fail", "Other", "Legacy Local Fail", "other"]
+        result = server._merge_required_fail_reasons(items, "call_fails")
+        self.assertEqual(result, ["Legacy Local Fail", "Did not search for member", "Other"])
+
+    def test_candidate_tracking_quota_message_is_trainer_safe(self):
+        message = server._candidate_tracking_temporary_unavailable_message()
+        self.assertIn("Candidate Tracking is temporarily unavailable", message)
+        self.assertIn("SAM will retry automatically", message)
+        self.assertNotIn("RATE_LIMIT_EXCEEDED", message)
+        self.assertNotIn("spreadsheet", message.lower())
+        self.assertNotIn("service account", message.lower())
+        self.assertTrue(server._google_sheet_quota_or_temporary_error(Exception("HTTP 429 RATE_LIMIT_EXCEEDED")))
+
     def test_incomplete_technical_issue_ignores_stale_fail_summary(self):
         session = {
             "candidate_name": "Candidate",
@@ -339,6 +456,175 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             self.assertEqual(len(result_exact["matches"]), 1)
             self.assertEqual(result_exact["matches"][0]["candidate_name"], "Lisa Rusie")
             self.assertEqual(result_exact["matches"][0]["matchConfidence"], 100)
+
+    def test_candidate_lookup_returns_latest_visible_session_per_candidate(self):
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        mock_candidates = [
+            {
+                "candidate_name": "Jordan Tester",
+                "status": "FAIL",
+                "completed_at": (now - datetime.timedelta(days=8)).isoformat(),
+                "created_at": (now - datetime.timedelta(days=8)).isoformat(),
+                "notes": "Older failure",
+                "tester_name": "Tester A",
+            },
+            {
+                "candidate_name": "Jordan Tester",
+                "status": "PASS",
+                "completed_at": (now - datetime.timedelta(days=1)).isoformat(),
+                "created_at": (now - datetime.timedelta(days=1)).isoformat(),
+                "notes": "Latest pass",
+                "tester_name": "Tester B",
+            },
+            {
+                "candidate_name": "Jordan Other",
+                "status": "FAIL",
+                "completed_at": (now - datetime.timedelta(days=2)).isoformat(),
+                "created_at": (now - datetime.timedelta(days=2)).isoformat(),
+                "notes": "Other candidate",
+                "tester_name": "Tester C",
+            },
+        ]
+
+        mock_client = mock.MagicMock()
+        mock_client.get.return_value = {"rows": mock_candidates, "pendingRows": []}
+
+        with mock.patch("server._shared_sheet_context") as mock_ctx:
+            mock_ctx.return_value = {
+                "ok": True,
+                "appsScriptClient": mock_client,
+                "sheet_id": "test-sheet",
+            }
+
+            result = server._lookup_shared_candidate_sessions("Jordan Tester")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["passedCertification"])
+        self.assertEqual(len(result["matches"]), 1)
+        self.assertEqual(result["matches"][0]["candidate_name"], "Jordan Tester")
+        self.assertEqual(result["matches"][0]["status"], "PASS")
+
+    def test_summary_labels_are_human_readable_and_override_note_dedupes(self):
+        session = {
+            "candidate_name": "Candidate",
+            "call_1": {
+                "result": "Fail",
+                "fails": {
+                    "Verification_Name": True,
+                    "Paraphrased script": True,
+                },
+                "failReasonDetails": {
+                    "Paraphrased script": "terms",
+                },
+            },
+            "final_attempt": True,
+            "finalReadinessJudgment": {
+                "overrideApplied": True,
+                "calculatedResult": "Pass",
+                "overrideResult": "Fail",
+                "primaryReason": "Evaluator Override Applied: Candidate did not meet certification standards.",
+            },
+        }
+
+        summaries = server.generate_summaries(session)
+
+        self.assertIn("Verify the candidate's name.", summaries["coaching"])
+        self.assertIn("Verify the candidate's name", summaries["fail"])
+        self.assertNotIn("Verification_Name", summaries["coaching"])
+        self.assertNotIn("Verification_Name", summaries["fail"])
+        self.assertIn("Paraphrased the terms section of the script.", summaries["fail"])
+        self.assertEqual(summaries["fail"].count("Evaluator Override Applied"), 1)
+
+    def test_professional_summary_labels_group_children_and_remove_internal_keys(self):
+        session = {
+            "candidate_name": "Candidate",
+            "call_1": {
+                "result": "Fail",
+                "coaching": {
+                    "Verification": True,
+                    "Verification_Name": True,
+                    "Verification_Address": True,
+                    "Verification_Phone": True,
+                    "Verification_Card/EFT": True,
+                    "Show appreciation_After donation amount is given": True,
+                    "Show appreciation_For Current/Existing Donors": True,
+                    "Screenshots/Discord Chat": True,
+                },
+                "fails": {
+                    "Paraphrased script": True,
+                },
+                "failReasonDetails": {
+                    "Paraphrased script": "Monthly Sustaining Terms",
+                },
+            },
+            "call_2": {
+                "result": "Fail",
+                "fails": {
+                    "Script navigation issues": True,
+                },
+            },
+            "final_attempt": True,
+        }
+
+        coaching = server.build_clean_coaching(session)
+        fail = server.build_clean_fail(session)
+        combined = f"{coaching}\n{fail}"
+
+        self.assertNotIn("_", combined)
+        self.assertNotIn("Verification_Name", combined)
+        self.assertNotIn("Show appreciation_After donation amount is given", combined)
+        self.assertIn("Verification:", coaching)
+        self.assertEqual(coaching.count("Verification:"), 1)
+        self.assertIn("Verify the candidate's name.", coaching)
+        self.assertIn("Verify the candidate's address.", coaching)
+        self.assertIn("Show appreciation after the donation amount is given.", coaching)
+        self.assertIn("Show appreciation for current or existing donors.", coaching)
+        self.assertIn("Coaching was provided using the standard screenshots and Discord chat.", coaching)
+        self.assertIn("Paraphrased the Monthly Sustaining Terms section of the script.", fail)
+
+    def test_pending_supervisor_transfers_exclude_terminal_latest_candidate_rows(self):
+        pending_rows = [
+            {
+                "pending_id": "pending-old",
+                "candidate_name": "Taylor Done",
+                "status": "pending",
+                "created_at": "2026-07-01T12:00:00+00:00",
+            },
+            {
+                "pending_id": "pending-live",
+                "candidate_name": "Jordan Pending",
+                "status": "pending",
+                "created_at": "2026-07-03T12:00:00+00:00",
+            },
+        ]
+        candidate_rows = [
+            {
+                "candidate_name": "Taylor Done",
+                "status": "INCOMPLETE",
+                "needs_sup_transfer": "TRUE",
+                "pending_sup_transfer_id": "pending-old",
+                "completed_at": "2026-07-01T12:00:00+00:00",
+            },
+            {
+                "candidate_name": "Taylor Done",
+                "status": "RESUMED-PASS",
+                "needs_sup_transfer": "FALSE",
+                "pending_sup_transfer_id": "",
+                "completed_at": "2026-07-04T12:00:00+00:00",
+            },
+            {
+                "candidate_name": "Jordan Pending",
+                "status": "INCOMPLETE",
+                "needs_sup_transfer": "TRUE",
+                "pending_sup_transfer_id": "pending-live",
+                "completed_at": "2026-07-03T12:00:00+00:00",
+            },
+        ]
+
+        filtered = server._filter_current_pending_sup_transfers(pending_rows, candidate_rows)
+
+        self.assertEqual([row["candidate_name"] for row in filtered], ["Jordan Pending"])
 
     @mock.patch("server.logger")
     def test_screenshot_merge_logic(self, mock_logger):

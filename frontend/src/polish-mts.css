@@ -381,8 +381,8 @@ textarea:focus-visible {
 /* Quick actions — visual focus */
 .mc-quick-actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: var(--space-md);
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 12px;
 }
 .qa-tile {
   display: flex;
@@ -461,6 +461,23 @@ textarea:focus-visible {
   cursor: pointer;
   transition: background-color var(--transition-fast);
   min-width: 0;
+}
+
+@media (max-width: 1120px) {
+  .mc-quick-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .mc-quick-actions .qa-tile:nth-child(4),
+  .mc-quick-actions .qa-tile:nth-child(5) {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .mc-quick-actions {
+    grid-template-columns: 1fr;
+  }
 }
 .mc-activity-list .recent-row:hover { background: var(--bg-card-hover); }
 .mc-activity-list .recent-row + .recent-row { border-top: 1px solid var(--border-subtle); border-radius: 0; }

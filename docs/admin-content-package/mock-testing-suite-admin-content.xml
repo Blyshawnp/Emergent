@@ -105,6 +105,7 @@ Then disposition in Call Corp.</Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Background noise on call</Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Paraphrased script</Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Wrong thank you gift</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Did not search for member</Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Script navigation issues</Data></Cell></Row>
       <Row><Cell><Data ss:Type="String">Other</Data></Cell></Row>
     </Table>

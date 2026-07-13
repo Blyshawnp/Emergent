@@ -11,6 +11,7 @@ const { spawn, spawnSync, execFileSync } = require('child_process');
 const http = require('http');
 const { pathToFileURL } = require('url');
 const Store = require('electron-store');
+const { DEFAULT_GRACEFUL_TIMEOUT_MS, createOwnedProcessRegistry } = require('./processOwnership');
 let desktopPackage = {};
 let electronAutoUpdater = null;
 
@@ -35,12 +36,14 @@ const DEFAULT_APP_VERSION = '1.0.1';
 const APP_DISPLAY_NAME = isNotificationManagerMode ? 'Smart Alert Manager' : 'Mock Testing Suite';
 const APP_RUNTIME_ID = isNotificationManagerMode ? NOTIFICATION_MANAGER_APP_ID : APP_ID;
 const APP_STORAGE_DIR_NAME = isNotificationManagerMode ? 'Smart Alert Manager' : 'Mock Testing Suite';
+const APP_PROCESS_OWNER = isNotificationManagerMode ? 'sam' : 'mts';
 const GITHUB_UPDATE_OWNER = 'Blyshawnp';
 const GITHUB_UPDATE_REPO = isNotificationManagerMode ? 'sam-releases' : 'mts-releases';
 const ENABLE_SIGNED_AUTO_UPDATES = String(process.env.ENABLE_SIGNED_AUTO_UPDATES || '').trim().toLowerCase() === 'true';
 const BACKEND_STARTUP_RETRY_DELAY_MS = 500;
 const BACKEND_STARTUP_RETRIES = isDev ? 40 : 120;
 const BACKEND_READY_REQUEST_TIMEOUT_MS = 1500;
+const QUIT_CONFIRMATION_TIMEOUT_MS = 4000;
 const SAM_NOTIFICATION_BACKEND_RETRY_LIMIT = 6;
 const SAM_NOTIFICATION_BACKEND_RETRY_BASE_DELAY_MS = 2000;
 const SAM_NOTIFICATION_BACKEND_RETRY_MAX_DELAY_MS = 12000;
@@ -96,12 +99,19 @@ let backendStderrLogStream = null;
 let githubUpdaterConfigured = false;
 let githubUpdateCheckInFlight = false;
 let manualUpdateOpenInFlight = false;
+let ownedProcessCleanupPromise = null;
+let ownedProcessCleanupComplete = false;
+let isRelaunchingAfterCleanup = false;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
 const STORE_LAST_ACKNOWLEDGED_VERSION_KEY = 'updater.lastAcknowledgedInstalledVersion';
 const STORE_UPDATER_STATUS_KEY = 'updater.status';
-const HEARTBEAT_STALE_MS = 8000;
+const ownedProcesses = createOwnedProcessRegistry({
+  owner: APP_PROCESS_OWNER,
+  gracefulTimeoutMs: DEFAULT_GRACEFUL_TIMEOUT_MS,
+  logger: console,
+});
 
 function normalizeVersionString(value) {
   return String(value || '').trim().replace(/^v(?=\d)/i, '');
@@ -234,18 +244,6 @@ function clearHeartbeat() {
   try {
     fs.rmSync(getHeartbeatPath(), { force: true });
   } catch (_err) {}
-}
-
-function isOtherAppActive() {
-  const otherMode = isNotificationManagerMode ? 'main' : 'notification-manager';
-  const heartbeat = readJsonFile(getHeartbeatPath(otherMode));
-  return Boolean(
-    heartbeat
-    && heartbeat.pid
-    && heartbeat.pid !== process.pid
-    && Number.isFinite(Number(heartbeat.updatedAt))
-    && (Date.now() - Number(heartbeat.updatedAt)) < HEARTBEAT_STALE_MS
-  );
 }
 
 function writeBackendOwner(pid) {
@@ -461,46 +459,24 @@ function resolvePythonLauncher() {
   };
 }
 
-function killChildProcessTree(child, label) {
-  if (!child || !child.pid) {
-    return;
-  }
-
-  try {
-    if (process.platform === 'win32') {
-      execFileSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    } else {
-      child.kill('SIGTERM');
-    }
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    if (!/not found|no running instance|has terminated/i.test(message)) {
-      console.warn(`[APP] Failed to stop ${label}: ${message}`);
-    }
-  }
-}
-
 function registerProcessCleanupHandlers() {
   if (hasRegisteredProcessCleanupHandlers) {
     return;
   }
 
-  const cleanup = () => {
+  const emergencyCleanup = () => {
     app.isQuitting = true;
     clearHeartbeat();
-    stopBackend();
+    cleanupOwnedProcessesSync('process-exit');
   };
 
-  process.on('exit', cleanup);
-  process.on('SIGINT', () => {
-    cleanup();
+  process.on('exit', emergencyCleanup);
+  process.on('SIGINT', async () => {
+    await cleanupOwnedProcesses('SIGINT');
     process.exit(0);
   });
-  process.on('SIGTERM', () => {
-    cleanup();
+  process.on('SIGTERM', async () => {
+    await cleanupOwnedProcesses('SIGTERM');
     process.exit(0);
   });
 
@@ -611,6 +587,12 @@ function startBackend() {
     console.log(`[BACKEND] Spawned backend.exe with pid ${backendProcess.pid}`);
     backendStartedByThisApp = true;
     writeBackendOwner(backendProcess.pid);
+    ownedProcesses.registerOwnedProcess({
+      id: 'backend',
+      name: 'backend',
+      role: 'fastapi-backend',
+      childProcess: backendProcess,
+    });
 
     backendProcess.stdout.on('data', (data) => {
       const text = data.toString();
@@ -622,10 +604,13 @@ function startBackend() {
       appendBackendLog(text.trim());
       if (backendStderrLogStream) backendStderrLogStream.write(text);
     });
+    const packagedBackendPid = backendProcess.pid;
     backendProcess.on('error', (err) => {
       backendLaunchError = err;
       backendStartedByThisApp = false;
       setBackendConnectionStatus('error', err.message);
+      ownedProcesses.unregisterOwnedProcess('backend');
+      clearBackendOwnerForPid(packagedBackendPid);
       backendProcess = null;
       console.error('[BACKEND] Failed to start:', err);
       if (!app.isQuitting) {
@@ -634,6 +619,9 @@ function startBackend() {
     });
     backendProcess.on('exit', (code) => {
       backendProcess = null;
+      backendStartedByThisApp = false;
+      ownedProcesses.unregisterOwnedProcess('backend');
+      clearBackendOwnerForPid(packagedBackendPid);
       console.log(`[BACKEND] backend.exe exited with code ${code}`);
       if (code !== 0 && code !== null) {
         backendLaunchError = new Error(`Backend executable exited with code ${code}.`);
@@ -681,6 +669,12 @@ function startBackend() {
     windowsHide: true
   });
   backendStartedByThisApp = true;
+  ownedProcesses.registerOwnedProcess({
+    id: 'backend',
+    name: 'backend',
+    role: 'fastapi-backend',
+    childProcess: backendProcess,
+  });
 
   backendProcess.stdout.on('data', (data) => {
     const message = data.toString().trim();
@@ -694,10 +688,15 @@ function startBackend() {
     if (msg && !msg.includes('INFO:')) console.error(`[BACKEND] ${msg}`);
   });
 
+  const devBackendPid = backendProcess.pid;
+  writeBackendOwner(devBackendPid);
+
   backendProcess.on('error', (err) => {
     backendLaunchError = err;
     backendStartedByThisApp = false;
     setBackendConnectionStatus('error', err.message);
+    ownedProcesses.unregisterOwnedProcess('backend');
+    clearBackendOwnerForPid(devBackendPid);
     backendProcess = null;
     console.error('[BACKEND] Failed to start:', err.message);
     if (!app.isQuitting) {
@@ -710,6 +709,9 @@ function startBackend() {
 
   backendProcess.on('exit', (code) => {
     backendProcess = null;
+    backendStartedByThisApp = false;
+    ownedProcesses.unregisterOwnedProcess('backend');
+    clearBackendOwnerForPid(devBackendPid);
     console.log(`[BACKEND] Process exited with code ${code}`);
     if (code !== 0 && code !== null) {
       backendLaunchError = new Error(`Backend exited with code ${code}.`);
@@ -724,33 +726,80 @@ function startBackend() {
   });
 }
 
-function stopBackend() {
+async function stopBackend(reason = 'cleanup') {
   clearNotificationBackendRetryTimer();
 
-  if (backendProcess) {
-    if (isOtherAppActive()) {
-      console.log('[BACKEND] Leaving backend running because the companion app is active.');
-      backendProcess = null;
-      return;
+  const listenerRecord = ownedProcesses.getOwnedProcess('backend-listener');
+  if (listenerRecord) {
+    const result = await ownedProcesses.stopOwnedProcess('backend-listener', reason);
+    if (result?.ok !== false) {
+      clearBackendOwnerForPid(listenerRecord.pid);
     }
-    const pid = backendProcess.pid;
-    killChildProcessTree(backendProcess, 'backend process');
-    clearBackendOwnerForPid(pid);
+  }
+
+  const launcherRecord = ownedProcesses.getOwnedProcess('backend');
+  if (listenerRecord && !backendProcess && !launcherRecord) {
+    backendStartedByThisApp = false;
+    setBackendConnectionStatus('stopped');
+    return;
+  }
+
+  if (backendProcess || launcherRecord) {
+    const launcherPid = backendProcess?.pid || launcherRecord?.pid || 0;
+    const result = await ownedProcesses.stopOwnedProcess('backend', reason);
+    if (launcherPid && result?.ok !== false) {
+      clearBackendOwnerForPid(launcherPid);
+    }
     backendProcess = null;
     backendStartedByThisApp = false;
     setBackendConnectionStatus('stopped');
     return;
   }
 
-  if (usingExternalBackend && !isOtherAppActive()) {
-    const owner = readJsonFile(getBackendOwnerPath());
-    const pid = Number(owner?.pid || 0);
-    if (pid > 0) {
-      killChildProcessTree({ pid }, 'shared backend process');
-      clearBackendOwnerForPid(pid);
-      setBackendConnectionStatus('stopped');
-    }
+  if (usingExternalBackend) {
+    console.log(`[BACKEND] External backend on port ${BACKEND_PORT} was not started by ${APP_DISPLAY_NAME}; leaving it running.`);
   }
+}
+
+async function cleanupOwnedProcesses(reason = 'cleanup') {
+  if (ownedProcessCleanupPromise) {
+    return ownedProcessCleanupPromise;
+  }
+
+  app.isQuitting = true;
+  ownedProcessCleanupPromise = (async () => {
+    console.log(`[APP] Beginning owned-process cleanup (${reason})`);
+    clearNotificationBackendRetryTimer();
+    clearHeartbeat();
+    await stopBackend(reason);
+    closeBackendLogStreams();
+    ownedProcessCleanupComplete = true;
+    console.log('[APP] Owned-process cleanup complete.');
+  })().finally(() => {
+    ownedProcessCleanupPromise = null;
+  });
+
+  return ownedProcessCleanupPromise;
+}
+
+function cleanupOwnedProcessesSync(reason = 'emergency-cleanup') {
+  clearNotificationBackendRetryTimer();
+  clearHeartbeat();
+  const backendPid = backendProcess?.pid || 0;
+  const listenerPid = ownedProcesses.getOwnedProcess('backend-listener')?.pid || 0;
+  const results = ownedProcesses.forceStopAllOwnedProcessesSync(APP_PROCESS_OWNER, reason);
+  const backendCleanup = results.find((result) => Number(result.pid) === Number(backendPid));
+  if (backendPid && backendCleanup?.ok !== false) {
+    clearBackendOwnerForPid(backendPid);
+  }
+  const listenerCleanup = results.find((result) => Number(result.pid) === Number(listenerPid));
+  if (listenerPid && listenerCleanup?.ok !== false) {
+    clearBackendOwnerForPid(listenerPid);
+  }
+  backendProcess = null;
+  backendStartedByThisApp = false;
+  closeBackendLogStreams();
+  ownedProcessCleanupComplete = true;
 }
 
 function sleep(ms) {
@@ -758,6 +807,10 @@ function sleep(ms) {
 }
 
 function isTcpPortListening(port) {
+  return getTcpPortListeningPids(port).length > 0;
+}
+
+function getTcpPortListeningPids(port) {
   try {
     const result = spawnSync('netstat', ['-ano'], {
       encoding: 'utf8',
@@ -765,11 +818,12 @@ function isTcpPortListening(port) {
     });
 
     if (result.status !== 0 || !result.stdout) {
-      return false;
+      return [];
     }
 
     const lines = result.stdout.split(/\r?\n/);
     const portSuffix = `:${port}`;
+    const pids = new Set();
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -783,17 +837,47 @@ function isTcpPortListening(port) {
       if (
         localAddress === `127.0.0.1${portSuffix}` ||
         localAddress === `0.0.0.0${portSuffix}` ||
-        localAddress === `::1${portSuffix}` ||
-        localAddress.endsWith(portSuffix)
+          localAddress === `::1${portSuffix}` ||
+          localAddress.endsWith(portSuffix)
       ) {
-        return true;
+        const pid = Number(parts[parts.length - 1] || 0);
+        if (pid > 0) {
+          pids.add(pid);
+        }
       }
     }
+    return Array.from(pids);
   } catch (err) {
     console.warn('[BACKEND] Failed to check port listen state:', err && err.message ? err.message : err);
   }
 
-  return false;
+  return [];
+}
+
+function reconcileBackendListenerOwnership(reason = 'ready') {
+  if (usingExternalBackend) {
+    return 0;
+  }
+
+  const listenerPids = getTcpPortListeningPids(BACKEND_PORT);
+  if (listenerPids.length !== 1) {
+    console.warn(`[BACKEND] Expected one listener on port ${BACKEND_PORT} during ${reason}; found ${listenerPids.length}.`);
+    return 0;
+  }
+
+  const listenerPid = listenerPids[0];
+  const existing = ownedProcesses.getOwnedProcess('backend-listener');
+  if (!existing || Number(existing.pid) !== Number(listenerPid)) {
+    ownedProcesses.registerOwnedProcess({
+      id: 'backend-listener',
+      name: 'backend-listener',
+      role: 'fastapi-backend-listener',
+      pid: listenerPid,
+    });
+  }
+  writeBackendOwner(listenerPid);
+  console.log(`[BACKEND] Registered listener PID ${listenerPid} for port ${BACKEND_PORT} (${reason}).`);
+  return listenerPid;
 }
 
 function probeBackend() {
@@ -821,7 +905,9 @@ function probeBackend() {
 function killStaleOwnedBackend() {
   const owner = readJsonFile(getBackendOwnerPath()) || {};
   const ownerPid = Number(owner.pid || 0);
-  const backendExePath = path.join(process.resourcesPath, 'backend', 'backend.exe');
+  const ownerMode = String(owner.ownerMode || '');
+  const ownerProcessPid = Number(owner.ownerPid || 0);
+  const listeningPids = getTcpPortListeningPids(BACKEND_PORT);
 
   const killPid = (pid) => {
     try {
@@ -839,32 +925,17 @@ function killStaleOwnedBackend() {
     }
   };
 
-  if (ownerPid > 0 && killPid(ownerPid)) {
+  if (
+    ownerPid > 0
+    && ownerProcessPid > 0
+    && ownerMode === getAppModeName()
+    && listeningPids.includes(ownerPid)
+    && killPid(ownerPid)
+  ) {
     return true;
   }
 
-  try {
-    const lookup = execFileSync('wmic', ['process', 'where', "name='backend.exe'", 'get', 'ProcessId,CommandLine', '/FORMAT:LIST'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    });
-    const entries = lookup.split(/\r?\n\r?\n/);
-    for (const entry of entries) {
-      const pidLine = entry.split(/\r?\n/).find((line) => line.trim().startsWith('ProcessId='));
-      const cmdLine = entry.split(/\r?\n/).find((line) => line.trim().startsWith('CommandLine='));
-      if (!pidLine || !cmdLine) continue;
-      const pid = Number((pidLine.split('=')[1] || '').trim() || 0);
-      const command = (cmdLine.split('=')[1] || '').trim() || '';
-      if (pid > 0 && command.includes(backendExePath)) {
-        if (killPid(pid)) {
-          return true;
-        }
-      }
-    }
-  } catch (_err) {
-    // WMIC may not be available or may fail; ignore and continue.
-  }
-
+  console.warn('[BACKEND] No current-app backend owner metadata found; refusing to kill processes by executable name.');
   return false;
 }
 
@@ -903,6 +974,7 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
         if (res.statusCode === 200) {
           backendReadyRetryCount = Math.max(0, retries - remaining);
           setBackendConnectionStatus('connected');
+          reconcileBackendListenerOwnership('startup-ready');
           resolve();
         } else {
           setTimeout(() => attempt(remaining - 1), BACKEND_STARTUP_RETRY_DELAY_MS);
@@ -1169,24 +1241,33 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
       parentWindow.focus();
 
       confirmed = await new Promise((resolve) => {
+        let settled = false;
+        let timeoutId = null;
         const cleanup = () => {
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
           parentWindow.removeListener('closed', handleRendererUnavailable);
           parentWindow.webContents.removeListener('render-process-gone', handleRendererUnavailable);
         };
 
-        const handleRendererUnavailable = () => {
-          if (!quitConfirmationResolver) {
+        const finish = (value) => {
+          if (settled) {
             return;
           }
+          settled = true;
           quitConfirmationResolver = null;
           cleanup();
-          resolve(null);
+          resolve(value);
+        };
+
+        const handleRendererUnavailable = () => {
+          finish(null);
         };
 
         quitConfirmationResolver = (value) => {
-          quitConfirmationResolver = null;
-          cleanup();
-          resolve(Boolean(value));
+          finish(Boolean(value));
         };
 
         parentWindow.once('closed', handleRendererUnavailable);
@@ -1194,15 +1275,19 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
         sendAppEvent('app:confirm-quit', {
           hasUnsavedChanges,
         });
+        timeoutId = setTimeout(() => {
+          console.warn('[APP] Renderer did not acknowledge quit confirmation; using native fallback dialog.');
+          finish(null);
+        }, QUIT_CONFIRMATION_TIMEOUT_MS);
       });
     }
 
     if (confirmed === null || (!parentWindow || parentWindow.isDestroyed())) {
       const { response } = await dialog.showMessageBox(parentWindow || null, {
         type: 'question',
-        buttons: ['Yes', 'No'],
-        defaultId: 1,
-        cancelId: 1,
+        buttons: ['No', 'Yes'],
+        defaultId: 0,
+        cancelId: 0,
         title: isNotificationManagerMode ? 'Exit Smart Alert Manager' : 'Close App',
         message: isNotificationManagerMode
           ? 'Are you sure you want to exit Smart Alert Manager?'
@@ -1210,7 +1295,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
               ? 'You have unsaved work. Are you sure you want to close the app?'
               : 'Are you sure you want to close the app?'),
       });
-      confirmed = response === 0;
+      confirmed = response === 1;
     }
 
     if (!confirmed) {
@@ -1220,8 +1305,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
     tray = null;
     app.isQuitting = true;
     allowWindowClose = true;
-    clearHeartbeat();
-    stopBackend();
+    await cleanupOwnedProcesses('confirmed-quit');
     app.quit();
     return true;
   } finally {
@@ -1981,6 +2065,7 @@ async function quitAndInstallDownloadedUpdate() {
       percent: 100,
       source: 'github-releases',
     });
+    await cleanupOwnedProcesses('updater-quit-and-install');
     electronAutoUpdater.quitAndInstall(false, true);
     return { ok: true, action: 'quit-and-install' };
   } catch (err) {
@@ -2169,7 +2254,7 @@ app.whenReady().then(async () => {
       setBackendConnectionStatus('retrying', err.message);
       scheduleNotificationBackendRetry(err.message);
     } else {
-      stopBackend();
+      await cleanupOwnedProcesses('startup-failure');
       dialog.showErrorBox('Startup Error', err.message);
       app.quit();
       return;
@@ -2185,9 +2270,10 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    clearHeartbeat();
-    stopBackend();
-    app.quit();
+    app.isQuitting = true;
+    cleanupOwnedProcesses('window-all-closed').finally(() => {
+      app.quit();
+    });
   }
 });
 
@@ -2196,9 +2282,17 @@ app.on('activate', () => {
   else mainWindow.show();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   app.isQuitting = true;
   tray = null;
-  clearHeartbeat();
-  stopBackend();
+  if (!ownedProcessCleanupComplete && !isRelaunchingAfterCleanup) {
+    event.preventDefault();
+    cleanupOwnedProcesses('before-quit').finally(() => {
+      isRelaunchingAfterCleanup = true;
+      app.quit();
+      setImmediate(() => {
+        isRelaunchingAfterCleanup = false;
+      });
+    });
+  }
 });

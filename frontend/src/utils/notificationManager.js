@@ -247,6 +247,21 @@ export function createEmptyNotification() {
   };
 }
 
+export function createNotificationId() {
+  const cryptoApi = globalThis?.crypto;
+  if (cryptoApi?.randomUUID) {
+    return `sam-${cryptoApi.randomUUID()}`;
+  }
+
+  const randomValues = cryptoApi?.getRandomValues
+    ? Array.from(cryptoApi.getRandomValues(new Uint32Array(4)))
+    : [];
+  const randomSeed = randomValues.length
+    ? randomValues.map((value) => value.toString(36)).join('-')
+    : Math.random().toString(36).slice(2, 12);
+  return `sam-${Date.now().toString(36)}-${randomSeed}`;
+}
+
 function normalizeSheetBoolean(value, defaultValue = false) {
   if (typeof value === 'boolean') return value;
   if (value === null || value === undefined) return defaultValue;
@@ -284,13 +299,7 @@ export function normalizeManagerNotification(item = {}) {
 
 export function ensureNotificationId(item) {
   if (item.ID) return item.ID;
-  const titleSeed = String(item.Title || item.Message || 'notification')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-  const dateSeed = String(item.StartDate || getEasternNowDefaults().startDate);
-  return `${titleSeed || 'notification'}-${dateSeed}`;
+  return createNotificationId();
 }
 
 export function validateNotification(item, existingItems = []) {

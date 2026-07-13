@@ -41,16 +41,18 @@ class AppErrorBoundary extends React.Component {
     if (!this.state.hasError) {
       return this.props.children;
     }
+    const appName = this.props.appName || "App";
+    const reloadLabel = appName === "SAM" ? "Reload SAM" : "Reload MTS";
 
     return (
       <div className="nm-app">
         <div className="nm-shell">
           <section className="nm-status-card is-warning" style={{ margin: "24px" }}>
-            <strong>SAM encountered an error loading this section.</strong>
-            <span>{this.state.message || "Reload the app to try again."}</span>
+            <strong>{appName} encountered an error loading this section.</strong>
+            <span>{appName} could not finish loading this section. Reload {appName} to try again.</span>
             <div style={{ marginTop: 16 }}>
               <button type="button" className="nm-btn nm-btn-primary" onClick={this.handleReload}>
-                Reload SAM
+                {reloadLabel}
               </button>
             </div>
           </section>
@@ -61,9 +63,11 @@ class AppErrorBoundary extends React.Component {
 }
 
 root.render(isNotificationManager ? (
-  <AppErrorBoundary>
+  <AppErrorBoundary appName="SAM">
     <NotificationManagerApp />
   </AppErrorBoundary>
 ) : (
-  <App />
+  <AppErrorBoundary appName="MTS">
+    <App />
+  </AppErrorBoundary>
 ));

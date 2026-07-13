@@ -19,7 +19,7 @@ const HELP_CATEGORIES = [
   },
   {
     id: 'cat-basics-setup',
-    title: 'Basics Setup',
+    title: 'Basics',
     description: 'Candidate readiness, headsets, VPN, and IP checks.',
     anchor: 'basics',
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
@@ -60,10 +60,10 @@ const HELP_CATEGORIES = [
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
   },
   {
-    id: 'cat-troubleshooting',
-    title: 'Troubleshooting',
-    description: 'When something is off: quick fixes and where to look.',
-    anchor: 'troubleshooting',
+    id: 'cat-tech-issues',
+    title: 'Tech Issues',
+    description: 'Technical issue flow, recovery paths, and where to look.',
+    anchor: 'tech-issues',
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="0.6" fill="currentColor"/></svg>',
   },
   {
@@ -154,7 +154,7 @@ const HELP_TOPICS = [
       'VPN must be off, and required browser checks must pass before you can continue.',
       'When checking for VPN or proxy, use VPN / Proxy Check as decision support and manually review the result.',
       'VPN / Proxy Check never fails a candidate automatically. The tester always makes the final decision.',
-      'Manual lookup links are the release-safe default. Integrated provider checks are optional and require administrator-managed provider keys outside the app.',
+      'Automatic VPN/proxy lookup is the default. Manual lookup links remain available when provider coverage is limited or a trainer needs to send a lookup site to the candidate.',
       'Integrated mode never treats a single provider as a confident clear result. If coverage is limited, verify the candidate IP manually.',
       'Headset and VPN fail popups include Discord copy buttons when the matching post template is available.',
       'Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.',
@@ -486,9 +486,9 @@ const HELP_TOPICS = [
     ],
   },
   {
-    id: 'troubleshooting',
-    title: '27. Troubleshooting',
-    summary: 'Use the built-in troubleshooting paths before ending a session for technical reasons.',
+    id: 'tech-issues',
+    title: '27. Tech Issues',
+    summary: 'Use the built-in tech issue paths before ending a session for technical reasons.',
     bullets: [
       'Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.',
       'Use the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.',
@@ -941,9 +941,7 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
           </div>
           <div className="help-common-tasks" aria-label="Common help tasks">
             <a href="#tutorial" className="help-common-task">Replay Tutorial</a>
-            <a href="#basics" className="help-common-task">Basics Setup</a>
             <a href="#fill-form" className="help-common-task">Fill Form</a>
-            <a href="#troubleshooting" className="help-common-task">Troubleshooting</a>
           </div>
           <div className="help-hero-tips" aria-label="Quick tips">
             <div className="help-hero-tip">
@@ -1097,7 +1095,7 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
         <aside className="help-support-column">
           <div className="card help-support-card">
             <div className="help-card-eyebrow">Support</div>
-            <h2>Support & Troubleshooting</h2>
+            <h2>Support & Tech Issues</h2>
 
             <div className="help-troubleshooting-section">
               <div className="help-support-tip help-support-tip-info">

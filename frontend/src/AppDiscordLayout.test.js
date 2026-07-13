@@ -12,6 +12,7 @@ import {
   getBuiltInDiscordScreenshotSuggestions,
   resolveDiscordSuggestedScreenshots,
 } from './utils/discordScreenshotSuggestions';
+import { findDiscordTemplateMessage, getActiveDiscordTemplates } from './api';
 
 test('discord post modal uses search-first two-pane template workflow', () => {
   const css = fs.readFileSync(path.join(__dirname, 'App.css'), 'utf8');
@@ -51,6 +52,20 @@ test('discord post modal uses search-first two-pane template workflow', () => {
   expect(app).toContain('Copy Post');
   expect(app).toContain('Screenshot {index + 1}');
   expect(app).toContain('Copy the post and screenshot separately');
+});
+
+test('discord templates use remote/default rows unless explicit settings override is enabled', () => {
+  const settings = {
+    discord_templates: [{ category: 'Local', title: 'Local Trigger', message: 'Local message' }],
+  };
+  const defaults = {
+    discord_templates: [{ category: 'Remote', title: 'Remote Trigger', message: 'Remote message' }],
+  };
+
+  expect(getActiveDiscordTemplates(settings, defaults)).toEqual(defaults.discord_templates);
+  expect(findDiscordTemplateMessage(settings, defaults, 'Remote Trigger')).toBe('Remote message');
+
+  expect(getActiveDiscordTemplates({ ...settings, discord_override: true }, defaults)).toEqual(settings.discord_templates);
 });
 
 test('discord screenshot suggestions use strict title mappings', () => {
@@ -101,6 +116,44 @@ test('discord productivity settings normalize shortcut assignments', () => {
   ], 'ctrl+2', 'global:openPosts')).toMatchObject({ label: 'VPN Failed' });
 });
 
+test('full registry of Discord shortcuts normalize, match key events, and resolve conflicts correctly', () => {
+  const globalDefaults = {
+    openPosts: 'Ctrl+D',
+    openScreenshots: 'Ctrl+Shift+D',
+    openCommandPalette: 'Ctrl+Shift+P',
+    focusSearch: 'Ctrl+F',
+    showFavorites: 'Ctrl+Shift+F',
+    close: 'Esc',
+  };
+  Object.entries(globalDefaults).forEach(([key, shortcut]) => {
+    expect(normalizeShortcut(shortcut)).toBe(shortcut);
+  });
+
+  const categoryDefaults = ['Alt+1', 'Alt+2', 'Alt+3', 'Alt+4', 'Alt+5', 'Alt+6', 'Alt+7', 'Alt+8'];
+  categoryDefaults.forEach((shortcut) => {
+    expect(normalizeShortcut(shortcut)).toBe(shortcut);
+  });
+
+  const favoriteDefaults = ['Ctrl+1', 'Ctrl+2', 'Ctrl+3', 'Ctrl+4', 'Ctrl+5'];
+  favoriteDefaults.forEach((shortcut) => {
+    expect(normalizeShortcut(shortcut)).toBe(shortcut);
+  });
+
+  expect(shortcutFromEvent({ key: 'p', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false })).toBe('Ctrl+Shift+P');
+  expect(shortcutFromEvent({ key: '7', ctrlKey: false, metaKey: false, shiftKey: false, altKey: true })).toBe('Alt+7');
+  expect(shortcutFromEvent({ key: '5', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false })).toBe('Ctrl+5');
+
+  const assignments = [
+    { key: 'global:openPosts', shortcut: 'Ctrl+D' },
+    { key: 'category:calls', shortcut: 'Alt+1' },
+    { key: 'favorite:vpnFailed', shortcut: 'Ctrl+2' },
+  ];
+  expect(findShortcutConflict(assignments, 'ctrl+d', 'global:openPosts')).toBeNull();
+  expect(findShortcutConflict(assignments, 'ctrl+d', 'favorite:vpnFailed')).toMatchObject({ key: 'global:openPosts' });
+  expect(findShortcutConflict(assignments, 'alt+1', 'global:openPosts')).toMatchObject({ key: 'category:calls' });
+  expect(findShortcutConflict(assignments, 'ctrl+2', 'category:calls')).toMatchObject({ key: 'favorite:vpnFailed' });
+});
+
 test('discord productivity settings expose shortcut recorder and save field', () => {
   const settings = fs.readFileSync(path.join(__dirname, 'pages', 'SettingsPage.jsx'), 'utf8');
   expect(settings).toContain('Discord Productivity');
@@ -110,9 +163,35 @@ test('discord productivity settings expose shortcut recorder and save field', ()
   expect(settings).toContain('Global Shortcuts');
   expect(settings).toContain('Category Shortcuts');
   expect(settings).toContain('Favorite Shortcuts');
+  expect(settings).toContain('Action / Shortcut Editor / Restore Default');
+  expect(settings).not.toContain('discord-current-shortcut');
   expect(settings).toContain('settings-discord-tab-productivity');
   expect(settings).toContain('discord_productivity');
   expect(settings).toContain('favoriteShortcuts');
   expect(settings).toContain('Suggested Screenshots');
   expect(settings).toContain('settings-discord-suggested');
+});
+
+test('discord global shortcuts open modal states instead of relying on focused modal container', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'App.js'), 'utf8');
+  expect(app).toContain('setDiscordInitialFilter(\'favorites\')');
+  expect(app).toContain('setDiscordInitialShortcutKey(shortcutMatch.key)');
+  expect(app).toContain("window.addEventListener('keydown', handleKeyDown)");
+  expect(app).toContain("shortcutMatchesEvent(productivity.globalShortcuts.openScreenshots, event)");
+});
+
+test('discord shortcut handoff does not reference copyTemplate before initialization', () => {
+  const app = fs.readFileSync(path.join(__dirname, 'App.js'), 'utf8');
+  const copyTemplateIndex = app.indexOf('const copyTemplate = useCallback');
+  const shortcutHandoffIndex = app.indexOf('if (!initialShortcutKey || !templates.length) return;');
+  expect(copyTemplateIndex).toBeGreaterThan(-1);
+  expect(shortcutHandoffIndex).toBeGreaterThan(-1);
+  expect(copyTemplateIndex).toBeLessThan(shortcutHandoffIndex);
+});
+
+test('MTS renderer is wrapped in recoverable error boundary', () => {
+  const index = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+  expect(index).toContain('<AppErrorBoundary appName="MTS">');
+  expect(index).toContain('{appName} could not finish loading this section. Reload {appName} to try again.');
+  expect(index).toContain('console.error("[APP] Renderer crashed:"');
 });

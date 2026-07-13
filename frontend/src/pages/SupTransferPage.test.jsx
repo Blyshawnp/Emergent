@@ -131,11 +131,11 @@ test('supervisor-only NC/NS button confirms, saves auto-fail, and routes to revi
 
   expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
     title: 'Mark Session',
-    buttons: expect.arrayContaining([
+    buttons: [
+      expect.objectContaining({ label: 'Cancel', value: 'cancel' }),
       expect.objectContaining({ label: 'Same Day Drop', value: 'same-day-drop' }),
       expect.objectContaining({ label: 'NC/NS', value: 'ncns' }),
-      expect.objectContaining({ label: 'Cancel', value: 'cancel' }),
-    ]),
+    ],
   }));
   expect(mockModal.confirm).toHaveBeenCalledWith(
     'Confirm Auto-Fail',

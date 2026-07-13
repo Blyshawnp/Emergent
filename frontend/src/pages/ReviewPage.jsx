@@ -5,6 +5,7 @@ import { CandidateIpReviewBlock, storeCandidateIpIntelligence } from '../compone
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
+import { displaySummaryLabel } from '../utils/summaryDisplayLabels';
 
 const READINESS_NEEDS_RETEST = 'Needs Retest / Additional Coaching';
 const READINESS_OVERRIDE_REASONS = [
@@ -129,10 +130,11 @@ function computeFinalStatus(session) {
 
 function formatReadinessOverrideSummary(judgment) {
   if (!judgment?.overrideApplied) return '';
+  const reason = String(judgment.primaryReason || '').trim().replace(/^Evaluator Override Applied:\s*/i, '');
   const parts = [
     `Evaluator Override Applied: calculated result was ${judgment.calculatedResult || 'N/A'} and final result is ${judgment.overrideResult}.`,
   ];
-  if (judgment.primaryReason) parts.push(`Primary reason: ${judgment.primaryReason}.`);
+  if (reason) parts.push(`Primary reason: ${reason}.`);
   if (judgment.explanation) parts.push(`Explanation: ${judgment.explanation}`);
   return parts.join(' ');
 }
@@ -142,6 +144,9 @@ function appendReadinessOverrideSummary(text, judgment) {
   if (!note) return text;
   const base = String(text || '').trim();
   if (base.includes('Evaluator Override Applied:')) return base;
+  const baseNorm = base.toLowerCase().replace(/\s+/g, ' ').trim();
+  const noteNorm = note.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (noteNorm && (baseNorm.includes(noteNorm) || baseNorm.endsWith(noteNorm))) return base;
   return base ? `${base}\n\n${note}` : note;
 }
 
@@ -196,10 +201,12 @@ function summarizeSectionForFallback(section, label) {
   if (!section?.result) return '';
   const coaching = Object.entries(section.coaching || {})
     .filter(([, checked]) => checked)
-    .map(([item]) => item);
+    .map(([item]) => displaySummaryLabel(item))
+    .filter(Boolean);
   const fails = Object.entries(section.fails || {})
     .filter(([, checked]) => checked)
-    .map(([item]) => item);
+    .map(([item]) => displaySummaryLabel(item))
+    .filter(Boolean);
   const parts = [`${label}: ${section.result}.`];
   if (coaching.length) parts.push(`Coaching: ${coaching.join(', ')}.`);
   if (fails.length) parts.push(`Fail reasons: ${fails.join(', ')}.`);
@@ -234,7 +241,45 @@ function getFallbackFailSummary(session) {
   const finalStatus = session?.final_status || computeFinalStatus(session);
   if (!shouldPopulateFailSummary(finalStatus)) return 'N/A';
   if (saved) return saved;
-  return 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+  const generated = buildLocalFallbackFailSummary(session);
+  return generated || 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+}
+
+function summarizeFailSectionForFallback(section, label) {
+  if (!section || section.result !== 'Fail') return '';
+  const failDetails = section.failReasonDetails || section.fail_reason_details || {};
+  const fails = Object.entries(section.fails || {})
+    .filter(([, checked]) => checked)
+    .map(([item]) => {
+      const labelText = displaySummaryLabel(item).replace(/\.$/, '');
+      const detail = String(failDetails[item] || '').trim();
+      return detail ? `${labelText}: ${detail}` : labelText;
+    })
+    .filter(Boolean);
+  if (!fails.length && !section.fail_notes) return '';
+  const parts = [`${label} failed.`];
+  if (fails.length) parts.push(`Fail reasons: ${fails.join(', ')}.`);
+  if (section.fail_notes) parts.push(`Notes: ${section.fail_notes}.`);
+  return parts.join(' ');
+}
+
+function buildLocalFallbackFailSummary(session) {
+  if (!session) return '';
+  const lines = [];
+  if (!session.supervisor_only) {
+    for (let i = 1; i <= 3; i += 1) {
+      const line = summarizeFailSectionForFallback(session[`call_${i}`], `Call ${i}`);
+      if (line) lines.push(line);
+    }
+  }
+  for (let i = 1; i <= 2; i += 1) {
+    const line = summarizeFailSectionForFallback(session[`sup_transfer_${i}`], `Supervisor Transfer ${i}`);
+    if (line) lines.push(line);
+  }
+  if (session.auto_fail_reason) {
+    lines.push(`Session ended under auto-fail reason: ${session.auto_fail_reason}.`);
+  }
+  return lines.join('\n');
 }
 
 function getStatusSafeFailSummary(failText, finalStatus, judgment) {
@@ -857,8 +902,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         body: 'Would you like to fill the certification form before closing this session?',
         graphic: 'form',
         buttons: [
-          { label: 'Fill Form', cls: 'btn-warning', value: 'fill' },
           { label: 'No', cls: 'btn-primary', value: 'skip' },
+          { label: 'Fill Form', cls: 'btn-warning', value: 'fill' },
         ],
       });
 
@@ -876,8 +921,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       body: 'Save this session and finish?<br><br>This will save to history and clear the current draft.',
       graphic: 'save',
       buttons: [
-        { label: 'Yes', cls: 'btn-primary', value: true },
         { label: 'No', cls: 'btn-muted', value: false },
+        { label: 'Yes', cls: 'btn-primary', value: true },
       ],
     });
     if (!confirmed) return;

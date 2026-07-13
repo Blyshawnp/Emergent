@@ -202,6 +202,93 @@ test('review keeps automatic fallback visible when summary generation errors', a
   await view.unmount();
 });
 
+test('review fallback summary uses professional display labels without internal keys', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    call_1: {
+      result: 'Fail',
+      coaching: {
+        Verification_Name: true,
+        Verification_Address: true,
+        'Show appreciation_After donation amount is given': true,
+        'Screenshots/Discord Chat': true,
+      },
+      fails: {
+        'Paraphrased script': true,
+      },
+      failReasonDetails: {
+        'Paraphrased script': 'Monthly Sustaining Terms',
+      },
+    },
+    coaching_summary: '',
+    fail_summary: '',
+    final_attempt: true,
+  }, null, {
+    generateSummariesError: new Error('Gemini unavailable'),
+  });
+
+  await act(async () => {
+    await flushPromises();
+    await flushPromises();
+  });
+
+  const coaching = view.container.querySelector('[data-testid="review-coaching"]').value;
+  expect(coaching).toContain("Verify the candidate's name.");
+  expect(coaching).toContain("Verify the candidate's address.");
+  expect(coaching).toContain('Show appreciation after the donation amount is given.');
+  expect(coaching).toContain('Use the required screenshots and Discord guidance.');
+  expect(coaching).not.toContain('_');
+  expect(coaching).not.toContain('Verification_Name');
+  expect(coaching).not.toContain('Show appreciation_After donation amount is given');
+
+  await view.unmount();
+});
+
+test('review fallback fail summary and form payload include Did not search for member', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    call_1: {
+      result: 'Fail',
+      fails: {
+        'Did not search for member': true,
+      },
+    },
+    call_2: { result: 'Fail', fails: { 'Skipped parts of script': true } },
+    sup_transfer_1: undefined,
+    coaching_summary: '',
+    fail_summary: '',
+    final_attempt: true,
+  }, null, {
+    generateSummariesError: new Error('Gemini unavailable'),
+  });
+
+  await act(async () => {
+    await flushPromises();
+    await flushPromises();
+  });
+
+  const failSummary = view.container.querySelector('[data-testid="review-fail"]').value;
+  expect(failSummary).toContain('Did not search for the member');
+  expect(failSummary).not.toContain('did_not_search_for_member');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="review-fill-form"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.fillForm).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.stringContaining('Did not search for the member'),
+    expect.objectContaining({
+      call_1: expect.objectContaining({
+        fails: expect.objectContaining({ 'Did not search for member': true }),
+      }),
+    }),
+  );
+
+  await view.unmount();
+});
+
 test('incomplete review keeps fail summary N/A and shows scheduling action', async () => {
   const incompleteSession = {
     ...passingSession,

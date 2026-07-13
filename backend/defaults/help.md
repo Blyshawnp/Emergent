@@ -272,8 +272,8 @@ Update checks and app version info live in the app menu and Settings.
 - When a download cannot open automatically, use the manual download option shown in the updater message.
 - About shows the app version and support identity details (also shown on this Help screen).
 
-## 27. Troubleshooting
-Use the built-in troubleshooting paths before ending a session for technical reasons.
+## 27. Tech Issues
+Use the built-in tech issue paths before ending a session for technical reasons.
 - Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.
 - Use the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.
 - Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.

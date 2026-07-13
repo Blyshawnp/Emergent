@@ -164,6 +164,12 @@ beforeEach(() => {
     setUnsavedChanges: jest.fn().mockResolvedValue(undefined),
     openExternal: jest.fn().mockResolvedValue({ ok: true }),
   };
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: jest.fn().mockResolvedValue(undefined),
+    },
+  });
 });
 
 afterEach(() => {
@@ -281,6 +287,70 @@ test('settings exposes welcome voice and sound volume controls', async () => {
     enable_sounds: false,
     ticker_speed: 'fast',
   }));
+
+  await view.unmount();
+});
+
+test('settings shows fail reason source and can disable local call fail override', async () => {
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Tester',
+    call_fails: ['Legacy Local Fail', 'Did not search for member'],
+    call_fails_customized: true,
+  });
+  api.getDefaults.mockResolvedValue({
+    call_fails: ['Remote Custom Fail', 'Did not search for member'],
+    sup_fails: ['Supervisor Fail'],
+    _content_sources: {
+      call_fails: { source: 'google', count: 2, ok: true },
+      sup_fails: { source: 'local_csv', count: 1, ok: true },
+    },
+  });
+  api.resetSettingsSection.mockResolvedValue({
+    ok: true,
+    section: 'call_fails',
+    settings: {
+      tester_name: 'Tester',
+      call_fails: ['Remote Custom Fail', 'Did not search for member'],
+      call_fails_customized: false,
+    },
+  });
+
+  const view = await renderComponent(
+    <SettingsPage
+      onNavigate={jest.fn()}
+      updateState={{}}
+      refreshUpdateState={jest.fn()}
+      appVersion="1.0.1"
+    />
+  );
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="settings-tab-failreasons"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.querySelector('[data-testid="settings-call_fails-source"]').textContent).toContain('Source: Local override');
+  expect(view.container.textContent).toContain('Legacy Local Fail');
+
+  await act(async () => {
+    Array.from(view.container.querySelectorAll('button'))
+      .find((button) => button.textContent === 'Use Google/admin content')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+    title: 'Use Google/admin content for Call Fail Reasons',
+    buttons: [
+      expect.objectContaining({ label: 'Cancel', value: false }),
+      expect.objectContaining({ label: 'Use Google/admin content', value: true }),
+    ],
+  }));
+  expect(api.resetSettingsSection).toHaveBeenCalledWith('call_fails');
+  expect(view.container.querySelector('[data-testid="settings-call_fails-source"]').textContent).toContain('Source: Google Sheet');
+  expect(view.container.textContent).toContain('Remote Custom Fail');
+  expect(view.container.textContent).toContain('Did not search for member');
+  expect(view.container.textContent).not.toContain('Legacy Local Fail');
 
   await view.unmount();
 });
@@ -544,6 +614,105 @@ test('shared candidate lookup retries after a temporary failure and recovers wit
   }
 });
 
+test('shared candidate typed-name choice suppresses repeated dropdown until the name changes', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [], denied: [] });
+  api.lookupSharedCandidate.mockResolvedValue({
+    ok: true,
+    matches: [{ candidate_name: 'Candidate Example', matchConfirmed: true, status: 'Fail', session_type: 'mock_session', completed_at: '2026-07-01T12:00:00Z' }],
+    finalAttempt: false,
+    finalAttemptUsed: false,
+    withdrawn: false,
+    extraAttemptGranted: false,
+    passedCertification: false,
+  });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  jest.useFakeTimers();
+  try {
+    await act(async () => {
+      setInputValue(view.container.querySelector('[data-testid="basics-candidate"]'), 'Candidate Example');
+      jest.advanceTimersByTime(650);
+      await Promise.resolve();
+    });
+
+    expect(api.lookupSharedCandidate).toHaveBeenCalledTimes(1);
+    expect(view.container.querySelector('[data-testid="candidate-suggestions-dropdown"]')).not.toBeNull();
+    expect(view.container.textContent).toContain('Session: Mock Session');
+    expect(view.container.textContent).not.toContain('Campaign:');
+    expect(view.container.textContent).not.toContain('mock_session');
+
+    await act(async () => {
+      Array.from(view.container.querySelectorAll('.suggestion-item'))
+        .find((item) => item.textContent.includes('Use typed name: Candidate Example'))
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(view.container.querySelector('[data-testid="candidate-suggestions-dropdown"]')).toBeNull();
+    expect(api.lookupSharedCandidate).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      setInputValue(view.container.querySelector('[data-testid="basics-candidate"]'), 'Candidate Example Jr');
+      jest.advanceTimersByTime(650);
+      await Promise.resolve();
+    });
+
+    expect(api.lookupSharedCandidate).toHaveBeenCalledTimes(2);
+  } finally {
+    jest.useRealTimers();
+    await view.unmount();
+  }
+});
+
+test('shared candidate lookup blocks passed candidates unless an extra attempt is granted', async () => {
+  const onNavigate = jest.fn();
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [], denied: [] });
+  api.lookupSharedCandidate.mockResolvedValue({
+    ok: true,
+    matches: [{ candidate_name: 'Passed Candidate', matchConfirmed: true, status: 'PASS', completed_at: '2026-07-01T12:00:00Z' }],
+    finalAttempt: false,
+    finalAttemptUsed: false,
+    withdrawn: false,
+    extraAttemptGranted: false,
+    passedCertification: true,
+  });
+
+  const view = await renderComponent(<BasicsPage onNavigate={onNavigate} />);
+  jest.useFakeTimers();
+  try {
+    await act(async () => {
+      setInputValue(view.container.querySelector('[data-testid="basics-candidate"]'), 'Passed Candidate');
+      jest.advanceTimersByTime(650);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      Array.from(view.container.querySelectorAll('.suggestion-item'))
+        .find((item) => item.textContent.includes('Passed Candidate') && !item.textContent.includes('Use typed name'))
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockModal.showModal).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Candidate Already Passed',
+    }));
+    expect(api.discardSession).toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith('home');
+  } finally {
+    jest.useRealTimers();
+    await view.unmount();
+  }
+});
+
 test('basics records changed approved-list hash without interrupting the trainer', async () => {
   const oldGroups = [{ brand: 'Logitech', models: ['H390'] }];
   const newGroups = [{ brand: 'Logitech', models: ['H390', 'H650e'] }];
@@ -715,7 +884,7 @@ test('vpn proxy review verdict requires explicit manual-review decision before c
 });
 
 test('vpn proxy checker mode runs the built-in provider lookup and keeps clear provider results collapsed', async () => {
-  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getCurrentSession.mockResolvedValue({ session: { candidate_ip_intelligence: { ip: '8.8.8.8', timestamp: '2026-07-11T12:00:00Z' } } });
   api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'checker' });
   api.getDefaults.mockResolvedValue({});
   api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
@@ -726,12 +895,14 @@ test('vpn proxy checker mode runs the built-in provider lookup and keeps clear p
     await flushPromises();
   });
   await act(async () => {
-    setInputValue(view.container.querySelector('[data-testid="candidate-ip-input"]'), '8.8.8.8');
     view.container.querySelector('.candidate-ip-actions .btn-primary').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
 
   expect(api.checkIpIntelligence).toHaveBeenCalledWith('8.8.8.8');
+  expect(view.container.querySelector('[data-testid="candidate-ip-input"]')).toBeNull();
+  expect(view.container.textContent).not.toContain('Candidate Public IP Address');
+  expect(view.container.textContent).not.toContain('Copy IP');
   expect(view.container.textContent).toContain('Integrated Check');
   expect(view.container.textContent).toContain('CLEAR — LIMITED CHECK');
   expect(view.container.textContent).toContain('Confidence: Medium');
@@ -748,7 +919,7 @@ test('vpn proxy checker mode runs the built-in provider lookup and keeps clear p
 });
 
 test('vpn proxy technical details show simplified columns and keep advanced metadata hidden until expanded', async () => {
-  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getCurrentSession.mockResolvedValue({ session: { candidate_ip_intelligence: { ip: '8.8.8.8', timestamp: '2026-07-11T12:00:00Z' } } });
   api.getSettings.mockResolvedValue({ tester_name: 'Tester', vpnProxyCheckMode: 'checker' });
   api.getDefaults.mockResolvedValue({});
   api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
@@ -759,7 +930,6 @@ test('vpn proxy technical details show simplified columns and keep advanced meta
     await flushPromises();
   });
   await act(async () => {
-    setInputValue(view.container.querySelector('[data-testid="candidate-ip-input"]'), '8.8.8.8');
     view.container.querySelector('.candidate-ip-actions .btn-primary').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
@@ -851,16 +1021,22 @@ test('vpn proxy non-clear verdicts open technical details by default', async () 
   }
 });
 
-test('vpn proxy defaults to manual links when settings omit mode', async () => {
+test('vpn proxy defaults to automatic lookup when settings omit mode', async () => {
   api.getCurrentSession.mockResolvedValue({ session: null });
   api.getSettings.mockResolvedValue({ tester_name: 'Tester' });
   api.getDefaults.mockResolvedValue({});
   api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
 
   const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
-  expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
-  expect(view.container.textContent).toContain('Manual Verification');
-  expect(view.container.textContent).toContain('Manual verification is the release-safe default.');
+  expect(view.container.querySelector('[data-testid="candidate-ip-intelligence"]')).not.toBeNull();
+  expect(view.container.textContent).toContain('Integrated Check');
+  await act(async () => {
+    view.container.querySelector('.candidate-ip-card-toggle').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.textContent).toContain('Automatic lookup checks configured providers.');
+  expect(view.container.textContent).not.toContain('Candidate Public IP Address');
+  expect(view.container.querySelector('[data-testid="candidate-ip-input"]')).toBeNull();
   expect(api.checkIpIntelligence).not.toHaveBeenCalled();
   await view.unmount();
 });
@@ -874,20 +1050,37 @@ test('vpn proxy links mode shows external lookup buttons and does not call provi
   const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
   expect(view.container.querySelector('[data-testid="candidate-ip-links"]')).not.toBeNull();
   expect(view.container.textContent).toContain('Manual Verification');
+  expect(view.container.textContent).toContain('Manual verification is available when automatic lookup is not needed.');
   await act(async () => {
     const btn = Array.from(view.container.querySelectorAll('button')).find(b => b.textContent.includes('Expand'));
     if (btn) btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 
   await act(async () => {
-    setInputValue(view.container.querySelector('[data-testid="candidate-ip-manual-input"]'), '8.8.8.8');
     view.container.querySelector('[data-testid="candidate-ip-link-ip2location"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
   });
 
   expect(api.checkIpIntelligence).not.toHaveBeenCalled();
-  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.ip2location.com/demo/8.8.8.8');
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.ip2location.com/demo');
+  expect(view.container.textContent).toContain('Lookup');
+  expect(view.container.textContent).not.toContain('Open Lookup');
+  expect(view.container.textContent).toContain('WhatIsMyIP Proxy Check');
+  expect(view.container.textContent).toContain('Teoh VPN Detection');
+  expect(view.container.textContent).toContain('ProxyCheck.io');
+  expect(view.container.textContent).toContain('IP2Location');
+  expect(view.container.textContent).not.toContain('IPQualityScore');
+  expect(view.container.textContent).not.toContain('GetIPIntel');
   expect(view.container.textContent).toContain('Check the candidate IP using more than one lookup site because individual services can be stale or incomplete.');
+  expect(view.container.textContent).not.toContain('Candidate Public IP Address');
+  expect(view.container.textContent).not.toContain('Copy IP');
+  expect(view.container.querySelector('[data-testid="candidate-ip-manual-input"]')).toBeNull();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="candidate-ip-copy-url-whatismyip-proxy-check"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://www.whatismyip.com/proxy-check/');
   await view.unmount();
 });
 

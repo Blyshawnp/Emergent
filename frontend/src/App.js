@@ -373,8 +373,8 @@ function ElectronEventBridge({ navigate, setUpdateState, setMtsUpdateModal }) {
             : 'Are you sure you want to close the app?',
           graphic: 'exit',
           buttons: [
-            { label: 'Yes', cls: 'btn-primary', value: true },
             { label: 'No', cls: 'btn-muted', value: false },
+            { label: 'Yes', cls: 'btn-primary', value: true },
           ],
         });
         await window.electronAPI?.respondToQuitConfirmation?.(confirmed);
@@ -588,6 +588,8 @@ function AppShell() {
   const [discordOpen, setDiscordOpen] = useState(false);
   const [discordInitialTab, setDiscordInitialTab] = useState('templates');
   const [discordInitialPaletteOpen, setDiscordInitialPaletteOpen] = useState(false);
+  const [discordInitialFilter, setDiscordInitialFilter] = useState('');
+  const [discordInitialShortcutKey, setDiscordInitialShortcutKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('Starting app...');
   const [loadingProgress, setLoadingProgress] = useState(10);
@@ -602,6 +604,12 @@ function AppShell() {
     () => normalizeDiscordProductivitySettings(settings?.discord_productivity),
     [settings?.discord_productivity]
   );
+  const appDiscordTemplates = useMemo(() => {
+    const source = (!settings?.discord_override && defaults?.discord_templates?.length > 0)
+      ? defaults.discord_templates
+      : (settings?.discord_templates || []);
+    return normalizeDiscordTemplates(source);
+  }, [defaults?.discord_templates, settings?.discord_override, settings?.discord_templates]);
 
   useEffect(() => {
     const saved = localStorage.getItem('mts-theme') || 'dark';
@@ -623,10 +631,13 @@ function AppShell() {
   useEffect(() => {
     if (!discordProductivity.enableShortcuts) return undefined;
     const handleGlobalDiscordShortcuts = (event) => {
+      if (discordOpen) return;
       if (shortcutMatchesEvent(discordProductivity.globalShortcuts.openPosts, event)) {
         event.preventDefault();
         setDiscordInitialTab('templates');
         setDiscordInitialPaletteOpen(false);
+        setDiscordInitialFilter('');
+        setDiscordInitialShortcutKey('');
         setDiscordOpen(true);
         return;
       }
@@ -634,6 +645,8 @@ function AppShell() {
         event.preventDefault();
         setDiscordInitialTab('screenshots');
         setDiscordInitialPaletteOpen(false);
+        setDiscordInitialFilter('');
+        setDiscordInitialShortcutKey('');
         setDiscordOpen(true);
         return;
       }
@@ -641,12 +654,44 @@ function AppShell() {
         event.preventDefault();
         setDiscordInitialTab('templates');
         setDiscordInitialPaletteOpen(true);
+        setDiscordInitialFilter('');
+        setDiscordInitialShortcutKey('');
+        setDiscordOpen(true);
+        return;
+      }
+      if (shortcutMatchesEvent(discordProductivity.globalShortcuts.focusSearch, event)) {
+        event.preventDefault();
+        setDiscordInitialTab('templates');
+        setDiscordInitialPaletteOpen(false);
+        setDiscordInitialFilter('');
+        setDiscordInitialShortcutKey('');
+        setDiscordOpen(true);
+        return;
+      }
+      if (shortcutMatchesEvent(discordProductivity.globalShortcuts.showFavorites, event)) {
+        event.preventDefault();
+        setDiscordInitialTab('templates');
+        setDiscordInitialPaletteOpen(false);
+        setDiscordInitialFilter('favorites');
+        setDiscordInitialShortcutKey('');
+        setDiscordOpen(true);
+        return;
+      }
+      const shortcutMatch = appDiscordTemplates.find((template) => (
+        shortcutMatchesEvent(discordProductivity.favoriteShortcuts[template.key] || getDefaultFavoriteShortcut(template), event)
+      ));
+      if (shortcutMatch) {
+        event.preventDefault();
+        setDiscordInitialTab('templates');
+        setDiscordInitialPaletteOpen(false);
+        setDiscordInitialFilter('');
+        setDiscordInitialShortcutKey(shortcutMatch.key);
         setDiscordOpen(true);
       }
     };
     window.addEventListener('keydown', handleGlobalDiscordShortcuts);
     return () => window.removeEventListener('keydown', handleGlobalDiscordShortcuts);
-  }, [discordProductivity]);
+  }, [appDiscordTemplates, discordOpen, discordProductivity]);
 
   useEffect(() => {
     if (loading || discordAutoOpenRef.current || !discordProductivity.openAutomatically) return;
@@ -743,14 +788,6 @@ function AppShell() {
     showInstalledPopup();
 
   }, [modal, refreshUpdateState, updateState]);
-
-  useEffect(() => {
-    console.log("app component mounted");
-  }, []);
-
-  useEffect(() => {
-    console.log("ticker mounted");
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1230,8 +1267,8 @@ function AppShell() {
       body: 'Are you sure you want to close the app?',
       graphic: 'exit',
       buttons: [
-        { label: 'Yes', cls: 'btn-primary', value: true },
         { label: 'No', cls: 'btn-muted', value: false },
+        { label: 'Yes', cls: 'btn-primary', value: true },
       ],
     });
 
@@ -1408,7 +1445,20 @@ function AppShell() {
           </main>
         </div>
 
-        {discordOpen && <DiscordModal settings={settings} defaults={defaults} currentSession={currentSession} initialTab={discordInitialTab} initialPaletteOpen={discordInitialPaletteOpen} onPaletteHandled={() => setDiscordInitialPaletteOpen(false)} onClose={() => setDiscordOpen(false)} />}
+        {discordOpen && (
+          <DiscordModal
+            settings={settings}
+            defaults={defaults}
+            currentSession={currentSession}
+            initialTab={discordInitialTab}
+            initialPaletteOpen={discordInitialPaletteOpen}
+            initialFilter={discordInitialFilter}
+            initialShortcutKey={discordInitialShortcutKey}
+            onPaletteHandled={() => setDiscordInitialPaletteOpen(false)}
+            onShortcutHandled={() => setDiscordInitialShortcutKey('')}
+            onClose={() => setDiscordOpen(false)}
+          />
+        )}
         <ElectronEventBridge navigate={navigate} setUpdateState={setUpdateState} setMtsUpdateModal={setMtsUpdateModal} />
         {mtsUpdateModal && (
           <MtsUpdateModal
@@ -1436,6 +1486,27 @@ const DEFAULT_DISCORD_FAVORITES = [
 
 function discordTemplateKey(item) {
   return `${String(item?.category || '').trim().toLowerCase()}::${String(item?.title || '').trim().toLowerCase()}`;
+}
+
+function normalizeDiscordTemplates(source, defaultCategory = 'Uncategorized') {
+  return (Array.isArray(source) ? source : []).map(t => {
+    if (!t) return null;
+    if (Array.isArray(t)) {
+      return { category: String(t[2] || defaultCategory), title: String(t[0] || ''), message: String(t[1] || '') };
+    }
+    if (typeof t === 'object') {
+      const category = t.category || t.Category || t.group || t.Group || '';
+      const title = t.title || t.Title || t.name || t.Name || t.label || t.Label || '';
+      const message = t.message || t.Message || t.text || t.Text || t.content || t.Content || t.body || t.Body || '';
+      const normalized = { category: String(category || defaultCategory), title: String(title), message: String(message) };
+      const explicitSuggestedScreenshots = getDiscordPostSuggestedScreenshotPaths(t);
+      if (explicitSuggestedScreenshots.length || Object.prototype.hasOwnProperty.call(t, 'suggestedScreenshots') || Object.prototype.hasOwnProperty.call(t, 'suggested_screenshots') || Object.prototype.hasOwnProperty.call(t, 'SuggestedScreenshots')) {
+        normalized.suggestedScreenshots = explicitSuggestedScreenshots;
+      }
+      return normalized;
+    }
+    return null;
+  }).filter(Boolean).map((item) => ({ ...item, key: discordTemplateKey(item) }));
 }
 
 function hasStoredDiscordKeys(storageKey) {
@@ -1507,7 +1578,7 @@ function getSuggestedDiscordKeys(templates, currentSession) {
   return Array.from(new Set(suggestions)).slice(0, 5);
 }
 
-function DiscordModal({ settings, defaults, currentSession, initialTab = 'templates', initialPaletteOpen = false, onPaletteHandled, onClose }) {
+function DiscordModal({ settings, defaults, currentSession, initialTab = 'templates', initialPaletteOpen = false, initialFilter = '', initialShortcutKey = '', onPaletteHandled, onShortcutHandled, onClose }) {
   const defaultCategory = 'Uncategorized';
   const [modalDefaults, setModalDefaults] = useState(defaults || emptyDefaults());
   const [defaultsLoadStatus, setDefaultsLoadStatus] = useState('idle');
@@ -1550,6 +1621,13 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
     setCommandPaletteOpen(true);
     onPaletteHandled?.();
   }, [initialPaletteOpen, onPaletteHandled]);
+
+  useEffect(() => {
+    if (!initialFilter) return;
+    setTab('templates');
+    setShowFavoritesOnly(initialFilter === 'favorites');
+    setShowRecentOnly(initialFilter === 'recent');
+  }, [initialFilter]);
 
   const activeDefaults = modalDefaults || emptyDefaults();
   const hasDefaultDiscordData = Boolean(
@@ -1604,28 +1682,13 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
         ? 'settings_fallback'
         : 'empty';
 
-  const screenshotsSrc = (!settings?.discord_override && activeDefaults?.discord_screenshots?.length > 0)
-    ? activeDefaults.discord_screenshots
-    : (settings?.discord_screenshots || []);
+  const screenshotsSrc = useMemo(() => (
+    (!settings?.discord_override && activeDefaults?.discord_screenshots?.length > 0)
+      ? activeDefaults.discord_screenshots
+      : (settings?.discord_screenshots || [])
+  ), [activeDefaults?.discord_screenshots, settings?.discord_override, settings?.discord_screenshots]);
 
-  const templates = templatesSrc.map(t => {
-    if (!t) return null;
-    if (Array.isArray(t)) {
-      return { category: String(t[2] || defaultCategory), title: String(t[0] || ''), message: String(t[1] || '') };
-    }
-    if (typeof t === 'object') {
-      const category = t.category || t.Category || t.group || t.Group || '';
-      const title = t.title || t.Title || t.name || t.Name || t.label || t.Label || '';
-      const message = t.message || t.Message || t.text || t.Text || t.content || t.Content || t.body || t.Body || '';
-      const normalized = { category: String(category || defaultCategory), title: String(title), message: String(message) };
-      const explicitSuggestedScreenshots = getDiscordPostSuggestedScreenshotPaths(t);
-      if (explicitSuggestedScreenshots.length || Object.prototype.hasOwnProperty.call(t, 'suggestedScreenshots') || Object.prototype.hasOwnProperty.call(t, 'suggested_screenshots') || Object.prototype.hasOwnProperty.call(t, 'SuggestedScreenshots')) {
-        normalized.suggestedScreenshots = explicitSuggestedScreenshots;
-      }
-      return normalized;
-    }
-    return null;
-  }).filter(Boolean).map((item) => ({ ...item, key: discordTemplateKey(item) }));
+  const templates = useMemo(() => normalizeDiscordTemplates(templatesSrc, defaultCategory), [templatesSrc]);
 
   useEffect(() => {
     if (favoritesInitialized || favoriteKeys.length || !templates.length) return;
@@ -1652,7 +1715,7 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
     });
   }, [activeDefaults?.discord_templates?.length, discordTemplateSource, settings?.discord_templates?.length, templates.length, templatesSrc, templatesUsedSource]);
 
-  const screenshots = screenshotsSrc.map(s => {
+  const screenshots = useMemo(() => screenshotsSrc.map(s => {
     if (!s) return null;
     if (typeof s === 'object') {
       const category = s.category || s.Category || s.group || s.Group || '';
@@ -1661,9 +1724,9 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
       return { category: String(category || defaultCategory), title: String(title), imageUrl: String(imageUrl) };
     }
     return null;
-  }).filter(Boolean);
+  }).filter(Boolean), [screenshotsSrc]);
 
-  const activeItems = tab === 'templates' ? templates : screenshots;
+  const activeItems = useMemo(() => (tab === 'templates' ? templates : screenshots), [screenshots, tab, templates]);
   const categories = useMemo(() => {
     const seen = new Set();
     activeItems.forEach((item) => {
@@ -1777,6 +1840,19 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
     });
   }, [productivity.showCopyToast]);
 
+  useEffect(() => {
+    if (!initialShortcutKey || !templates.length) return;
+    const match = templates.find((template) => template.key === initialShortcutKey);
+    if (match) {
+      setTab('templates');
+      setSelectedKey(match.key);
+      if (productivity.automaticCopy) {
+        copyTemplate(match);
+      }
+    }
+    onShortcutHandled?.();
+  }, [copyTemplate, initialShortcutKey, onShortcutHandled, productivity.automaticCopy, templates]);
+
   const toggleFavorite = useCallback((template) => {
     if (!template?.key) return;
     markStoredDiscordKeysInitialized(DISCORD_FAVORITES_INITIALIZED_KEY);
@@ -1797,6 +1873,16 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
 
   const handleKeyDown = useCallback((event) => {
     if (commandPaletteOpen) return;
+    if (shortcutMatchesEvent(productivity.globalShortcuts.openPosts, event)) {
+      event.preventDefault();
+      setTab('templates');
+      return;
+    }
+    if (shortcutMatchesEvent(productivity.globalShortcuts.openScreenshots, event)) {
+      event.preventDefault();
+      setTab('screenshots');
+      return;
+    }
     if (productivity.enableShortcuts && productivity.enableCommandPalette && shortcutMatchesEvent(productivity.globalShortcuts.openCommandPalette, event)) {
       event.preventDefault();
       setTab('templates');
@@ -1868,6 +1954,11 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
     }
   }, [categories, commandPaletteOpen, copyTemplate, moveSelection, onClose, productivity, selectedTemplate, tab, templates, visibleTemplates]);
 
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
   const handlePaletteKeyDown = useCallback((event) => {
     event.stopPropagation();
     if (event.key === 'Escape') {
@@ -1908,7 +1999,7 @@ function DiscordModal({ settings, defaults, currentSession, initialTab = 'templa
 
   return (
     <div className="modal-overlay open" data-testid="discord-modal">
-      <div className="modal discord-modal" onClick={e => e.stopPropagation()} onKeyDown={handleKeyDown}>
+      <div className="modal discord-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Discord Posts</h2>
           <div className="discord-header-actions">

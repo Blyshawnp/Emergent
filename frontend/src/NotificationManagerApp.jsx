@@ -10,8 +10,6 @@ import {
   RefreshCw,
   HelpCircle,
   Search,
-  Copy,
-  Pencil,
   Download,
   Upload,
   DownloadCloud,
@@ -29,6 +27,7 @@ import {
   NOTIFICATION_CSV_COLUMNS,
   NOTIFICATION_MANAGER_STORAGE_KEY,
   createEmptyNotification,
+  createNotificationId,
   downloadCsv,
   ensureNotificationId,
   getEasternNowDefaults,
@@ -57,6 +56,7 @@ const SAM_SETTINGS_KEY = 'sam:settings';
 const SAM_BACKEND_RETRY_LIMIT = 6;
 const SAM_BACKEND_RETRY_BASE_DELAY_MS = 2000;
 const SAM_BACKEND_RETRY_MAX_DELAY_MS = 12000;
+const SAM_AUTO_REFRESH_INTERVAL_MS = 45000;
 const DEFAULT_SAM_SETTINGS = {
   soundVolume: 'medium',
   statusBannerDurationSeconds: 60,
@@ -195,27 +195,40 @@ const SAM_TUTORIAL_STEPS = [
   },
 ];
 let notificationStartupSoundAttempted = false;
+const SAM_SHARED_DATA_TEMPORARY_MESSAGE = 'Shared data is temporarily unavailable.\n\nPlease wait about 60 seconds and try again.';
+const SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE = 'Candidate Tracking is temporarily unavailable.\n\nGoogle Sheets is currently receiving too many requests or could not be reached.\n\nSAM will retry automatically. Please wait a moment and select Refresh if needed.';
+const SAM_CANDIDATE_TRACKING_CACHE_MS = 15000;
+const SAM_CANDIDATE_TRACKING_BACKOFF_MS = 60000;
+const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS = 1200;
+const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_LIMIT = 2;
 
 function getErrorMessage(error, fallback) {
   if (!error) return fallback;
-  if (error.response?.data?.error) return error.response.data.error;
+  if (typeof error.response?.data?.error === 'string') return error.response.data.error;
+  if (error.response?.data?.error) return fallback;
+  if (typeof error.response?.data?.message === 'string') return error.response.data.message;
+  if (error.response?.status === 429) return 'HTTP 429 rate limit';
   if (error.code === 'ECONNABORTED') return 'Connecting is taking longer than expected. Please try again in a moment.';
   if (/network error/i.test(error.message || '')) return 'Unable to reach live content. Please try Refresh or contact support.';
-  return error.message || fallback;
+  return typeof error.message === 'string' ? error.message : fallback;
 }
 
 function isSharedDataTemporaryError(value) {
   const text = String(value || '').toLowerCase();
-  return /quota|429|rate limit|too many requests|auth|credential|unauthori[sz]ed|forbidden|google|sheet|temporary|temporarily|timeout|unavailable|api/.test(text);
+  return /\[object object\]|quota|429|rate limit|rate_limit|too many requests|resource exhausted|auth|credential|unauthori[sz]ed|forbidden|google|sheet|temporary|temporarily|timeout|unavailable|api/.test(text);
 }
 
-function getSharedDataErrorMessage(error, fallback = 'Shared data is temporarily unavailable.\n\nPlease wait about 60 seconds and try again.') {
+function getSharedDataErrorMessage(error, fallback = SAM_SHARED_DATA_TEMPORARY_MESSAGE) {
   const raw = getErrorMessage(error, fallback);
   if (isSharedDataTemporaryError(raw)) {
     console.warn('[SAM] Shared data request failed; user-facing details were sanitized.', raw);
-    return 'Shared data is temporarily unavailable.\n\nPlease wait about 60 seconds and try again.';
+    return fallback;
   }
   return raw || fallback;
+}
+
+function getCandidateTrackingErrorMessage(error) {
+  return getSharedDataErrorMessage(error, SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE);
 }
 
 function formatSamTimestamp(value) {
@@ -399,7 +412,7 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
   };
 
   return (
-    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="nm-modal-backdrop">
       <section className="nm-help-modal" role="dialog" aria-modal="true" aria-labelledby="sam-help-title">
         <div className="nm-help-header">
           <div>
@@ -601,7 +614,7 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
   };
 
   return (
-    <div className="nm-modal-backdrop" onMouseDown={(event) => { if ((manualMode || !required) && !isInstalling && event.target === event.currentTarget) onLater(); }}>
+    <div className="nm-modal-backdrop">
       <section className="nm-help-modal nm-update-modal" role="dialog" aria-modal="true">
         <div className="nm-help-header">
           <div>
@@ -658,7 +671,7 @@ function StatusModal({ message, kind = 'info', onClose }) {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
   );
   return (
-    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="nm-modal-backdrop">
       <section className={`nm-help-modal nm-status-modal nm-status-modal-${kind}`} role="dialog" aria-modal="true">
         <div className="nm-help-header">
           <div className="nm-status-modal-head">
@@ -692,7 +705,7 @@ function ConfirmModal({ state, onConfirm, onCancel }) {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><circle cx="12" cy="17" r="0.6" fill="currentColor" /></svg>
   );
   return (
-    <div className="nm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+    <div className="nm-modal-backdrop">
       <section className={`nm-help-modal nm-status-modal nm-status-modal-${isDanger ? 'danger' : 'confirm'}`} role="dialog" aria-modal="true">
         <div className="nm-help-header">
           <div className="nm-status-modal-head">
@@ -839,12 +852,12 @@ const CANDIDATE_SORT_OPTIONS = [
 ];
 
 const SECTION_NAV_ITEMS = [
-  { key: 'notifications', label: 'Notifications', target: 'sam-notifications' },
-  { key: 'preview', label: 'Live Preview', target: 'sam-live-preview' },
-  { key: 'headsets', label: 'Headset Review', target: 'sam-headset-review' },
-  { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive' },
-  { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending' },
-  { key: 'help', label: 'Settings/Help', target: 'sam-help-settings' },
+  { key: 'notifications', label: 'Notifications', target: 'sam-notifications', tone: 'notifications' },
+  { key: 'preview', label: 'Live Preview', target: 'sam-live-preview', tone: 'preview' },
+  { key: 'headsets', label: 'Headset Review', target: 'sam-headset-review', tone: 'headsets' },
+  { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive', tone: 'candidates' },
+  { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending', tone: 'pending' },
+  { key: 'help', label: 'Settings/Help', target: 'sam-help-settings', tone: 'help' },
 ];
 
 function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault, showStatusModal }) {
@@ -852,6 +865,8 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const [selectedTargets, setSelectedTargets] = useState({});
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
+  const [candidateActionMenu, setCandidateActionMenu] = useState(null);
+  const [expandedRowPreviews, setExpandedRowPreviews] = useState({});
   const rows = data?.views?.[view] || [];
   const searchText = search.trim().toLowerCase();
   const searchPool = searchText
@@ -913,10 +928,6 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const selectedList = Object.values(selectedTargets);
   const selectedCount = selectedKeys.length;
   const allVisibleSelected = visibleEntries.length > 0 && visibleEntries.every((entry) => selectedTargets[entry.key]);
-  const setup = data?.setup || {};
-  const requiredSetup = Object.entries(setup)
-    .map(([tab, headers]) => `${tab}: ${Array.isArray(headers) ? headers.join(', ') : String(headers || '')}`)
-    .join('\n');
 
   useEffect(() => {
     setIncludeArchivedSearch(Boolean(includeArchivedDefault));
@@ -1129,6 +1140,14 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     });
   };
 
+  const toggleRowPreview = (rowKey) => {
+    setExpandedRowPreviews((current) => ({ ...current, [rowKey]: !current[rowKey] }));
+  };
+
+  const hasExpandablePreview = (results, notes) => (
+    String(results || '').length > 48 || String(notes || '').length > 72
+  );
+
   const computeRowMeta = (row) => {
     const results = [row.call_1_result, row.call_2_result, row.call_3_result, row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || row.mock_call_summary || 'Recorded';
     const notes = row.fail_summary || row.notes || row.coaching_summary || row.review_notes || 'None recorded';
@@ -1143,31 +1162,83 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     return { results, notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts, statusUpper, isPendingTransfer, isIncomplete, isWithdrawn, isArchived };
   };
 
-  const renderCandidateActions = (row) => {
+  const renderCandidateActions = (row, rowKey) => {
     const { isIncomplete, isPendingTransfer, isWithdrawn, isArchived } = computeRowMeta(row);
+    const closeMenu = () => setCandidateActionMenu(null);
+    const runMenuAction = async (action) => {
+      closeMenu();
+      await action();
+    };
+    const statusActions = [];
+    if (isIncomplete || isPendingTransfer || isWithdrawn) {
+      statusActions.push(
+        { label: 'Mark Passed', kind: 'success', onClick: () => handleManualCorrection(row, 'mark_passed', 'Mark Passed') },
+        { label: 'Mark Failed', kind: 'danger', onClick: () => handleManualCorrection(row, 'mark_failed', 'Mark Failed') },
+      );
+    }
+    if (isIncomplete && !isPendingTransfer) {
+      statusActions.push({ label: 'Move to Pending Sup', kind: 'action', onClick: () => handleManualCorrection(row, 'move_pending_sup_transfer', 'Move to Pending Sup Transfer') });
+    }
+    if (isPendingTransfer) {
+      statusActions.push({ label: 'Mark Incomplete', kind: 'action', onClick: () => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete') });
+    }
+    statusActions.push({ label: 'Extra Attempt', kind: 'info', onClick: () => handleExtraAttempt(row) });
+
+    const moreActions = [];
+    if (row.pending_id) {
+      moreActions.push({ label: 'Cancel Transfer', kind: 'danger', onClick: () => handleCancel(row) });
+    }
+    if (!isArchived) {
+      moreActions.push({ label: 'Archive', kind: 'secondary', onClick: () => handleArchive(row) });
+    }
+    moreActions.push(isWithdrawn
+      ? { label: 'Restore', kind: 'primary', onClick: () => handleRestore(row) }
+      : { label: 'Withdraw', kind: 'danger', onClick: () => handleWithdraw(row) });
+    moreActions.push({ label: 'Delete', kind: 'danger', onClick: () => handleDeleteRow(row) });
+
+    const renderMenu = (type, label, actions) => {
+      if (!actions.length) return null;
+      const menuKey = `${rowKey || getCandidateRowKey(row)}:${type}`;
+      const isOpen = candidateActionMenu === menuKey;
+      return (
+        <div className="nm-action-menu-wrap">
+          <button
+            type="button"
+            className="nm-btn nm-btn-secondary nm-btn-table nm-menu-trigger"
+            aria-haspopup="menu"
+            aria-expanded={isOpen}
+            aria-label={`${label} for ${row.candidate_name || 'candidate'}`}
+            onClick={() => setCandidateActionMenu(isOpen ? null : menuKey)}
+          >
+            {label}
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+          {isOpen ? (
+            <div className="nm-action-menu" role="menu" onKeyDown={(event) => { if (event.key === 'Escape') closeMenu(); }}>
+              {actions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  role="menuitem"
+                  className={`nm-action-menu-item is-${action.kind}`}
+                  onClick={() => runMenuAction(action.onClick)}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    };
+
     return (
-      <div className="nm-row-actions">
-        {(isIncomplete || isPendingTransfer || isWithdrawn) ? (
-          <>
-            <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_passed', 'Mark Passed')}>Mark Passed</button>
-            <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'mark_failed', 'Mark Failed')}>Mark Failed</button>
-          </>
-        ) : null}
-        {isIncomplete && !isPendingTransfer ? (
-          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'move_pending_sup_transfer', 'Move to Pending Sup Transfer')}>Move to Pending Sup</button>
-        ) : null}
-        {isPendingTransfer ? (
-          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete')}>Mark Incomplete</button>
-        ) : null}
-        {row.pending_id ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleCancel(row)}>Cancel</button> : null}
-        <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleExtraAttempt(row)}>Extra Attempt</button>
-        {!isArchived ? <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleArchive(row)}>Archive</button> : null}
-        {isWithdrawn ? (
-          <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => handleRestore(row)}>Restore</button>
-        ) : (
-          <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleWithdraw(row)}>Withdraw</button>
-        )}
-        <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => handleDeleteRow(row)}>Delete</button>
+      <div className="nm-row-actions nm-row-actions-compact">
+        <button type="button" className="nm-btn nm-btn-secondary nm-btn-table nm-view-details-btn" onClick={() => setDetailKey(rowKey)}>
+          View Details
+        </button>
+        {renderMenu('status', 'Update Status', statusActions)}
+        {renderMenu('more', 'More Actions', moreActions)}
       </div>
     );
   };
@@ -1260,7 +1331,6 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
         <div className="nm-status-card is-warning">
           <strong>Shared tracking unavailable</strong>
           <span>{data.error}</span>
-          {requiredSetup ? <pre>{requiredSetup}</pre> : null}
         </div>
       ) : null}
       <div className="nm-view-tabs" role="tablist" aria-label="Candidate tracking views">
@@ -1347,9 +1417,11 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             ) : visibleEntries.map(({ row, index, key: rowKey }) => {
               const { results, notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts, isArchived } = computeRowMeta(row);
               const isExpanded = detailKey === rowKey;
+              const isPreviewExpanded = Boolean(expandedRowPreviews[rowKey]);
+              const canExpandPreview = hasExpandablePreview(results, notes);
               return (
                 <React.Fragment key={rowKey}>
-                  <tr className={isExpanded ? 'is-selected' : ''}>
+                  <tr className={`${isExpanded ? 'is-selected' : ''} ${isPreviewExpanded ? 'is-preview-expanded' : ''}`}>
                     <td className="nm-select-column">
                       <input
                         type="checkbox"
@@ -1359,23 +1431,35 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                       />
                     </td>
                     <td>
-                      <div className="nm-row-title">{row.candidate_name || 'Unknown'}</div>
+                      <div className="nm-row-title" title={row.candidate_name || 'Unknown'} aria-label={row.candidate_name || 'Unknown'}>
+                        {row.candidate_name || 'Unknown'}
+                      </div>
                       <div className="nm-meta">{isArchived ? 'Archived' : sheetTruthy(row.final_attempt) || sheetTruthy(row.final_attempt_risk) ? 'Final-attempt risk' : sheetTruthy(row.extra_attempt_granted) ? 'Extra attempt granted' : 'Active'}</div>
                     </td>
-                    <td>{row.status || row.latest_status || 'Unknown'}</td>
+                    <td title={row.status || row.latest_status || 'Unknown'}>{row.status || row.latest_status || 'Unknown'}</td>
                     <td>{row.attempt_count ?? row.attempt_number ?? attempts.length ?? '0'}</td>
-                    <td>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
+                    <td title={row.original_tester_name || row.tester_name || 'Unknown'}>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
                     <td className="nm-meta">{formatSamTimestamp(row.completed_at || row.last_session_date || row.created_at)}</td>
-                    <td className="nm-meta">{results}</td>
+                    <td className="nm-meta" title={results}>
+                      <div className="nm-results-preview" title={results} tabIndex={0} aria-label={results}>{results}</div>
+                    </td>
                     <td className="nm-meta nm-notes-cell">
-                      <div className="nm-notes-preview">{notes}</div>
+                      <div className="nm-notes-preview" title={notes} tabIndex={0} aria-label={notes}>{notes}</div>
                       {hasFinalNotes ? <span className="nm-final-notes-badge" title={isFinalNotesHistoryOnly ? 'Final notes (history only — not in review summary)' : 'Final evaluator notes available'}>📝 Final Notes{isFinalNotesHistoryOnly ? ' (History)' : ''}</span> : null}
-                      <button type="button" className="nm-link-button" onClick={() => setDetailKey((current) => (current === rowKey ? null : rowKey))}>
-                        {isExpanded ? 'Hide Details' : 'View Details'}
-                      </button>
+                      {canExpandPreview ? (
+                        <button
+                          type="button"
+                          className="nm-row-preview-toggle"
+                          aria-expanded={isPreviewExpanded}
+                          aria-label={`${isPreviewExpanded ? 'Collapse' : 'Show more'} row preview for ${row.candidate_name || 'candidate'}`}
+                          onClick={() => toggleRowPreview(rowKey)}
+                        >
+                          {isPreviewExpanded ? 'Show Less' : 'Show More'}
+                        </button>
+                      ) : null}
                     </td>
                     <td>
-                      {renderCandidateActions(row)}
+                      {renderCandidateActions(row, rowKey)}
                     </td>
                   </tr>
                 </React.Fragment>
@@ -1384,38 +1468,41 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           </tbody>
         </table>
       </div>
-      <aside className="nm-detail-panel" aria-label="Candidate details">
-        {detailRow ? (
-          <>
-            <div className="nm-detail-head">
-              <div className="nm-detail-id">
-                <div className="nm-detail-name">{detailRow.candidate_name || 'Unknown'}</div>
-                <span className={`nm-badge ${detailMeta.isWithdrawn ? 'nm-badge-urgent' : detailMeta.isPendingTransfer ? 'nm-badge-warning' : detailMeta.isIncomplete ? 'nm-badge-info' : detailMeta.isArchived ? 'nm-badge-offline' : 'nm-badge-success'}`}>{detailRow.status || detailRow.latest_status || 'Unknown'}</span>
-              </div>
-              <button type="button" className="nm-modal-close" aria-label="Close candidate details" onClick={() => setDetailKey(null)}>×</button>
-            </div>
-            <dl className="nm-detail-grid">
-              <div><dt>Attempts</dt><dd>{detailRow.attempt_count ?? detailRow.attempt_number ?? detailMeta.attempts.length ?? '0'}</dd></div>
-              <div><dt>Tester</dt><dd>{detailRow.original_tester_name || detailRow.tester_name || 'Unknown'}</dd></div>
-              <div><dt>Date</dt><dd>{formatSamTimestamp(detailRow.completed_at || detailRow.last_session_date || detailRow.created_at)}</dd></div>
-              <div><dt>Results</dt><dd>{detailMeta.results}</dd></div>
-            </dl>
-            <div className="nm-detail-section">
-              <div className="nm-detail-label">Actions</div>
-              {renderCandidateActions(detailRow)}
-            </div>
-            <div className="nm-detail-section">
-              <div className="nm-detail-label">Record</div>
-              {renderCandidateDetails(detailRow)}
-            </div>
-          </>
-        ) : (
-          <div className="nm-empty nm-detail-empty">
-            Select <strong>View Details</strong> on a candidate to see their full record, history, and actions here.
-          </div>
-        )}
-      </aside>
       </div>
+      {detailRow ? (
+        <ModalPortal>
+          <div className="nm-modal-backdrop nm-candidate-detail-backdrop">
+            <section className="nm-candidate-detail-modal" role="dialog" aria-modal="true" aria-labelledby="sam-candidate-detail-title">
+              <div className="nm-candidate-detail-header">
+                <div className="nm-detail-id">
+                  <div className="nm-detail-name" id="sam-candidate-detail-title">{detailRow.candidate_name || 'Unknown'}</div>
+                  <span className={`nm-badge ${detailMeta.isWithdrawn ? 'nm-badge-urgent' : detailMeta.isPendingTransfer ? 'nm-badge-warning' : detailMeta.isIncomplete ? 'nm-badge-info' : detailMeta.isArchived ? 'nm-badge-offline' : 'nm-badge-success'}`}>{detailRow.status || detailRow.latest_status || 'Unknown'}</span>
+                </div>
+                <button type="button" className="nm-modal-close" aria-label="Close candidate details" onClick={() => setDetailKey(null)}>×</button>
+              </div>
+              <div className="nm-candidate-detail-scroll">
+                <dl className="nm-detail-grid">
+                  <div><dt>Attempts</dt><dd>{detailRow.attempt_count ?? detailRow.attempt_number ?? detailMeta.attempts.length ?? '0'}</dd></div>
+                  <div><dt>Tester</dt><dd>{detailRow.original_tester_name || detailRow.tester_name || 'Unknown'}</dd></div>
+                  <div><dt>Date</dt><dd>{formatSamTimestamp(detailRow.completed_at || detailRow.last_session_date || detailRow.created_at)}</dd></div>
+                  <div><dt>Results</dt><dd>{detailMeta.results}</dd></div>
+                </dl>
+                <div className="nm-detail-section">
+                  <div className="nm-detail-label">Actions</div>
+                  {renderCandidateActions(detailRow)}
+                </div>
+                <div className="nm-detail-section">
+                  <div className="nm-detail-label">Record</div>
+                  {renderCandidateDetails(detailRow)}
+                </div>
+              </div>
+              <div className="nm-candidate-detail-footer">
+                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setDetailKey(null)}>Back / Close</button>
+              </div>
+            </section>
+          </div>
+        </ModalPortal>
+      ) : null}
       <div className="nm-print-layout" aria-hidden="true">
         <div className="nm-print-header">
           <img src="/assets/branding/mts-logo-white.svg" alt="MTS Logo" className="nm-print-logo" />
@@ -1597,7 +1684,6 @@ function NotificationEditorModal({
     <ModalPortal>
       <div
         className="nm-editor-modal-layer"
-        onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
       >
         <section className="nm-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="nm-editor-title">
           <div className="nm-editor-header">
@@ -1628,15 +1714,6 @@ function NotificationEditorModal({
                       <select id="nm-type" value={selectedItem.Type} onChange={(event) => updateSelected({ Type: event.target.value })}>
                         {MANAGER_NOTIFICATION_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                       </select>
-                    </div>
-                    <div className="nm-field">
-                      <label htmlFor="nm-id">Notification ID</label>
-                      <input
-                        id="nm-id"
-                        value={selectedItem.ID}
-                        onChange={(event) => updateSelected({ ID: event.target.value })}
-                        placeholder={validation.id}
-                      />
                     </div>
                   </div>
 
@@ -1735,23 +1812,15 @@ function NotificationEditorModal({
                 </div>
 
                 <div className="nm-sidecard">
-                  <h4>Submit Rules</h4>
+                  <h4>Save Rules</h4>
                   <ul>
-                    <li>`StartDate` defaults to today in Eastern Time.</li>
-                    <li>`StartTime` defaults to the current Eastern time.</li>
-                    <li>`Expires At` stays blank until you choose an end date.</li>
-                    <li>When `EndDate` is set and `EndTime` is blank, submit uses `12:00 AM`.</li>
-                    <li>If the `ID` already exists in the sheet, Submit updates that row instead of appending a duplicate.</li>
+                    <li>Start date defaults to today in Eastern Time.</li>
+                    <li>Start time defaults to the current Eastern time.</li>
+                    <li>Expiration stays blank until you choose an end date.</li>
+                    <li>When an end date is set without a time, SAM uses 12:00 AM.</li>
+                    <li>SAM assigns and preserves the internal notification ID automatically.</li>
                     <li>Ticker speed is controlled in Mock Testing Suite Settings, not here.</li>
                   </ul>
-                  <h4 style={{ marginTop: 18 }}>Current ID</h4>
-                  <p style={{ margin: 0, fontFamily: '"IBM Plex Mono", monospace' }}>{validation.id}</p>
-                  {sheetState.sheetId ? (
-                    <>
-                      <h4 style={{ marginTop: 18 }}>Sheet ID</h4>
-                      <p style={{ margin: 0, fontFamily: '"IBM Plex Mono", monospace' }}>{sheetState.sheetId}</p>
-                    </>
-                  ) : null}
                 </div>
               </div>
             ) : (
@@ -2060,6 +2129,17 @@ export default function NotificationManagerApp() {
     setShowExitConfirm(false);
     if (resolver) resolver(value);
   }, []);
+  useEffect(() => {
+    if (!showExitConfirm) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        resolveExitConfirm(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [resolveExitConfirm, showExitConfirm]);
   const [tutorialStep, setTutorialStep] = useState(null);
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
@@ -2071,6 +2151,9 @@ export default function NotificationManagerApp() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [candidateTracking, setCandidateTracking] = useState({ ok: true, views: {}, candidates: [], pending: [], error: '' });
   const [candidateTrackingLoading, setCandidateTrackingLoading] = useState(false);
+  const candidateTrackingRequestRef = useRef(null);
+  const candidateTrackingCacheRef = useRef({ data: null, timestamp: 0 });
+  const candidateTrackingBackoffUntilRef = useRef(0);
   const [headsetReviews, setHeadsetReviews] = useState({ ok: true, pending: [], approved: [], denied: [], error: '' });
   const [headsetReviewsLoading, setHeadsetReviewsLoading] = useState(false);
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
@@ -2277,9 +2360,7 @@ export default function NotificationManagerApp() {
         return;
       }
       if (result.updateAvailable) {
-        if (!silent) {
-          setUpdateModal(result.updateInfo);
-        }
+        setUpdateModal(result.updateInfo);
         return;
       }
       if (!silent) {
@@ -2309,26 +2390,103 @@ export default function NotificationManagerApp() {
     await handleCheckForUpdates({ silent: true });
   }, [handleCheckForUpdates]);
 
-  const loadCandidateTracking = useCallback(async ({ silent = false } = {}) => {
+  const loadCandidateTracking = useCallback(async ({ silent = false, startup = false } = {}) => {
+    const now = Date.now();
+    const cached = candidateTrackingCacheRef.current;
+    if (silent && cached.data && now - cached.timestamp < SAM_CANDIDATE_TRACKING_CACHE_MS) {
+      return cached.data;
+    }
+    if (candidateTrackingRequestRef.current) {
+      if (!silent) setCandidateTrackingLoading(true);
+      try {
+        return await candidateTrackingRequestRef.current;
+      } finally {
+        if (!silent) setCandidateTrackingLoading(false);
+      }
+    }
+    if (now < candidateTrackingBackoffUntilRef.current) {
+      setCandidateTracking((current) => ({
+        ...current,
+        ok: false,
+        error: SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
+      }));
+      if (!silent) {
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'warning',
+          statusMessage: SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
+        }));
+      }
+      return cached.data || null;
+    }
+
     if (!silent) setCandidateTrackingLoading(true);
-    try {
-      const result = await api.getSharedAdminCandidates();
-      setCandidateTracking({
+    const requestPromise = (async () => {
+      let result = null;
+      let caughtError = null;
+      const maxAttempts = startup ? SAM_CANDIDATE_TRACKING_STARTUP_RETRY_LIMIT + 1 : 1;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          result = await api.getSharedAdminCandidates();
+          caughtError = null;
+          if (result?.ok !== false) break;
+        } catch (error) {
+          caughtError = error;
+        }
+        if (attempt < maxAttempts - 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS));
+        }
+      }
+      if (caughtError) throw caughtError;
+      const next = {
         ok: Boolean(result?.ok),
         views: result?.views || {},
         candidates: result?.candidates || [],
         pending: result?.pending || [],
-        error: result?.error || '',
-        setup: result?.setup || null,
-      });
+        error: result?.ok === false ? getCandidateTrackingErrorMessage({ message: result?.error }) : '',
+      };
+      if (next.ok) {
+        candidateTrackingCacheRef.current = { data: next, timestamp: Date.now() };
+        candidateTrackingBackoffUntilRef.current = 0;
+        setCandidateTracking(next);
+        return next;
+      }
+      candidateTrackingBackoffUntilRef.current = Date.now() + SAM_CANDIDATE_TRACKING_BACKOFF_MS;
+      setCandidateTracking((current) => ({
+        ...current,
+        ok: false,
+        error: next.error || SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
+      }));
+      if (!silent) {
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'warning',
+          statusMessage: next.error || SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
+        }));
+      }
+      return next;
+    })();
+    candidateTrackingRequestRef.current = requestPromise;
+    try {
+      return await requestPromise;
     } catch (error) {
-      const message = getSharedDataErrorMessage(error);
+      const message = getCandidateTrackingErrorMessage(error);
+      candidateTrackingBackoffUntilRef.current = Date.now() + SAM_CANDIDATE_TRACKING_BACKOFF_MS;
       setCandidateTracking((current) => ({
         ...current,
         ok: false,
         error: message,
       }));
+      if (!silent) {
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'warning',
+          statusMessage: message,
+        }));
+      }
+      return null;
     } finally {
+      candidateTrackingRequestRef.current = null;
       setCandidateTrackingLoading(false);
     }
   }, []);
@@ -2428,7 +2586,7 @@ export default function NotificationManagerApp() {
       }));
       playSamActionSound('success');
       showStatusModal(actionLabels[payload?.action] || 'Candidate tracking successfully updated.', 'success');
-      await loadCandidateTracking({ silent: true });
+      await loadCandidateTracking({ silent: true, startup: true });
     } catch (error) {
       const message = getSharedDataErrorMessage(error, 'Candidate tracking update failed.');
       setSheetState((current) => ({
@@ -2633,8 +2791,7 @@ export default function NotificationManagerApp() {
     if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) {
       return;
     }
-    // Do not show update status on normal startup
-    // void runStartupUpdateCheck();
+    void runStartupUpdateCheck();
   }, [runStartupUpdateCheck, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
 
   useEffect(() => {
@@ -2730,6 +2887,27 @@ export default function NotificationManagerApp() {
     }
   }, [refreshDiagnostics]);
 
+  useEffect(() => {
+    if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) return undefined;
+    const interval = window.setInterval(() => {
+      if (sheetState.isSaving || editorOpen || confirmModal) {
+        return;
+      }
+      void loadSheetItems({ silent: true });
+      void loadCandidateTracking({ silent: true });
+    }, SAM_AUTO_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [
+    confirmModal,
+    editorOpen,
+    loadCandidateTracking,
+    loadSheetItems,
+    samSetupStatus.loading,
+    samSetupStatus.setupComplete,
+    sheetState.backendReady,
+    sheetState.isSaving,
+  ]);
+
   const attemptBackendStartupRetry = useCallback(async (resetAttempt = false) => {
     if (resetAttempt) {
       clearBackendStartupRetryTimer();
@@ -2768,7 +2946,7 @@ export default function NotificationManagerApp() {
         return;
       }
       await loadSheetItems({ silent: false });
-      await loadCandidateTracking({ silent: true });
+      await loadCandidateTracking({ silent: true, startup: true });
     } catch (error) {
       const message = getSharedDataErrorMessage(error, 'Unable to connect to live data right now. Please try again in a moment.');
       scheduleBackendStartupRetry(message);
@@ -2829,7 +3007,7 @@ export default function NotificationManagerApp() {
           return;
         }
         await loadSheetItems();
-        await loadCandidateTracking({ silent: true });
+        await loadCandidateTracking({ silent: true, startup: true });
       } catch (error) {
         if (cancelled) return;
         const elapsed = Date.now() - startedAt;
@@ -2961,6 +3139,7 @@ export default function NotificationManagerApp() {
     const defaults = getEasternNowDefaults();
     const next = normalizeManagerNotification({
       ...createEmptyNotification(),
+      ID: createNotificationId(),
       StartDate: defaults.startDate,
       StartTime: defaults.startTime,
       CreatedAt: new Date().toISOString(),
@@ -2971,12 +3150,13 @@ export default function NotificationManagerApp() {
     setEditorOpen(true);
   };
 
-  const handleDuplicate = () => {
-    if (!selectedItem) return;
+  const handleDuplicate = (index = selectedIndex) => {
+    const source = Number.isInteger(index) && items[index] ? items[index] : selectedItem;
+    if (!source) return;
     const duplicate = normalizeManagerNotification({
-      ...selectedItem,
-      ID: '',
-      Title: selectedItem.Title ? `${selectedItem.Title} Copy` : '',
+      ...source,
+      ID: createNotificationId(),
+      Title: source.Title ? `${source.Title} Copy` : '',
       CreatedAt: new Date().toISOString(),
       UpdatedAt: new Date().toISOString(),
     });
@@ -3143,6 +3323,7 @@ export default function NotificationManagerApp() {
 
   const handleSubmit = async () => {
     if (!editorDraft) return;
+    if (sheetState.isSaving) return;
     if (editorValidation.errors.length > 0) {
       setSheetState((current) => ({
         ...current,
@@ -3257,7 +3438,7 @@ export default function NotificationManagerApp() {
     }));
     playSamActionSound('success');
     await loadSheetItems({ silent: false });
-    await loadCandidateTracking({ silent: true });
+    await loadCandidateTracking({ silent: true, startup: true });
   };
 
   if (sheetState.backendReady && !samSetupStatus.loading && !samSetupStatus.setupComplete) {
@@ -3306,6 +3487,14 @@ export default function NotificationManagerApp() {
             >
               <HelpCircle size={18} aria-hidden="true" />
             </button>
+            <button
+              type="button"
+              className="nm-btn nm-ops-exit"
+              onClick={handleExitApp}
+              aria-label="Exit Smart Alert Manager"
+            >
+              <LogOut size={16} aria-hidden="true" /> Exit
+            </button>
           </div>
         </header>
 
@@ -3314,9 +3503,9 @@ export default function NotificationManagerApp() {
           <div className={`nm-metric nm-metric-status is-${syncTone}`}>
             <div className="nm-metric-icon"><Activity size={20} aria-hidden="true" /></div>
             <div className="nm-metric-body">
-              <div className="nm-metric-label">Current Sync</div>
+              <div className="nm-metric-label">Sync Status</div>
               <div className="nm-metric-value">{syncLabel}</div>
-              <div className="nm-metric-sub">{syncSub}</div>
+              <div className="nm-metric-sub">{syncSub} · Last sync: {lastSyncLabel}</div>
             </div>
           </div>
           <button type="button" className="nm-metric nm-metric-btn" onClick={() => setActiveSection('notifications')}>
@@ -3343,29 +3532,26 @@ export default function NotificationManagerApp() {
               <div className="nm-metric-sub">{pendingCandidateCount ? 'Sup transfers due' : 'Nothing pending'}</div>
             </div>
           </button>
-          <div className="nm-metric nm-metric-muted">
-            <div className="nm-metric-icon"><Clock size={20} aria-hidden="true" /></div>
+          <button type="button" className="nm-metric nm-metric-btn nm-metric-action" onClick={handleAdd}>
+            <div className="nm-metric-icon"><Plus size={20} aria-hidden="true" /></div>
             <div className="nm-metric-body">
-              <div className="nm-metric-label">Last Sync</div>
-              <div className="nm-metric-value nm-metric-value-sm">{lastSyncLabel}</div>
-              <div className="nm-metric-sub">All times Eastern</div>
+              <div className="nm-metric-label">Add Notification</div>
+              <div className="nm-metric-value nm-metric-value-sm">Create</div>
+              <div className="nm-metric-sub">Start a new alert</div>
             </div>
-          </div>
+          </button>
+          <button type="button" className="nm-metric nm-metric-btn nm-metric-action" onClick={() => { setActiveSection('candidates'); setCandidateView('allActive'); }}>
+            <div className="nm-metric-icon"><Users size={20} aria-hidden="true" /></div>
+            <div className="nm-metric-body">
+              <div className="nm-metric-label">Candidate Tracking</div>
+              <div className="nm-metric-value nm-metric-value-sm">Open</div>
+              <div className="nm-metric-sub">Review all active candidates</div>
+            </div>
+          </button>
         </section>
 
         {/* ===== Quick actions (grouped) ===== */}
         <section className="nm-ops-quick" aria-label="Quick actions">
-          <div className="nm-ops-quick-group">
-            <span className="nm-ops-quick-label">Selection</span>
-            <div className="nm-ops-quick-buttons">
-              <button type="button" className="nm-ops-action" onClick={() => openEditor(selectedIndex)} disabled={!selectedItem}>
-                <Pencil size={15} aria-hidden="true" /> Edit
-              </button>
-              <button type="button" className="nm-ops-action" onClick={handleDuplicate} disabled={!selectedItem}>
-                <Copy size={15} aria-hidden="true" /> Duplicate
-              </button>
-            </div>
-          </div>
           <div className="nm-ops-quick-group">
             <span className="nm-ops-quick-label">Data</span>
             <div className="nm-ops-quick-buttons">
@@ -3378,24 +3564,24 @@ export default function NotificationManagerApp() {
             </div>
           </div>
           <div className="nm-ops-quick-group">
-            <span className="nm-ops-quick-label">Tools</span>
+            <span className="nm-ops-quick-label">Workflow</span>
             <div className="nm-ops-quick-buttons">
+              <button type="button" className="nm-ops-action" onClick={handleAdd}>
+                <Plus size={15} aria-hidden="true" /> Add Notification
+              </button>
               <button type="button" className="nm-ops-action" onClick={() => setSearchModalOpen(true)} data-sam-tour="candidate-search-btn">
                 <Search size={15} aria-hidden="true" /> Candidate Search
               </button>
-              <button type="button" className="nm-ops-action" onClick={handleCheckForUpdates}>
-                <DownloadCloud size={15} aria-hidden="true" /> Check for Updates
+              <button type="button" className="nm-ops-action" onClick={() => { setActiveSection('candidates'); setCandidateView('allActive'); }}>
+                <Users size={15} aria-hidden="true" /> Candidate Tracking
               </button>
             </div>
           </div>
-          <div className="nm-ops-quick-group nm-ops-quick-group-end">
+          <div className="nm-ops-quick-group">
             <span className="nm-ops-quick-label">System</span>
             <div className="nm-ops-quick-buttons">
-              <button type="button" className="nm-ops-action" onClick={() => setHelpOpen(true)}>
-                <HelpCircle size={15} aria-hidden="true" /> Help
-              </button>
-              <button type="button" className="nm-ops-action is-danger" onClick={handleExitApp}>
-                <LogOut size={15} aria-hidden="true" /> Exit
+              <button type="button" className="nm-ops-action" onClick={handleCheckForUpdates}>
+                <DownloadCloud size={15} aria-hidden="true" /> Check for Updates
               </button>
             </div>
           </div>
@@ -3416,7 +3602,7 @@ export default function NotificationManagerApp() {
                 type="button"
                 role="tab"
                 aria-selected={isActive}
-                className={`nm-ops-tab ${isActive ? 'is-active' : ''}`}
+                className={`nm-ops-tab is-${item.tone || 'default'} ${isActive ? 'is-active' : ''}`}
                 onClick={() => openSection(item)}
                 data-sam-tour={item.target === 'sam-candidate-tracking' && item.candidateView === 'allActive' ? 'candidate-tracking-btn' : undefined}
               >
@@ -3538,6 +3724,7 @@ export default function NotificationManagerApp() {
                     </button>
                     <div className="nm-note-card-actions">
                       <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => openEditor(index)}>Edit</button>
+                      <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleDuplicate(index)}>Duplicate</button>
                       <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleToggleEnabled(index)}>
                         {normalized.Enabled ? 'Disable' : 'Enable'}
                       </button>
@@ -3687,7 +3874,7 @@ export default function NotificationManagerApp() {
         onCancel={() => resolveConfirm(false)}
       />
       {showExitConfirm && (
-        <div className="sam-exit-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) resolveExitConfirm(false); }}>
+        <div className="sam-exit-backdrop">
           <section className="sam-exit-modal" role="dialog" aria-modal="true">
             <div className="sam-exit-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
