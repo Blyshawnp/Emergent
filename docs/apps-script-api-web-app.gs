@@ -26,6 +26,8 @@ const ALLOWED_TABS = Object.freeze([
   'headsets',
   'gemini-coaching-prompt',
   'gemini-fail-prompt',
+  'mts-tutorial-videos',
+  'sam-tutorial-videos',
   'Candidate Sessions',
   'Pending Sup Transfers',
   'newbie-shift-requests',
@@ -69,6 +71,15 @@ function dispatchGet_(action, params) {
       return { rows: readTableRows_('screenshots') };
     case 'getDiscordPosts':
       return { rows: readTableRows_('discord-posts') };
+    case 'getTutorialVideos':
+      return {
+        mtsRows: readOptionalTableRows_('mts-tutorial-videos'),
+        samRows: readOptionalTableRows_('sam-tutorial-videos'),
+      };
+    case 'getMtsTutorialVideos':
+      return { rows: readOptionalTableRows_('mts-tutorial-videos') };
+    case 'getSamTutorialVideos':
+      return { rows: readOptionalTableRows_('sam-tutorial-videos') };
     case 'getHeadsetReviewLog':
       return { rows: readTableRows_('headset-review-log') };
     case 'getCandidateTracking':
@@ -227,6 +238,15 @@ function readTableRows_(title) {
     });
     return item;
   });
+}
+
+function readOptionalTableRows_(title) {
+  try {
+    return readTableRows_(title);
+  } catch (error) {
+    if (String(error && error.message || error).indexOf('Missing sheet') !== -1) return [];
+    throw error;
+  }
 }
 
 function getPendingRequests_(params) {

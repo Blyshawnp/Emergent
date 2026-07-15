@@ -2,6 +2,8 @@
 
 This document explains where the MTS Help and FAQ fallback content lives and how live Google Doc overrides interact with it.
 
+Help is a searchable written guide and must remain complete without video. Every trainer article retains What this is, When to use it, Steps, What happens next, Common mistakes, and Related topics. Optional tutorial metadata is maintained separately under `docs/tutorial-video-setup.md`; do not put backend routes, storage details, credentials, workbook setup, deployment instructions, or developer commands into trainer-facing Help.
+
 Trainer Help must contain user workflows, status meanings, safe troubleshooting, and support guidance only. Admin setup and developer implementation details remain in repository documentation such as `backend/defaults/admin-setup.md`, `PROJECT_CONTEXT.md`, and the data-source maintenance guides.
 
 ## Runtime source order

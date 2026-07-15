@@ -106,6 +106,8 @@ Because of that, the `Approved Headsets` worksheet in the workbook is a structur
 2. Review or edit each worksheet.
 3. If you want a simpler import path, use the files in `csv-tabs/` instead of the XML workbook.
 4. In Google Sheets, create one tab per CSV and import each file into its matching tab name exactly.
+
+Tutorial metadata uses `mts-tutorial-videos.csv` and `sam-tutorial-videos.csv`. Keep the exact headers and Category values in `docs/tutorial-video-setup.md`. Placeholder Quick Start rows are inactive; set `Active` to `TRUE` only after adding and testing an approved YouTube URL.
 5. Use `help-content.rtf` and `faq-content.rtf` as the starting point for Google Docs versions of Help and FAQ.
 6. Use the Google Sheet tabs `gemini-coaching-prompt` and `gemini-fail-prompt` only if you need intentional remote Gemini prompt overrides.
 7. Use `admin-master-guide.rtf` as the starting point for the admin-only Google Doc.

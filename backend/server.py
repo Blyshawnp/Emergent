@@ -525,6 +525,8 @@ DEFAULTS_FILE_MAP = {
     "help_markdown": "help.md",
     "faq_markdown": "faq.md",
     "admin_setup_markdown": "admin-setup.md",
+    "mts_tutorial_videos": "mts-tutorial-videos.csv",
+    "sam_tutorial_videos": "sam-tutorial-videos.csv",
     "gemini_coaching_prompt": "gemini-coaching-prompt.md",
     "gemini_fail_prompt": "gemini-fail-prompt.md",
 }
@@ -541,6 +543,8 @@ CONTENT_SHEET_TAB_MAP = {
     "discord_templates": "discord-posts",
     "discord_screenshots": "screenshots",
     "approved_headsets": "headsets",
+    "mts_tutorial_videos": "mts-tutorial-videos",
+    "sam_tutorial_videos": "sam-tutorial-videos",
     "gemini_coaching_prompt": "gemini-coaching-prompt",
     "gemini_fail_prompt": "gemini-fail-prompt",
 }
@@ -676,6 +680,8 @@ TRACKED_CONTENT_KEYS = (
     "help_markdown",
     "faq_markdown",
     "admin_setup_markdown",
+    "mts_tutorial_videos",
+    "sam_tutorial_videos",
     "gemini_coaching_prompt",
     "gemini_fail_prompt",
 )
@@ -1764,6 +1770,81 @@ def _normalize_denied_headsets(rows):
     return denied
 
 
+TUTORIAL_VIDEO_HEADERS = [
+    "Category", "VideoKey", "Title", "Description", "YouTubeURL", "Duration",
+    "HelpTopicKey", "SortOrder", "Active", "Audience", "Notes",
+]
+MTS_TUTORIAL_CATEGORIES = {
+    "Quick Start", "Getting Started", "Candidate Lookup", "Approved Headsets", "Mock Calls",
+    "Supervisor Transfers", "Smart Resume", "Technical Issues", "Newbie Shifts", "Rescheduling",
+    "Review and Form Fill", "History", "Discord Posts", "Settings", "Help and Shortcuts", "Troubleshooting",
+}
+SAM_TUTORIAL_CATEGORIES = {
+    "Quick Start", "Dashboard", "Notifications", "Live Preview", "Candidate Search", "Candidate Tracking",
+    "Pending Supervisor Transfers", "Pending Requests", "Headset Review", "Reports", "Updates", "Settings", "Help", "Troubleshooting",
+}
+YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+YOUTUBE_VIDEO_HOSTS = {"youtube.com", "www.youtube.com", "youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com"}
+
+
+def _tutorial_youtube_video_id(value):
+    text = str(value or "").strip()
+    if not text or "<" in text or ">" in text:
+        return ""
+    if YOUTUBE_VIDEO_ID_RE.fullmatch(text):
+        return text
+    try:
+        parsed = urlparse(text)
+    except Exception:
+        return ""
+    host = str(parsed.hostname or "").lower()
+    if parsed.scheme != "https" or host not in YOUTUBE_VIDEO_HOSTS:
+        return ""
+    parts = [part for part in str(parsed.path or "").split("/") if part]
+    candidate = ""
+    if host == "youtu.be":
+        candidate = parts[0] if parts else ""
+    elif parsed.path == "/watch":
+        from urllib.parse import parse_qs
+        candidate = (parse_qs(parsed.query).get("v") or [""])[0]
+    elif parts and parts[0] in {"embed", "shorts", "live"}:
+        candidate = parts[1] if len(parts) > 1 else ""
+    return candidate if YOUTUBE_VIDEO_ID_RE.fullmatch(candidate or "") else ""
+
+
+def _normalize_tutorial_videos(rows, app):
+    if not isinstance(rows, list) or not rows:
+        return []
+    present_headers = {str(key or "").strip() for key in (rows[0] or {}).keys()}
+    if not set(TUTORIAL_VIDEO_HEADERS).issubset(present_headers):
+        logger.warning("[CONTENT] %s tutorial rows have invalid headers; using packaged fallback.", str(app).upper())
+        return []
+    categories = SAM_TUTORIAL_CATEGORIES if app == "sam" else MTS_TUTORIAL_CATEGORIES
+    normalized, seen_keys = [], set()
+    for row in rows:
+        video_key = str(row.get("VideoKey") or "").strip()
+        title = str(row.get("Title") or "").strip()
+        if not video_key or not title or video_key.casefold() in seen_keys:
+            continue
+        category = str(row.get("Category") or "").strip()
+        youtube_url = str(row.get("YouTubeURL") or "").strip()
+        if youtube_url and not _tutorial_youtube_video_id(youtube_url):
+            continue
+        try:
+            sort_order = int(str(row.get("SortOrder") or "9999").strip())
+        except (TypeError, ValueError):
+            sort_order = 9999
+        normalized.append({
+            "Category": category if category in categories else "Other Tutorials", "VideoKey": video_key,
+            "Title": title, "Description": str(row.get("Description") or "").strip(),
+            "YouTubeURL": youtube_url, "Duration": str(row.get("Duration") or "").strip(),
+            "HelpTopicKey": str(row.get("HelpTopicKey") or "").strip(), "SortOrder": sort_order,
+            "Active": str(row.get("Active") or "").strip(), "Audience": str(row.get("Audience") or "").strip(),
+        })
+        seen_keys.add(video_key.casefold())
+    return normalized
+
+
 def _load_local_defaults_content():
     source_dirs = _local_default_source_dirs()
     defaults_dir = _resolve_defaults_dir()
@@ -1862,6 +1943,8 @@ def _load_local_defaults_content():
         "discord_screenshots": lambda: _normalize_screenshots(read_csv_file(DEFAULTS_FILE_MAP["discord_screenshots"]) or []),
         "approved_headsets": lambda: _normalize_approved_headsets(headset_rows),
         "denied_headsets": lambda: _normalize_denied_headsets(headset_rows),
+        "mts_tutorial_videos": lambda: _normalize_tutorial_videos(read_csv_file(DEFAULTS_FILE_MAP["mts_tutorial_videos"]) or [], "mts"),
+        "sam_tutorial_videos": lambda: _normalize_tutorial_videos(read_csv_file(DEFAULTS_FILE_MAP["sam_tutorial_videos"]) or [], "sam"),
     }
 
     for key, loader in local_csv_loaders.items():
@@ -1941,6 +2024,8 @@ CONTENT_SHEET_PARSERS = {
         "approved_headsets": _normalize_approved_headsets(_read_csv_rows(csv_text)),
         "denied_headsets": _normalize_denied_headsets(_read_csv_rows(csv_text)),
     },
+    "mts_tutorial_videos": lambda csv_text: {"mts_tutorial_videos": _normalize_tutorial_videos(_read_csv_rows(csv_text), "mts")},
+    "sam_tutorial_videos": lambda csv_text: {"sam_tutorial_videos": _normalize_tutorial_videos(_read_csv_rows(csv_text), "sam")},
 }
 
 
@@ -3455,6 +3540,8 @@ SAM_AUTHORIZED_USERS_TAB = "sam-authorized-users"
 SAM_NOTIFICATIONS_TAB = "sam-notifications"
 HEADSET_REVIEW_LOG_TAB = "headset-review-log"
 HEADSETS_TAB = "headsets"
+MTS_TUTORIAL_VIDEOS_TAB = "mts-tutorial-videos"
+SAM_TUTORIAL_VIDEOS_TAB = "sam-tutorial-videos"
 
 SAM_AUTHORIZED_USER_HEADERS = [
     "name",
@@ -3712,6 +3799,13 @@ def _gemini_prompt_required_setup():
     return {
         tab_name: ["prompt"]
         for tab_name, _filename in GEMINI_PROMPT_TABS.values()
+    }
+
+
+def _tutorial_video_required_setup():
+    return {
+        MTS_TUTORIAL_VIDEOS_TAB: TUTORIAL_VIDEO_HEADERS,
+        SAM_TUTORIAL_VIDEOS_TAB: TUTORIAL_VIDEO_HEADERS,
     }
 
 
@@ -3984,6 +4078,7 @@ def _verify_master_shared_sheets():
         "setup": {
             **_shared_tracking_required_setup(),
             **_gemini_prompt_required_setup(),
+            **_tutorial_video_required_setup(),
             **_update_sheet_required_setup(),
             **_sam_admin_required_setup(),
         },
@@ -4009,6 +4104,8 @@ def _verify_master_shared_sheets():
                 result["tabs"].append({"tab": title, "ok": True})
             for title, _ in GEMINI_PROMPT_TABS.values():
                 result["tabs"].append({"tab": title, "ok": True})
+            for title in _tutorial_video_required_setup().keys():
+                result["tabs"].append({"tab": title, "ok": True, "manualVerificationRequired": True})
             result["ok"] = True
             return result
         except Exception as exc:
@@ -4044,6 +4141,16 @@ def _verify_master_shared_sheets():
                 status = _verify_gemini_prompt_tab(sheets_api, sheet_id, title, filename, tabs)
             except Exception as exc:
                 status = _tab_error_status(title, "gemini_prompt", exc, exists=title in tabs)
+            result["tabs"].append(status)
+            if status.get("created"):
+                metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
+                tabs = {((sheet.get("properties") or {}).get("title") or ""): sheet for sheet in metadata.get("sheets", [])}
+
+        for title, headers in _tutorial_video_required_setup().items():
+            try:
+                status = _verify_header_tab(sheets_api, sheet_id, title, headers, "tutorial_videos", tabs)
+            except Exception as exc:
+                status = _tab_error_status(title, "tutorial_videos", exc, exists=title in tabs)
             result["tabs"].append(status)
             if status.get("created"):
                 metadata = sheets_api.get(spreadsheetId=sheet_id).execute()
@@ -9532,6 +9639,14 @@ async def get_help_content():
         **HELP_CONTENT,
         "help_markdown": help_text,
         "faq_markdown": faq_text,
+        "tutorial_videos": {
+            "mts": EXTERNAL_CONTENT.get("mts_tutorial_videos") or [],
+            "sam": EXTERNAL_CONTENT.get("sam_tutorial_videos") or [],
+        },
+        "tutorial_video_source": {
+            "mts": (_content_source_status.get("mts_tutorial_videos") or {}).get("source") or "local_csv",
+            "sam": (_content_source_status.get("sam_tutorial_videos") or {}).get("source") or "local_csv",
+        },
     }
 
 

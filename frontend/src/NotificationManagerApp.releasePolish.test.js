@@ -435,6 +435,16 @@ test('SAM headset startup notice is a non-modal status update', () => {
   expect(appSource).not.toContain('setHeadsetReviewNoticeOpen');
 });
 
+test('MTS and SAM post-setup Quick Start is one-time, skippable, and replayable from Help', () => {
+  expect(mtsAppSource).toContain("const MTS_QUICK_START_STATE_KEY = 'mts:quick-start:v1'");
+  expect(mtsAppSource).toContain("localStorage.setItem(MTS_QUICK_START_STATE_KEY, 'pending')");
+  expect(mtsAppSource).toContain('onReplayQuickStart={replayQuickStart}');
+  expect(appSource).toContain("const SAM_QUICK_START_STATE_KEY = 'sam:quick-start:v1'");
+  expect(appSource).toContain("localStorage.setItem(SAM_QUICK_START_STATE_KEY, 'seen')");
+  expect(appSource).toContain('onReplayQuickStart={replayQuickStart}');
+  expect(appSource).toContain('<PostSetupQuickStart');
+});
+
 test('Electron main locks one instance per app mode while preserving app identities', () => {
   expect(electronMain).toContain('app.requestSingleInstanceLock');
   expect(electronMain).toContain('Mock Testing Suite is already open.');

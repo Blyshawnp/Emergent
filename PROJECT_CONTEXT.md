@@ -1064,6 +1064,14 @@ Verification needed from current packaged-app smoke testing:
 
 ## 14. Recent Major Changes
 
+### 2026-07-15: Searchable Help, post-setup Quick Start, and tutorial videos
+
+- Expanded MTS and SAM Help into searchable user guides with trainer/admin workflow articles, consistent What this is / When to use it / Steps / What happens next / Common mistakes / Related topics structure, and a session/follow-up/form status glossary. Normal Help continues filtering developer, storage, deployment, credential, route, and schema content.
+- Replaced forced first-run walkthrough startup with a one-time, skippable post-setup choice in both apps. Users can watch the established guided Quick Start, open the app-specific user guide, or continue directly to Home/Dashboard; setup values remain saved and Help can replay the choice screen.
+- Added one reusable click-to-load YouTube player/library. It accepts only strict YouTube IDs or HTTPS URLs from the approved YouTube hosts, constructs `youtube-nocookie.com` embeds internally, mounts one selected iframe, supports fullscreen when permitted, and uses the existing safe external-browser bridge as fallback.
+- Added managed `mts-tutorial-videos` and `sam-tutorial-videos` content with exact shared headers, approved app categories, HelpTopicKey article linking, Active filtering, deterministic SortOrder, Other Tutorials placement, inactive packaged Quick Start placeholders, and valid-remote-over-packaged-fallback precedence.
+- The explicit master-content setup path can create the tutorial tabs and write blank headers once; normal Help refresh and polling never creates/verifies tabs. Apps Script source allowlists both tabs and adds tutorial read actions. The live workbook and deployment were not changed by repository work and require the manual steps in `docs/tutorial-video-setup.md` and `docs/apps-script-api-packaged-config.md`.
+
 ### 2026-07-15: Pending Requests reminder lifecycle and deployment readiness
 
 - Replaced the unversioned ad hoc SAM alert map with one bounded, versioned per-install suppression store containing only request ID, suppression type, and epoch expiry. Remind Me and Dismiss suppress immediate alerts for 30 minutes while bell/category counts and inbox rows remain unchanged.

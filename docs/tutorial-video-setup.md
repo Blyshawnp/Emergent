@@ -1,40 +1,44 @@
-# Tutorial Video Setup
+# Tutorial Video Maintenance
 
-Mock Testing Suite supports an optional local tutorial video in Help. The guided step-by-step tutorial remains the fallback and no video is required.
+MTS and SAM written Help remains complete without video. Videos are optional, click-to-load supplements under Help > Tutorial Videos and matching Help articles.
 
-## Recommended Location
+## Tabs and exact headers
 
-Place the video in:
+Create `mts-tutorial-videos` and `sam-tutorial-videos` in the configured admin content workbook. Use this exact header row on both:
 
-`frontend/public/assets/tutorial/`
+```text
+Category,VideoKey,Title,Description,YouTubeURL,Duration,HelpTopicKey,SortOrder,Active,Audience,Notes
+```
 
-Recommended filenames:
+The established master-content setup action can create a missing tab and write this header once. Help refresh and polling never create or verify tabs. If setup cannot run safely, create the tabs and headers manually.
 
-- `tutorial.mp4`
-- `mts-tutorial.mp4`
+## Row maintenance
 
-## Supported Formats
+- `Category`: one exact app value below.
+- `VideoKey`: stable unique key.
+- `Title`, `Description`, `Duration`, `Audience`: trainer-facing card text.
+- `YouTubeURL`: an HTTPS YouTube watch, `youtu.be`, or embed URL. Never paste iframe HTML.
+- `HelpTopicKey`: matching article key, such as `candidate-lookup`, `history`, or `pending-requests`.
+- `SortOrder`: whole number; lower values display first.
+- `Active`: only `TRUE` rows display.
+- `Notes`: admin maintenance notes; never shown in normal Help.
 
-Use MP4 with H.264 video and AAC audio for the most reliable Electron playback.
+Blank YouTubeURL displays `Video Coming Soon`. Invalid/non-YouTube URLs are skipped. Unknown categories appear under `Other Tutorials`.
 
-## Rebuild and Package
+## MTS categories
 
-After adding or replacing the video, rebuild the React app and then rebuild/package the desktop app with the normal release process. For this repo, run the normal frontend build from `desktop`:
+`Quick Start`, `Getting Started`, `Candidate Lookup`, `Approved Headsets`, `Mock Calls`, `Supervisor Transfers`, `Smart Resume`, `Technical Issues`, `Newbie Shifts`, `Rescheduling`, `Review and Form Fill`, `History`, `Discord Posts`, `Settings`, `Help and Shortcuts`, `Troubleshooting`.
 
-`npm run build:react`
+## SAM categories
 
-Then run the normal packaging or clean rebuild command for the release you are preparing.
+`Quick Start`, `Dashboard`, `Notifications`, `Live Preview`, `Candidate Search`, `Candidate Tracking`, `Pending Supervisor Transfers`, `Pending Requests`, `Headset Review`, `Reports`, `Updates`, `Settings`, `Help`, `Troubleshooting`.
 
-## No Video Behavior
+## Source priority
 
-If neither recommended file exists, Help does not show the "Watch Tutorial Video" button. The existing guided tutorial remains available from Help and first-run setup.
+Valid remote rows replace the packaged list. Missing, unavailable, or malformed remote content falls back to `backend/defaults/mts-tutorial-videos.csv` and `backend/defaults/sam-tutorial-videos.csv`, mirrored in `docs/admin-content-package/csv-tabs/`. Placeholder Quick Start rows ship inactive.
 
-## Test Checklist
+## Apps Script and acceptance
 
-1. Add the MP4 file to `frontend/public/assets/tutorial/`.
-2. Run `npm run build:react` from `desktop`.
-3. Open Help.
-4. Confirm "Watch Tutorial Video" appears.
-5. Click it and confirm the local video opens.
-6. Remove or rename the video.
-7. Rebuild and confirm Help falls back to only "Replay Tutorial".
+Repository source allowlists both tabs and reads them through `getTutorialVideos`, `getMtsTutorialVideos`, and `getSamTutorialVideos`. For Apps Script installations, update the existing deployment using `docs/apps-script-api-packaged-config.md`; keep its URL stable and private.
+
+Add one active test row per tab, refresh Help, verify app/category placement and playback, deactivate each row, then verify it disappears. Also verify Open in Browser and packaged fallback during a safe remote failure test.

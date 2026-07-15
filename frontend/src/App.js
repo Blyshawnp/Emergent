@@ -53,6 +53,7 @@ import {
 import mtsLogo from './assets/images/MTSLogonew.png';
 import updateGraphic from './assets/images/update.png';
 import TutorialPreviewOverlay from "./tutorial/TutorialPreviewOverlay";
+import PostSetupQuickStart from './components/PostSetupQuickStart';
 
 const LOGO_SRC = mtsLogo;
 const APP_VERSION_FALLBACK = '1.0.1';
@@ -61,6 +62,7 @@ const INITIAL_SETTINGS_MAX_RETRIES = 12;
 const SIDEBAR_COLLAPSED_KEY = 'mts-sidebar-collapsed';
 const TUTORIAL_STATUS_KEY = 'mts-tutorial-status';
 const TUTORIAL_AFTER_SETUP_KEY = 'mts-start-tutorial-after-setup';
+const MTS_QUICK_START_STATE_KEY = 'mts:quick-start:v1';
 const DISMISSED_NOTIFICATION_POPUPS_KEY = 'mts-dismissed-notification-popups';
 const DISMISSED_NOTIFICATION_BANNERS_KEY = 'mts-dismissed-notification-banners';
 const TICKER_REFRESH_INTERVAL_MS = 30000;
@@ -211,8 +213,8 @@ function resolveScreenshotUrl(imageUrl) {
   return `${backend}/${cleanPath}`;
 }
 
-function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal, onHistoryRefresh }) {
-  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onSetupCompleted, startupStatuses, setMtsUpdateModal, onHistoryRefresh };
+function PageRouter({ page, navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onReplayQuickStart, onSetupCompleted, startupStatuses, setMtsUpdateModal, onHistoryRefresh }) {
+  const props = { onNavigate: navigate, navigationState, updateState, refreshUpdateState, appVersion, settings, defaults, history, historyStats, currentSession, onReplayTutorial, onReplayQuickStart, onSetupCompleted, startupStatuses, setMtsUpdateModal, onHistoryRefresh };
   switch (page) {
     case 'setup': return <SetupPage {...props} />;
     case 'home': return <HomePage {...props} />;
@@ -579,6 +581,7 @@ function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.sessionStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1');
   const [tutorialRun, setTutorialRun] = useState(false);
   const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+  const [quickStartOpen, setQuickStartOpen] = useState(false);
   const [appVersion, setAppVersion] = useState(() => window.electronAPI?.getVersion?.() || APP_VERSION_FALLBACK);
   const [updateState, setUpdateState] = useState({ currentVersion: APP_VERSION_FALLBACK, pendingUpdate: null, installedUpdate: null });
   const [mtsUpdateModal, setMtsUpdateModal] = useState(null);
@@ -1179,7 +1182,9 @@ function AppShell() {
       // Ignore settings refresh errors here; the user can still proceed to Home.
     }
 
-    localStorage.setItem(TUTORIAL_AFTER_SETUP_KEY, '1');
+    localStorage.removeItem(TUTORIAL_AFTER_SETUP_KEY);
+    localStorage.setItem(MTS_QUICK_START_STATE_KEY, 'pending');
+    setQuickStartOpen(true);
     navigate('home', null);
   }, [navigate]);
 
@@ -1215,12 +1220,23 @@ function AppShell() {
     }, 0);
   }, [navigate]);
 
+  const closeQuickStart = useCallback(() => {
+    localStorage.setItem(MTS_QUICK_START_STATE_KEY, 'seen');
+    setQuickStartOpen(false);
+    navigate('home', null);
+  }, [navigate]);
+
+  const replayQuickStart = useCallback(() => {
+    setTutorialRun(false);
+    setQuickStartOpen(true);
+  }, []);
+
   useEffect(() => {
     if (loading || tutorialRun) {
       return;
     }
 
-    if (localStorage.getItem(TUTORIAL_AFTER_SETUP_KEY) !== '1') {
+    if (localStorage.getItem(MTS_QUICK_START_STATE_KEY) !== 'pending') {
       return;
     }
 
@@ -1229,17 +1245,15 @@ function AppShell() {
       return;
     }
 
-    localStorage.removeItem(TUTORIAL_AFTER_SETUP_KEY);
-    localStorage.removeItem(TUTORIAL_STATUS_KEY);
-    startFullTutorial();
-  }, [loading, navigate, page, startFullTutorial, tutorialRun]);
+    setQuickStartOpen(true);
+  }, [loading, navigate, page, tutorialRun]);
 
   useEffect(() => {
     if (loading || tutorialRun || tutorialAutoStartRef.current) {
       return;
     }
 
-    if (!settings?.setup_complete || settings?.tutorial_completed === true) {
+    if (!settings?.setup_complete || settings?.tutorial_completed === true || localStorage.getItem(MTS_QUICK_START_STATE_KEY)) {
       return;
     }
 
@@ -1249,9 +1263,9 @@ function AppShell() {
     }
 
     tutorialAutoStartRef.current = true;
-    localStorage.removeItem(TUTORIAL_STATUS_KEY);
-    startFullTutorial();
-  }, [loading, navigate, page, settings, startFullTutorial, tutorialRun]);
+    localStorage.setItem(MTS_QUICK_START_STATE_KEY, 'pending');
+    setQuickStartOpen(true);
+  }, [loading, navigate, page, settings, tutorialRun]);
 
   const handleExit = useCallback(async () => {
     if (window.electronAPI?.quitApp) {
@@ -1329,6 +1343,22 @@ function AppShell() {
         currentPage={page}
         onStop={stopTutorial}
       />
+      {quickStartOpen ? (
+        <PostSetupQuickStart
+          app="mts"
+          onWatch={() => {
+            localStorage.setItem(MTS_QUICK_START_STATE_KEY, 'seen');
+            setQuickStartOpen(false);
+            startFullTutorial();
+          }}
+          onGuide={() => {
+            localStorage.setItem(MTS_QUICK_START_STATE_KEY, 'seen');
+            setQuickStartOpen(false);
+            navigate('help', { section: 'getting-started' });
+          }}
+          onContinue={closeQuickStart}
+        />
+      ) : null}
 
       <div className="app-root" data-testid="app-root">
         <div className="ticker-bar" style={{ '--ticker-duration': `${tickerDurationSeconds}s` }}>
@@ -1430,6 +1460,7 @@ function AppShell() {
                   historyStats={historyStats}
                   currentSession={currentSession}
                   onReplayTutorial={startFullTutorial}
+                  onReplayQuickStart={replayQuickStart}
                   onSetupCompleted={handleSetupCompleted}
                   startupStatuses={startupStatuses}
                   setMtsUpdateModal={setMtsUpdateModal}

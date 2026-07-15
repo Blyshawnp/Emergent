@@ -12,5 +12,5 @@ test('tutorial guidance includes synced settings and workflow updates', () => {
   expect(TUTORIAL_COPY.reviewFill).toContain('Final Readiness Judgment');
   expect(TUTORIAL_COPY.reviewFill).toContain('regenerate');
   expect(TUTORIAL_COPY.helpPage).toContain('Discord categories');
-  expect(TUTORIAL_COPY.helpPage).toContain('optional local tutorial video');
+  expect(TUTORIAL_COPY.helpPage).toContain('Tutorial Videos');
 });

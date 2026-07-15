@@ -2,11 +2,19 @@ import React, { useEffect, useMemo, useState } from 'react';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
+import { TutorialVideoLibrary } from '../components/TutorialVideoPlayer';
+import { normalizeTutorialVideos } from '../utils/tutorialVideos';
 
 const APP_VERSION_FALLBACK = '1.0.1';
-export const TUTORIAL_VIDEO_CANDIDATES = [
-  '/assets/tutorial/tutorial.mp4',
-  '/assets/tutorial/mts-tutorial.mp4',
+const HELP_HOME_GROUPS = [
+  ['Getting Started', '#getting-started'],
+  ['Common Tasks', '#home-screen'],
+  ['MTS Workflows', '#basics'],
+  ['SAM Workflows', '#sam-workflows'],
+  ['Status Glossary', '#status-glossary'],
+  ['Troubleshooting', '#tech-issues'],
+  ['Keyboard Shortcuts', '#discord-productivity'],
+  ['Tutorial Videos', '#tutorial-videos'],
 ];
 
 const HELP_CATEGORIES = [
@@ -91,7 +99,7 @@ const HELP_TOPICS = [
   {
     id: 'setup-wizard',
     title: '2. Setup Wizard',
-    summary: 'The first-run wizard captures your tester identity and the form/spreadsheet links the app needs to fill.',
+    summary: 'The first-run wizard captures your tester identity and the provided certification workflow links.',
     bullets: [
       'Enter your first name, last name, and (optional) display name.',
       'First install uses the default welcome audio and does not need your name before setup is complete.',
@@ -99,7 +107,7 @@ const HELP_TOPICS = [
       'Setup Wizard includes ticker speed, welcome voice, and sound volume. Ticker speed defaults to Normal.',
       'Welcome voice can be Male or Female. Female welcome audio files use -f before .mp3.',
       'Sound volume controls welcome audio and app sound effects.',
-      'Confirm the certification form URL and the certification spreadsheet URL.',
+      'Confirm the provided certification workflow links.',
       'When you finish the wizard, the Tutorial starts automatically if it has not been completed yet.',
       'You can revisit any of these values later from Settings.',
     ],
@@ -411,7 +419,7 @@ const HELP_TOPICS = [
     title: '23. Settings',
     summary: 'Settings controls your profile, integrations, and app preferences.',
     bullets: [
-      'General: tester identity, form/spreadsheet links, browser behavior, welcome voice, sound volume, theme, and ticker speed.',
+      'General: tester identity, workflow links, browser behavior, welcome voice, sound volume, theme, and ticker speed.',
       'Female welcome audio files use -f before .mp3, such as welcome-shawn-f.mp3.',
       'Missing personalized welcome files fall back to default welcome audio.',
       'Sound volume controls welcome audio and app sound effects.',
@@ -517,6 +525,41 @@ const HELP_TOPICS = [
       'See the Common Questions panel on this page (right side on wide screens, below the topics on narrow screens).',
       'FAQ content is loaded from the admin-configured FAQ source, with a built-in fallback if loading fails.',
       'If the FAQ shows the fallback notice, the app could not reach the configured FAQ source. Try Help again later.',
+    ],
+  },
+];
+
+const REQUIRED_GUIDE_TOPICS = [
+  {
+    id: 'sam-workflows',
+    title: 'SAM Workflows',
+    summary: 'Smart Alert Manager is the administrator workspace for notifications, candidate follow-up, reviews, reports, and updates.',
+    bullets: [
+      'Use Dashboard to see what needs attention, Notifications and Live Preview to prepare trainer alerts, and Candidate Search or Candidate Tracking to review shared candidate progress.',
+      'Pending Supervisor Transfers and Pending Requests remain visible until an administrator completes the required action.',
+      'Headset Review records approved or denied headset decisions, Reports support operational handoff, and Updates checks for the current SAM release.',
+      'Open SAM Help for the complete step-by-step administrator guide.',
+    ],
+  },
+  {
+    id: 'status-glossary',
+    title: 'Status Glossary',
+    summary: 'Use these labels to understand what is complete, what needs attention, and what follow-up remains.',
+    bullets: [
+      'Session — Pass: certification was passed. No retry is needed; review the saved form status.',
+      'Session — Resumed – Pass: a resumed session finished with a passing result. Confirm the continuation is saved.',
+      'Session — Fail: certification failed and another attempt may be available. Review the fail reason and next-step guidance.',
+      'Session — Fail – Final Attempt: the final allowed attempt failed. Do not start another attempt without administrator approval.',
+      'Session — NC/NS: the candidate did not attend. Confirm the correct attendance choice and follow the current scheduling policy.',
+      'Session — Incomplete: the session could not be completed. Review the reason and any Supervisor Transfer or Newbie Shift follow-up.',
+      'Follow-Up — Pending: an administrator has not decided yet. The request remains visible until Approved or Denied.',
+      'Follow-Up — Approved: the requested follow-up was approved. Continue with the approved schedule or action.',
+      'Follow-Up — Denied: the request was denied. Read the denial reason before taking another action.',
+      'Form — Not Yet Filled: the Microsoft Form has not been filled. Review the session and fill it when ready.',
+      'Form — Form Filled: MTS completed filling the Microsoft Form. Review it in the browser; this does not mean Form Submitted.',
+      'Form — Form Skipped: the trainer intentionally skipped form fill. Complete the form manually if required.',
+      'Form — Fill Failed: automatic fill did not finish. Review the visible message and use the documented recovery steps.',
+      'Form — Not Recorded: an older record has no saved form status. Verify manually before refilling.',
     ],
   },
 ];
@@ -871,7 +914,41 @@ function mergeHelpTopics(liveSections) {
   return [...liveSections, ...fallbackTopics];
 }
 
-export default function HelpPage({ appVersion, onNavigate, settings, onReplayTutorial }) {
+function HelpArticle({ topic, videos, onWatch }) {
+  const attachedVideos = videos.filter((video) => video.helpTopicKey && video.helpTopicKey === topic.id);
+  return (
+    <article id={topic.id} className="card help-card help-doc-card">
+      <div className="help-card-header">
+        <div><div className="help-card-eyebrow">Help Topic</div><h2>{topic.title}</h2></div>
+      </div>
+      <h3 className="help-doc-subheading">What this is</h3>
+      <p className="help-card-body">{topic.summary || `Guidance for ${normalizeHelpTitle(topic.title)}.`}</p>
+      <h3 className="help-doc-subheading">When to use it</h3>
+      <p className="help-card-body">Use this topic when you are working in this part of MTS or need to confirm the correct next action.</p>
+      <h3 className="help-doc-subheading">Steps</h3>
+      {topic.blocks?.length ? topic.blocks.map((block, index) => (
+        <MarkdownBlock key={`${topic.id}-${block.type}-${index}`} block={block} />
+      )) : topic.steps?.length ? (
+        <ol className="help-list help-list-numbered">{topic.steps.map((item) => <li key={item}>{item}</li>)}</ol>
+      ) : (
+        <ul className="help-list">{(topic.bullets || []).map((item) => <li key={item}>{item}</li>)}</ul>
+      )}
+      <h3 className="help-doc-subheading">What happens next</h3>
+      <p className="help-card-body">Continue only after the required information is complete. MTS preserves the session and shows the next available workflow action.</p>
+      <h3 className="help-doc-subheading">Common mistakes</h3>
+      <p className="help-card-body">Do not skip required review prompts, assume a pending request is approved, or treat Form Filled as Form Submitted.</p>
+      <h3 className="help-doc-subheading">Related topics</h3>
+      <p className="help-card-body"><a href="#getting-started">Getting Started</a> · <a href="#status-glossary">Status Glossary</a> · <a href="#tutorial-videos">Tutorial Videos</a></p>
+      {attachedVideos.length ? (
+        <div className="tutorial-actions">
+          {attachedVideos.map((video) => <button key={video.videoKey} type="button" onClick={() => onWatch(video)}>Watch Tutorial: {video.title}</button>)}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+export default function HelpPage({ appVersion, onNavigate, settings, onReplayTutorial, onReplayQuickStart }) {
   const modal = useModal();
   const version = appVersion || APP_VERSION_FALLBACK;
   const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
@@ -891,7 +968,7 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
   const [helpContent, setHelpContent] = useState(null);
   const [helpLoadError, setHelpLoadError] = useState('');
   const [query, setQuery] = useState('');
-  const [tutorialVideoUrl, setTutorialVideoUrl] = useState('');
+  const [selectedTutorial, setSelectedTutorial] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -911,28 +988,6 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function detectTutorialVideo() {
-      if (typeof fetch !== 'function') return;
-      for (const url of TUTORIAL_VIDEO_CANDIDATES) {
-        try {
-          const response = await fetch(url, { method: 'HEAD' });
-          if (!cancelled && response.ok) {
-            setTutorialVideoUrl(url);
-            return;
-          }
-        } catch (_error) {
-          // Missing optional tutorial video keeps the guided tutorial as the fallback.
-        }
-      }
-    }
-    detectTutorialVideo();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const faqEntries = useMemo(() => {
     if (helpContent === null) return [];
     const entries = buildFaqEntries(sanitizeTrainerHelpMarkdown(helpContent?.faq_markdown || ''));
@@ -944,7 +999,13 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
     () => buildHelpSectionsFromMarkdown(sanitizeTrainerHelpMarkdown(helpContent?.help_markdown || '')),
     [helpContent],
   );
-  const helpTopics = useMemo(() => mergeHelpTopics(liveSections), [liveSections]);
+  const helpTopics = useMemo(() => [...mergeHelpTopics(liveSections), ...REQUIRED_GUIDE_TOPICS], [liveSections]);
+  const mtsTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.mts, 'mts'), [helpContent]);
+  const samTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.sam, 'sam'), [helpContent]);
+  const selectTutorial = (video) => {
+    setSelectedTutorial(video);
+    window.setTimeout(() => document.getElementById('tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }), 0);
+  };
   const visibleTopics = useMemo(() => {
     return helpTopics.filter((topic) => (
       topic.blocks
@@ -966,14 +1027,12 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
           ← Back
         </button>
         <div className="help-center-header-actions">
-          <button className="btn btn-primary btn-sm" onClick={() => onReplayTutorial?.()} data-testid="help-tutorial">
-            Replay Tutorial
+          <button className="btn btn-ghost btn-sm" onClick={() => onReplayQuickStart?.()} data-testid="help-quick-start-choices">
+            Quick Start Choices
           </button>
-          {tutorialVideoUrl ? (
-            <a className="btn btn-ghost btn-sm" href={tutorialVideoUrl} target="_blank" rel="noreferrer" data-testid="help-tutorial-video">
-              Watch Tutorial Video
-            </a>
-          ) : null}
+          <button className="btn btn-primary btn-sm" onClick={() => onReplayTutorial?.()} data-testid="help-tutorial">
+            Replay Guided Walkthrough
+          </button>
         </div>
       </div>
 
@@ -989,8 +1048,9 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
             <span className="help-pill">{geminiActive ? 'Gemini summaries enabled' : 'Generic summaries available'}</span>
           </div>
           <div className="help-common-tasks" aria-label="Common help tasks">
-            <a href="#tutorial" className="help-common-task">Replay Tutorial</a>
+            <a href="#tutorial" className="help-common-task">Guided Walkthrough</a>
             <a href="#fill-form" className="help-common-task">Fill Form</a>
+            <a href="#tutorial-videos" className="help-common-task">Tutorial Videos</a>
           </div>
           <div className="help-hero-tips" aria-label="Quick tips">
             <div className="help-hero-tip">
@@ -1045,13 +1105,9 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
           </label>
           <div className="help-hero-action-list">
             <button className="btn btn-primary" onClick={() => onReplayTutorial?.()} data-testid="help-quick-replay">
-              Replay Tutorial
+              Replay Guided Walkthrough
             </button>
-            {tutorialVideoUrl ? (
-              <a className="btn btn-ghost" href={tutorialVideoUrl} target="_blank" rel="noreferrer" data-testid="help-quick-video">
-                Watch Tutorial Video
-              </a>
-            ) : null}
+            <button className="btn btn-ghost" onClick={() => onReplayQuickStart?.()}>Show Quick Start Choices</button>
             <button className="btn btn-ghost" onClick={() => onNavigate?.('settings', null)}>
               Open Settings
             </button>
@@ -1076,6 +1132,9 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
         <div className="help-anchor-title">
           <h2>Browse Topics</h2>
           <p className="text-muted text-sm">Jump to the section you need. {visibleTopics.length} topic{visibleTopics.length === 1 ? '' : 's'} match your search.</p>
+        </div>
+        <div className="help-anchor-grid" aria-label="Help home sections">
+          {HELP_HOME_GROUPS.map(([label, href]) => <a key={label} href={href} className="help-anchor-link">{label}</a>)}
         </div>
         <div className="help-category-grid">
           {HELP_CATEGORIES.map((category) => (
@@ -1102,37 +1161,7 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
       <section className="help-doc-grid">
         <div className="help-doc-column">
           {visibleTopics.length ? visibleTopics.map((topic) => (
-            <article key={topic.id} id={topic.id} className="card help-card help-doc-card">
-              <div className="help-card-header">
-                <div>
-                  <div className="help-card-eyebrow">Help Topic</div>
-                  <h2>{topic.title}</h2>
-                </div>
-              </div>
-              {topic.blocks && topic.blocks.length ? (
-                topic.blocks.map((block, index) => (
-                  <MarkdownBlock key={`${topic.id}-${block.type}-${index}`} block={block} />
-                ))
-              ) : (
-                <>
-                  {topic.summary ? <p className="help-card-body">{topic.summary}</p> : null}
-                  {topic.bullets && topic.bullets.length ? (
-                    <ul className="help-list">
-                      {topic.bullets.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {topic.steps && topic.steps.length ? (
-                    <ol className="help-list help-list-numbered">
-                      {topic.steps.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ol>
-                  ) : null}
-                </>
-              )}
-            </article>
+            <HelpArticle key={topic.id} topic={topic} videos={mtsTutorials} onWatch={selectTutorial} />
           )) : (
             <div className="card help-empty-state">
               <h2>No topics match that search.</h2>
@@ -1224,6 +1253,10 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
             </div>
           </div>
         </aside>
+      </section>
+      <section className="card help-card">
+        <TutorialVideoLibrary videos={mtsTutorials} title="MTS Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="mts-tutorial-videos" />
+        <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" />
       </section>
     </div>
   );

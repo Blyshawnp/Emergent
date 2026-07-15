@@ -26,6 +26,9 @@ import './notification-manager.css';
 import './polish-sam.css';
 import api from './api';
 import PendingRequestAlert from './components/PendingRequestAlert';
+import PostSetupQuickStart from './components/PostSetupQuickStart';
+import { TutorialVideoLibrary } from './components/TutorialVideoPlayer';
+import { normalizeTutorialVideos } from './utils/tutorialVideos';
 import { playSound, setSoundSettings } from './utils/sound';
 import {
   NOTIFICATION_CSV_COLUMNS,
@@ -56,6 +59,7 @@ const BACKEND_READY_TIMEOUT_MS = 45000;
 const SAM_TUTORIAL_SEEN_KEY = 'sam:tutorial-seen';
 const SAM_HELP_DISMISSED_KEY = 'sam:help-dismissed';
 const SAM_ONBOARDING_STATE_KEY = 'sam:onboarding-state';
+const SAM_QUICK_START_STATE_KEY = 'sam:quick-start:v1';
 const SAM_SETTINGS_KEY = 'sam:settings';
 const SAM_BACKEND_RETRY_LIMIT = 6;
 const SAM_BACKEND_RETRY_BASE_DELAY_MS = 2000;
@@ -87,12 +91,12 @@ const SAM_HELP_SECTIONS = [
   {
     id: 'notifications',
     title: 'Notifications',
-    body: 'Create, edit, enable, disable, archive, withdraw, delete, import, export, and refresh alert rows from sam-notifications. Success and error feedback appears in the status banner and can play sounds when enabled.',
+    body: 'Create, edit, enable, disable, archive, withdraw, delete, import, export, and refresh trainer alerts. Success and error feedback appears in the status banner and can play sounds when enabled.',
   },
   {
     id: 'live-preview',
     title: 'Live Preview',
-    body: 'Preview ticker, banner, and popup output for the selected notification before saving it to the sheet.',
+    body: 'Preview ticker, banner, and popup output for the selected notification before publishing it.',
   },
   {
     id: 'headset-review',
@@ -100,9 +104,19 @@ const SAM_HELP_SECTIONS = [
     body: 'Headset Review shows unknown headset submissions from MTS. Approve only when the model is confirmed USB with a noise-cancelling microphone, deny models that should not be used, archive completed rows, and refresh if the queue looks stale.',
   },
   {
+    id: 'candidate-search',
+    title: 'Candidate Search',
+    body: 'Search by candidate name, include archived records when needed, and open the matching candidate in Candidate Tracking for the full record and available actions.',
+  },
+  {
     id: 'candidate-tracking',
     title: 'Candidate Tracking',
     body: 'Review pending transfers, incomplete candidates, failed attempts, withdrawn candidates, passed certifications, archived candidates, and all active candidates. Use View Details for the reading pane, Copy Selected for a quick handoff, Print Report for a paper review, Archive for history cleanup, Withdraw when a candidate leaves certification, Extra Attempt when admin approval allows another try, and Delete only when a shared row must be removed.',
+  },
+  {
+    id: 'reports',
+    title: 'Reports',
+    body: 'Use Copy Selected, Print Report, and CSV export for an operational handoff. Review the selected rows before sharing or printing them.',
   },
   {
     id: 'pending-sup-transfers',
@@ -115,9 +129,9 @@ const SAM_HELP_SECTIONS = [
     body: 'Pending Requests is the SAM inbox for initial Newbie Shift requests, Newbie Shift reschedules, candidate-list deletion requests, and headset review links. Approve records the admin and timestamp. Deny requires a readable reason. Remind Me and Dismiss suppress only the immediate alert for 30 minutes; unresolved requests stay in the inbox and bell count until approved or denied.',
   },
   {
-    id: 'diagnostics',
-    title: 'Diagnostics and System Health',
-    body: 'System Health shows sync, backend, source, and version information. Open it when refresh or sync behavior looks wrong; otherwise keep it collapsed so normal SAM work stays focused.',
+    id: 'troubleshooting',
+    title: 'Troubleshooting',
+    body: 'If information looks stale, wait a moment and select Refresh. Confirm the Live status, retry the action once, and use Request App Support if the issue continues.',
   },
   {
     id: 'sync-offline',
@@ -140,9 +154,9 @@ const SAM_HELP_SECTIONS = [
     body: 'Export a backup CSV before bulk edits. Import replaces the local draft list so it can be reviewed before rows are submitted.',
   },
   {
-    id: 'refresh-from-sheet',
-    title: 'Refresh from Sheet',
-    body: 'Refresh reloads the master sheet rows and candidate tracking state without restarting SAM.',
+    id: 'refresh-data',
+    title: 'Refresh Data',
+    body: 'Refresh reloads notifications and candidate tracking without restarting SAM.',
   },
   {
     id: 'check-for-updates',
@@ -377,10 +391,13 @@ function getAppVersion() {
   }
 }
 
-function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutorial, onCheckForUpdates }) {
+function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutorial, onReplayQuickStart, onCheckForUpdates }) {
   const sectionRefs = useRef({});
   const [supportFormUrl, setSupportFormUrl] = useState('https://forms.gle/h3L8BZcFqpZ8RZf39');
   const [supportError, setSupportError] = useState('');
+  const [query, setQuery] = useState('');
+  const [helpContent, setHelpContent] = useState({});
+  const [selectedTutorial, setSelectedTutorial] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -399,6 +416,16 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api.getHelpContent().then((content) => {
+      if (active) setHelpContent(content || {});
+    }).catch(() => {
+      if (active) setHelpContent({});
+    });
+    return () => { active = false; };
   }, []);
 
   const handleRequestSupport = async () => {
@@ -421,6 +448,13 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
   const jumpToSection = (id) => {
     sectionRefs.current[id]?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
   };
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleSections = useMemo(
+    () => SAM_HELP_SECTIONS.filter((section) => !normalizedQuery || `${section.title} ${section.body}`.toLowerCase().includes(normalizedQuery)),
+    [normalizedQuery],
+  );
+  const mtsTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.mts, 'mts'), [helpContent]);
+  const samTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.sam, 'sam'), [helpContent]);
 
   return (
     <div className="nm-modal-backdrop">
@@ -471,7 +505,11 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
         </div>
 
         <div className="nm-help-toc" aria-label="SAM help sections">
-          {SAM_HELP_SECTIONS.map((section) => (
+          <label className="nm-field">
+            <span>Search Help</span>
+            <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dashboard, requests, reports..." data-testid="sam-help-search" />
+          </label>
+          {visibleSections.map((section) => (
             <button key={section.id} type="button" className="nm-help-toc-button" onClick={() => jumpToSection(section.id)}>
               {section.title}
             </button>
@@ -479,7 +517,7 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
         </div>
 
         <div className="nm-help-grid">
-          {SAM_HELP_SECTIONS.map((section) => (
+          {visibleSections.map((section) => (
             <article
               key={section.id}
               id={`sam-help-${section.id}`}
@@ -487,7 +525,12 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
               ref={(node) => { sectionRefs.current[section.id] = node; }}
             >
               <h3>{section.title}</h3>
-              <p>{section.body}</p>
+              <h4>What this is</h4><p>{section.body}</p>
+              <h4>When to use it</h4><p>Use this topic when you are working in {section.title} or deciding which administrator action is appropriate.</p>
+              <h4>Steps</h4><ol><li>Open {section.title} from SAM.</li><li>Review the visible status and selected record.</li><li>Choose the applicable action and confirm the result.</li></ol>
+              <h4>What happens next</h4><p>SAM refreshes the applicable view and keeps unresolved work visible until it is completed.</p>
+              <h4>Common mistakes</h4><p>Do not treat Dismiss as a decision, approve without reviewing details, or deny a Pending Request without a clear reason.</p>
+              <h4>Related topics</h4><p>Dashboard · Troubleshooting · Tutorial Videos</p>
               {section.id === 'support' && (
                 <div style={{ marginTop: 12 }}>
                   <button
@@ -504,8 +547,13 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
             </article>
           ))}
         </div>
+        <div className="nm-help-grid">
+          <TutorialVideoLibrary videos={mtsTutorials} title="MTS Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="mts-tutorial-videos" />
+          <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" />
+        </div>
         <div className="nm-help-actions">
-          <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayTutorial}>Replay Tutorial</button>
+          <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayQuickStart}>Quick Start Choices</button>
+          <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayTutorial}>Replay Guided Walkthrough</button>
           <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>Done</button>
         </div>
       </section>
@@ -789,7 +837,7 @@ function SamSetupWizard({ status, onComplete }) {
       }
       onComplete?.(result);
     } catch (setupError) {
-      setError(getSharedDataErrorMessage(setupError, 'SAM setup requires access to the admin configuration sheet.'));
+      setError(getSharedDataErrorMessage(setupError, 'SAM could not verify your assigned access. Please try again or contact support.'));
     } finally {
       setSubmitting(false);
     }
@@ -2406,6 +2454,7 @@ export default function NotificationManagerApp() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [resolveExitConfirm, showExitConfirm]);
   const [tutorialStep, setTutorialStep] = useState(null);
+  const [quickStartOpen, setQuickStartOpen] = useState(false);
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
   const [updaterStatus, setUpdaterStatus] = useState(null);
@@ -3059,11 +3108,10 @@ export default function NotificationManagerApp() {
 
   useEffect(() => {
     if (!samSetupStatus.setupComplete) return undefined;
-    if (localStorage.getItem(SAM_TUTORIAL_SEEN_KEY) === '1') return;
+    if (localStorage.getItem(SAM_QUICK_START_STATE_KEY) === 'seen') return undefined;
     const timer = window.setTimeout(() => {
-      setTutorialStep(0);
-      localStorage.setItem(SAM_TUTORIAL_SEEN_KEY, '1');
-      localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'seen');
+      localStorage.setItem(SAM_QUICK_START_STATE_KEY, 'pending');
+      setQuickStartOpen(true);
     }, 1200);
     return () => window.clearTimeout(timer);
   }, [samSetupStatus.setupComplete]);
@@ -3196,7 +3244,7 @@ export default function NotificationManagerApp() {
       setSamSetupStatus(nextStatus);
       return nextStatus;
     } catch (error) {
-      const message = getSharedDataErrorMessage(error, 'SAM setup requires access to the admin configuration sheet.');
+      const message = getSharedDataErrorMessage(error, 'SAM could not verify assigned access. Please try again or contact support.');
       const nextStatus = { loading: false, setupComplete: false, userName: '', userRole: '', ok: false, error: message };
       setSamSetupStatus(nextStatus);
       return nextStatus;
@@ -3683,6 +3731,11 @@ export default function NotificationManagerApp() {
     localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'replay');
     window.setTimeout(() => setTutorialStep(0), 160);
   };
+  const replayQuickStart = () => {
+    setHelpOpen(false);
+    setTutorialStep(null);
+    setQuickStartOpen(true);
+  };
 
   const handleSubmit = async () => {
     if (!editorDraft) return;
@@ -3794,6 +3847,8 @@ export default function NotificationManagerApp() {
       error: '',
     };
     setSamSetupStatus(nextStatus);
+    localStorage.setItem(SAM_QUICK_START_STATE_KEY, 'pending');
+    setQuickStartOpen(true);
     setSheetState((current) => ({
       ...current,
       backendReady: true,
@@ -4266,6 +4321,28 @@ export default function NotificationManagerApp() {
             setHelpOpen(false);
           }}
           onReplayTutorial={replayTutorial}
+          onReplayQuickStart={replayQuickStart}
+        />
+      ) : null}
+      {quickStartOpen ? (
+        <PostSetupQuickStart
+          app="sam"
+          onWatch={() => {
+            localStorage.setItem(SAM_QUICK_START_STATE_KEY, 'seen');
+            setQuickStartOpen(false);
+            replayTutorial();
+          }}
+          onGuide={() => {
+            localStorage.setItem(SAM_QUICK_START_STATE_KEY, 'seen');
+            setQuickStartOpen(false);
+            setHelpOpen(true);
+          }}
+          onContinue={() => {
+            localStorage.setItem(SAM_QUICK_START_STATE_KEY, 'seen');
+            localStorage.setItem(SAM_ONBOARDING_STATE_KEY, 'seen');
+            setQuickStartOpen(false);
+            setActiveSection('notifications');
+          }}
         />
       ) : null}
       {tutorialStep !== null ? (

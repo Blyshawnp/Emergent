@@ -11,7 +11,7 @@ export const TUTORIAL_COPY = {
   supervisorTransfer: 'Supervisor Transfer covers the live transfer portion. Copy the Discord message, choose setup details, use payment dropdowns starting on Default, score the transfer, and use the Fail Reasons copy button when Transfer 1 fails.',
   reviewFill: 'Review is the final checkpoint. Confirm Basics, results, coaching and fail summaries, set Final Readiness Judgment if evaluator override is needed, use Fill Form, then Save & Finish. Readiness changes regenerate the summaries used for History and form fill.',
   settingsPage: 'Settings manages app behavior and integrations: tester identity, form links, welcome voice, sound volume, ticker speed, payment options, Gemini summaries, Discord posts and screenshots, updates, and theme. Payment lists start with 3 Credit Card and 3 EFT defaults and can be edited.',
-  helpPage: 'Help is the reference center for workflow guidance, troubleshooting, setup notes, payment settings, Discord categories, update/about details, optional local tutorial video, and replaying this tutorial later.',
+  helpPage: 'Help is the searchable reference center for workflow guidance, status meanings, troubleshooting, keyboard shortcuts, Discord categories, supplemental Tutorial Videos, and replaying the Quick Start later.',
 };
 
 function isTargetVisible(selector) {

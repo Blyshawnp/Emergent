@@ -151,11 +151,17 @@ test('help page renders current help topics and configured faq entries', async (
   await view.unmount();
 });
 
-test('help page shows tutorial video action only when a local video exists', async () => {
-  global.fetch = jest.fn()
-    .mockResolvedValueOnce({ ok: false })
-    .mockResolvedValueOnce({ ok: true });
-  api.getHelpContent.mockResolvedValue({ help_markdown: '# Help\n', faq_markdown: '', support: {} });
+test('help page shows only active validated tutorial metadata', async () => {
+  api.getHelpContent.mockResolvedValue({
+    help_markdown: '# Help\n', faq_markdown: '', support: {},
+    tutorial_videos: {
+      mts: [
+        { Category: 'Quick Start', VideoKey: 'active', Title: 'MTS Quick Start', YouTubeURL: 'https://youtu.be/dQw4w9WgXcQ', SortOrder: '1', Active: 'TRUE', HelpTopicKey: 'getting-started' },
+        { Category: 'Quick Start', VideoKey: 'inactive', Title: 'Hidden Tutorial', YouTubeURL: 'https://youtu.be/dQw4w9WgXcQ', SortOrder: '2', Active: 'FALSE' },
+      ],
+      sam: [],
+    },
+  });
 
   const view = await renderComponent(
     <HelpPage
@@ -166,8 +172,9 @@ test('help page shows tutorial video action only when a local video exists', asy
     />
   );
 
-  expect(view.container.querySelector('[data-testid="help-tutorial-video"]')?.getAttribute('href')).toBe('/assets/tutorial/mts-tutorial.mp4');
-  expect(view.container.textContent).toContain('Watch Tutorial Video');
+  expect(view.container.textContent).toContain('MTS Quick Start');
+  expect(view.container.textContent).not.toContain('Hidden Tutorial');
+  expect(view.container.textContent).toContain('Watch Tutorial: MTS Quick Start');
 
   await view.unmount();
 });
@@ -190,6 +197,11 @@ test('help page shows friendly faq fallback when configured source fails', async
   expect(view.container.textContent).toContain('Use Reschedule from History only for an eligible incomplete session');
   expect(view.container.textContent).toContain('Form Filled means MTS completed filling the Microsoft Form');
   expect(view.container.textContent).toContain('Follow-up may be Pending, Approved, or Denied');
+  expect(view.container.textContent).toContain('Status Glossary');
+  expect(view.container.textContent).toContain('Resumed – Pass');
+  expect(view.container.textContent).toContain('Form Filled: MTS completed filling the Microsoft Form');
+  expect(view.container.textContent).toContain('What this is');
+  expect(view.container.textContent).toContain('Common mistakes');
   expect(view.container.textContent).not.toMatch(/frontend\/public|backend failure|safety\/API|master Google Sheet|headset-review-log/i);
 
   await view.unmount();

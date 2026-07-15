@@ -1,0 +1,2 @@
+Category,VideoKey,Title,Description,YouTubeURL,Duration,HelpTopicKey,SortOrder,Active,Audience,Notes
+Quick Start,sam-quick-start,SAM Quick Start,A short tour of the Smart Alert Manager dashboard,,,dashboard,10,FALSE,Administrators,Replace with the approved tutorial URL before activating

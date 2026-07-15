@@ -180,3 +180,11 @@ action` for a required route, the app reports a deployment-route error instead
 of silently treating local defaults as live Google Sheet data.
 
 Correct the build-local config or Apps Script deployment, rebuild if necessary, and restart the application to restore remote synchronization.
+
+## Tutorial Video Help Tabs
+
+Repository Apps Script source allowlists `mts-tutorial-videos` and `sam-tutorial-videos` and exposes `getTutorialVideos`, `getMtsTutorialVideos`, and `getSamTutorialVideos`. Both tabs use the exact header row in `docs/tutorial-video-setup.md`.
+
+Update the existing Web app deployment: open the Apps Script project, replace its source with the current `docs/apps-script-api-web-app.gs`, confirm the existing Script Properties remain configured without displaying their values, select **Deploy > Manage deployments**, edit the current Web app, choose **New version**, add a release description, and deploy. Keep the existing endpoint stable. Run read-only `ping` and tutorial-video reads before activating a video row.
+
+Repository source is deployment-ready. This coding environment did not update the live deployment or workbook and does not claim that live work complete.
