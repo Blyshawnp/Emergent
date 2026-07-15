@@ -215,6 +215,16 @@ class SQLiteCollection:
     def clone(doc):
         return json.loads(json.dumps(doc or {}, ensure_ascii=False, default=str))
 
+    @staticmethod
+    def encode(doc):
+        return json.dumps(SQLiteCollection.clone(doc), ensure_ascii=False, default=str)
+
+    @staticmethod
+    def decode(data):
+        if isinstance(data, dict):
+            return SQLiteCollection.clone(data)
+        return json.loads(data or "{}")
+
     @classmethod
     def project(cls, doc, projection=None):
         projected = cls.clone(doc)
@@ -1194,6 +1204,28 @@ REQUIRED_FAIL_REASONS = {
     "call_fails": ["Did not search for member"],
 }
 
+CERTIFICATION_SUPPORT_EMAIL = "certification@acdsupport.com"
+LEGACY_CERTIFICATION_SUPPORT_EMAIL = "certification@acddirect.com"
+
+
+def _normalize_legacy_certification_email_text(value):
+    if not isinstance(value, str):
+        return value
+    if LEGACY_CERTIFICATION_SUPPORT_EMAIL not in value:
+        return value
+    logger.warning("[CONTENT] Legacy certification support email normalized in managed text.")
+    return value.replace(LEGACY_CERTIFICATION_SUPPORT_EMAIL, CERTIFICATION_SUPPORT_EMAIL)
+
+
+def _normalize_managed_content_certification_email(value):
+    if isinstance(value, str):
+        return _normalize_legacy_certification_email_text(value)
+    if isinstance(value, list):
+        return [_normalize_managed_content_certification_email(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_managed_content_certification_email(item) for key, item in value.items()}
+    return value
+
 
 def _managed_custom_flag(key):
     return f"{key}_customized"
@@ -1854,7 +1886,7 @@ def _load_local_defaults_content():
         except Exception as exc:
             logger.warning("[CONTENT] Failed to read local defaults for %s: %s", key, exc)
 
-    return loaded
+    return _normalize_managed_content_certification_email(loaded)
 
 
 def _parse_gemini_prompt_sheet_override(csv_text, local_prompt, prompt_name):
@@ -2002,7 +2034,7 @@ def _load_google_sheet_content(runtime_config, local_content=None):
                 )
         if not loaded_this_key and last_error:
             logger.warning("[SAM] No Google Sheets tab candidate loaded for %s; last error: %s", content_key, last_error)
-    return loaded
+    return _normalize_managed_content_certification_email(loaded)
 
 def _load_help_faq_google_doc_overrides(runtime_config):
     loaded = {}
@@ -2060,13 +2092,13 @@ def _load_help_faq_google_doc_overrides(runtime_config):
                     content_key,
                 )
                 continue
-            loaded[content_key] = normalized
+            loaded[content_key] = _normalize_legacy_certification_email_text(normalized)
             logger.info(
                 "[CONTENT] Loaded %d FAQ entries from Google Doc",
                 question_count,
             )
         else:
-            loaded[content_key] = text
+            loaded[content_key] = _normalize_legacy_certification_email_text(text)
     return loaded
 
 
@@ -2983,6 +3015,7 @@ def _log_startup_runtime_diagnostics():
 
 
 DEFAULT_SUPPORT_FORM_URL = "https://forms.gle/h3L8BZcFqpZ8RZf39"
+DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION = "@beckysowlesacdadmin"
 
 
 DEFAULT_SETTINGS = {
@@ -2997,6 +3030,7 @@ DEFAULT_SETTINGS = {
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
     "support_form_url": DEFAULT_SUPPORT_FORM_URL,
+    "newbieShiftRescheduleAdminMention": DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION,
     "vpnProxyCheckMode": "checker",
     "ticker_speed": "normal",
     "enable_sounds": True,
@@ -3373,7 +3407,6 @@ NEWBIE_REQUEST_PENDING = "pending"
 NEWBIE_REQUESTED_BY_TESTER = "tester"
 NEWBIE_REQUESTED_BY_CANDIDATE = "candidate"
 DELETION_REQUEST_PENDING = "pending"
-CERTIFICATION_SUPPORT_EMAIL = "certification@acddirect.com"
 
 
 def _normalize_form_fill_status(value):
@@ -3598,6 +3631,7 @@ SHARED_NEWBIE_SHIFT_REQUEST_HEADERS = [
     "admin_decision_at",
     "admin_decision_by",
     "denial_reason",
+    "updated_at",
 ]
 
 SHARED_CANDIDATE_DELETION_REQUEST_HEADERS = [
@@ -3614,6 +3648,10 @@ SHARED_CANDIDATE_DELETION_REQUEST_HEADERS = [
     "session_status",
     "completed_at",
     "audit_summary",
+    "admin_decision_at",
+    "admin_decision_by",
+    "denial_reason",
+    "updated_at",
 ]
 
 UPDATE_MTS_TAB = "update-MTS"
@@ -3637,6 +3675,8 @@ def _shared_tracking_required_setup():
     return {
         SHARED_CANDIDATE_SESSIONS_TAB: SHARED_CANDIDATE_SESSION_HEADERS,
         SHARED_PENDING_SUP_TRANSFERS_TAB: SHARED_PENDING_SUP_TRANSFER_HEADERS,
+        SHARED_NEWBIE_SHIFT_REQUESTS_TAB: SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
+        SHARED_CANDIDATE_DELETION_REQUESTS_TAB: SHARED_CANDIDATE_DELETION_REQUEST_HEADERS,
         HEADSET_REVIEW_LOG_TAB: HEADSET_REVIEW_LOG_HEADERS,
         HEADSETS_TAB: HEADSETS_HEADERS,
     }
@@ -5333,6 +5373,709 @@ def _shared_admin_candidate_snapshot():
     }
 
 
+def _request_status_value(value):
+    return str(value or "").strip().lower() or "pending"
+
+
+def _approval_label(status):
+    normalized = _request_status_value(status)
+    if normalized == "approved":
+        return "Approved"
+    if normalized == "denied":
+        return "Denied"
+    return "Pending"
+
+
+def _public_newbie_request(row):
+    request_type = str(row.get("request_type") or "").strip().lower()
+    requested_by = str(row.get("requested_by") or "").strip().lower()
+    return {
+        "id": row.get("request_id") or "",
+        "request_id": row.get("request_id") or "",
+        "session_id": row.get("session_id") or "",
+        "category": "newbie_reschedule" if request_type == NEWBIE_REQUEST_RESCHEDULE else "newbie_initial",
+        "categoryLabel": "Newbie Shift — Reschedule" if request_type == NEWBIE_REQUEST_RESCHEDULE else "Newbie Shift — Initial",
+        "candidate": row.get("candidate_name") or "",
+        "tester": row.get("tester_name") or "",
+        "created_at": row.get("request_created_at") or "",
+        "requested_schedule": row.get("scheduled_at") or row.get("rescheduled_at") or "",
+        "original_schedule": row.get("original_scheduled_at") or "",
+        "timezone": row.get("timezone") or "",
+        "requester": "Candidate" if requested_by == NEWBIE_REQUESTED_BY_CANDIDATE else "Tester" if requested_by == NEWBIE_REQUESTED_BY_TESTER else "",
+        "reason": row.get("request_reason") or "",
+        "details": row.get("request_details") or "",
+        "within_24_hours": _shared_truthy(row.get("within_24_hours")),
+        "counts_as_attempt": _shared_truthy(row.get("counts_as_attempt")),
+        "final_attempt": _shared_truthy(row.get("final_attempt")),
+        "status": _approval_label(row.get("request_status")),
+        "raw_status": _request_status_value(row.get("request_status")),
+        "admin_decision_at": row.get("admin_decision_at") or "",
+        "admin_decision_by": row.get("admin_decision_by") or "",
+        "denial_reason": row.get("denial_reason") or "",
+    }
+
+
+def _public_deletion_request(row):
+    return {
+        "id": row.get("request_id") or "",
+        "request_id": row.get("request_id") or "",
+        "session_id": row.get("session_id") or "",
+        "category": "candidate_deletion",
+        "categoryLabel": "Candidate Deletion",
+        "candidate": row.get("candidate_name") or "",
+        "tester": row.get("tester_name") or "",
+        "created_at": row.get("created_at") or "",
+        "requested_schedule": "",
+        "original_schedule": "",
+        "timezone": "",
+        "requester": "Tester",
+        "reason": row.get("reason") or "Trainer requested candidate-list deletion review.",
+        "details": row.get("audit_summary") or "",
+        "within_24_hours": False,
+        "counts_as_attempt": False,
+        "final_attempt": False,
+        "status": _approval_label(row.get("status")),
+        "raw_status": _request_status_value(row.get("status")),
+        "admin_decision_at": row.get("admin_decision_at") or "",
+        "admin_decision_by": row.get("admin_decision_by") or "",
+        "denial_reason": row.get("denial_reason") or "",
+        "target_scope": "single_session",
+        "session_status": row.get("session_status") or "",
+        "completed_at": row.get("completed_at") or "",
+    }
+
+
+def _request_category_counts(requests, headset_pending_count=0):
+    pending = [item for item in requests if item.get("raw_status") == "pending"]
+    return {
+        "newbieInitial": sum(1 for item in pending if item.get("category") == "newbie_initial"),
+        "reschedules": sum(1 for item in pending if item.get("category") == "newbie_reschedule"),
+        "candidateDeletions": sum(1 for item in pending if item.get("category") == "candidate_deletion"),
+        "headsetReviews": headset_pending_count,
+        "unresolved": len(pending) + headset_pending_count,
+    }
+
+
+REMOTE_NEWBIE_REQUEST_CACHE_TTL_SECONDS = 15
+REMOTE_NEWBIE_REQUEST_BACKOFF_SECONDS = 30
+_remote_newbie_request_cache_lock = threading.Lock()
+_remote_newbie_request_cache = {
+    "requests": [],
+    "last_success": 0.0,
+    "last_failure": 0.0,
+    "in_flight": False,
+}
+
+
+def _canonical_remote_newbie_request(row):
+    row = dict(row or {})
+    source_tab = str(row.get("source_tab") or "").strip().lower()
+    request_type_raw = str(row.get("request_type") or row.get("newbie_shift_request_type") or "").strip().lower()
+    if source_tab == SHARED_CANDIDATE_DELETION_REQUESTS_TAB.lower() or request_type_raw == "candidate_deletion":
+        return None
+    request_type = (
+        NEWBIE_REQUEST_RESCHEDULE
+        if request_type_raw in {NEWBIE_REQUEST_RESCHEDULE, "newbie_shift_reschedule"}
+        else NEWBIE_REQUEST_INITIAL
+    )
+    status = _normalize_newbie_request_status(
+        row.get("request_status") or row.get("status") or row.get("raw_status")
+    )
+    return {
+        "request_id": str(row.get("request_id") or row.get("newbie_shift_request_id") or "").strip(),
+        "source_session_id": str(
+            row.get("source_session_id") or row.get("session_id") or row.get("history_id") or ""
+        ).strip(),
+        "request_type": request_type,
+        "status": status,
+        "requested_by": str(row.get("requested_by") or row.get("requester") or "").strip(),
+        "request_reason": str(row.get("request_reason") or row.get("reason") or "").strip(),
+        "request_details": str(row.get("request_details") or row.get("details") or "").strip(),
+        "request_created_at": str(row.get("request_created_at") or row.get("created_at") or "").strip(),
+        "original_scheduled_at": str(row.get("original_scheduled_at") or "").strip(),
+        "requested_scheduled_at": str(
+            row.get("requested_scheduled_at") or row.get("scheduled_at") or row.get("rescheduled_at") or ""
+        ).strip(),
+        "rescheduled_at": str(row.get("rescheduled_at") or row.get("requested_scheduled_at") or "").strip(),
+        "timezone": str(row.get("timezone") or "").strip(),
+        "within_24_hours": row.get("within_24_hours"),
+        "counts_as_attempt": row.get("counts_as_attempt"),
+        "decision_at": str(
+            row.get("decision_at") or row.get("admin_decision_at") or row.get("newbie_shift_admin_decision_at") or ""
+        ).strip(),
+        "decision_by": str(
+            row.get("decision_by") or row.get("admin_decision_by") or row.get("newbie_shift_admin_decision_by") or ""
+        ).strip(),
+        "denial_reason": str(row.get("denial_reason") or row.get("newbie_shift_denial_reason") or "").strip(),
+        "updated_at": str(row.get("updated_at") or "").strip(),
+    }
+
+
+def _candidate_row_remote_newbie_request(row):
+    row = dict(row or {})
+    return _canonical_remote_newbie_request({
+        "request_id": row.get("newbie_shift_request_id"),
+        "source_session_id": row.get("session_id"),
+        "request_type": row.get("newbie_shift_request_type"),
+        "status": row.get("newbie_shift_request_status"),
+        "requested_by": row.get("newbie_shift_requested_by"),
+        "request_reason": row.get("newbie_shift_request_reason"),
+        "request_details": row.get("newbie_shift_request_details"),
+        "request_created_at": row.get("newbie_shift_request_created_at"),
+        "original_scheduled_at": row.get("newbie_shift_original_scheduled_at"),
+        "requested_scheduled_at": row.get("newbie_shift_scheduled_at") or row.get("newbie_shift_rescheduled_at"),
+        "rescheduled_at": row.get("newbie_shift_rescheduled_at"),
+        "timezone": row.get("newbie_shift_timezone"),
+        "within_24_hours": row.get("newbie_shift_within_24_hours"),
+        "counts_as_attempt": row.get("newbie_shift_counts_as_attempt"),
+        "decision_at": row.get("newbie_shift_admin_decision_at"),
+        "decision_by": row.get("newbie_shift_admin_decision_by"),
+        "denial_reason": row.get("newbie_shift_denial_reason"),
+    })
+
+
+def _fetch_remote_newbie_requests():
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        raise RuntimeError("shared_request_context_unavailable")
+    if context.get("appsScriptClient"):
+        result = context["appsScriptClient"].get("getPendingRequests", {"include_resolved": "true"})
+        raw_rows = result.get("requests") if isinstance(result, dict) else []
+    else:
+        raw_rows = _shared_read_rows(
+            context["service"].spreadsheets(),
+            context["sheet_id"],
+            SHARED_NEWBIE_SHIFT_REQUESTS_TAB,
+            SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
+        )
+    requests = []
+    for row in raw_rows or []:
+        if not isinstance(row, dict):
+            continue
+        normalized = _canonical_remote_newbie_request(row)
+        if normalized and (normalized.get("request_id") or normalized.get("source_session_id")):
+            requests.append(normalized)
+    requests.sort(
+        key=lambda item: str(
+            item.get("decision_at") or item.get("updated_at") or item.get("request_created_at") or ""
+        ),
+        reverse=True,
+    )
+    return requests
+
+
+def _remote_newbie_request_snapshot(force=False):
+    now = time.monotonic()
+    with _remote_newbie_request_cache_lock:
+        cached_requests = SQLiteCollection.clone(_remote_newbie_request_cache.get("requests") or [])
+        last_success = float(_remote_newbie_request_cache.get("last_success") or 0.0)
+        last_failure = float(_remote_newbie_request_cache.get("last_failure") or 0.0)
+        if not force and last_success and (now - last_success) < REMOTE_NEWBIE_REQUEST_CACHE_TTL_SECONDS:
+            return {"ok": True, "requests": cached_requests, "source": "cache"}
+        if not force and last_failure and (now - last_failure) < REMOTE_NEWBIE_REQUEST_BACKOFF_SECONDS:
+            return {"ok": False, "requests": [], "source": "backoff"}
+        if _remote_newbie_request_cache.get("in_flight"):
+            return {"ok": False, "requests": [], "source": "in_flight"}
+        _remote_newbie_request_cache["in_flight"] = True
+
+    try:
+        requests = _fetch_remote_newbie_requests()
+    except Exception as exc:
+        with _remote_newbie_request_cache_lock:
+            _remote_newbie_request_cache["last_failure"] = time.monotonic()
+            _remote_newbie_request_cache["in_flight"] = False
+        logger.warning(
+            "[REQUEST RECONCILIATION] Remote request refresh unavailable error_type=%s; local state preserved",
+            type(exc).__name__,
+        )
+        return {"ok": False, "requests": [], "source": "remote"}
+
+    with _remote_newbie_request_cache_lock:
+        _remote_newbie_request_cache["requests"] = SQLiteCollection.clone(requests)
+        _remote_newbie_request_cache["last_success"] = time.monotonic()
+        _remote_newbie_request_cache["last_failure"] = 0.0
+        _remote_newbie_request_cache["in_flight"] = False
+    return {"ok": True, "requests": requests, "source": "remote"}
+
+
+def _parse_request_decision_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _local_request_session_ids(record):
+    return {
+        str(value).strip()
+        for value in (
+            (record or {}).get("history_id"),
+            (record or {}).get("session_id"),
+            (record or {}).get("resume_source_history_id"),
+        )
+        if str(value or "").strip()
+    }
+
+
+def _remote_request_matches_local_record(record, remote):
+    local_request_id = str((record or {}).get("newbie_shift_request_id") or "").strip()
+    remote_request_id = str((remote or {}).get("request_id") or "").strip()
+    local_session_ids = _local_request_session_ids(record)
+    remote_session_id = str((remote or {}).get("source_session_id") or "").strip()
+
+    if local_request_id:
+        if not remote_request_id or local_request_id != remote_request_id:
+            return False, "request_id_mismatch"
+        if remote_session_id and local_session_ids and remote_session_id not in local_session_ids:
+            return False, "source_session_conflict"
+        return True, "request_id"
+
+    if remote_session_id and local_session_ids and remote_session_id in local_session_ids:
+        return True, "source_session_id"
+    return False, "missing_or_mismatched_identifiers"
+
+
+def _reconcile_local_newbie_request_record(record, remote):
+    local = SQLiteCollection.clone(record or {})
+    remote = _canonical_remote_newbie_request(remote) or {}
+    matches, match_reason = _remote_request_matches_local_record(local, remote)
+    if not matches:
+        return local, False, match_reason
+
+    remote_status = _normalize_newbie_request_status(remote.get("status"))
+    local_status = _normalize_newbie_request_status(local.get("newbie_shift_request_status"))
+    if remote_status == NEWBIE_REQUEST_PENDING:
+        return local, False, "remote_pending"
+
+    local_decision_at = _parse_request_decision_timestamp(local.get("newbie_shift_admin_decision_at"))
+    remote_decision_at = _parse_request_decision_timestamp(remote.get("decision_at"))
+    same_resolved_status = local_status == remote_status and local_status in {"approved", "denied"}
+    if local_status in {"approved", "denied"} and local_status != remote_status:
+        if not local_decision_at or not remote_decision_at or remote_decision_at <= local_decision_at:
+            return local, False, "resolved_timestamp_not_newer"
+    elif same_resolved_status and local_decision_at and remote_decision_at and remote_decision_at < local_decision_at:
+        return local, False, "resolved_timestamp_older"
+
+    overwrite_metadata = (
+        local_status == NEWBIE_REQUEST_PENDING
+        or (remote_decision_at and local_decision_at and remote_decision_at >= local_decision_at)
+        or (same_resolved_status and remote_decision_at and not local_decision_at)
+    )
+    updates = {
+        "newbie_shift_request_id": remote.get("request_id") or local.get("newbie_shift_request_id") or "",
+        "newbie_shift_request_status": remote_status,
+    }
+    string_fields = {
+        "newbie_shift_request_type": "request_type",
+        "newbie_shift_requested_by": "requested_by",
+        "newbie_shift_request_reason": "request_reason",
+        "newbie_shift_request_details": "request_details",
+        "newbie_shift_request_created_at": "request_created_at",
+        "newbie_shift_original_scheduled_at": "original_scheduled_at",
+        "newbie_shift_rescheduled_at": "rescheduled_at",
+        "newbie_shift_scheduled_at": "requested_scheduled_at",
+        "newbie_shift_timezone": "timezone",
+        "newbie_shift_admin_decision_at": "decision_at",
+        "newbie_shift_admin_decision_by": "decision_by",
+        "newbie_shift_request_updated_at": "updated_at",
+    }
+    for local_key, remote_key in string_fields.items():
+        remote_value = str(remote.get(remote_key) or "").strip()
+        if not remote_value:
+            continue
+        if overwrite_metadata or not str(local.get(local_key) or "").strip():
+            updates[local_key] = remote_value
+    for local_key, remote_key in (
+        ("newbie_shift_within_24_hours", "within_24_hours"),
+        ("newbie_shift_counts_as_attempt", "counts_as_attempt"),
+    ):
+        remote_value = remote.get(remote_key)
+        if remote_value not in (None, "") and (overwrite_metadata or local_key not in local):
+            updates[local_key] = _shared_truthy(remote_value)
+
+    if remote_status == "denied":
+        remote_reason = str(remote.get("denial_reason") or "").strip()
+        if remote_reason and (overwrite_metadata or not str(local.get("newbie_shift_denial_reason") or "").strip()):
+            updates["newbie_shift_denial_reason"] = remote_reason
+    elif overwrite_metadata or local_status != "approved":
+        updates["newbie_shift_denial_reason"] = ""
+
+    changed = any(local.get(key) != value for key, value in updates.items())
+    if changed:
+        local.update(updates)
+    return local, changed, match_reason
+
+
+def _reconcile_record_with_remote_requests(record, requests):
+    reconciled = SQLiteCollection.clone(record or {})
+    changed = False
+    match_reason = "no_match"
+    for remote in requests or []:
+        next_record, item_changed, item_reason = _reconcile_local_newbie_request_record(reconciled, remote)
+        if item_changed:
+            reconciled = next_record
+            changed = True
+            match_reason = item_reason
+            break
+        if item_reason in {"remote_pending", "resolved_timestamp_not_newer", "resolved_timestamp_older"}:
+            match_reason = item_reason
+            break
+    return reconciled, changed, match_reason
+
+
+def _reconcile_remote_newbie_requests_into_local_state(force=False):
+    snapshot = _remote_newbie_request_snapshot(force=force)
+    if not snapshot.get("ok"):
+        return {"ok": False, "historyUpdated": 0, "activeSessionUpdated": False, "source": snapshot.get("source")}
+
+    requests = snapshot.get("requests") or []
+    history_updated = 0
+    missing_identifier_records = 0
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC", ())
+    for row in rows:
+        existing = SQLiteCollection.decode(row["data"])
+        if not str(existing.get("newbie_shift_request_id") or "").strip() and not _local_request_session_ids(existing):
+            if existing.get("newbie_shift_data") or existing.get("newbie_shift_request_status"):
+                missing_identifier_records += 1
+            continue
+        reconciled, changed, _reason = _reconcile_record_with_remote_requests(existing, requests)
+        if not changed:
+            continue
+        db.history.store.execute(
+            "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+            (
+                SQLiteCollection.encode(reconciled),
+                str(reconciled.get("timestamp_iso") or reconciled.get("timestamp") or ""),
+                row["id"],
+            ),
+        )
+        history_updated += 1
+
+    active_updated = False
+    active = db.sessions._read_document("active_session")
+    if active:
+        reconciled, changed, _reason = _reconcile_record_with_remote_requests(active, requests)
+        if changed:
+            reconciled["_id"] = "active_session"
+            db.sessions._write_document(reconciled)
+            active_updated = True
+
+    if missing_identifier_records:
+        logger.info(
+            "[REQUEST RECONCILIATION] Skipped local request records without stable identifiers count=%d",
+            missing_identifier_records,
+        )
+    if history_updated or active_updated:
+        logger.info(
+            "[REQUEST RECONCILIATION] Applied targeted local updates history=%d active_session=%s",
+            history_updated,
+            active_updated,
+        )
+    return {
+        "ok": True,
+        "historyUpdated": history_updated,
+        "activeSessionUpdated": active_updated,
+        "source": snapshot.get("source"),
+    }
+
+
+def _shared_pending_request_snapshot():
+    context = _shared_sheet_context()
+    headset_snapshot = _headset_review_snapshot()
+    headset_pending_count = len(headset_snapshot.get("pending") or []) if headset_snapshot.get("ok") else 0
+    if context.get("appsScriptClient"):
+        try:
+            result = context["appsScriptClient"].get("getPendingRequests", {"include_resolved": "true"})
+            raw_requests = result.get("requests") if isinstance(result, dict) else []
+            requests = []
+            for row in raw_requests or []:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("source_tab") == SHARED_CANDIDATE_DELETION_REQUESTS_TAB:
+                    requests.append(_public_deletion_request({
+                        "request_id": row.get("request_id"), "session_id": row.get("source_session_id"),
+                        "candidate_name": row.get("candidate"), "tester_name": row.get("tester"),
+                        "created_at": row.get("created_at"), "status": row.get("status"),
+                        "reason": row.get("reason"), "audit_summary": row.get("details"),
+                        "admin_decision_at": row.get("decision_at"), "admin_decision_by": row.get("decision_by"),
+                        "denial_reason": row.get("denial_reason"),
+                    }))
+                else:
+                    request_type = NEWBIE_REQUEST_RESCHEDULE if str(row.get("request_type") or "").lower() in {"reschedule", "newbie_shift_reschedule"} else NEWBIE_REQUEST_INITIAL
+                    requests.append(_public_newbie_request({
+                        "request_id": row.get("request_id"), "session_id": row.get("source_session_id"),
+                        "request_type": request_type, "request_status": row.get("status"),
+                        "candidate_name": row.get("candidate"), "tester_name": row.get("tester"),
+                        "requested_by": row.get("requester"), "request_reason": row.get("reason"),
+                        "request_details": row.get("details"), "request_created_at": row.get("created_at"),
+                        "original_scheduled_at": row.get("original_scheduled_at"),
+                        "scheduled_at": row.get("requested_scheduled_at"), "timezone": row.get("timezone"),
+                        "within_24_hours": row.get("within_24_hours"), "counts_as_attempt": row.get("counts_as_attempt"),
+                        "final_attempt": row.get("final_attempt"), "admin_decision_at": row.get("decision_at"),
+                        "admin_decision_by": row.get("decision_by"), "denial_reason": row.get("denial_reason"),
+                    }))
+            return {
+                "ok": True, "requests": requests, "headsetReviews": headset_snapshot.get("pending") or [],
+                "counts": _request_category_counts(requests, headset_pending_count), "warning": "", "error_code": "", "message": "",
+                "targeting": {"mode": "all_authorized_admins", "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests."},
+                "transport": "apps_script",
+            }
+        except Exception as exc:
+            logger.warning("[REQUESTS] Apps Script pending request listing failed: %s", exc)
+            return {
+                "ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "error_code": "apps_script_pending_requests_unavailable", "message": "",
+                "requests": [], "headsetReviews": headset_snapshot.get("pending") or [], "counts": _request_category_counts([], headset_pending_count), "transport": "apps_script",
+            }
+    if not context.get("ok"):
+        return {
+            "ok": False,
+            "error": _candidate_tracking_temporary_unavailable_message(),
+            "requests": [],
+            "headsetReviews": headset_snapshot.get("pending") or [],
+            "counts": _request_category_counts([], headset_pending_count),
+            "targeting": {
+                "mode": "all_authorized_admins",
+                "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests.",
+            },
+        }
+    try:
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        newbie_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_NEWBIE_SHIFT_REQUESTS_TAB, SHARED_NEWBIE_SHIFT_REQUEST_HEADERS)
+        deletion_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_DELETION_REQUESTS_TAB, SHARED_CANDIDATE_DELETION_REQUEST_HEADERS)
+        requests = [_public_newbie_request(row) for row in newbie_rows] + [_public_deletion_request(row) for row in deletion_rows]
+        requests.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+        return {
+            "ok": True,
+            "requests": requests,
+            "headsetReviews": headset_snapshot.get("pending") or [],
+            "counts": _request_category_counts(requests, headset_pending_count),
+            "targeting": {
+                "mode": "all_authorized_admins",
+                "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests.",
+            },
+        }
+    except Exception as exc:
+        logger.warning("[REQUESTS] Pending request snapshot unavailable: %s", exc)
+        return {
+            "ok": False,
+            "error": _candidate_tracking_temporary_unavailable_message(),
+            "requests": [],
+            "headsetReviews": headset_snapshot.get("pending") or [],
+            "counts": _request_category_counts([], headset_pending_count),
+            "targeting": {
+                "mode": "all_authorized_admins",
+                "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests.",
+            },
+        }
+
+
+def _set_row_value(row, key, value):
+    if key in row:
+        row[key] = value
+
+
+def _find_request_row(rows, request_id):
+    return next((row for row in rows if str(row.get("request_id") or "").strip() == str(request_id or "").strip()), None)
+
+
+def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_id, status, actor, decided_at, denial_reason=""):
+    if not session_id:
+        return 0
+    candidate_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+    updated = 0
+    for row in candidate_rows:
+        if str(row.get("session_id") or "").strip() != str(session_id).strip():
+            continue
+        row["newbie_shift_request_id"] = request_id or row.get("newbie_shift_request_id") or ""
+        row["newbie_shift_request_status"] = status
+        row["newbie_shift_admin_decision_at"] = decided_at
+        row["newbie_shift_admin_decision_by"] = actor
+        row["newbie_shift_denial_reason"] = denial_reason
+        _shared_update_existing_row(
+            sheets_api,
+            sheet_id,
+            SHARED_CANDIDATE_SESSIONS_TAB,
+            SHARED_CANDIDATE_SESSION_HEADERS,
+            row["_row_number"],
+            _shared_row_values(row, SHARED_CANDIDATE_SESSION_HEADERS),
+        )
+        updated += 1
+    return updated
+
+
+def _shared_pending_request_action(payload):
+    request_id = str((payload or {}).get("request_id") or "").strip()
+    category = str((payload or {}).get("category") or "").strip()
+    decision_input = str((payload or {}).get("decision") or "").strip().lower()
+    actor = str((payload or {}).get("actor") or (payload or {}).get("admin") or "SAM").strip() or "SAM"
+    denial_reason = str((payload or {}).get("denial_reason") or "").strip()
+    expected_status = str((payload or {}).get("expected_status") or "pending").strip().lower()
+    if decision_input in {"approve", "approved"}:
+        decision_cmd = "approve"
+        decision = "approved"
+    elif decision_input in {"deny", "denied"}:
+        decision_cmd = "deny"
+        decision = "denied"
+    else:
+        return {"ok": False, "error": "Decision must be approved or denied."}
+    if decision == "denied" and not denial_reason:
+        return {"ok": False, "error": "A denial reason is required."}
+    if not request_id:
+        return {"ok": False, "error": "Request id is required."}
+
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup()}
+    if context.get("appsScriptClient"):
+        from services.apps_script_api import AppsScriptApiError
+        if category == "newbie_initial":
+            request_type = "initial_newbie_shift"
+        elif category == "newbie_reschedule":
+            request_type = "newbie_shift_reschedule"
+        elif category == "candidate_deletion":
+            request_type = "candidate_deletion"
+        else:
+            return {"ok": False, "error": "Unsupported request category."}
+
+        apps_script_client = context["appsScriptClient"]
+        decided_at = datetime.now(timezone.utc).isoformat()
+        try:
+            result = apps_script_client.post("decidePendingRequest", {
+                "request_id": request_id,
+                "request_type": request_type,
+                "decision": decision_cmd,
+                "expected_status": expected_status,
+                "decision_by": actor,
+                "denial_reason": denial_reason
+            })
+            if not isinstance(result, dict):
+                result = {}
+
+            response = {
+                "ok": result.get("ok") if "ok" in result else True,
+                "request_id": result.get("request_id") or request_id,
+                "request_type": result.get("request_type") or request_type,
+                "status": result.get("status") or result.get("request_status") or decision,
+                "decision": result.get("decision") or decision_cmd,
+                "decision_at": result.get("decision_at") or decided_at,
+                "decision_by": result.get("decision_by") or actor,
+                "denial_reason": result.get("denial_reason") or denial_reason,
+            }
+            for field in [
+                "candidate_session_synced",
+                "deletion_action_required",
+                "warning",
+                "error_code",
+                "message",
+            ]:
+                if field in result:
+                    response[field] = result[field]
+            return response
+        except AppsScriptApiError as exc:
+            err_msg = str(exc)
+            lowered = err_msg.lower()
+            if "not found" in lowered or "missing" in lowered:
+                friendly = "Request was not found."
+            elif "status has changed" in lowered or "already resolved" in lowered or "already approved" in lowered or "already denied" in lowered or "status mismatch" in lowered or "expected-status" in lowered:
+                friendly = "Request has already been resolved."
+            elif "lock timeout" in lowered:
+                friendly = "Temporary database lock conflict. Please try again in a moment."
+            elif "invalid decision" in lowered:
+                friendly = "Decision must be approved or denied."
+            elif "denial reason" in lowered:
+                friendly = "A denial reason is required."
+            else:
+                friendly = _candidate_tracking_temporary_unavailable_message()
+            logger.warning("[REQUESTS] Apps Script pending request decision rejected: %s", exc)
+            return {
+                "ok": False,
+                "error": friendly,
+                "error_code": "apps_script_pending_request_error"
+            }
+        except Exception as exc:
+            logger.exception("[REQUESTS] Apps Script pending request decision transport failed: %s", exc)
+            return {
+                "ok": False,
+                "error": _candidate_tracking_temporary_unavailable_message(),
+                "error_code": "apps_script_pending_request_transport_failed"
+            }
+
+    try:
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        decided_at = datetime.now(timezone.utc).isoformat()
+        if category in {"newbie_initial", "newbie_reschedule"}:
+            rows = _shared_read_rows(sheets_api, sheet_id, SHARED_NEWBIE_SHIFT_REQUESTS_TAB, SHARED_NEWBIE_SHIFT_REQUEST_HEADERS)
+            row = _find_request_row(rows, request_id)
+            if not row:
+                return {"ok": False, "error": "Request was not found."}
+            current_status = _request_status_value(row.get("request_status"))
+            if current_status != expected_status:
+                return {"ok": False, "error": f"Request has already been {_approval_label(current_status).lower()}."}
+            row["request_status"] = decision
+            row["admin_decision_at"] = decided_at
+            row["admin_decision_by"] = actor
+            row["denial_reason"] = denial_reason if decision == "denied" else ""
+            _shared_update_existing_row(
+                sheets_api,
+                sheet_id,
+                SHARED_NEWBIE_SHIFT_REQUESTS_TAB,
+                SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
+                row["_row_number"],
+                _shared_row_values(row, SHARED_NEWBIE_SHIFT_REQUEST_HEADERS),
+            )
+            candidate_updates = _update_candidate_request_fields(
+                sheets_api,
+                sheet_id,
+                row.get("session_id") or "",
+                request_id,
+                decision,
+                actor,
+                decided_at,
+                denial_reason if decision == "denied" else "",
+            )
+            return {"ok": True, "request_id": request_id, "category": category, "status": decision, "candidateUpdates": candidate_updates}
+
+        if category == "candidate_deletion":
+            rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_DELETION_REQUESTS_TAB, SHARED_CANDIDATE_DELETION_REQUEST_HEADERS)
+            row = _find_request_row(rows, request_id)
+            if not row:
+                return {"ok": False, "error": "Request was not found."}
+            current_status = _request_status_value(row.get("status"))
+            if current_status != expected_status:
+                return {"ok": False, "error": f"Request has already been {_approval_label(current_status).lower()}."}
+            row["status"] = decision
+            row["admin_decision_at"] = decided_at
+            row["admin_decision_by"] = actor
+            row["denial_reason"] = denial_reason if decision == "denied" else ""
+            _shared_update_existing_row(
+                sheets_api,
+                sheet_id,
+                SHARED_CANDIDATE_DELETION_REQUESTS_TAB,
+                SHARED_CANDIDATE_DELETION_REQUEST_HEADERS,
+                row["_row_number"],
+                _shared_row_values(row, SHARED_CANDIDATE_DELETION_REQUEST_HEADERS),
+            )
+            deletion_result = {}
+            if decision == "approved":
+                deletion_result = _shared_admin_candidate_action({
+                    "action": "delete_candidate_history",
+                    "targets": [{"session_id": row.get("session_id") or "", "candidate_name": row.get("candidate_name") or ""}],
+                    "actor": actor,
+                })
+            return {"ok": True, "request_id": request_id, "category": category, "status": decision, "deletion": deletion_result}
+
+        return {"ok": False, "error": "Unsupported request category."}
+    except Exception as exc:
+        logger.exception("[REQUESTS] Failed to apply pending request decision: %s", exc)
+        return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message()}
+
+
 def _shared_admin_candidate_action(payload):
     action = str((payload or {}).get("action") or "").strip()
     candidate_name = str((payload or {}).get("candidate_name") or "").strip()
@@ -6168,6 +6911,7 @@ def _newbie_shift_request_row(session):
         session.get("newbie_shift_admin_decision_at") or "",
         session.get("newbie_shift_admin_decision_by") or "",
         session.get("newbie_shift_denial_reason") or "",
+        session.get("newbie_shift_request_updated_at") or "",
     ], request_id
 
 
@@ -6196,13 +6940,26 @@ def _candidate_deletion_request_row(record, request_id):
         record.get("status") or record.get("final_status") or "",
         completed_at,
         "; ".join(audit_parts),
+        record.get("admin_decision_at") or "",
+        record.get("admin_decision_by") or "",
+        record.get("denial_reason") or "",
     ]
 
 
-def _sync_newbie_shift_request(session, sheets_api, sheet_id):
+def _sync_newbie_shift_request(session, sheets_api, sheet_id, existing_rows=None):
     session = _session_with_workflow_defaults(session)
     if not session.get("newbie_shift_request_id"):
         return ""
+    if existing_rows is None:
+        existing_rows = _shared_read_rows(
+            sheets_api,
+            sheet_id,
+            SHARED_NEWBIE_SHIFT_REQUESTS_TAB,
+            SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
+        )
+    existing = _find_request_row(existing_rows, session.get("newbie_shift_request_id"))
+    if existing:
+        session, _changed, _reason = _reconcile_local_newbie_request_record(session, existing)
     row_values, request_id = _newbie_shift_request_row(session)
     return _shared_update_or_append_row(
         sheets_api,
@@ -6223,6 +6980,12 @@ def _sync_shared_candidate_tracking(session):
 
     current_operation = "initialize"
     try:
+        request_snapshot = _remote_newbie_request_snapshot()
+        if request_snapshot.get("ok"):
+            session, _changed, _reason = _reconcile_record_with_remote_requests(
+                session,
+                request_snapshot.get("requests") or [],
+            )
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
             status = _shared_status(compute_final_status(session))
@@ -6233,7 +6996,14 @@ def _sync_shared_candidate_tracking(session):
                 "updatedBy": str(session.get("tester_name") or "MTS").strip() or "MTS",
                 "timestamp": str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()),
             })
-            return {"ok": True, "candidateAction": "updated", "pendingAction": "", **(result if isinstance(result, dict) else {})}
+            newbie_action = ""
+            if session.get("newbie_shift_request_id"):
+                row_values, request_id = _newbie_shift_request_row(session)
+                request = dict(zip(SHARED_NEWBIE_SHIFT_REQUEST_HEADERS, row_values))
+                request["source_session_id"] = request.pop("session_id", "")
+                request["request_type"] = "newbie_shift_reschedule" if request.get("request_type") == NEWBIE_REQUEST_RESCHEDULE else "initial_newbie_shift"
+                newbie_action = apps_script_client.post("upsertPendingRequest", {"request": request})
+            return {"ok": True, "candidateAction": "updated", "pendingAction": "", "newbieRequestAction": newbie_action, **(result if isinstance(result, dict) else {})}
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         current_operation = "read_candidate_rows"
@@ -6243,6 +7013,35 @@ def _sync_shared_candidate_tracking(session):
             SHARED_CANDIDATE_SESSIONS_TAB,
             SHARED_CANDIDATE_SESSION_HEADERS,
         )
+        current_operation = "read_newbie_request_rows"
+        newbie_request_rows = _shared_read_rows(
+            sheets_api,
+            sheet_id,
+            SHARED_NEWBIE_SHIFT_REQUESTS_TAB,
+            SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
+        )
+        session, _changed, _reason = _reconcile_record_with_remote_requests(
+            session,
+            [
+                normalized
+                for normalized in (_canonical_remote_newbie_request(row) for row in newbie_request_rows)
+                if normalized
+            ],
+        )
+        candidate_session_id = str(
+            session.get("history_id") or session.get("resume_source_history_id") or session.get("session_id") or ""
+        ).strip()
+        existing_candidate = next(
+            (
+                row for row in candidate_rows
+                if candidate_session_id and str(row.get("session_id") or "").strip() == candidate_session_id
+            ),
+            None,
+        )
+        if existing_candidate:
+            existing_remote = _candidate_row_remote_newbie_request(existing_candidate)
+            if existing_remote:
+                session, _changed, _reason = _reconcile_local_newbie_request_record(session, existing_remote)
         row_values, pending_id, needs_sup = _candidate_session_row(session, candidate_rows)
         session_id = row_values[0]
         current_operation = "candidate_update_or_append"
@@ -6284,7 +7083,12 @@ def _sync_shared_candidate_tracking(session):
                 pending_row,
             )
 
-        newbie_request_action = _sync_newbie_shift_request(session, sheets_api, sheet_id)
+        newbie_request_action = _sync_newbie_shift_request(
+            session,
+            sheets_api,
+            sheet_id,
+            existing_rows=newbie_request_rows,
+        )
 
         return {"ok": True, "candidateAction": candidate_action, "pendingAction": pending_action, "newbieRequestAction": newbie_request_action}
     except Exception as exc:
@@ -6465,8 +7269,10 @@ def _lookup_shared_candidate_sessions(candidate_name):
             return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
-            rows = [
-                {
+            rows = []
+            for raw_row in _apps_script_rows(apps_script_client, "getCandidateTracking"):
+                row = _normalize_shared_row(raw_row)
+                row.update({
                     "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip(),
                     "status": str(row.get("status") or row.get("Status") or "").strip(),
                     "created_at": str(row.get("created_at") or row.get("Timestamp") or "").strip(),
@@ -6479,9 +7285,8 @@ def _lookup_shared_candidate_sessions(candidate_name):
                     "withdrawn": str(row.get("withdrawn") or row.get("Withdrawn") or "").strip(),
                     "extra_attempt_granted": str(row.get("extra_attempt_granted") or row.get("ExtraAttemptGranted") or row.get("Extra Attempt Granted") or "").strip(),
                     "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
-                }
-                for row in _apps_script_rows(apps_script_client, "getCandidateTracking")
-            ]
+                })
+                rows.append(row)
         else:
             sheets_api = context["service"].spreadsheets()
             rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
@@ -6493,6 +7298,12 @@ def _lookup_shared_candidate_sessions(candidate_name):
             exc,
         )
         return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
+    request_snapshot = _remote_newbie_request_snapshot()
+    if request_snapshot.get("ok"):
+        rows = [
+            _reconcile_record_with_remote_requests(row, request_snapshot.get("requests") or [])[0]
+            for row in rows
+        ]
     matches = []
     for row in rows:
         candidate = " ".join(str(row.get("candidate_name") or "").lower().split())
@@ -8365,6 +9176,15 @@ async def _record_form_fill_status(session, status, error_summary=""):
     return update
 
 
+async def _safe_record_form_fill_status(session, status, error_summary=""):
+    try:
+        update = await _record_form_fill_status(session, status, error_summary)
+        return {"ok": True, "update": update, "error": ""}
+    except Exception as exc:
+        logger.exception("[FORM-FILL] Form automation completed but status persistence failed: %s", exc)
+        return {"ok": False, "update": {}, "error": "MTS could not update the session form-fill status."}
+
+
 async def import_sqlite_seed_if_requested():
     """Optional one-time JSON import for Mongo exports; skipped once SQLite has data."""
     import_path = (os.getenv("SQLITE_IMPORT_PATH") or "").strip()
@@ -8713,7 +9533,6 @@ async def get_help_content():
         **HELP_CONTENT,
         "help_markdown": help_text,
         "faq_markdown": faq_text,
-        "admin_setup_markdown": ADMIN_SETUP_MARKDOWN,
     }
 
 
@@ -8745,6 +9564,7 @@ async def complete_setup(payload: dict, request: Request):
 # ══════════════════════════════════════════════════════════════════
 @api_router.get("/session/current")
 async def get_current_session():
+    await asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state)
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
     if doc:
         return {"session": doc, "has_active": bool(doc.get("candidate_name"))}
@@ -8753,6 +9573,7 @@ async def get_current_session():
 
 @api_router.get("/shared/candidates/lookup")
 async def lookup_shared_candidate(name: str = ""):
+    await asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state)
     return await asyncio.to_thread(_lookup_shared_candidate_sessions, name)
 
 
@@ -9796,6 +10617,18 @@ async def post_shared_admin_candidate_action(payload: dict, request: Request):
     return await asyncio.to_thread(_shared_admin_candidate_action, payload or {})
 
 
+@api_router.get("/shared/admin/pending-requests")
+async def get_shared_admin_pending_requests(request: Request):
+    _require_admin_token(request)
+    return await asyncio.to_thread(_shared_pending_request_snapshot)
+
+
+@api_router.post("/shared/admin/pending-requests/action")
+async def post_shared_admin_pending_request_action(payload: dict, request: Request):
+    _require_admin_token(request)
+    return await asyncio.to_thread(_shared_pending_request_action, payload or {})
+
+
 @api_router.get("/sam/setup/status")
 async def get_sam_setup_status():
     settings_doc = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0}) or {}
@@ -10025,6 +10858,7 @@ async def discard_session(request: Request):
 # ══════════════════════════════════════════════════════════════════
 @api_router.get("/history")
 async def get_history():
+    await asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state)
     docs = _recent_history_docs(await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500))
     for index, doc in enumerate(docs):
         doc = _session_with_workflow_defaults(doc)
@@ -10095,7 +10929,18 @@ async def request_history_session_deletion(history_id: str, request: Request):
 
     shared_result = {"ok": False, "error": "Shared candidate deletion request sync unavailable."}
     context = _shared_sheet_context()
-    if context.get("ok"):
+    if context.get("ok") and context.get("appsScriptClient"):
+        try:
+            row_values = _candidate_deletion_request_row(target, request_id)
+            request_payload = dict(zip(SHARED_CANDIDATE_DELETION_REQUEST_HEADERS, row_values))
+            request_payload["source_session_id"] = request_payload.pop("session_id", "")
+            request_payload["request_type"] = "candidate_deletion"
+            result = context["appsScriptClient"].post("upsertPendingRequest", {"request": request_payload})
+            shared_result = {"ok": True, "request_id": request_id, "request_type": "candidate_deletion", "status": request_payload.get("status") or DELETION_REQUEST_PENDING, "action": result, "warning": "", "error_code": "", "message": ""}
+        except Exception as exc:
+            logger.warning("[SHARED] Apps Script candidate deletion request sync failed: %s", exc)
+            shared_result = {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "error_code": "apps_script_candidate_deletion_request_unavailable", "message": ""}
+    elif context.get("ok"):
         try:
             sheets_api = context["service"].spreadsheets()
             row_values = _candidate_deletion_request_row(target, request_id)
@@ -12313,10 +13158,38 @@ async def fill_form(payload: dict, request: Request):
     )
     result = fill_cert_form(form_url, form_payload, settings.get("form_fill_browser", "auto"))
     if result.get("ok"):
-        await _record_form_fill_status(session, FORM_FILL_FILLED)
-    else:
-        await _record_form_fill_status(session, FORM_FILL_FAILED, result.get("message") or result.get("error") or "Form fill failed.")
-    return result
+        status_result = await _safe_record_form_fill_status(session, FORM_FILL_FILLED)
+        response = {
+            **result,
+            "ok": True,
+            "automation_completed": True,
+            "form_filled": True,
+            "local_status_saved": bool(status_result.get("ok")),
+            "shared_status_saved": None,
+            "status_update": status_result.get("update") or {},
+            "error_code": "" if status_result.get("ok") else "metadata_status_save_failed",
+        }
+        if not status_result.get("ok"):
+            response["warning"] = (
+                "The Microsoft Form was filled, but MTS could not update the session status. "
+                "Do not run Form Fill again. Refresh or update the status manually if needed."
+            )
+            response["message"] = response["warning"]
+        return response
+
+    error_message = result.get("message") or result.get("error") or "Form fill failed."
+    status_result = await _safe_record_form_fill_status(session, FORM_FILL_FAILED, error_message)
+    return {
+        **result,
+        "ok": False,
+        "automation_completed": False,
+        "form_filled": False,
+        "local_status_saved": bool(status_result.get("ok")),
+        "shared_status_saved": None,
+        "status_update": status_result.get("update") or {},
+        "error_code": result.get("error_code") or "form_automation_failed",
+        "message": error_message,
+    }
 
 
 @api_router.get("/")

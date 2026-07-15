@@ -5,6 +5,7 @@ import CandidateIpIntelligencePanel, { loadStoredCandidateIpIntelligence, normal
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
+import { CERTIFICATION_SUPPORT_EMAIL, followUpStatusMeta } from '../utils/certificationWorkflow';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 const HEADSET_LIST_VERSION_KEY = 'mts_approved_headset_list_seen_hash';
 const HEADSET_SYNC_ACK_KEY = 'mts_headset_sync_ack_signature';
@@ -34,6 +35,17 @@ function getCandidateDate(record) {
 
 function candidateHasFinalAttemptUsed(record) {
   return String(record?.status || '').trim().toUpperCase() === 'FAIL-FINAL ATTEMPT';
+}
+
+function formatSharedNewbieSchedule(record) {
+  const scheduledAt = String(record?.newbie_shift_scheduled_at || record?.newbie_shift_rescheduled_at || '').trim();
+  const timezone = String(record?.newbie_shift_timezone || '').trim();
+  if (!scheduledAt) return timezone || 'Not scheduled';
+  const parsed = new Date(scheduledAt);
+  const readable = Number.isNaN(parsed.getTime())
+    ? scheduledAt
+    : parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  return [readable, timezone].filter(Boolean).join(' · ');
 }
 
 function candidateHasPassed(record) {
@@ -724,7 +736,7 @@ export default function BasicsPage({ onNavigate }) {
       const choice = await modal.showModal({
         type: 'warning',
         title: 'Final Attempt Already Used',
-        body: `${candidateName} has already used their last attempt and is no longer able to continue. Please have the candidate email certification@acddirect.com if there are any issues. You can also post in the Discord Tester Room for further assistance. This session will be discarded.`,
+        body: `${candidateName} has already used their last attempt and is no longer able to continue. Please have the candidate email ${CERTIFICATION_SUPPORT_EMAIL} if there are any issues. You can also post in the Discord Tester Room for further assistance. This session will be discarded.`,
         graphic: 'warning',
         buttons: [
           { label: 'OK', cls: 'btn-primary', value: 'discard' },
@@ -1640,6 +1652,15 @@ function PreviousSessionModal({ matches, candidateName, onClose }) {
                     <div className="text-sm"><b>Extensions Off:</b> {recovered.extensions_disabled === true ? 'Yes' : recovered.extensions_disabled === false ? 'No' : 'N/A'}</div>
                     <div className="text-sm"><b>Pop-ups Allowed:</b> {recovered.popups_allowed === true ? 'Yes' : recovered.popups_allowed === false ? 'No' : 'N/A'}</div>
                     <div className="text-sm"><b>Pending supervisor transfer:</b> {session.needs_sup_transfer ? 'Yes' : 'No'}</div>
+                    {session.newbie_shift_request_id && (
+                      <>
+                        <div className="text-sm"><b>Newbie Shift request:</b> {followUpStatusMeta(session.newbie_shift_request_status).label}</div>
+                        <div className="text-sm"><b>Requested schedule:</b> {formatSharedNewbieSchedule(session)}</div>
+                        {String(session.newbie_shift_request_status || '').toLowerCase() === 'denied' && session.newbie_shift_denial_reason && (
+                          <div className="text-sm"><b>Denial reason:</b> {session.newbie_shift_denial_reason}</div>
+                        )}
+                      </>
+                    )}
                     <div className="text-sm"><b>Calls:</b> {[session.call_1_result, session.call_2_result, session.call_3_result].filter(Boolean).join(', ') || 'None recorded'}</div>
                     <div className="text-sm"><b>Supervisor transfers:</b> {[session.sup_transfer_1_result, session.sup_transfer_2_result].filter(Boolean).join(', ') || 'None recorded'}</div>
                     <div>

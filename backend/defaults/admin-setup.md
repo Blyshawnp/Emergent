@@ -31,10 +31,18 @@ The files in `backend/defaults/` are the packaged master defaults used when a us
 - In coaching CSV files, keep multiple sub-items in `ChildrenPipeDelimited` separated by `|`.
 - In `discord-posts.csv`, keep up to three suggested screenshot paths in `SuggestedScreenshots` separated by `|`.
 - In `callers.csv`, keep the `Category` column populated so records route to the correct caller group.
+- Certification support instructions must use `certification@acdsupport.com`. If a live admin-content sheet still has the older certification mailbox in a Discord/help row, update that row in place without duplicating the template.
+- Temporary Newbie Shift reschedule Discord posts use the internally managed `newbieShiftRescheduleAdminMention` value when configured. The packaged fallback is `@beckysowlesacdadmin`; the field is intentionally hidden from normal MTS and SAM Settings, and changing it does not change unrelated Discord post templates.
+
+## Help Content Separation
+- `help.md` and `faq.md` are trainer-facing runtime content. Keep them focused on app workflows, status meanings, safe troubleshooting, and support contacts.
+- This `admin-setup.md` file is repository/admin documentation only. Do not copy it into trainer Help or a trainer Help remote override.
+- Keep routes, schemas, credentials, service-account setup, sheet-tab maintenance, deployment steps, and repository paths in admin/developer documentation rather than trainer Help.
 
 ## Google Overrides
 - The Google Sheet tab names must match the local file base names exactly.
 - Use tabs named `callers`, `shows`, `call-types`, `sup-reasons`, `call-coaching`, `sup-coaching`, `call-fail-reasons`, `sup-fail-reasons`, `discord-posts`, `screenshots`, and `headsets`.
+- Shared workflow storage also requires the SAM/MTS tracking tabs defined in backend code, including `Candidate Sessions`, `Pending Sup Transfers`, `newbie-shift-requests`, and `candidate-deletion-requests`. The app verifies and adds missing headers through its safe shared tracking setup path when direct Google Sheets access is available.
 - Help and FAQ can be overridden by Google Docs.
 - Gemini prompt instructions use the bundled markdown files as the primary source.
 - Gemini prompt instructions can be overridden only by Google Sheet tabs named `gemini-coaching-prompt` and `gemini-fail-prompt`. Each tab must use A1 `prompt` and A2 containing the full prompt text. The override activates only when the normalized A2 text differs from the bundled markdown file.

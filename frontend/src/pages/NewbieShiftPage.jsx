@@ -8,6 +8,7 @@ import {
   buildRescheduleFailSummary,
   buildRescheduleSummary,
   computeWithin24Hours,
+  DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION,
   NEWBIE_REQUESTED_BY,
   NEWBIE_REQUEST_STATUS,
   NEWBIE_REQUEST_TYPE,
@@ -118,7 +119,11 @@ export default function NewbieShiftPage({ onNavigate }) {
 
   const candidateFirstName = splitCandidateFirstName(candidateName);
   const isReschedule = session?.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE;
-  const adminMention = settings?.newbie_shift_admin_mention || settings?.discord_admin_mention || '@admin';
+  const adminMention = settings?.newbieShiftRescheduleAdminMention
+    || settings?.newbie_shift_reschedule_admin_mention
+    || settings?.newbie_shift_admin_mention
+    || settings?.discord_admin_mention
+    || DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION;
 
   const reschedulePreviewSession = useMemo(() => ({
     ...(session || {}),
@@ -185,6 +190,16 @@ export default function NewbieShiftPage({ onNavigate }) {
     setRescheduleError('');
   }, [adminMention, rescheduleDetails, rescheduleReason, rescheduleRequester, session]);
 
+  const selectRescheduleRequester = useCallback((value) => {
+    setRescheduleRequester(value);
+    setRescheduleError('');
+  }, []);
+
+  const selectRescheduleReason = useCallback((value) => {
+    setRescheduleReason(value);
+    setRescheduleError('');
+  }, []);
+
   const handleContinue = useCallback(async () => {
     const ft = getFormattedTime();
     if (!ft) { await modal.warning('Notice', 'Enter a valid time (e.g. 10:30 or 9:45).'); return; }
@@ -201,6 +216,13 @@ export default function NewbieShiftPage({ onNavigate }) {
       patch.newbie_shift_request_status = session?.newbie_shift_request_status || NEWBIE_REQUEST_STATUS.PENDING;
       patch.coaching_summary = buildRescheduleSummary({ ...(session || {}), ...patch });
       patch.fail_summary = buildRescheduleFailSummary({ ...(session || {}), ...patch });
+    } else {
+      patch.newbie_shift_request_id = session?.newbie_shift_request_id || `newbie-${session?.history_id || session?.resume_source_history_id || Date.now()}`;
+      patch.newbie_shift_request_type = NEWBIE_REQUEST_TYPE.INITIAL;
+      patch.newbie_shift_request_status = session?.newbie_shift_request_status || NEWBIE_REQUEST_STATUS.PENDING;
+      patch.newbie_shift_requested_by = session?.newbie_shift_requested_by || NEWBIE_REQUESTED_BY.TESTER;
+      patch.newbie_shift_request_reason = session?.newbie_shift_request_reason || 'Initial Newbie Shift scheduling';
+      patch.newbie_shift_request_created_at = session?.newbie_shift_request_created_at || new Date().toISOString();
     }
     await api.updateSession(patch);
     onNavigate('review');
@@ -297,45 +319,90 @@ export default function NewbieShiftPage({ onNavigate }) {
 
       {showRescheduleDialog && (
         <div className="modal-overlay open" data-testid="reschedule-dialog">
-          <div className="modal" style={{ width: 720, maxHeight: '88vh' }}>
+          <div
+            className="modal"
+            style={{ width: 760, maxHeight: '88vh' }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                onNavigate('history');
+              }
+            }}
+          >
             <div className="modal-header">
-              <h2>Newbie Shift Reschedule</h2>
+              <h2><span className="reschedule-question-icon" aria-hidden="true">R</span> Newbie Shift Reschedule</h2>
             </div>
             <div className="modal-body">
-              <div className="card" style={{ marginBottom: 14 }}>
-                <h3>Did you or {candidateFirstName} need the Newbie Shift rescheduled?</h3>
-                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-                  <button className={`btn ${rescheduleRequester === NEWBIE_REQUESTED_BY.TESTER ? 'btn-primary' : 'btn-muted'}`} onClick={() => setRescheduleRequester(NEWBIE_REQUESTED_BY.TESTER)} data-testid="reschedule-requester-tester">Myself</button>
-                  <button className={`btn ${rescheduleRequester === NEWBIE_REQUESTED_BY.CANDIDATE ? 'btn-primary' : 'btn-muted'}`} onClick={() => setRescheduleRequester(NEWBIE_REQUESTED_BY.CANDIDATE)} data-testid="reschedule-requester-candidate">{candidateFirstName}</button>
+              <div className="reschedule-card" style={{ marginBottom: 14 }}>
+                <h3 className="reschedule-question"><span className="reschedule-question-icon" aria-hidden="true">1</span> Did you or {candidateFirstName} need the Newbie Shift rescheduled?</h3>
+                <div className="reschedule-requester-grid" role="radiogroup" aria-label={`Did you or ${candidateFirstName} need the Newbie Shift rescheduled?`}>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={rescheduleRequester === NEWBIE_REQUESTED_BY.TESTER}
+                    className={`reschedule-radio-card ${rescheduleRequester === NEWBIE_REQUESTED_BY.TESTER ? 'is-selected' : ''}`}
+                    onClick={() => selectRescheduleRequester(NEWBIE_REQUESTED_BY.TESTER)}
+                    data-testid="reschedule-requester-tester"
+                  >
+                    <span className="reschedule-radio-mark" aria-hidden="true" />
+                    <span>Myself</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={rescheduleRequester === NEWBIE_REQUESTED_BY.CANDIDATE}
+                    className={`reschedule-radio-card ${rescheduleRequester === NEWBIE_REQUESTED_BY.CANDIDATE ? 'is-selected' : ''}`}
+                    onClick={() => selectRescheduleRequester(NEWBIE_REQUESTED_BY.CANDIDATE)}
+                    data-testid="reschedule-requester-candidate"
+                  >
+                    <span className="reschedule-radio-mark" aria-hidden="true" />
+                    <span>{candidateFirstName}</span>
+                  </button>
                 </div>
               </div>
-              <div className="card">
-                <h3>What is the reason that this Newbie Shift must be rescheduled?</h3>
-                <div className="choice-grid" style={{ marginTop: 12 }}>
+              <div className="reschedule-card">
+                <h3 className="reschedule-question"><span className="reschedule-question-icon" aria-hidden="true">2</span> What is the reason that this Newbie Shift must be rescheduled?</h3>
+                <div className="reschedule-reason-grid" role="radiogroup" aria-label="What is the reason that this Newbie Shift must be rescheduled?">
                   {RESCHEDULE_REASONS.map((reason) => (
-                    <button key={reason} className={`btn ${rescheduleReason === reason ? 'btn-primary' : 'btn-muted'} btn-sm`} onClick={() => setRescheduleReason(reason)} data-testid={`reschedule-reason-${reason.toLowerCase().replace(/\s+/g, '-')}`}>{reason}</button>
+                    <button
+                      key={reason}
+                      type="button"
+                      role="radio"
+                      aria-checked={rescheduleReason === reason}
+                      className={`reschedule-radio-card ${rescheduleReason === reason ? 'is-selected' : ''}`}
+                      onClick={() => selectRescheduleReason(reason)}
+                      data-testid={`reschedule-reason-${reason.toLowerCase().replace(/\s+/g, '-')}`}
+                    >
+                      <span className="reschedule-radio-mark" aria-hidden="true" />
+                      <span>{reason}</span>
+                    </button>
                   ))}
                 </div>
+                <label className="reschedule-details-label" htmlFor="reschedule-details">
+                  <span>Additional details</span>
+                  {rescheduleReason === 'Other' && <span className="reschedule-required">Required for Other</span>}
+                </label>
                 <textarea
+                  id="reschedule-details"
                   rows={3}
                   value={rescheduleDetails}
                   onChange={(event) => setRescheduleDetails(event.target.value)}
-                  placeholder={rescheduleReason === 'Other' ? 'Details required for Other' : 'Optional details'}
-                  style={{ marginTop: 12 }}
+                  placeholder={rescheduleReason === 'Other' ? 'Enter the required details for Other.' : 'Optional details'}
+                  aria-required={rescheduleReason === 'Other'}
                   data-testid="reschedule-details"
                 />
               </div>
               {rescheduleError && <div className="banner banner-fail" style={{ marginTop: 12 }}>{rescheduleError}</div>}
             </div>
             <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
-              <button className="btn btn-muted" onClick={() => onNavigate('history')} data-testid="reschedule-cancel">Cancel</button>
-              <button className="btn btn-danger-outline" onClick={async () => {
+              <button type="button" className="btn btn-muted" onClick={() => onNavigate('history')} data-testid="reschedule-cancel">Cancel</button>
+              <button type="button" className="btn btn-danger-outline" onClick={async () => {
                 if (await modal.confirmDanger('Discard Session', 'Discard this reschedule draft? The saved history record will remain unchanged.')) {
                   await api.discardSession();
                   onNavigate('history');
                 }
               }} data-testid="reschedule-discard">Discard</button>
-              <button className="btn btn-primary" onClick={handleRescheduleDialogContinue} data-testid="reschedule-continue">Continue</button>
+              <button type="button" className="btn btn-primary" onClick={handleRescheduleDialogContinue} data-testid="reschedule-continue">Continue</button>
             </div>
           </div>
         </div>

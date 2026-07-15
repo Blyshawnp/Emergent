@@ -53,6 +53,32 @@ test('SAM candidate tracking sanitizes quota errors and throttles duplicate refr
   expect(appSource).not.toContain('[object Object]');
 });
 
+test('SAM pending request inbox, bell, and denial safeguards are wired', () => {
+  expect(appSource).toContain('SAM_PENDING_REQUESTS_BACKOFF_MS');
+  expect(appSource).toContain('pendingRequestsRequestRef');
+  expect(appSource).toContain('getSharedAdminPendingRequests');
+  expect(appSource).toContain('updateSharedAdminPendingRequest');
+  expect(appSource).toContain('Pending Requests');
+  expect(appSource).toContain('aria-label={`Pending request summary: ${unresolvedRequestCount} unresolved actionable requests`}');
+  expect(appSource).toContain('Newbie Shift Requests');
+  expect(appSource).toContain('Reschedule Requests');
+  expect(appSource).toContain('Candidate Deletion Requests');
+  expect(appSource).toContain('Headset Reviews');
+  expect(appSource).toContain('A denial reason is required.');
+  expect(appSource).toContain('Remind Me in 30 Minutes');
+  expect(appSource).toContain('There is a Newbie Shift request to reschedule awaiting approval.');
+  expect(appSource).toContain('Single session request');
+  expect(samPolishCss).toContain('.nm-request-bell-badge');
+  expect(samPolishCss).toContain('.nm-request-status.is-approved');
+  expect(samPolishCss).toContain('.nm-request-status.is-denied');
+});
+
+test('SAM operations layout uses pending requests instead of duplicate candidate tracking metric card', () => {
+  expect(appSource).toContain('<div className="nm-metric-label">Pending Requests</div>');
+  expect(appSource).not.toContain('<div className="nm-metric-label">Candidate Tracking</div>');
+  expect(appSource).toContain('<Plus size={16} aria-hidden="true" /> Add Notification');
+});
+
 test('SAM candidate actions use compact row menus with View Details first', () => {
   const actionsStart = appSource.indexOf('const renderCandidateActions = (row, rowKey)');
   const actionsBlock = appSource.slice(actionsStart, appSource.indexOf('const renderCandidateDetails', actionsStart));
@@ -92,7 +118,8 @@ test('SAM notification header has one help control and one destructive exit cont
 });
 
 test('SAM notification rows keep edit and duplicate actions at row level', () => {
-  const cardActionsStart = appSource.indexOf('<div className="nm-note-card-actions">');
+  const notificationsStart = appSource.indexOf('id="sam-notifications"');
+  const cardActionsStart = appSource.indexOf('<div className="nm-note-card-actions">', notificationsStart);
   const cardActionsBlock = appSource.slice(cardActionsStart, appSource.indexOf('</div>', cardActionsStart));
   expect(cardActionsBlock).toContain('openEditor(index)');
   expect(cardActionsBlock).toContain('handleDuplicate(index)');
@@ -103,12 +130,12 @@ test('SAM notification rows keep edit and duplicate actions at row level', () =>
 test('SAM operations cards and tabs have compact identity states', () => {
   expect(appSource).toContain('Sync Status');
   expect(appSource).toContain('Add Notification</div>');
-  expect(appSource).toContain('Candidate Tracking</div>');
+  expect(appSource).toContain('Pending Requests</div>');
   expect(appSource).toContain('<span className="nm-ops-quick-label">Data</span>');
   expect(appSource).toContain('<span className="nm-ops-quick-label">Workflow</span>');
   expect(appSource).toContain('<span className="nm-ops-quick-label">System</span>');
   expect(appSource).toContain('<Plus size={15} aria-hidden="true" /> Add Notification');
-  expect(appSource).toContain('<Users size={15} aria-hidden="true" /> Candidate Tracking');
+  expect(appSource).toContain('<Inbox size={15} aria-hidden="true" /> Pending Requests');
   expect(samPolishCss).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))');
   expect(samPolishCss).toContain('width: 246px');
   expect(appSource).toContain("tone: 'notifications'");

@@ -27,7 +27,7 @@ The guided tutorial walks through the main app workflow without changing any ses
 - The tutorial points out current Settings, payment, headset, Discord, and Review behavior.
 - Use Next, Back, Skip, and Finish inside the tutorial to control it.
 - Tutorial completion is only marked after Skip or Finish.
-- Optional tutorial videos are local files only. Place tutorial.mp4 or mts-tutorial.mp4 in frontend/public/assets/tutorial, then rebuild the app. If no video exists, the guided tutorial remains the fallback.
+- If a tutorial video is available, use Watch Tutorial Video. Otherwise, Replay Tutorial opens the guided walkthrough.
 
 ## 4. Home Screen
 Home is the launcher for every session type and the entry point to history.
@@ -40,7 +40,7 @@ Home is the launcher for every session type and the entry point to history.
 Smart Resume restores work in progress so you do not lose data from a paused or interrupted session.
 - If you reopen the app while a session is in progress, Home offers to resume it.
 - For Supervisor Transfer Only, Smart Resume can continue from local history when you conducted the original mock calls.
-- If another tester conducted the original mock calls, choose No when prompted to load the shared pending supervisor-transfer queue from the master Google Sheet.
+- If another tester conducted the original mock calls, choose No when prompted to load the shared pending supervisor-transfer queue.
 - Shared pending entries show candidate name, original tester, call results, created date/time, and available prior coaching or review notes.
 - Selecting a shared pending candidate loads the saved session data, skips Basics, and opens Supervisor Transfer Call 1.
 - If shared lookup is unavailable, the app falls back to local session mode so testing can continue.
@@ -56,14 +56,14 @@ Basics verifies candidate readiness before any scoring begins.
 - When checking for VPN or proxy, use VPN / Proxy Check as decision support and manually review the result.
 - VPN / Proxy Check never fails a candidate automatically. The tester always makes the final decision.
 - Headset and VPN fail popups include Discord copy buttons when the matching post template is available.
-- Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.
+- Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared candidate records.
 - When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.
 - Choose Correct Candidate only after confirming the match. The app loads the matching Basics context and starts Calls, or Supervisor Transfer 1 for Supervisor Transfer Only.
 - If the most recent previous session was NC/NS, the app looks for older usable Basics information for that candidate.
 - If no previous Basics information exists, the app keeps the candidate linked and returns you to Basics with a message to complete the screen before continuing.
 - If prior qualifying failures show this is truly the final attempt, the app warns you and sets Final Attempt automatically after candidate confirmation.
 - If the shared record shows the final attempt was already used, testing is blocked unless you use the override flow and notify Admin in the Discord Tester Room.
-- Blocked candidates should email certification@acddirect.com if there are issues, and testers can post in the Discord Tester Room for help.
+- Blocked candidates should email certification@acdsupport.com if there are issues, and testers can post in the Discord Tester Room for help.
 - Withdrawn candidates are blocked unless an admin restores the candidate or grants an extra attempt in SAM.
 - Candidates with an extra attempt granted can continue, with the notice shown during lookup.
 - Continue validates readiness and routes into Calls (or Supervisor Transfer Only when applicable).
@@ -76,7 +76,7 @@ Use the Brand / Model autocomplete to confirm a candidate is using an allowed US
 - Pick an approved headset first so USB and Noise Cancelling can be marked Yes automatically.
 - If the model is not listed, double-check that the headset is USB and has a noise-cancelling microphone before continuing.
 - If the headset is confirmed USB with a noise-cancelling microphone, type it manually in the field.
-- Manually entered headset models that are not on the approved list may be logged to the headset-review-log tab for admin review.
+- Manually entered headset models that are not on the approved list may be sent for admin review.
 - Approved but unlisted headsets are reviewed and added to the approved list every 7-10 days.
 - A denied model shows a Denied Headset popup. If the candidate has no replacement headset, the session auto-fails.
 
@@ -150,15 +150,20 @@ Use this when mock calls were already completed earlier and only the transfer po
 - Choose No when another tester conducted the original mock calls; the app loads the shared pending supervisor-transfer queue.
 - Selecting a shared pending candidate loads the prior call results, prior notes, and available Basics information, then goes directly to Supervisor Transfer Call 1.
 - If a pending shared record is missing Basics, the app searches prior sessions for the most recent usable Basics for that candidate.
-- If the shared Google Sheet cannot be reached, the app shows a local-only notice and continues without blocking the workflow.
+- If shared candidate records cannot be reached, the app shows a local-only notice and continues without blocking the workflow.
 - Fresh supervisor-only sessions still run through Basics first when no resumable local or shared record is selected.
+- For a No Call/No Show on the transfer-only appointment, use the Supervisor Transfer NC/NS action and confirm the choice before Review.
 
 ## 16. Newbie Shift
 Newbie Shift schedules follow-up work when a candidate cannot complete the flow today.
 - Enter the follow-up date, start time, AM/PM, and timezone.
 - Use Add to Google Calendar to open a prefilled calendar event.
 - Use the Supervisor Transfer time-check popup to copy the Out of Time (Needs Sup) Discord post when there is not enough time to complete Supervisor Transfers.
-- Rescheduled Newbie Shifts collect who requested the change, the reason, and exact request timing before a new date/time is selected.
+- Use Reschedule from History only for an eligible incomplete session that still needs Newbie Shift or Supervisor Transfer follow-up.
+- Choose who needed the change and select one reason. Other requires additional details before you can continue.
+- Select the new date, time, and timezone after providing the reason.
+- A candidate-requested change may count as an attempt based on when it was requested. Approval may remain Pending until an admin reviews it.
+- Use the editable temporary Discord post when the reschedule needs to be shared with the admin team.
 - Continue to Review to save the Newbie Shift details on the session.
 
 ## 17. Review Screen
@@ -174,8 +179,11 @@ Review is the final checkpoint before filling forms or saving the session.
 - Final Readiness Judgment lets the evaluator keep the calculated result or override it with a final result and reason.
 - When an override is applied, summaries and saved history preserve both the calculated result and the final evaluator result.
 - Use Fill Form to push session data into the certification form.
+- Form Filled means MTS completed filling the Microsoft Form. It does not mean the trainer clicked Submit.
+- Not Yet Filled means the fill action has not completed. Fill Failed means the browser automation did not complete.
+- If MTS says the form was filled but session status could not be updated, do not fill it again. Refresh History or contact support.
 - Save and Finish stores the session in local History, immediately updates shared Candidate Sessions, and updates Pending Sup Transfers when applicable.
-- If the shared Google Sheet update fails, the local save still completes and the app warns you without crashing.
+- If the shared candidate update fails, the local save still completes and the app shows a trainer-safe warning.
 
 ## 18. Generic Summaries
 Generic summaries are built from your coaching and fail-reason selections without using AI.
@@ -188,9 +196,9 @@ Gemini summaries rewrite the generic summary into more polished management-facin
 - Gemini is optional. The app still creates generic summaries without it.
 - Gemini only rewrites the wording; it does not change pass/fail status or routing.
 - Turn Gemini on in Settings → Gemini AI after adding an API key (next section).
-- Use Test Gemini Connection after saving the key. If it fails, the status shows the backend failure reason without exposing the key.
+- Use Test Gemini Connection after saving the key. If it fails, the status shows a friendly connection message without exposing the key.
 - If the API key is typed or already saved, Settings shows the key as configured instead of saying no key is configured.
-- If Gemini connects but the test response is blocked or empty, the app explains that safety/API settings may need a simpler prompt or adjustment.
+- If Gemini connects but the test response is blocked or empty, try again later or use a simpler prompt.
 - Typical usage in this app is light, often fewer than 5 AI calls per day.
 
 ## 20. How to get and add a free Gemini API key
@@ -223,9 +231,11 @@ Fill Form pushes session data into the configured Microsoft certification form u
 History stores recent local sessions. You can reopen a session in read-only Review or fill the form from it again.
 - Open History from Home to see recent sessions tested on this app/user.
 - Local History is retained for recent work only and can be cleared or deleted by the tester without deleting SAM admin candidate history.
-- Shared Google Sheet candidate lookup remains available for older or cross-tester records unless an admin deletes the shared candidate history in SAM or the rows are manually deleted from the Google Sheet.
+- Shared candidate records remain available for older or cross-tester lookup unless an administrator approves their removal.
 - Click a session to view summary details, or open it in Historical Review (read-only).
-- Historical Fill Form re-runs Fill Form from a saved record without changing the active session.
+- Use View to inspect a saved session, Reschedule for an eligible incomplete follow-up, and Delete to choose whether only local History should be removed.
+- History shows the session result, form status, and follow-up status. Follow-up may be Pending, Approved, or Denied.
+- Historical Fill Form runs Fill Form from a saved record without changing the active session. Confirm carefully before filling a record again.
 
 ## 23. Settings
 Settings controls your profile, integrations, and app preferences.
@@ -239,7 +249,7 @@ Settings controls your profile, integrations, and app preferences.
 - Sound Volume supports Off, Low, Medium, and High.
 - Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.
 - Help content is not editable from normal Settings.
-- Notifications are managed by admins in SAM through the master Google Sheet, not from normal MTS Settings.
+- Notifications are managed by admins in SAM, not from normal MTS Settings.
 
 ## 24. Discord Posts and Screenshots
 The Discord panel keeps reusable Discord messages and screenshot images close at hand during a session.
@@ -259,15 +269,15 @@ The Discord panel keeps reusable Discord messages and screenshot images close at
 ## 25. Ticker and Notifications
 The ticker and notification system surfaces operational messages without blocking normal work.
 - Ticker messages scroll across the top of the app.
-- Ticker, banner, and popup content is managed by admins through SAM and the master sam-notifications sheet.
+- Ticker, banner, and popup content is managed by admins through SAM.
 - Banner and popup notifications can also appear from the same source.
 - Ticker Speed can be set during Setup Wizard and changed later in Settings; the ticker URL is admin-only.
 
 ## 26. Updates and About
 Update checks and app version info live in the app menu and Settings.
-- Use the app menu or Settings update panel to check the master Google Sheet update-MTS tab for updates.
-- Update metadata includes Version, RequiredVersion, Release Date, Release Title, URL, and multiline Notes.
-- If RequiredVersion is newer than your installed version, the update is required and normal use is blocked until Update Now is selected.
+- Use the app menu or Settings update panel to check for updates.
+- Available update details include the version, release date, release title, and release notes.
+- When an update is required, normal use is blocked until Update Now is selected.
 - Optional updates show release notes and can be installed now or deferred.
 - Deferred updates can be installed later from Settings when available.
 - When a download cannot open automatically, use the manual download option shown in the updater message.

@@ -13,7 +13,7 @@ Shared lookup waits for a stronger name entry so a single letter does not accide
 The app keeps the candidate linked and returns you to Basics with a message to complete the Basics screen before continuing.
 
 ## What if a candidate already used their final attempt?
-Testing is blocked unless an override is used with admin permission. The candidate should email certification@acddirect.com for issues, and testers can ask in the Discord Tester Room.
+Testing is blocked unless an override is used with admin permission. The candidate should email certification@acdsupport.com for issues, and testers can ask in the Discord Tester Room.
 
 ## What if a candidate is withdrawn?
 Withdrawn candidates are blocked until an admin restores the withdrawal or grants an extra attempt in SAM.
@@ -31,10 +31,10 @@ On Basics, click one of the VPN/proxy website buttons. The full URL copies to yo
 Confirm it is USB and has a noise-cancelling microphone, then type it manually in Brand / Model. Unknown manual entries may be logged for admin review and approved-but-unlisted models are added every 7-10 days.
 
 ## What if Gemini says the test response was blocked or empty?
-That means the API key connected, but Gemini did not return usable text for the test. Try again later, use a simpler prompt, or check Gemini safety/API settings.
+That means Gemini connected but did not return usable text for the test. Try again later or use a simpler prompt.
 
 ## Where is my data stored?
-Local History stores recent sessions tested on this app/user and can be cleared or deleted by testers without deleting SAM admin candidate history. Shared Google Sheet candidate records remain separate for cross-tester lookup and resume workflows unless an admin deletes the shared candidate history in SAM or the rows are manually deleted from the Google Sheet.
+Local History stores recent sessions tested on this app. Shared candidate records remain separate for cross-tester lookup and resume workflows unless an administrator approves their removal.
 
 ## How do I customize Discord templates?
 Open Settings and use the Discord tab to edit templates and screenshots.

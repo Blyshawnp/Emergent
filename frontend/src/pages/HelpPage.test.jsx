@@ -138,7 +138,10 @@ test('help page renders current help topics and configured faq entries', async (
   expect(view.container.textContent).toContain('Conflict detection: duplicate shortcut assignments are blocked');
   expect(view.container.textContent).toContain('Restoring defaults: use Restore Default');
   expect(view.container.textContent).toContain('Final Readiness Judgment lets the evaluator keep the calculated result');
-  expect(view.container.textContent).toContain('Optional tutorial videos are local files only');
+  expect(view.container.textContent).toContain('If a tutorial video is available');
+  expect(view.container.textContent).toContain('Use Reschedule from History only for an eligible incomplete session');
+  expect(view.container.textContent).toContain('Form Filled means MTS completed filling the Microsoft Form');
+  expect(view.container.textContent).toContain('Follow-up may be Pending, Approved, or Denied');
   expect(view.container.textContent).toContain('Use Category to filter grouped templates or screenshots');
   expect(view.container.querySelector('[data-testid="help-hero-search"]')).toBeTruthy();
   expect(view.container.textContent).toContain('Where is my data stored?');
@@ -184,6 +187,55 @@ test('help page shows friendly faq fallback when configured source fails', async
   expect(view.container.textContent).toContain('Showing built-in guidance.');
   expect(view.container.textContent).toContain('What if FAQ content does not load?');
   expect(view.container.textContent).toContain('The app could not load the configured FAQ source.');
+  expect(view.container.textContent).toContain('Use Reschedule from History only for an eligible incomplete session');
+  expect(view.container.textContent).toContain('Form Filled means MTS completed filling the Microsoft Form');
+  expect(view.container.textContent).toContain('Follow-up may be Pending, Approved, or Denied');
+  expect(view.container.textContent).not.toMatch(/frontend\/public|backend failure|safety\/API|master Google Sheet|headset-review-log/i);
+
+  await view.unmount();
+});
+
+test('trainer help filters internal remote documentation while preserving safe override content', async () => {
+  api.getHelpContent.mockResolvedValue({
+    help_markdown: [
+      '# Mock Testing Suite Help Center',
+      '',
+      '## Session Flow',
+      'Use Reschedule from History for an eligible incomplete session.',
+      'GET /api/help/content returns the source payload.',
+      'The newbieShiftRescheduleAdminMention key controls the mention.',
+      '',
+      '## Admin Setup',
+      'Run PowerShell and edit SQLite schema migrations.',
+      'Update the service-account credentials.',
+      '',
+      '## Backend Routes',
+      'Use the following internal operations for maintenance.',
+      '',
+      '## Form Status',
+      'Form Filled means MTS completed filling the form.',
+    ].join('\n'),
+    faq_markdown: [
+      '## What does Pending mean?',
+      'Pending means an administrator has not decided yet.',
+      'POST /api/shared/admin/pending-requests/action changes the row.',
+    ].join('\n'),
+    support: {},
+  });
+
+  const view = await renderComponent(
+    <HelpPage
+      appVersion="1.0.1"
+      settings={{ enable_gemini: false, gemini_api_key: '' }}
+      onNavigate={jest.fn()}
+      onReplayTutorial={jest.fn()}
+    />
+  );
+
+  expect(view.container.textContent).toContain('Use Reschedule from History for an eligible incomplete session.');
+  expect(view.container.textContent).toContain('Form Filled means MTS completed filling the form.');
+  expect(view.container.textContent).toContain('Pending means an administrator has not decided yet.');
+  expect(view.container.textContent).not.toMatch(/\/api\/|SQLite|schema migration|service-account|PowerShell|newbieShiftRescheduleAdminMention|Admin Setup/i);
 
   await view.unmount();
 });

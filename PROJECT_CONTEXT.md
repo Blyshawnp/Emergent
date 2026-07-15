@@ -2,8 +2,8 @@
 
 > This is the living technical and release handoff document for MTS and SAM. Update it whenever a major workflow, fallback, release rule, build command, security decision, or architecture detail changes. Repository code and validated runtime behavior remain the final source of truth.
 
-Last verified: 2026-07-11 by static repository inspection, automated tests/builds, and limited non-GUI process checks. Hands-on packaged Discord/exit verification is still required.
-Active branch: `release/v1.0.1`
+Last verified: 2026-07-14 by static repository inspection, focused and full automated tests, frontend production build, and sequential SAM/MTS package builds. Live pending-request approval/denial and packaged-app restart verification still requires the Apps Script deployment used by MTS/SAM.
+Active branch: `feature/newbie-shift-request-workflows`
 Release target: `v1.0.1`
 Release stage: Release Candidate stabilization. Some current RC fixes are uncommitted.
 
@@ -210,6 +210,27 @@ Current release behavior:
 - Extra Attempt allows a candidate to continue after admin approval.
 - Completed pass/fail/final statuses are subject to archive-after-60-days behavior.
 
+### SAM Pending Requests
+
+SAM pending-request administration is implemented in:
+
+- Backend snapshot/action APIs: `/api/shared/admin/pending-requests` and `/api/shared/admin/pending-requests/action` in `backend/server.py`.
+- Frontend inbox, bell, alert banner, and dashboard wiring in `frontend/src/NotificationManagerApp.jsx`.
+- Shared frontend API helpers in `frontend/src/api.js`.
+
+Current feature-branch behavior:
+
+- The Pending Requests inbox combines initial Newbie Shift requests, Newbie Shift reschedule requests, candidate-list deletion requests, and a linkable headset-review queue.
+- Supported filters are All Pending, Newbie Shifts, Reschedules, Candidate Deletions, Headset Reviews, Approved, and Denied.
+- The SAM header bell shows unresolved actionable counts by category. Reschedule alerts can be viewed, dismissed, or reminded in 30 minutes; dismiss/reminder state is local per browser/admin session when no stronger admin identity store is available.
+- Approve and Deny decisions are idempotent against the expected current request status. Denials require a readable reason. Decisions record admin identity when supplied by the SAM setup flow plus a UTC decision timestamp.
+- Initial and reschedule approvals/denials update the shared Candidate Sessions Newbie Shift request fields so MTS History/Home/Smart Resume/Candidate Tracking can display Pending, Approved, or Denied from the shared contract.
+- Candidate deletion requests target the single source session represented by Prompt 1's request contract. Approval delegates to the existing shared candidate-history deletion behavior for that targeted session; denial leaves shared candidate history intact and records the reason.
+- SAM Candidate Tracking displays distinct form-fill and Newbie Shift approval indicators. Form-fill labels remain Form Filled, Form Skipped, Not Yet Filled, Fill Failed, or Not Recorded and must not be described as submitted.
+- Per-admin targeting cannot be reliably proven from the current admin identity source, so pending requests are visible to all authorized SAM admins. Duplicate decisions are prevented by status/version checks in the backend action.
+- Google Sheet request tabs are `newbie-shift-requests` and `candidate-deletion-requests`; required columns are centralized in `backend/server.py` and are verified through the shared tracking setup path. Private sheet IDs and URLs must not be documented.
+- The direct Google Sheets service path is authoritative for request approvals. If the runtime is using an Apps Script transport that does not yet expose these request APIs, SAM shows sanitized temporary-unavailable copy rather than raw Google or credential details.
+
 ### Approved Headset Lookup
 
 Approved headset lookup uses:
@@ -381,12 +402,25 @@ Current release behavior:
 - New shared contract fields include `form_fill_status`, `form_filled_at`, `newbie_shift_scheduled_at`, `newbie_shift_timezone`, `newbie_shift_request_id`, `newbie_shift_request_type`, `newbie_shift_request_status`, `newbie_shift_requested_by`, request reason/detail/timestamps, 24-hour flags, admin decision placeholders, and deletion request placeholders.
 - Shared Google Sheet contract tabs for follow-up workflow are `newbie-shift-requests` and `candidate-deletion-requests`. Required columns are defined in `backend/server.py`; private sheet IDs and URLs must not be documented here.
 - Form-fill state is tracked as `not_attempted`, `filled`, `skipped`, `failed`, or `not_recorded` for legacy display. The UI must say Form Filled, Form Skipped, Not Yet Filled, Fill Failed, or Not Recorded; it must not claim Form Submitted.
-- The canonical certification support email used by blocked/final-attempt reschedule wording is `certification@acddirect.com`.
-- The editable reschedule Discord post is temporary session UI text only. Trainer edits are copied to clipboard but are not written back to default Discord templates.
+- History form fill treats Selenium/browser automation and metadata persistence as separate phases. If the Microsoft Form is filled but local/shared status persistence fails, the backend returns `form_filled=true`, `automation_completed=true`, `local_status_saved=false`, and `error_code=metadata_status_save_failed`; MTS must show a warning, keep the visible status as Form Filled, and warn trainers not to refill the Microsoft Form.
+- The root regression fixed on this branch was a post-fill History status update failure caused by the SQLite history helper path calling missing JSON encode/decode helpers after Selenium completed. `SQLiteCollection.encode` and `SQLiteCollection.decode` now provide the same safe JSON serialization used by the local persistence layer.
+- History stores a best-effort local recovery marker for the partial-success case so a refreshed History record still appears Form Filled until metadata can be reconciled. Any retry/recovery path must update metadata only and must not relaunch Chrome or refill the Microsoft Form without explicit trainer confirmation.
+- Form, session-result, and follow-up approval chips use centralized semantic metadata in `frontend/src/utils/certificationWorkflow.js`. Form-empty/legacy states are neutral gray, Incomplete remains amber, and Pending approval is blue/violet so Home Recent Activity and History do not conflate Not Yet Filled, Incomplete, and Pending.
+- Status-chip metadata must expose trainer-facing labels and accessibility text, not visible textual icon prefixes. Decorative dots/icons are rendered by CSS with `aria-hidden="true"`; visible labels should be clean forms such as `Resumed - Pass`, `Fail - Final Attempt`, `NC/NS`, `Form Filled`, and `Not Yet Filled`, never `OK`, `!`, `x`, `-`, or raw enum text.
+- History uses a responsive grid-row layout rather than a rigid wide table. At practical desktop widths every row must keep Date, Candidate, Tester, Session Status, Follow-Up, Form Status, and Actions visible inside the app viewport. Restored/narrow widths collapse rows into compact card-like grids with actions still reachable and no required horizontal scrolling.
+- The Newbie Shift reschedule modal uses radio-card grids for requester and reason selection. Reason cards should render as two columns at normal modal widths, one column at narrow/high-DPI widths, and may expand to three columns only when enough horizontal space exists. `Other` requires details before Continue.
+- The canonical certification support email used by blocked/final-attempt reschedule wording is `certification@acdsupport.com`; the previous `certification` + `@acddirect.com` address is obsolete and is normalized out of managed text at runtime.
+- The backend canonical value is `CERTIFICATION_SUPPORT_EMAIL` in `backend/server.py`; frontend deterministic reschedule text uses `CERTIFICATION_SUPPORT_EMAIL` in `frontend/src/utils/certificationWorkflow.js`. Packaged defaults and admin-content package CSVs have been updated. Live Google Sheet/admin-content rows must be checked manually when no safe admin-content writer is available; update the `discord-posts` row titled `VPN Fail` in place if the obsolete mailbox remains.
+- The editable reschedule Discord post is temporary session UI text only. Trainer edits are copied to clipboard but are not written back to default Discord templates. Its admin mention is internally managed by `newbieShiftRescheduleAdminMention`, with packaged fallback `@beckysowlesacdadmin`; the field is intentionally absent from normal MTS and SAM Settings and must not change unrelated Discord templates.
 - Local History deletion offers History Only or History & Candidate List Request. The request path removes local history immediately and writes a pending SAM review request without deleting shared candidate records directly.
+- Remote Newbie Shift decisions are reconciled into local SQLite History and the active session with resolved remote states taking precedence over local Pending. Remote Pending never downgrades local Approved or Denied. If both sides are resolved with different states, a remote state replaces the local state only when both decision timestamps are valid and the remote timestamp is newer; missing timestamps are handled conservatively.
+- Reconciliation matches `newbie_shift_request_id` to `request_id` first, then uses exact `history_id`/`session_id`/`resume_source_history_id` to `source_session_id` only when the local request ID is absent. Conflicting request/session identifiers are skipped, and candidate names are never used as a reconciliation key.
+- Existing lifecycle triggers perform reconciliation during current-session startup load, History load/refresh, Home Recent Activity refresh through History, and shared candidate lookup/Smart Resume refresh. Remote request reads use a short success cache and failure backoff; there is no per-session timer or aggressive polling.
+- Local persistence patches only Newbie Shift request fields: request ID/type/status, requester/reason/details/timestamps, original/requested/rescheduled schedule and timezone, within-24-hours/counts-as-attempt flags, decision time/admin, denial reason, and request update timestamp. Calls, Supervisor Transfer results, Form Filled state, headset/technical/coaching/trainer data, candidate identity, and unrelated history fields are preserved.
+- If remote request data is unavailable, reconciliation performs no local write, keeps the current local state, logs only a sanitized failure category, and retries at the next normal lifecycle refresh after backoff. Direct shared writes also reconcile against existing exact request/session rows so stale local Pending cannot overwrite a resolved shared decision.
 - The scheduling workflow should not directly create duplicate appointments without trainer confirmation.
 
-Verification needed: confirm external calendar integration behavior and duplicate-prevention behavior in a configured runtime environment.
+Verification needed: after redeploying the current Apps Script, complete live initial-request approval and reschedule denial tests, refresh History/Home/Smart Resume, inspect denial details and Form Filled preservation, restart MTS, and confirm the resolved state persists with no duplicate sessions. External calendar integration and duplicate-prevention behavior also remain to be confirmed in a configured runtime environment.
 
 ### Review
 
@@ -645,7 +679,7 @@ Do not claim full accessibility compliance without a dedicated audit. Current ac
 | VPN verification | Automatic backend intelligence check plus manual provider lookup links | Settings `vpnProxyCheckMode` | Manual trainer decision and manual provider cards | Falls back to manual verification when provider coverage is limited |
 | Google Sheets | Authenticated Google service-account client | Apps Script/public CSV for selected content where configured | Packaged CSV/Markdown/default constants | Feature-specific fallback or warning |
 | Google Apps Script | Apps Script config/docs and backend adapter | `backend/config/apps-script-api.json` when configured | Direct Sheets/local defaults | Should degrade to direct/fallback paths |
-| Help/FAQ | Google Doc override via runtime config | `admin_help_doc_url`, `admin_faq_doc_url` | `backend/defaults/help.md`, `backend/defaults/faq.md`, backend fallback, `frontend/src/pages/HelpPage.jsx` topic cards | Falls back to local markdown |
+| Help/FAQ | Trainer-focused Google Doc override via runtime config | `admin_help_doc_url`, `admin_faq_doc_url` | `backend/defaults/help.md`, `backend/defaults/faq.md`, backend fallback, `frontend/src/pages/HelpPage.jsx` topic cards | Falls back to local markdown; clearly internal remote sections/lines are filtered before rendering |
 | Call fail reasons | Google Sheet tab `call-fail-reasons` or aliases `fail reasons` / `call-fails` | Customized settings only when marked customized | `backend/defaults/call-fail-reasons.csv`, `docs/admin-content-package/csv-tabs/call-fails.csv`, backend constants | Uses local defaults; required system fail reasons are merged when missing |
 | Call coaching reasons | Google Sheet tab `call-coaching` | Customized settings only when marked customized | `backend/defaults/call-coaching.csv`, `docs/admin-content-package/csv-tabs/call-coaching.csv`, backend constants | Uses local defaults; workflow-required coaching rows may be merged where explicitly coded |
 | Discord posts | Google/admin rows from `discord-posts` when configured | Settings Discord override only when `discord_override` is enabled | `backend/defaults/discord-posts.csv`, `docs/admin-content-package/csv-tabs/discord-posts.csv`, backend constants | Valid remote rows replace fallback rows; local defaults are used only when remote load fails or parses no usable rows |
@@ -1026,6 +1060,39 @@ Verification needed from current packaged-app smoke testing:
 - Improve observability for live-vs-fallback data source selection without exposing sensitive details.
 
 ## 14. Recent Major Changes
+
+### 2026-07-14: Remote pending-request decision reconciliation into MTS
+
+- Added exact-ID reconciliation from shared Newbie Shift request decisions into local SQLite History and the active MTS session. Request ID is authoritative; source session ID is the fallback only when the local request ID is absent. Name-only matching is forbidden.
+- Added remote precedence rules so Approved/Denied replaces local Pending, Pending cannot downgrade a resolved state, and conflicting resolved decisions require a strictly newer valid remote decision timestamp.
+- Wired reconciliation into existing current-session, History/Home, and shared-candidate lookup lifecycles with a short cache/backoff. Shared candidate rows retain request fields so Smart Resume/shared details receive current approval state and denial reason.
+- History, Home Recent Activity, Review details, and shared candidate details use existing trainer-facing status labels. Denial reason remains available in details, and Smart Resume carries the reconciled request fields without changing Form Filled or unrelated session data.
+- Focused backend reconciliation tests, the existing backend workflow suite, the full frontend suite, frontend production build, and sequential SAM/MTS package builds pass. SQLite reopen coverage verifies local persistence; live Apps Script redeployment, approval/denial refresh, and packaged-app restart verification remain manual and are not yet claimed complete.
+
+### 2026-07-14: Hidden internal reschedule mention and trainer Help separation
+
+- Removed the internally managed Newbie Shift reschedule admin mention from normal MTS Settings. Generated temporary reschedule posts still use the configured internal value or packaged `@beckysowlesacdadmin` fallback.
+- Reworked MTS trainer Help copy around Newbie Shift rescheduling, form-fill states, approval states, History actions, and Supervisor Transfer NC/NS so it explains trainer actions without exposing storage, route, schema, or transport implementation details.
+- Added a narrow trainer Help compatibility filter for configured remote Help/FAQ overrides. Clearly internal sections and lines containing routes, credentials, service-account setup, schema instructions, repository paths, deployment instructions, or hidden setting keys are omitted; safe remote trainer content continues to override fallback content.
+- Kept technical setup and source-priority guidance in repository-only admin/developer documentation. SAM Help/tutorial wording remains operational and no longer names internal notification tabs.
+- Manual verification remains required for every MTS Settings tab, all MTS Help sections/search, SAM Help/tutorial copy, remote Help override behavior, and editable/copyable reschedule post generation.
+
+### 2026-07-14: Current uncommitted MTS History layout and clean status-label fix
+
+- Replaced the History page's rigid table presentation with a responsive grid-row layout so Date, Candidate, Tester, Session Status, Follow-Up, Form Status, and Actions remain inside the visible MTS viewport. Restored-width layouts collapse into compact card-like rows without requiring horizontal scrolling.
+- Removed visible textual status-icon prefixes from History and Home Recent Activity. Centralized status metadata now provides clean trainer-facing labels and accessible text, while CSS renders decorative dots/icons with `aria-hidden="true"`.
+- Follow-Up display now separates scheduled date/time, timezone, and approval chip so long combined values do not force History rows wider than the app shell.
+- Temporary Newbie Shift reschedule Discord posts now default to `@beckysowlesacdadmin` through the `newbieShiftRescheduleAdminMention` setting/fallback. Trainer edits remain temporary and Copy uses the current edited text.
+- Validation for this change must include History at maximized/restored/practical narrow widths and 100%, 125%, 150%, and 200% display scaling; Recent Activity clean chip labels; and temporary Discord post edit/copy behavior.
+
+### 2026-07-13: Current uncommitted History form-fill and reschedule UI regression fix
+
+- Fixed a false History Form Fill failure where Selenium could complete Microsoft Form automation but the backend returned HTTP 500 during post-fill status persistence. The backend now separates automation completion from metadata persistence and returns partial-success fields instead of collapsing the result into Form Fill Failed.
+- Added SQLite JSON encode/decode helpers used by the History status update path so old and new local history rows can be updated safely after form fill.
+- Updated History and Review form-fill handling so `form_filled`/`automation_completed` is treated as Form Filled even when metadata synchronization reports a warning. History keeps a best-effort local recovery marker and requires explicit confirmation before refilling an already-filled record.
+- Centralized semantic status-chip metadata in `frontend/src/utils/certificationWorkflow.js` and applied it to History and Home Recent Activity. Not Yet Filled/Not Recorded are neutral, Pending follow-up is blue/violet, and Incomplete remains amber.
+- Reworked the Newbie Shift reschedule modal requester/reason controls into accessible radio-card grids with better spacing, selected/focus states, required `Other` details, and Cancel/Discard/Continue ordering.
+- Validation for this change must include History form-fill dry-run behavior, partial metadata failure behavior, chip layout at restored/maximized widths, and reschedule modal spacing at 100%, 125%, 150%, and 200% display scaling.
 
 ### 2026-07-12: Current uncommitted MTS Settings source-priority stabilization
 

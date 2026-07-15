@@ -291,6 +291,29 @@ test('settings exposes welcome voice and sound volume controls', async () => {
   await view.unmount();
 });
 
+test('settings does not render the internally managed reschedule admin mention', async () => {
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Trainer',
+    newbieShiftRescheduleAdminMention: '@beckysowlesacdadmin',
+  });
+  api.getDefaults.mockResolvedValue({});
+
+  const view = await renderComponent(
+    <SettingsPage
+      onNavigate={jest.fn()}
+      updateState={{}}
+      refreshUpdateState={jest.fn()}
+      appVersion="1.0.1"
+    />
+  );
+
+  expect(view.container.querySelector('[data-testid="settings-reschedule-admin-mention"]')).toBeNull();
+  expect(view.container.textContent).not.toContain('Reschedule Admin Mention');
+  expect(view.container.textContent).not.toContain('newbieShiftRescheduleAdminMention');
+
+  await view.unmount();
+});
+
 test('settings shows fail reason source and can disable local call fail override', async () => {
   api.getSettings.mockResolvedValue({
     tester_name: 'Tester',

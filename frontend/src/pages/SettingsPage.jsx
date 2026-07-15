@@ -314,7 +314,7 @@ export default function SettingsPage({ onNavigate, updateState, refreshUpdateSta
     if (manualUpdateMode) {
       const result = await window.electronAPI?.updaterManualDownload?.();
       if (!result?.ok) {
-        await modal.error('Manual Update Link Invalid', result?.error || 'Manual update link is invalid. Please check update-MTS.');
+        await modal.error('Manual Update Link Invalid', result?.error || 'The update link is invalid. Contact an administrator for help.');
       } else {
         await modal.alert('Update Page Opened', 'The update page opened in your browser. Download and run the installer to update.');
       }
@@ -510,7 +510,7 @@ function GeneralTab({ s, set }) {
         </select>
       </SettingsRow>
       <p className="text-muted text-sm" style={{ marginTop: 12, lineHeight: 1.7 }}>
-        Ticker Speed is the only notification ticker setting exposed to normal users. SAM notification rows are managed by admins in the master Google Sheet sam-notifications tab.
+        Ticker Speed is the only notification ticker setting exposed to normal users. Notification content is managed by administrators in SAM.
       </p>
       <h3 style={{ margin: '24px 0 16px' }}>Theme</h3>
       <button className="btn btn-ghost btn-sm" onClick={() => {

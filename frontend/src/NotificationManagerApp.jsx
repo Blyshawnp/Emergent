@@ -18,6 +18,9 @@ import {
   Wifi,
   WifiOff,
   Inbox,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import './notification-manager.css';
 import './polish-sam.css';
@@ -78,7 +81,7 @@ const SAM_HELP_SECTIONS = [
   {
     id: 'dashboard',
     title: 'Dashboard',
-    body: 'Dashboard gives admins a quick count of active notifications, pending headset reviews, pending supervisor transfers, and the last sync time. Use it first to decide where attention is needed.',
+    body: 'Dashboard gives admins a quick count of active notifications, pending headset reviews, pending supervisor transfers, pending approval requests, and the last sync time. Use it first to decide where attention is needed.',
   },
   {
     id: 'notifications',
@@ -106,6 +109,11 @@ const SAM_HELP_SECTIONS = [
     body: 'Pending transfer rows show candidates whose mock calls were saved but whose supervisor transfer still needs completion or correction.',
   },
   {
+    id: 'pending-requests',
+    title: 'Pending Requests',
+    body: 'Pending Requests is the SAM inbox for initial Newbie Shift requests, Newbie Shift reschedules, candidate-list deletion requests, and headset review links. Approve records the admin and timestamp. Deny requires a readable reason. The bell count reflects unresolved actionable requests and dismissed reschedule alerts return after 30 minutes until the request is approved or denied.',
+  },
+  {
     id: 'diagnostics',
     title: 'Diagnostics and System Health',
     body: 'System Health shows sync, backend, source, and version information. Open it when refresh or sync behavior looks wrong; otherwise keep it collapsed so normal SAM work stays focused.',
@@ -113,7 +121,7 @@ const SAM_HELP_SECTIONS = [
   {
     id: 'sync-offline',
     title: 'Refresh, Sync, and Offline behavior',
-    body: 'Refresh reloads shared Google Sheet data. If shared data is temporarily unavailable, wait about 60 seconds and retry. SAM keeps the current screen usable where possible and avoids showing raw provider or API error text.',
+    body: 'Refresh reloads shared data. If it is temporarily unavailable, wait about 60 seconds and retry. SAM keeps the current screen usable where possible and shows a friendly error message.',
   },
   {
     id: 'export-print-copy',
@@ -160,7 +168,7 @@ const SAM_TUTORIAL_STEPS = [
   {
     target: 'notification-list',
     title: 'Notification list',
-    body: 'Notifications reads and writes alert rows from the master sam-notifications tab.',
+    body: 'Notifications shows the shared alert list managed in SAM.',
     placement: 'left',
   },
   {
@@ -178,13 +186,13 @@ const SAM_TUTORIAL_STEPS = [
   {
     target: 'help-access',
     title: 'Help',
-    body: 'Open Help for assigned name and PIN setup, master Google Sheet details, candidate admin workflows, updates, and tutorial replay.',
+      body: 'Open Help for assigned name and PIN setup, candidate administration workflows, updates, and tutorial replay.',
     placement: 'bottom',
   },
   {
     target: 'notification-list',
     title: 'Enable and edit',
-    body: 'Use Edit to open the modal. Enable, Disable, and Delete update sam-notifications after confirmation.',
+    body: 'Use Edit to open the modal. Enable, Disable, and Delete update the shared notification after confirmation.',
     placement: 'left',
   },
   {
@@ -201,6 +209,10 @@ const SAM_CANDIDATE_TRACKING_CACHE_MS = 15000;
 const SAM_CANDIDATE_TRACKING_BACKOFF_MS = 60000;
 const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS = 1200;
 const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_LIMIT = 2;
+const SAM_PENDING_REQUESTS_CACHE_MS = 15000;
+const SAM_PENDING_REQUESTS_BACKOFF_MS = 60000;
+const SAM_REQUEST_REMINDER_MS = 30 * 60 * 1000;
+const SAM_REQUEST_ALERT_KEY = 'sam:pending-request-alerts';
 
 function getErrorMessage(error, fallback) {
   if (!error) return fallback;
@@ -790,7 +802,7 @@ function SamSetupWizard({ status, onComplete }) {
         <section className="nm-setup-panel">
           <div className="nm-overline">SAM SETUP</div>
           <h1>{SAM_TITLE}</h1>
-          <p>Enter the assigned admin name and PIN from the master Google Sheet to enable Smart Alert Manager on this device.</p>
+          <p>Enter the administrator name and PIN assigned to you to enable Smart Alert Manager on this device.</p>
           <form className="nm-setup-form" onSubmit={submitSetup}>
             <label>
               <span>Name</span>
@@ -857,8 +869,254 @@ const SECTION_NAV_ITEMS = [
   { key: 'headsets', label: 'Headset Review', target: 'sam-headset-review', tone: 'headsets' },
   { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive', tone: 'candidates' },
   { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending', tone: 'pending' },
+  { key: 'requests', label: 'Pending Requests', target: 'sam-pending-requests', tone: 'pending' },
   { key: 'help', label: 'Settings/Help', target: 'sam-help-settings', tone: 'help' },
 ];
+
+const REQUEST_FILTERS = [
+  { key: 'pending', label: 'All Pending' },
+  { key: 'newbie', label: 'Newbie Shifts' },
+  { key: 'reschedules', label: 'Reschedules' },
+  { key: 'deletions', label: 'Candidate Deletions' },
+  { key: 'headsets', label: 'Headset Reviews' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'denied', label: 'Denied' },
+];
+
+function approvalTone(status) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'approved') return 'approved';
+  if (normalized === 'denied') return 'denied';
+  return 'pending';
+}
+
+function approvalLabel(status) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'approved') return 'Approved';
+  if (normalized === 'denied') return 'Denied';
+  return 'Pending';
+}
+
+function formFillMeta(status) {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'filled') return { label: 'Form Filled', tone: 'filled', Icon: CheckCircle };
+  if (normalized === 'failed') return { label: 'Fill Failed', tone: 'failed', Icon: AlertTriangle };
+  if (normalized === 'skipped') return { label: 'Form Skipped', tone: 'skipped', Icon: Clock };
+  if (normalized === 'not_recorded') return { label: 'Not Recorded', tone: 'not-filled', Icon: Clock };
+  return { label: 'Not Yet Filled', tone: 'not-filled', Icon: Clock };
+}
+
+function newbieApprovalMeta(status) {
+  const tone = approvalTone(status);
+  const Icon = tone === 'approved' ? CheckCircle : tone === 'denied' ? XCircle : Clock;
+  return { label: approvalLabel(status), tone, Icon };
+}
+
+function StatusChip({ meta, className = '', title }) {
+  const Icon = meta.Icon || Clock;
+  const label = meta.label || 'Unknown';
+  return (
+    <span className={`nm-status-chip is-${meta.tone || 'neutral'} ${className}`} title={title || label} aria-label={title || label}>
+      <Icon size={13} aria-hidden="true" />
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function formatRequestTime(value) {
+  return formatSamTimestamp(value) || value || 'N/A';
+}
+
+function loadRequestAlertState() {
+  try {
+    return JSON.parse(localStorage.getItem(SAM_REQUEST_ALERT_KEY) || '{}') || {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function saveRequestAlertState(state) {
+  try {
+    localStorage.setItem(SAM_REQUEST_ALERT_KEY, JSON.stringify(state || {}));
+  } catch (_error) {}
+}
+
+function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh, onDecision, onOpenHeadsets, actor }) {
+  const [denialRequest, setDenialRequest] = useState(null);
+  const [denialReason, setDenialReason] = useState('');
+  const [denialError, setDenialError] = useState('');
+  const requests = Array.isArray(data?.requests) ? data.requests : [];
+  const headsetRows = Array.isArray(data?.headsetReviews) ? data.headsetReviews : [];
+  const filteredRequests = requests.filter((request) => {
+    const status = String(request.raw_status || request.status || '').toLowerCase();
+    if (filter === 'pending') return status === 'pending';
+    if (filter === 'newbie') return request.category === 'newbie_initial';
+    if (filter === 'reschedules') return request.category === 'newbie_reschedule';
+    if (filter === 'deletions') return request.category === 'candidate_deletion';
+    if (filter === 'approved') return status === 'approved';
+    if (filter === 'denied') return status === 'denied';
+    return true;
+  });
+
+  const approve = async (request) => {
+    await onDecision({
+      request_id: request.request_id,
+      category: request.category,
+      decision: 'approved',
+      expected_status: request.raw_status || 'pending',
+      actor,
+    });
+  };
+
+  const openDeny = (request) => {
+    setDenialRequest(request);
+    setDenialReason('');
+    setDenialError('');
+  };
+
+  const submitDeny = async () => {
+    if (!denialReason.trim()) {
+      setDenialError('A denial reason is required.');
+      return;
+    }
+    await onDecision({
+      request_id: denialRequest.request_id,
+      category: denialRequest.category,
+      decision: 'denied',
+      expected_status: denialRequest.raw_status || 'pending',
+      denial_reason: denialReason.trim(),
+      actor,
+    });
+    setDenialRequest(null);
+    setDenialReason('');
+    setDenialError('');
+  };
+
+  const renderStatus = (request) => {
+    const tone = approvalTone(request.raw_status || request.status);
+    const Icon = tone === 'approved' ? CheckCircle : tone === 'denied' ? XCircle : Clock;
+    return (
+      <span className={`nm-request-status is-${tone}`}>
+        <Icon size={14} aria-hidden="true" />
+        {approvalLabel(request.raw_status || request.status)}
+      </span>
+    );
+  };
+
+  return (
+    <section className="nm-panel nm-request-panel" id="sam-pending-requests" data-testid="sam-pending-requests">
+      <div className="nm-section-title">
+        <div>
+          <h2>Pending Requests</h2>
+          <div className="nm-kicker">Approve or deny Newbie Shift, reschedule, candidate deletion, and headset review requests.</div>
+        </div>
+        <div className="nm-section-title-actions">
+          <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={onRefresh} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+      {!data?.ok && data?.error ? (
+        <div className="nm-status-card is-warning">
+          <strong>Pending requests unavailable</strong>
+          <span>{data.error}</span>
+        </div>
+      ) : null}
+      {data?.targeting?.message ? (
+        <div className="nm-status-card is-info">
+          <strong>Admin targeting</strong>
+          <span>{data.targeting.message}</span>
+        </div>
+      ) : null}
+      <div className="nm-view-tabs" role="tablist" aria-label="Pending request filters">
+        {REQUEST_FILTERS.map((item) => (
+          <button key={item.key} type="button" className={`nm-view-tab ${filter === item.key ? 'is-active' : ''}`} onClick={() => onFilterChange(item.key)}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {filter === 'headsets' ? (
+        <div className="nm-note-cards" role="list">
+          {headsetRows.length ? headsetRows.map((row, index) => (
+            <article key={`${row.brand}-${row.model}-${index}`} className="nm-note-card" role="listitem">
+              <div className="nm-note-card-main">
+                <div className="nm-note-card-head">
+                  <span className="nm-badge nm-badge-info">Headset Review</span>
+                  <span className="nm-request-status is-pending"><Clock size={14} aria-hidden="true" />Pending</span>
+                </div>
+                <div className="nm-note-title">{row.brand} {row.model}</div>
+                <div className="nm-note-preview">{row.note || 'No note provided.'}</div>
+                <div className="nm-note-meta">
+                  <span className="nm-note-meta-chip">Tester: {row.tester || 'N/A'}</span>
+                  <span className="nm-note-meta-chip">Submitted: {formatRequestTime(row.submitted_date)}</span>
+                </div>
+              </div>
+              <div className="nm-note-card-actions">
+                <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={onOpenHeadsets}>Open Headset Review</button>
+              </div>
+            </article>
+          )) : <div className="nm-empty">No headset reviews match this filter.</div>}
+        </div>
+      ) : (
+        <div className="nm-note-cards" role="list">
+          {filteredRequests.length ? filteredRequests.map((request) => (
+            <article key={`${request.category}-${request.request_id}`} className="nm-note-card" role="listitem">
+              <div className="nm-note-card-main">
+                <div className="nm-note-card-head">
+                  <span className="nm-badge nm-badge-info">{request.categoryLabel}</span>
+                  {renderStatus(request)}
+                </div>
+                <div className="nm-note-title">{request.candidate || 'Unknown candidate'}</div>
+                <div className="nm-note-preview">
+                  {request.reason || 'No reason provided.'}
+                  {request.details ? ` ${request.details}` : ''}
+                </div>
+                <div className="nm-request-grid">
+                  <div><strong>Tester</strong><span>{request.tester || 'N/A'}</span></div>
+                  <div><strong>Created</strong><span>{formatRequestTime(request.created_at)}</span></div>
+                  <div><strong>Requested Schedule</strong><span>{formatRequestTime(request.requested_schedule)} {request.timezone || ''}</span></div>
+                  <div><strong>Original Schedule</strong><span>{formatRequestTime(request.original_schedule)}</span></div>
+                  <div><strong>Requester</strong><span>{request.requester || 'N/A'}</span></div>
+                  <div><strong>24-Hour Rule</strong><span>{request.within_24_hours ? 'Less than 24 hours' : '24 hours or more / not candidate penalty'}</span></div>
+                  <div><strong>Counts as Attempt</strong><span>{request.counts_as_attempt ? 'Yes' : 'No'}</span></div>
+                  <div><strong>Final Attempt</strong><span>{request.final_attempt ? 'Yes' : 'No'}</span></div>
+                  {request.category === 'candidate_deletion' ? <div><strong>Deletion Scope</strong><span>Single session request</span></div> : null}
+                  {request.denial_reason ? <div className="nm-request-grid-wide"><strong>Denial Reason</strong><span>{request.denial_reason}</span></div> : null}
+                </div>
+              </div>
+              {String(request.raw_status || '').toLowerCase() === 'pending' ? (
+                <div className="nm-note-card-actions">
+                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => approve(request)}>Approve</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => openDeny(request)}>Deny</button>
+                </div>
+              ) : null}
+            </article>
+          )) : <div className="nm-empty">No requests match this filter.</div>}
+        </div>
+      )}
+      {denialRequest ? (
+        <div className="nm-modal-backdrop">
+          <section className="nm-modal-card" role="dialog" aria-modal="true" aria-label="Deny request">
+            <h3>Deny Request</h3>
+            <p className="nm-muted">Enter a readable reason. Denials cannot be submitted without a reason.</p>
+            <textarea
+              value={denialReason}
+              onChange={(event) => setDenialReason(event.target.value)}
+              rows={4}
+              placeholder="Reason for denial"
+              data-testid="pending-request-denial-reason"
+            />
+            {denialError ? <div className="nm-form-error">{denialError}</div> : null}
+            <div className="nm-modal-actions">
+              <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setDenialRequest(null)}>Cancel</button>
+              <button type="button" className="nm-btn nm-btn-danger" onClick={submitDeny}>Deny Request</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault, showStatusModal }) {
   const [detailKey, setDetailKey] = useState(null);
@@ -1245,6 +1503,9 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
 
   const renderCandidateDetails = (row) => {
     const { notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts } = computeRowMeta(row);
+    const formMeta = formFillMeta(row.form_fill_status);
+    const approvalMeta = newbieApprovalMeta(row.newbie_shift_request_status);
+    const hasNewbieRequest = Boolean(row.newbie_shift_request_id || row.newbie_shift_scheduled_at || row.newbie_shift_request_status);
     return (
       <div className="nm-candidate-details">
         <section className="nm-detail-card">
@@ -1264,6 +1525,18 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           <strong>Results</strong>
           <div>Calls: {[row.call_1_result, row.call_2_result, row.call_3_result].filter(Boolean).join(', ') || 'N/A'}</div>
           <div>Sup Transfers: {[row.sup_transfer_1_result, row.sup_transfer_2_result].filter(Boolean).join(', ') || 'N/A'}</div>
+        </section>
+        <section className="nm-detail-card">
+          <strong>Request Status</strong>
+          <div className="nm-status-stack">
+            <StatusChip meta={formMeta} title={`Form fill status: ${formMeta.label}`} />
+            {hasNewbieRequest ? <StatusChip meta={approvalMeta} title={`Newbie Shift approval status: ${approvalMeta.label}`} /> : null}
+          </div>
+          {row.form_filled_at ? <div>Form filled: {formatSamTimestamp(row.form_filled_at)}</div> : null}
+          {row.newbie_shift_scheduled_at ? <div>Newbie Shift: {formatSamTimestamp(row.newbie_shift_scheduled_at)} {row.newbie_shift_timezone || ''}</div> : null}
+          {row.newbie_shift_original_scheduled_at ? <div>Original schedule: {formatSamTimestamp(row.newbie_shift_original_scheduled_at)}</div> : null}
+          {row.newbie_shift_rescheduled_at ? <div>Tentative reschedule: {formatSamTimestamp(row.newbie_shift_rescheduled_at)}</div> : null}
+          {row.newbie_shift_denial_reason ? <div>Denial reason: {row.newbie_shift_denial_reason}</div> : null}
         </section>
         {hasFinalNotes ? (
           <div className="nm-final-notes-section">
@@ -1416,6 +1689,9 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
               <tr><td colSpan={9}><div className="nm-empty">No candidates in this view.</div></td></tr>
             ) : visibleEntries.map(({ row, index, key: rowKey }) => {
               const { results, notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts, isArchived } = computeRowMeta(row);
+              const formMeta = formFillMeta(row.form_fill_status);
+              const approvalMeta = newbieApprovalMeta(row.newbie_shift_request_status);
+              const hasNewbieRequest = Boolean(row.newbie_shift_request_id || row.newbie_shift_scheduled_at || row.newbie_shift_request_status);
               const isExpanded = detailKey === rowKey;
               const isPreviewExpanded = Boolean(expandedRowPreviews[rowKey]);
               const canExpandPreview = hasExpandablePreview(results, notes);
@@ -1435,6 +1711,10 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                         {row.candidate_name || 'Unknown'}
                       </div>
                       <div className="nm-meta">{isArchived ? 'Archived' : sheetTruthy(row.final_attempt) || sheetTruthy(row.final_attempt_risk) ? 'Final-attempt risk' : sheetTruthy(row.extra_attempt_granted) ? 'Extra attempt granted' : 'Active'}</div>
+                      <div className="nm-row-chip-list">
+                        <StatusChip meta={formMeta} title={`Form fill status: ${formMeta.label}`} />
+                        {hasNewbieRequest ? <StatusChip meta={approvalMeta} title={`Newbie Shift approval status: ${approvalMeta.label}`} /> : null}
+                      </div>
                     </td>
                     <td title={row.status || row.latest_status || 'Unknown'}>{row.status || row.latest_status || 'Unknown'}</td>
                     <td>{row.attempt_count ?? row.attempt_number ?? attempts.length ?? '0'}</td>
@@ -2156,6 +2436,14 @@ export default function NotificationManagerApp() {
   const candidateTrackingBackoffUntilRef = useRef(0);
   const [headsetReviews, setHeadsetReviews] = useState({ ok: true, pending: [], approved: [], denied: [], error: '' });
   const [headsetReviewsLoading, setHeadsetReviewsLoading] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState({ ok: true, requests: [], headsetReviews: [], counts: {}, error: '', targeting: {} });
+  const [pendingRequestsLoading, setPendingRequestsLoading] = useState(false);
+  const [pendingRequestFilter, setPendingRequestFilter] = useState('pending');
+  const [requestBellOpen, setRequestBellOpen] = useState(false);
+  const [requestAlertState, setRequestAlertState] = useState(() => loadRequestAlertState());
+  const pendingRequestsRequestRef = useRef(null);
+  const pendingRequestsCacheRef = useRef({ data: null, timestamp: 0 });
+  const pendingRequestsBackoffUntilRef = useRef(0);
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
   const showStatusModal = useCallback((message, kind = 'info') => {
     setStatusModal({ message, kind });
@@ -2556,6 +2844,81 @@ export default function NotificationManagerApp() {
     }
   }, [loadHeadsetReviews, playSamActionSound, showStatusModal]);
 
+  const loadPendingRequests = useCallback(async ({ silent = false } = {}) => {
+    const now = Date.now();
+    if (silent && pendingRequestsCacheRef.current.data && now - pendingRequestsCacheRef.current.timestamp < SAM_PENDING_REQUESTS_CACHE_MS) {
+      return pendingRequestsCacheRef.current.data;
+    }
+    if (silent && pendingRequestsBackoffUntilRef.current > now) {
+      return pendingRequestsCacheRef.current.data;
+    }
+    if (pendingRequestsRequestRef.current) {
+      return pendingRequestsRequestRef.current;
+    }
+    if (!silent) setPendingRequestsLoading(true);
+    pendingRequestsRequestRef.current = api.getSharedAdminPendingRequests()
+      .then((result) => {
+        const next = {
+          ok: result?.ok !== false,
+          requests: Array.isArray(result?.requests) ? result.requests : [],
+          headsetReviews: Array.isArray(result?.headsetReviews) ? result.headsetReviews : [],
+          counts: result?.counts || {},
+          targeting: result?.targeting || {},
+          error: result?.error || '',
+        };
+        setPendingRequests(next);
+        pendingRequestsCacheRef.current = { data: next, timestamp: Date.now() };
+        if (!next.ok) pendingRequestsBackoffUntilRef.current = Date.now() + SAM_PENDING_REQUESTS_BACKOFF_MS;
+        return next;
+      })
+      .catch((error) => {
+        const message = getSharedDataErrorMessage(error, 'Pending requests are temporarily unavailable.');
+        const next = {
+          ok: false,
+          requests: pendingRequestsCacheRef.current.data?.requests || [],
+          headsetReviews: pendingRequestsCacheRef.current.data?.headsetReviews || [],
+          counts: pendingRequestsCacheRef.current.data?.counts || {},
+          targeting: pendingRequestsCacheRef.current.data?.targeting || {},
+          error: message,
+        };
+        setPendingRequests(next);
+        pendingRequestsBackoffUntilRef.current = Date.now() + SAM_PENDING_REQUESTS_BACKOFF_MS;
+        return next;
+      })
+      .finally(() => {
+        pendingRequestsRequestRef.current = null;
+        setPendingRequestsLoading(false);
+      });
+    return pendingRequestsRequestRef.current;
+  }, []);
+
+  const runPendingRequestDecision = useCallback(async (payload) => {
+    try {
+      const result = await api.updateSharedAdminPendingRequest(payload);
+      if (!result?.ok) {
+        const message = getSharedDataErrorMessage({ message: result?.error }, 'Pending request update failed.');
+        setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
+        playSamActionSound('error');
+        showStatusModal(message, 'error');
+        return result;
+      }
+      const message = payload.decision === 'approved' ? 'Request approved.' : 'Request denied.';
+      setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: message }));
+      playSamActionSound('success');
+      await Promise.all([
+        loadPendingRequests({ silent: true }),
+        loadCandidateTracking({ silent: true, startup: true }),
+      ]);
+      return result;
+    } catch (error) {
+      const message = getSharedDataErrorMessage(error, 'Pending request update failed.');
+      setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
+      playSamActionSound('error');
+      showStatusModal(message, 'error');
+      return { ok: false, error: message };
+    }
+  }, [loadCandidateTracking, loadPendingRequests, playSamActionSound, showStatusModal]);
+
   const runCandidateAction = useCallback(async (payload) => {
     try {
       const result = await api.updateSharedAdminCandidate(payload);
@@ -2799,6 +3162,11 @@ export default function NotificationManagerApp() {
     void loadHeadsetReviews({ silent: true, showPendingNotice: true });
   }, [loadHeadsetReviews, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
 
+  useEffect(() => {
+    if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) return;
+    void loadPendingRequests({ silent: true });
+  }, [loadPendingRequests, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
+
   const selectedItem = items[selectedIndex] || items[0];
   const editorValidation = useMemo(() => {
     if (!editorDraft) return { errors: [], id: '' };
@@ -2895,12 +3263,14 @@ export default function NotificationManagerApp() {
       }
       void loadSheetItems({ silent: true });
       void loadCandidateTracking({ silent: true });
+      void loadPendingRequests({ silent: true });
     }, SAM_AUTO_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [
     confirmModal,
     editorOpen,
     loadCandidateTracking,
+    loadPendingRequests,
     loadSheetItems,
     samSetupStatus.loading,
     samSetupStatus.setupComplete,
@@ -3392,6 +3762,9 @@ export default function NotificationManagerApp() {
   const activeNotificationCount = items.filter(isCurrentNotification).length;
   const enabledCount = items.filter((item) => item.Enabled).length;
   const pendingHeadsetCount = Array.isArray(headsetReviews?.pending) ? headsetReviews.pending.length : 0;
+  const pendingRequestCounts = pendingRequests?.counts || {};
+  const unresolvedRequestCount = Number(pendingRequestCounts.unresolved || 0);
+  const pendingWorkflowRequestCount = Math.max(0, unresolvedRequestCount - Number(pendingRequestCounts.headsetReviews || 0));
   const pendingCandidateCount = Array.isArray(candidateTracking?.views?.pending)
     ? candidateTracking.views.pending.length
     : (Array.isArray(candidateTracking?.pending) ? candidateTracking.pending.length : 0);
@@ -3402,6 +3775,27 @@ export default function NotificationManagerApp() {
     : (isConnecting ? 'Reaching data source' : 'Working from local draft');
   const lastSyncLabel = formatRelativeSyncTime(lastSyncAt);
   const operatorName = samSetupStatus.userName || samSetupStatus.userRole || '';
+  const pendingRescheduleAlert = (pendingRequests.requests || []).find((request) => (
+    request.category === 'newbie_reschedule'
+    && String(request.raw_status || '').toLowerCase() === 'pending'
+  ));
+  const alertMeta = pendingRescheduleAlert ? requestAlertState[pendingRescheduleAlert.request_id] || {} : {};
+  const alertHiddenUntil = Number(alertMeta.hiddenUntil || 0);
+  const showPendingRescheduleAlert = Boolean(pendingRescheduleAlert && alertHiddenUntil <= Date.now());
+
+  const updateRequestAlert = useCallback((requestId, patch) => {
+    setRequestAlertState((current) => {
+      const next = {
+        ...current,
+        [requestId]: {
+          ...(current[requestId] || {}),
+          ...patch,
+        },
+      };
+      saveRequestAlertState(next);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (sheetState.backendStatus === 'connected' && !sheetState.isLoading && !sheetState.readError) {
@@ -3439,6 +3833,7 @@ export default function NotificationManagerApp() {
     playSamActionSound('success');
     await loadSheetItems({ silent: false });
     await loadCandidateTracking({ silent: true, startup: true });
+    await loadPendingRequests({ silent: true });
   };
 
   if (sheetState.backendReady && !samSetupStatus.loading && !samSetupStatus.setupComplete) {
@@ -3468,6 +3863,43 @@ export default function NotificationManagerApp() {
             <button type="button" className="nm-btn nm-btn-primary nm-ops-primary" onClick={handleAdd} data-sam-tour="add-notification">
               <Plus size={16} aria-hidden="true" /> Add Notification
             </button>
+            <div className="nm-request-bell-wrap">
+              <button
+                type="button"
+                className={`nm-ops-icon-btn nm-request-bell ${unresolvedRequestCount ? 'has-attention' : ''}`}
+                onClick={() => setRequestBellOpen((open) => !open)}
+                title="Pending request summary"
+                aria-label={`Pending request summary: ${unresolvedRequestCount} unresolved actionable requests`}
+                aria-expanded={requestBellOpen}
+              >
+                <Bell size={18} aria-hidden="true" />
+                {unresolvedRequestCount ? <span className="nm-request-bell-badge">{unresolvedRequestCount}</span> : null}
+              </button>
+              {requestBellOpen ? (
+                <div className="nm-request-popover" role="dialog" aria-label="Pending request category summary">
+                  {[
+                    ['Newbie Shift Requests', pendingRequestCounts.newbieInitial || 0, 'newbie'],
+                    ['Reschedule Requests', pendingRequestCounts.reschedules || 0, 'reschedules'],
+                    ['Candidate Deletion Requests', pendingRequestCounts.candidateDeletions || 0, 'deletions'],
+                    ['Headset Reviews', pendingRequestCounts.headsetReviews || pendingHeadsetCount, 'headsets'],
+                  ].map(([label, count, targetFilter]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      className="nm-request-popover-row"
+                      onClick={() => {
+                        setPendingRequestFilter(targetFilter);
+                        setActiveSection('requests');
+                        setRequestBellOpen(false);
+                      }}
+                    >
+                      <span>{label}</span>
+                      <strong>{count}</strong>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
               className="nm-ops-icon-btn"
@@ -3540,12 +3972,12 @@ export default function NotificationManagerApp() {
               <div className="nm-metric-sub">Start a new alert</div>
             </div>
           </button>
-          <button type="button" className="nm-metric nm-metric-btn nm-metric-action" onClick={() => { setActiveSection('candidates'); setCandidateView('allActive'); }}>
-            <div className="nm-metric-icon"><Users size={20} aria-hidden="true" /></div>
+          <button type="button" className={`nm-metric nm-metric-btn ${unresolvedRequestCount ? 'has-attention' : ''}`} onClick={() => { setActiveSection('requests'); setPendingRequestFilter('pending'); }}>
+            <div className="nm-metric-icon"><Inbox size={20} aria-hidden="true" /></div>
             <div className="nm-metric-body">
-              <div className="nm-metric-label">Candidate Tracking</div>
-              <div className="nm-metric-value nm-metric-value-sm">Open</div>
-              <div className="nm-metric-sub">Review all active candidates</div>
+              <div className="nm-metric-label">Pending Requests</div>
+              <div className="nm-metric-value">{unresolvedRequestCount}</div>
+              <div className="nm-metric-sub">{pendingWorkflowRequestCount ? `${pendingWorkflowRequestCount} workflow` : 'Workflow clear'} · {pendingHeadsetCount} headset</div>
             </div>
           </button>
         </section>
@@ -3572,8 +4004,8 @@ export default function NotificationManagerApp() {
               <button type="button" className="nm-ops-action" onClick={() => setSearchModalOpen(true)} data-sam-tour="candidate-search-btn">
                 <Search size={15} aria-hidden="true" /> Candidate Search
               </button>
-              <button type="button" className="nm-ops-action" onClick={() => { setActiveSection('candidates'); setCandidateView('allActive'); }}>
-                <Users size={15} aria-hidden="true" /> Candidate Tracking
+              <button type="button" className="nm-ops-action" onClick={() => { setActiveSection('requests'); setPendingRequestFilter('pending'); }}>
+                <Inbox size={15} aria-hidden="true" /> Pending Requests
               </button>
             </div>
           </div>
@@ -3595,7 +4027,9 @@ export default function NotificationManagerApp() {
               : (activeSection === item.key);
             const badge = item.target === 'sam-headset-review'
               ? pendingHeadsetCount
-              : (item.candidateView === 'pending' ? pendingCandidateCount : 0);
+              : item.target === 'sam-pending-requests'
+                ? unresolvedRequestCount
+                : (item.candidateView === 'pending' ? pendingCandidateCount : 0);
             return (
               <button
                 key={`${item.target}-${item.label}`}
@@ -3612,6 +4046,23 @@ export default function NotificationManagerApp() {
             );
           })}
         </nav>
+
+        {showPendingRescheduleAlert ? (
+          <section className="nm-status-card is-warning" data-testid="sam-reschedule-alert">
+            <div className="nm-status-card-main">
+              <strong>There is a Newbie Shift request to reschedule awaiting approval.</strong>
+              <span>{pendingRescheduleAlert.candidate || 'A candidate'} · {formatRequestTime(pendingRescheduleAlert.created_at)}</span>
+            </div>
+            <div className="nm-status-actions">
+              <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => {
+                setActiveSection('requests');
+                setPendingRequestFilter('reschedules');
+              }}>View</button>
+              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => updateRequestAlert(pendingRescheduleAlert.request_id, { hiddenUntil: Date.now() + SAM_REQUEST_REMINDER_MS, dismissedAt: 0 })}>Remind Me in 30 Minutes</button>
+              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => updateRequestAlert(pendingRescheduleAlert.request_id, { hiddenUntil: Date.now() + SAM_REQUEST_REMINDER_MS, dismissedAt: Date.now() })}>Dismiss</button>
+            </div>
+          </section>
+        ) : null}
 
         {sheetState.statusMessage ? (
           <section className={`nm-status-card is-${sheetState.statusKind || 'info'}`}>
@@ -3781,6 +4232,18 @@ export default function NotificationManagerApp() {
             onDecision={runHeadsetDecision}
             onConfirm={requestConfirm}
             onStatus={(message, kind = 'info') => setSheetState((current) => ({ ...current, statusKind: kind, statusMessage: message }))}
+          />
+        ) : null}
+        {activeSection === 'requests' ? (
+          <PendingRequestsPanel
+            data={pendingRequests}
+            filter={pendingRequestFilter}
+            onFilterChange={setPendingRequestFilter}
+            loading={pendingRequestsLoading}
+            onRefresh={() => loadPendingRequests()}
+            onDecision={runPendingRequestDecision}
+            onOpenHeadsets={() => setActiveSection('headsets')}
+            actor={samSetupStatus.userName || samSetupStatus.userRole || 'SAM'}
           />
         ) : null}
 

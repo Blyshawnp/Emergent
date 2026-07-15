@@ -6,7 +6,7 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 import { displaySummaryLabel } from '../utils/summaryDisplayLabels';
-import { buildRescheduleFailSummary, buildRescheduleSummary, NEWBIE_REQUEST_TYPE } from '../utils/certificationWorkflow';
+import { buildRescheduleFailSummary, buildRescheduleSummary, followUpStatusMeta, NEWBIE_REQUEST_STATUS, NEWBIE_REQUEST_TYPE } from '../utils/certificationWorkflow';
 
 const READINESS_NEEDS_RETEST = 'Needs Retest / Additional Coaching';
 const READINESS_OVERRIDE_REASONS = [
@@ -875,17 +875,36 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     try {
       const sessionForFill = { ...session, final_status: finalStatus, finalReadinessJudgment };
       const r = await api.fillForm(coachingForDisplay, failForDisplay, sessionForFill);
-      if (r.ok) {
+      if (r.ok || r.form_filled || r.automation_completed) {
         setHasFilledForm(true);
-        await api.updateSession({ form_fill_status: 'filled', form_filled_at: new Date().toISOString(), form_fill_error_summary: '' }).catch(() => {});
+        if (r.local_status_saved === false) {
+          await api.updateSession({ form_fill_status: 'filled', form_filled_at: new Date().toISOString(), form_fill_error_summary: '' }).catch(() => {});
+        }
         if (showSuccess) {
-          await modal.alert('Form Filled', r.message, 'check-circle', 'success');
+          if (r.warning || r.local_status_saved === false) {
+            await modal.warning(
+              'Form Filled - Status Warning',
+              r.warning || 'The Microsoft Form was filled, but MTS could not update the session status. Do not run Form Fill again. Refresh or update the status manually if needed.'
+            );
+          } else {
+            await modal.alert('Form Filled', r.message || 'The Microsoft Form was filled.', 'check-circle', 'success');
+          }
         }
         return true;
       }
       await api.updateSession({ form_fill_status: 'failed', form_fill_error_summary: r.message || 'Form fill failed.' }).catch(() => {});
       await modal.error('Form Fill Failed', r.message || 'Error');
     } catch (e) {
+      const data = e?.response?.data || {};
+      if (data.form_filled || data.automation_completed) {
+        setHasFilledForm(true);
+        await api.updateSession({ form_fill_status: 'filled', form_filled_at: new Date().toISOString(), form_fill_error_summary: '' }).catch(() => {});
+        await modal.warning(
+          'Form Filled - Status Warning',
+          data.warning || 'The Microsoft Form was filled, but MTS could not update the session status. Do not run Form Fill again. Refresh or update the status manually if needed.'
+        );
+        return true;
+      }
       await api.updateSession({ form_fill_status: 'failed', form_fill_error_summary: e.message || 'Form fill failed.' }).catch(() => {});
       await modal.error('Error', e.message);
     }
@@ -1214,7 +1233,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             <br /><strong>- NEWBIE SHIFT -</strong><br />
             <strong>{s.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE ? 'Rescheduled Newbie Shift' : 'Date/Time'}:</strong> {newbie.newbie_date || ''} at {newbie.newbie_time || ''} {newbie.newbie_tz || ''}<br />
             {s.newbie_shift_original_scheduled_at && <><strong>Original Scheduled At:</strong> {s.newbie_shift_original_scheduled_at}<br /></>}
-            {s.newbie_shift_request_status && <><strong>Reschedule Status:</strong> {s.newbie_shift_request_status}<br /></>}
+            {s.newbie_shift_request_status && <><strong>Reschedule Status:</strong> {followUpStatusMeta(s.newbie_shift_request_status).label}<br /></>}
+            {s.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && s.newbie_shift_denial_reason && <><strong>Denial Reason:</strong> {s.newbie_shift_denial_reason}<br /></>}
           </>)}
         </div>
       </div>

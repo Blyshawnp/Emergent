@@ -114,7 +114,7 @@ const HELP_TOPICS = [
       'The tutorial points out current Settings, payment, headset, Discord, and Review behavior.',
       'Use Next, Back, Skip, and Finish inside the tutorial to control it.',
       'Tutorial completion is only marked after Skip or Finish.',
-      'Optional tutorial videos are local files only. Place tutorial.mp4 or mts-tutorial.mp4 in frontend/public/assets/tutorial, then rebuild the app. If no video exists, the guided tutorial remains the fallback.',
+      'If a tutorial video is available, use Watch Tutorial Video. Otherwise, Replay Tutorial opens the guided walkthrough.',
     ],
   },
   {
@@ -135,7 +135,7 @@ const HELP_TOPICS = [
     bullets: [
       'If you reopen the app while a session is in progress, Home offers to resume it.',
       'For Supervisor Transfer Only, Smart Resume can continue from local history when you conducted the original mock calls.',
-      'If another tester conducted the original mock calls, choose No when prompted to load the shared pending supervisor-transfer queue from the master Google Sheet.',
+      'If another tester conducted the original mock calls, choose No when prompted to load the shared pending supervisor-transfer queue.',
       'Shared pending entries show candidate name, original tester, call results, created date/time, and available prior coaching or review notes.',
       'Selecting a shared pending candidate loads the saved session data, skips Basics, and opens Supervisor Transfer Call 1.',
       'If shared lookup is unavailable, the app falls back to local session mode so testing can continue.',
@@ -157,14 +157,14 @@ const HELP_TOPICS = [
       'Automatic VPN/proxy lookup is the default. Manual lookup links remain available when provider coverage is limited or a trainer needs to send a lookup site to the candidate.',
       'Integrated mode never treats a single provider as a confident clear result. If coverage is limited, verify the candidate IP manually.',
       'Headset and VPN fail popups include Discord copy buttons when the matching post template is available.',
-      'Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared Google Sheet records.',
+      'Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared candidate records.',
       'When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.',
       'Choose Correct Candidate only after confirming the match. The app loads the matching Basics context and starts Calls, or Supervisor Transfer 1 for Supervisor Transfer Only.',
       'If the most recent previous session was NC/NS, the app looks for older usable Basics information for that candidate.',
       'If no previous Basics information exists, the app keeps the candidate linked and returns you to Basics with a message to complete the screen before continuing.',
       'If prior qualifying failures show this is truly the final attempt, the app warns you and sets Final Attempt automatically after candidate confirmation.',
       'If the shared record shows the final attempt was already used, testing is blocked unless you use the override flow and notify Admin in the Discord Tester Room.',
-      'Blocked candidates should email certification@acddirect.com if there are issues, and testers can post in the Discord Tester Room for help.',
+      'Blocked candidates should email certification@acdsupport.com if there are issues, and testers can post in the Discord Tester Room for help.',
       'Withdrawn candidates are blocked unless an admin restores the candidate or grants an extra attempt in SAM.',
       'Candidates with an extra attempt granted can continue, with the notice shown during lookup.',
       'Continue validates readiness and routes into Calls (or Supervisor Transfer Only when applicable).',
@@ -183,7 +183,7 @@ const HELP_TOPICS = [
       'Use Research Headset when a model is not found. It opens a browser search and reminds you that administrator review is still required before the model can be added to the approved list.',
       'Use This Headset only when trainer judgment says the session should continue; it does not approve or add the headset.',
       'If the headset is confirmed USB with a noise-cancelling microphone, type it manually in the field.',
-      'Manually entered headset models that are not on the approved list may be logged to the headset-review-log tab for admin review.',
+      'Manually entered headset models that are not on the approved list may be sent for admin review.',
       'Approved but unlisted headsets are reviewed and added to the approved list every 7-10 days.',
       'A denied model shows a Denied Headset popup. If the candidate has no replacement headset, the session auto-fails.',
     ],
@@ -291,8 +291,9 @@ const HELP_TOPICS = [
       'Choose No when another tester conducted the original mock calls; the app loads the shared pending supervisor-transfer queue.',
       'Selecting a shared pending candidate loads the prior call results, prior notes, and available Basics information, then goes directly to Supervisor Transfer Call 1.',
       'If a pending shared record is missing Basics, the app searches prior sessions for the most recent usable Basics for that candidate.',
-      'If the shared Google Sheet cannot be reached, the app shows a local-only notice and continues without blocking the workflow.',
+      'If shared candidate records cannot be reached, the app shows a local-only notice and continues without blocking the workflow.',
       'Fresh supervisor-only sessions still run through Basics first when no resumable local or shared record is selected.',
+      'For a No Call/No Show on the transfer-only appointment, use the Supervisor Transfer NC/NS action and confirm the choice before Review.',
     ],
   },
   {
@@ -303,7 +304,11 @@ const HELP_TOPICS = [
       'Enter the follow-up date, start time, AM/PM, and timezone.',
       'Use Add to Google Calendar to open a prefilled calendar event.',
       'Use the Supervisor Transfer time-check popup to copy the Out of Time (Needs Sup) Discord post when there is not enough time to complete Supervisor Transfers.',
-      'Rescheduled Newbie Shifts collect who requested the change, the reason, and exact request timing before a new date/time is selected.',
+      'Use Reschedule from History only for an eligible incomplete session that still needs Newbie Shift or Supervisor Transfer follow-up.',
+      'Choose who needed the change and select one reason. Other requires additional details before you can continue.',
+      'Select the new date, time, and timezone after providing the reason.',
+      'A candidate-requested change may count as an attempt based on when it was requested. Approval may remain Pending until an admin reviews it.',
+      'Use the editable temporary Discord post when the reschedule needs to be shared with the admin team.',
       'Continue to Review to save the Newbie Shift details on the session.',
     ],
   },
@@ -323,8 +328,11 @@ const HELP_TOPICS = [
       'Final Readiness Judgment lets the evaluator keep the calculated result or override it with a final result and reason.',
       'When an override is applied, summaries and saved history preserve both the calculated result and the final evaluator result.',
       'Use Fill Form to push session data into the certification form.',
+      'Form Filled means MTS completed filling the Microsoft Form. It does not mean the trainer clicked Submit.',
+      'Not Yet Filled means the fill action has not completed. Fill Failed means the browser automation did not complete.',
+      'If MTS says the form was filled but session status could not be updated, do not fill it again. Refresh History or contact support.',
       'Save and Finish stores the session in local History, immediately updates shared Candidate Sessions, and updates Pending Sup Transfers when applicable.',
-      'If the shared Google Sheet update fails, the local save still completes and the app warns you without crashing.',
+      'If the shared candidate update fails, the local save still completes and the app shows a trainer-safe warning.',
     ],
   },
   {
@@ -345,9 +353,9 @@ const HELP_TOPICS = [
       'Gemini is optional. The app still creates generic summaries without it.',
       'Gemini only rewrites the wording; it does not change pass/fail status or routing.',
       'Turn Gemini on in Settings -> Gemini AI after adding an API key (next topic).',
-      'Use Test Gemini Connection after saving the key. If it fails, the status shows the backend failure reason without exposing the key.',
+      'Use Test Gemini Connection after saving the key. If it fails, the status shows a friendly connection message without exposing the key.',
       'If the API key is typed or already saved, Settings shows the key as configured instead of saying no key is configured.',
-      'If Gemini connects but the test response is blocked or empty, the app explains that safety/API settings may need a simpler prompt or adjustment.',
+      'If Gemini connects but the test response is blocked or empty, try again later or use a simpler prompt.',
       'Typical usage in this app is light, often fewer than 5 AI calls per day.',
     ],
   },
@@ -391,9 +399,11 @@ const HELP_TOPICS = [
     bullets: [
       'Open History from Home to see recent sessions tested on this app/user.',
       'Local History is retained for recent work only and can be cleared or deleted by the tester without deleting SAM admin candidate history.',
-      'Shared Google Sheet candidate lookup remains available for older or cross-tester records unless an admin deletes the shared candidate history in SAM or the rows are manually deleted from the Google Sheet.',
+      'Shared candidate records remain available for older or cross-tester lookup unless an administrator approves their removal.',
       'Click a session to view summary details, or open it in Historical Review (read-only).',
-      'Historical Fill Form re-runs Fill Form from a saved record without changing the active session.',
+      'Use View to inspect a saved session, Reschedule for an eligible incomplete follow-up, and Delete to choose whether only local History should be removed.',
+      'History shows the session result, form status, and follow-up status. Follow-up may be Pending, Approved, or Denied.',
+      'Historical Fill Form runs Fill Form from a saved record without changing the active session. Confirm carefully before filling a record again.',
     ],
   },
   {
@@ -411,7 +421,7 @@ const HELP_TOPICS = [
       'Sound Volume supports Off, Low, Medium, and High.',
       'Admin lists: shows, callers, coaching items, fail reasons, Discord posts, screenshots, Gemini AI, and Calendar.',
       'Help content is not editable from normal Settings.',
-      'Notifications are managed by admins in SAM through the master Google Sheet, not from normal MTS Settings.',
+      'Notifications are managed by admins in SAM, not from normal MTS Settings.',
     ],
   },
   {
@@ -467,7 +477,7 @@ const HELP_TOPICS = [
     summary: 'The ticker and notification system surfaces operational messages without blocking normal work.',
     bullets: [
       'Ticker messages scroll across the top of the app.',
-      'Ticker, banner, and popup content is managed by admins through SAM and the master sam-notifications sheet.',
+      'Ticker, banner, and popup content is managed by admins through SAM.',
       'Banner and popup notifications can also appear from the same source.',
       'Ticker Speed can be set during Setup Wizard and changed later in Settings; the ticker URL is admin-only.',
     ],
@@ -477,9 +487,9 @@ const HELP_TOPICS = [
     title: '27. Updates and About',
     summary: 'Update checks and app version info live in the app menu and Settings.',
     bullets: [
-      'Use the app menu or Settings update panel to check the master Google Sheet update-MTS tab for updates.',
-      'Update metadata includes Version, RequiredVersion, Release Date, Release Title, URL, and multiline Notes.',
-      'If RequiredVersion is newer than your installed version, the update is required and normal use is blocked until Update Now is selected.',
+      'Use the app menu or Settings update panel to check for updates.',
+      'Available update details include the version, release date, release title, and release notes.',
+      'When an update is required, normal use is blocked until Update Now is selected.',
       'Optional updates show release notes and can be installed now or deferred.',
       'Deferred updates can be installed later from Settings when available.',
       'When a download cannot open automatically, use the manual download option shown in the updater message.',
@@ -494,7 +504,7 @@ const HELP_TOPICS = [
       'Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.',
       'Use the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.',
       'Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.',
-      'If shared Google Sheets data is temporarily unavailable, continue with local or manual workflow, wait about 60 seconds, and try Refresh again.',
+      'If shared candidate data is temporarily unavailable, continue with the local or manual workflow, wait a moment, and try Refresh again.',
       'If the app itself is misbehaving, restart it. Active session drafts are saved automatically.',
       'When reporting an app issue, include the screen name, the action you took, and any visible error text.',
     ],
@@ -526,7 +536,7 @@ const FAQ_FALLBACK = [
   },
   {
     question: 'What if a candidate already used their final attempt?',
-    blocks: [{ type: 'paragraph', text: 'Testing is blocked unless an override is used with admin permission. The candidate should email certification@acddirect.com for issues, and testers can ask in the Discord Tester Room.' }],
+    blocks: [{ type: 'paragraph', text: 'Testing is blocked unless an override is used with admin permission. The candidate should email certification@acdsupport.com for issues, and testers can ask in the Discord Tester Room.' }],
   },
   {
     question: 'How do I check a candidate IP address?',
@@ -538,11 +548,11 @@ const FAQ_FALLBACK = [
   },
   {
     question: 'Where is session data stored?',
-    blocks: [{ type: 'paragraph', text: 'Local History stores recent sessions tested on this app/user and can be cleared or deleted by testers without deleting SAM admin candidate history. Shared Google Sheet candidate records remain separate for cross-tester lookup and resume workflows and can only be deleted from SAM by an admin confirmation or by manually deleting the rows from the Google Sheet.' }],
+    blocks: [{ type: 'paragraph', text: 'Local History stores recent sessions tested on this app. Shared candidate records remain separate for cross-tester lookup and resume workflows unless an administrator approves their removal.' }],
   },
   {
     question: 'What if Gemini says the test response was blocked or empty?',
-    blocks: [{ type: 'paragraph', text: 'That means the API key connected, but Gemini did not return usable text for the test. Try again later, use a simpler prompt, or check Gemini safety/API settings.' }],
+    blocks: [{ type: 'paragraph', text: 'That means Gemini connected but did not return usable text for the test. Try again later or use a simpler prompt.' }],
   },
   {
     question: 'What if VPN/Proxy Check is unavailable or blocked?',
@@ -558,9 +568,47 @@ const FAQ_FALLBACK = [
   },
   {
     question: 'What happens if shared session data is temporarily unavailable?',
-    blocks: [{ type: 'paragraph', text: 'If shared Google Sheets data cannot be reached, the app shows a local-only notice and continues without blocking the workflow. Retry after a short wait, or refresh the app to attempt reconnecting. Local session data remains available during the outage.' }],
+    blocks: [{ type: 'paragraph', text: 'If shared candidate data cannot be reached, the app shows a local-only notice and continues without blocking the workflow. Retry after a short wait or refresh the app. Local session data remains available during the outage.' }],
   },
 ];
+
+const TRAINER_HELP_INTERNAL_SECTION = /(?:admin setup|developer|implementation|deployment|backend|API (?:routes?|endpoints?)|SQLite|database (?:setup|schema)|schema migration|Google Sheet setup|service[- ]account|Apps Script)/i;
+const TRAINER_HELP_INTERNAL_LINE_PATTERNS = [
+  /newbieShiftRescheduleAdminMention/i,
+  /google-service-account|service[- ]account/i,
+  /\bGoogle Sheet\b/i,
+  /\bbackend\b/i,
+  /\bSQLite\b/i,
+  /\bApps Script\b/i,
+  /\bPowerShell\b/i,
+  /\bJSON\b/i,
+  /\bdebug logs?\b/i,
+  /\bports?\b/i,
+  /\bPROJECT_CONTEXT\.md\b/i,
+  /\b(?:backend|frontend)[\\/][^\s`]*/i,
+  /\b(?:GET|POST|PUT|PATCH|DELETE)\s+\/api\//i,
+  /\b(?:backend|API)\s+(?:route|endpoint)s?\b/i,
+  /\b(?:private key|access token|credentials?)\b/i,
+  /\b(?:schema migration|schema instructions?)\b/i,
+  /\b(?:update-MTS|RequiredVersion)\b/i,
+];
+
+export function sanitizeTrainerHelpMarkdown(markdown) {
+  let blockedSection = false;
+  return String(markdown || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .filter((line) => {
+      const headingMatch = line.trim().match(/^#{1,2}\s+(.+)$/);
+      if (headingMatch) {
+        blockedSection = TRAINER_HELP_INTERNAL_SECTION.test(headingMatch[1].trim());
+        return !blockedSection;
+      }
+      if (blockedSection) return false;
+      return !TRAINER_HELP_INTERNAL_LINE_PATTERNS.some((pattern) => pattern.test(line));
+    })
+    .join('\n');
+}
 
 function stripFaqMarkers(text) {
   return String(text || '')
@@ -887,13 +935,13 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
 
   const faqEntries = useMemo(() => {
     if (helpContent === null) return [];
-    const entries = buildFaqEntries(helpContent?.faq_markdown || '');
+    const entries = buildFaqEntries(sanitizeTrainerHelpMarkdown(helpContent?.faq_markdown || ''));
     return entries.length ? entries : FAQ_FALLBACK;
   }, [helpContent]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const liveSections = useMemo(
-    () => buildHelpSectionsFromMarkdown(helpContent?.help_markdown || ''),
+    () => buildHelpSectionsFromMarkdown(sanitizeTrainerHelpMarkdown(helpContent?.help_markdown || '')),
     [helpContent],
   );
   const helpTopics = useMemo(() => mergeHelpTopics(liveSections), [liveSections]);

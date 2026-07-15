@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -9,6 +10,73 @@ import server  # noqa: E402
 
 
 class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
+    def _run_fill_form_with_mocks(self, selenium_result, status_result=None, status_error=None):
+        async_mock_settings = mock.AsyncMock(return_value={"form_url": "https://forms.office.com/r/test123"})
+        async def fake_record(*_args, **_kwargs):
+            if status_error:
+                raise status_error
+            return status_result or {"form_fill_status": "filled", "form_filled_at": "2026-07-13T10:00:00Z"}
+
+        payload = {
+            "coaching": "Coaching summary",
+            "fail_reason": "N/A",
+            "session": {"history_id": "hist-1", "candidate_name": "Taylor Example"},
+        }
+        with mock.patch.object(server.db.settings, "find_one", async_mock_settings), \
+             mock.patch.object(server, "fill_cert_form", return_value=selenium_result), \
+             mock.patch.object(server, "_record_form_fill_status", side_effect=fake_record):
+            return asyncio.run(server.fill_form(payload, None))
+
+    def test_form_fill_success_records_metadata_separately(self):
+        response = self._run_fill_form_with_mocks({"ok": True, "message": "Filled"})
+
+        self.assertTrue(response["ok"])
+        self.assertTrue(response["automation_completed"])
+        self.assertTrue(response["form_filled"])
+        self.assertTrue(response["local_status_saved"])
+        self.assertEqual(response["error_code"], "")
+
+    def test_form_fill_success_with_metadata_failure_is_partial_success(self):
+        response = self._run_fill_form_with_mocks(
+            {"ok": True, "message": "Filled"},
+            status_error=RuntimeError("sqlite status update failed"),
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertTrue(response["automation_completed"])
+        self.assertTrue(response["form_filled"])
+        self.assertFalse(response["local_status_saved"])
+        self.assertEqual(response["error_code"], "metadata_status_save_failed")
+        self.assertIn("Microsoft Form was filled", response["warning"])
+
+    def test_form_fill_automation_failure_is_not_marked_filled(self):
+        response = self._run_fill_form_with_mocks({"ok": False, "message": "Browser failed"})
+
+        self.assertFalse(response["ok"])
+        self.assertFalse(response["automation_completed"])
+        self.assertFalse(response["form_filled"])
+        self.assertTrue(response["local_status_saved"])
+        self.assertEqual(response["error_code"], "form_automation_failed")
+
+    def test_default_reschedule_admin_mention_is_configured(self):
+        self.assertEqual(server.DEFAULT_SETTINGS["newbieShiftRescheduleAdminMention"], "@beckysowlesacdadmin")
+        self.assertEqual(
+            server.sanitize_settings({}).get("newbieShiftRescheduleAdminMention"),
+            "@beckysowlesacdadmin",
+        )
+
+    def test_trainer_help_response_excludes_admin_setup_document(self):
+        with mock.patch.object(
+            server,
+            "_refresh_help_and_faq_markdown",
+            return_value=("# Trainer Help", "# Trainer FAQ"),
+        ):
+            response = asyncio.run(server.get_help_content())
+
+        self.assertEqual(response["help_markdown"], "# Trainer Help")
+        self.assertEqual(response["faq_markdown"], "# Trainer FAQ")
+        self.assertNotIn("admin_setup_markdown", response)
+
     def test_full_session_newbie_shift_keeps_failed_call_out_of_fail_summary(self):
         session = {
             "candidate_name": "Candidate",
@@ -109,6 +177,106 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertEqual(payload["sup_complete"], "No")
         self.assertEqual(payload["all_complete"], "No")
         self.assertEqual(payload["auto_fail"], "NC/NS")
+
+    def test_certification_support_email_used_in_final_attempt_reschedule_text(self):
+        session = {
+            "candidate_name": "Taylor Example",
+            "newbie_shift_request_type": "reschedule",
+            "newbie_shift_requested_by": "candidate",
+            "newbie_shift_request_reason": "Scheduling conflict",
+            "newbie_shift_within_24_hours": True,
+            "newbie_shift_counts_as_attempt": True,
+            "final_attempt": True,
+            "newbie_shift_data": {"newbie_date": "07/15/2026", "newbie_time": "10:00 AM", "newbie_tz": "EST (Eastern)"},
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+        }
+
+        summaries = server.generate_summaries(session)
+        payload = server.build_form_fill_payload(session, {}, summaries["coaching"], summaries["fail"])
+        legacy = "certification@" + "acddirect.com"
+
+        self.assertEqual(server.CERTIFICATION_SUPPORT_EMAIL, "certification@acdsupport.com")
+        self.assertIn("certification@acdsupport.com", summaries["coaching"])
+        self.assertIn("certification@acdsupport.com", summaries["fail"])
+        self.assertIn("certification@acdsupport.com", payload["fail_reason"])
+        self.assertNotIn(legacy, summaries["coaching"])
+        self.assertNotIn(legacy, summaries["fail"])
+        self.assertNotIn(legacy, payload["fail_reason"])
+
+    def test_legacy_certification_email_normalization_is_exact(self):
+        legacy = "certification@" + "acddirect.com"
+        unrelated = "support@acddirect.com"
+        normalized = server._normalize_managed_content_certification_email({
+            "message": f"Email {legacy}. Keep {unrelated}.",
+            "rows": [{"message": f"{legacy} only"}],
+        })
+
+        self.assertIn("certification@acdsupport.com", normalized["message"])
+        self.assertIn(unrelated, normalized["message"])
+        self.assertIn("certification@acdsupport.com", normalized["rows"][0]["message"])
+        self.assertNotIn(legacy, str(normalized))
+
+    def test_obsolete_certification_email_absent_from_user_facing_defaults(self):
+        legacy = "certification@" + "acddirect.com"
+        repo_root = Path(__file__).resolve().parents[1]
+        paths = [
+            repo_root / "backend" / "content" / "app_content.json",
+            repo_root / "backend" / "defaults",
+            repo_root / "docs" / "admin-content-package",
+            repo_root / "docs" / "default-content",
+            repo_root / "frontend" / "src" / "pages",
+            repo_root / "frontend" / "src" / "utils",
+        ]
+        offenders = []
+        for path in paths:
+            candidates = [path] if path.is_file() else [item for item in path.rglob("*") if item.is_file()]
+            for candidate in candidates:
+                if candidate.suffix.lower() not in {".csv", ".json", ".md", ".jsx", ".js"}:
+                    continue
+                if ".test." in candidate.name:
+                    continue
+                text = candidate.read_text(encoding="utf-8", errors="ignore")
+                if legacy in text:
+                    offenders.append(str(candidate.relative_to(repo_root)))
+
+        self.assertEqual(offenders, [])
+
+    def test_pending_request_public_mapping_and_counts(self):
+        newbie = server._public_newbie_request({
+            "request_id": "req-1",
+            "request_type": "reschedule",
+            "request_status": "pending",
+            "candidate_name": "Taylor Example",
+            "tester_name": "Tester One",
+            "requested_by": "candidate",
+            "within_24_hours": "TRUE",
+            "counts_as_attempt": "TRUE",
+            "final_attempt": "FALSE",
+        })
+        deletion = server._public_deletion_request({
+            "request_id": "del-1",
+            "status": "pending",
+            "candidate_name": "Taylor Example",
+        })
+        counts = server._request_category_counts([newbie, deletion], headset_pending_count=2)
+        self.assertEqual(newbie["category"], "newbie_reschedule")
+        self.assertTrue(newbie["within_24_hours"])
+        self.assertEqual(deletion["target_scope"], "single_session")
+        self.assertEqual(counts["reschedules"], 1)
+        self.assertEqual(counts["candidateDeletions"], 1)
+        self.assertEqual(counts["headsetReviews"], 2)
+        self.assertEqual(counts["unresolved"], 4)
+
+    def test_pending_request_denial_requires_reason_before_sheet_access(self):
+        result = server._shared_pending_request_action({
+            "request_id": "req-1",
+            "category": "newbie_reschedule",
+            "decision": "denied",
+            "expected_status": "pending",
+        })
+        self.assertFalse(result["ok"])
+        self.assertIn("denial reason", result["error"].lower())
 
     def test_final_readiness_fail_and_needs_retest_require_fail_summary(self):
         base = {
@@ -702,6 +870,11 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             if sheet_content.get("discord_screenshots"):
                 live_screenshots_ok = True
 
+        def merge_screenshots(sheet_content, local_content):
+            live_screenshots_ok = False
+            if sheet_content.get("discord_screenshots"):
+                live_screenshots_ok = True
+
             if not live_screenshots_ok:
                 if local_content.get("discord_screenshots"):
                     sheet_content["discord_screenshots"] = local_content.get("discord_screenshots")
@@ -719,6 +892,117 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         sheet_none = {"discord_screenshots": None}
         res_none = merge_screenshots(sheet_none.copy(), local)
         self.assertEqual(res_none["discord_screenshots"], [{"title": "Default Screenshot", "image_url": "http://default"}])
+
+    @mock.patch("server._shared_sheet_context")
+    def test_apps_script_decide_pending_request_contract(self, mock_sheet_context):
+        mock_client = mock.MagicMock()
+        mock_sheet_context.return_value = {
+            "ok": True,
+            "appsScriptClient": mock_client,
+            "sheet_id": "test-sheet-id"
+        }
+
+        # 1. Test approve command is sent as 'approve' and stored status 'approved' is normalized correctly
+        mock_client.post.return_value = {
+            "ok": True,
+            "request_id": "req-123",
+            "request_type": "initial_newbie_shift",
+            "status": "approved",
+            "decision": "approve",
+        }
+
+        response = server._shared_pending_request_action({
+            "request_id": "req-123",
+            "category": "newbie_initial",
+            "decision": "approved",
+            "expected_status": "pending",
+            "actor": "AdminTester",
+        })
+
+        mock_client.post.assert_called_with("decidePendingRequest", {
+            "request_id": "req-123",
+            "request_type": "initial_newbie_shift",
+            "decision": "approve",
+            "expected_status": "pending",
+            "decision_by": "AdminTester",
+            "denial_reason": "",
+        })
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["decision"], "approve")
+        self.assertEqual(response["status"], "approved")
+
+        # 2. Test deny command is sent as 'deny' and stored status 'denied' is normalized correctly with denial reason
+        mock_client.reset_mock()
+        mock_client.post.return_value = {
+            "ok": True,
+            "request_id": "req-456",
+            "request_type": "newbie_shift_reschedule",
+            "status": "denied",
+            "decision": "deny",
+            "denial_reason": "No capacity",
+        }
+
+        response = server._shared_pending_request_action({
+            "request_id": "req-456",
+            "category": "newbie_reschedule",
+            "decision": "deny",
+            "expected_status": "pending",
+            "actor": "AdminTester",
+            "denial_reason": "No capacity",
+        })
+
+        mock_client.post.assert_called_with("decidePendingRequest", {
+            "request_id": "req-456",
+            "request_type": "newbie_shift_reschedule",
+            "decision": "deny",
+            "expected_status": "pending",
+            "decision_by": "AdminTester",
+            "denial_reason": "No capacity",
+        })
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["decision"], "deny")
+        self.assertEqual(response["status"], "denied")
+        self.assertEqual(response["denial_reason"], "No capacity")
+
+        # 3. Test already-resolved conflict remaining an error (AppsScriptApiError)
+        from services.apps_script_api import AppsScriptApiError
+        mock_client.reset_mock()
+        mock_client.post.side_effect = AppsScriptApiError("Apps Script API rejected the request: Pending request status has changed.")
+
+        response = server._shared_pending_request_action({
+            "request_id": "req-123",
+            "category": "newbie_initial",
+            "decision": "approve",
+            "expected_status": "pending",
+        })
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["error"], "Request has already been resolved.")
+
+    @mock.patch("server._shared_read_rows")
+    @mock.patch("server._shared_sheet_context")
+    def test_direct_sheets_fallback_unchanged(self, mock_sheet_context, mock_read_rows):
+        mock_sheet_context.return_value = {
+            "ok": True,
+            "service": mock.MagicMock(),
+            "sheet_id": "test-sheet-id"
+        }
+        mock_read_rows.return_value = [
+            {"request_id": "req-sheet", "request_status": "pending", "session_id": "session-1", "_row_number": 2}
+        ]
+
+        with mock.patch("server._shared_update_existing_row") as mock_update, \
+             mock.patch("server._update_candidate_request_fields") as mock_fields_update:
+            response = server._shared_pending_request_action({
+                "request_id": "req-sheet",
+                "category": "newbie_initial",
+                "decision": "approve",
+                "expected_status": "pending",
+                "actor": "AdminTester",
+            })
+            self.assertTrue(response["ok"])
+            self.assertEqual(response["status"], "approved")
+            mock_update.assert_called_once()
+            mock_fields_update.assert_called_once()
 
 
 if __name__ == "__main__":

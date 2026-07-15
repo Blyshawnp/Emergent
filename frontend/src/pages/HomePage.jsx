@@ -4,7 +4,12 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionDateOf, sessionIdOf } from '../utils/sessionBasics';
-import { formFillStatusLabel, formFillStatusTone, formatNewbieSchedule } from '../utils/certificationWorkflow';
+import {
+  followUpStatusMeta,
+  formFillStatusMeta,
+  formatNewbieSchedule,
+  sessionStatusMeta,
+} from '../utils/certificationWorkflow';
 
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 
@@ -67,7 +72,7 @@ function getHistoricalTechIssueFields(entry = {}) {
   };
 }
 
-function buildResumedSession(entry) {
+export function buildResumedSession(entry) {
   return {
     ...getHistoricalTechIssueFields(entry),
     candidate_name: entry.candidate_name || entry.candidate || '',
@@ -101,7 +106,23 @@ function buildResumedSession(entry) {
     sup_transfer_1: null,
     sup_transfer_2: null,
     time_for_sup: true,
-    newbie_shift_data: null,
+    newbie_shift_data: entry.newbie_shift_data || null,
+    newbie_shift_scheduled_at: entry.newbie_shift_scheduled_at || '',
+    newbie_shift_timezone: entry.newbie_shift_timezone || '',
+    newbie_shift_request_id: entry.newbie_shift_request_id || '',
+    newbie_shift_request_type: entry.newbie_shift_request_type || '',
+    newbie_shift_request_status: entry.newbie_shift_request_status || '',
+    newbie_shift_requested_by: entry.newbie_shift_requested_by || '',
+    newbie_shift_request_reason: entry.newbie_shift_request_reason || '',
+    newbie_shift_request_details: entry.newbie_shift_request_details || '',
+    newbie_shift_request_created_at: entry.newbie_shift_request_created_at || '',
+    newbie_shift_original_scheduled_at: entry.newbie_shift_original_scheduled_at || '',
+    newbie_shift_rescheduled_at: entry.newbie_shift_rescheduled_at || '',
+    newbie_shift_within_24_hours: Boolean(entry.newbie_shift_within_24_hours),
+    newbie_shift_counts_as_attempt: Boolean(entry.newbie_shift_counts_as_attempt),
+    newbie_shift_admin_decision_at: entry.newbie_shift_admin_decision_at || '',
+    newbie_shift_admin_decision_by: entry.newbie_shift_admin_decision_by || '',
+    newbie_shift_denial_reason: entry.newbie_shift_denial_reason || '',
     final_status: null,
     last_saved: null,
     tech_issues_log: [],
@@ -147,7 +168,23 @@ function buildSharedPendingSession(entry, testerName, basicsSource = null) {
     sup_transfer_1: null,
     sup_transfer_2: null,
     time_for_sup: true,
-    newbie_shift_data: null,
+    newbie_shift_data: entry.newbie_shift_data || null,
+    newbie_shift_scheduled_at: entry.newbie_shift_scheduled_at || '',
+    newbie_shift_timezone: entry.newbie_shift_timezone || '',
+    newbie_shift_request_id: entry.newbie_shift_request_id || '',
+    newbie_shift_request_type: entry.newbie_shift_request_type || '',
+    newbie_shift_request_status: entry.newbie_shift_request_status || '',
+    newbie_shift_requested_by: entry.newbie_shift_requested_by || '',
+    newbie_shift_request_reason: entry.newbie_shift_request_reason || '',
+    newbie_shift_request_details: entry.newbie_shift_request_details || '',
+    newbie_shift_request_created_at: entry.newbie_shift_request_created_at || '',
+    newbie_shift_original_scheduled_at: entry.newbie_shift_original_scheduled_at || '',
+    newbie_shift_rescheduled_at: entry.newbie_shift_rescheduled_at || '',
+    newbie_shift_within_24_hours: Boolean(entry.newbie_shift_within_24_hours),
+    newbie_shift_counts_as_attempt: Boolean(entry.newbie_shift_counts_as_attempt),
+    newbie_shift_admin_decision_at: entry.newbie_shift_admin_decision_at || '',
+    newbie_shift_admin_decision_by: entry.newbie_shift_admin_decision_by || '',
+    newbie_shift_denial_reason: entry.newbie_shift_denial_reason || '',
     final_status: null,
     last_saved: null,
     tech_issues_log: [],
@@ -286,14 +323,6 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
 
   const name = settings.display_name || settings.tester_name || 'Tester';
   const recent = (history || []).slice(0, 5);
-  const badgeClass = (s) => {
-    const status = String(s || '').trim().toLowerCase();
-    if (status.includes('pass')) return 'badge-pass';
-    if (status.includes('fail')) return 'badge-fail';
-    if (status.includes('incomplete') || status.includes('retest') || status.includes('coaching')) return 'badge-incomplete';
-    if (status.includes('nc/ns')) return 'badge-ncns';
-    return 'badge-incomplete';
-  };
   const statusChips = (status) => {
     const value = String(status || '?').trim();
     if (value === 'Needs Retest / Additional Coaching') {
@@ -301,11 +330,6 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
     }
     return [value || '?'];
   };
-  const formBadgeClass = (record) => ({
-    success: 'badge-pass',
-    danger: 'badge-fail',
-    warning: 'badge-incomplete',
-  }[formFillStatusTone(record?.form_fill_status, { legacy: !record?.form_fill_status })] || 'badge-incomplete');
 
   const startStandardSession = () => {
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
@@ -533,15 +557,14 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
                 <span className="recent-name">{s.candidate || 'Unknown'}</span>
                 <span className="recent-status-chips" aria-label={`Status: ${s.status || 'Unknown'}`}>
                   {statusChips(s.status).map((chip) => (
-                    <span key={chip} className={`badge recent-status-chip ${badgeClass(chip)}`}>{chip}</span>
+                    <StatusChip key={chip} meta={sessionStatusMeta(chip)} />
                   ))}
-                  <span className={`badge recent-status-chip ${formBadgeClass(s)}`} title={formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}>
-                    {formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}
-                  </span>
-                  {s.newbie_shift_data && (
-                    <span className="badge recent-status-chip badge-incomplete" title={`Newbie Shift: ${formatNewbieSchedule(s.newbie_shift_data)}`}>
-                      {s.newbie_shift_request_status || 'Pending'}
-                    </span>
+                  <StatusChip meta={formFillStatusMeta(s.form_fill_status, { legacy: !s.form_fill_status })} />
+                  {(s.newbie_shift_data || s.newbie_shift_request_id) && (
+                    <StatusChip
+                      meta={followUpStatusMeta(s.newbie_shift_request_status || 'pending')}
+                      title={`Newbie Shift: ${formatNewbieSchedule(s.newbie_shift_data)}`}
+                    />
                   )}
                 </span>
               </div>
@@ -602,6 +625,16 @@ function StatCard({ label, value, color }) {
       <div className="stat-label">{label}</div>
       <div className="stat-value" style={color ? { color } : {}}>{value}</div>
     </div>
+  );
+}
+
+function StatusChip({ meta, title }) {
+  const safe = meta || { label: 'Unknown', title: 'Unknown', ariaLabel: 'Status: Unknown', className: 'status-chip-form-legacy' };
+  return (
+    <span className={`status-chip recent-status-chip ${safe.className}`} title={title || safe.title || safe.label} aria-label={safe.ariaLabel || safe.label}>
+      <span className="status-chip-icon" aria-hidden="true" />
+      <span className="status-chip-label">{safe.label}</span>
+    </span>
   );
 }
 

@@ -2,11 +2,13 @@ import React, { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import {
-  formFillStatusLabel,
-  formFillStatusTone,
+  followUpStatusMeta,
+  formFillStatusMeta,
+  formatNewbieScheduleParts,
   formatNewbieSchedule,
   NEWBIE_REQUEST_STATUS,
   NEWBIE_REQUEST_TYPE,
+  sessionStatusMeta,
 } from '../utils/certificationWorkflow';
 
 function adminHistoryControlsEnabled() {
@@ -19,6 +21,55 @@ function adminHistoryControlsEnabled() {
 
 function detailDate(record) {
   return record?.timestamp || record?.completed_at || record?.created_at || record?.displayDate || '';
+}
+
+function formRecoveryKey(record) {
+  if (!record) return '';
+  const identity = [
+    record.history_id || '',
+    record.timestamp_iso || record.timestamp || '',
+    record.tester_name || '',
+    record.candidate_name || record.candidate || '',
+  ].join('|');
+  return identity ? `mts-form-fill-recovery:${identity}` : '';
+}
+
+function hasFormRecoveryMarker(record) {
+  try {
+    const key = formRecoveryKey(record);
+    return Boolean(key && window.localStorage.getItem(key) === 'filled');
+  } catch (_error) {
+    return false;
+  }
+}
+
+function setFormRecoveryMarker(record, value) {
+  try {
+    const key = formRecoveryKey(record);
+    if (!key) return;
+    if (value) window.localStorage.setItem(key, 'filled');
+    else window.localStorage.removeItem(key);
+  } catch (_error) {
+    // Local recovery marker is best-effort only.
+  }
+}
+
+function applyFormRecoveryMarker(record) {
+  if (!record || record.form_fill_status === 'filled' || !hasFormRecoveryMarker(record)) return record;
+  return {
+    ...record,
+    form_fill_status: 'filled',
+    form_fill_recovery_marker: true,
+  };
+}
+
+function formatFollowUpParts(record) {
+  const parts = formatNewbieScheduleParts(record?.newbie_shift_data || {});
+  const dateTime = [parts.date, parts.time].filter(Boolean).join(parts.date && parts.time ? ', ' : '');
+  return {
+    dateTime: dateTime || 'Not scheduled',
+    timezone: parts.timezone || '',
+  };
 }
 
 export default function HistoryPage({ onNavigate, navigationState, onHistoryRefresh }) {
@@ -34,7 +85,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       const result = onHistoryRefresh
         ? await onHistoryRefresh('history-page')
         : { stats: await api.getHistoryStats(), history: await api.getHistory() };
-      const nextHistory = Array.isArray(result?.history) ? result.history : [];
+      const nextHistory = (Array.isArray(result?.history) ? result.history : []).map(applyFormRecoveryMarker);
       setStats(result?.stats || {});
       setHistory(nextHistory);
       console.log('[HISTORY PAGE] fresh history loaded', { count: nextHistory.length });
@@ -47,17 +98,11 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
 
   useEffect(() => {
     if (navigationState?.selectedHistoryRecord) {
-      setDetail(navigationState.selectedHistoryRecord);
+      setDetail(applyFormRecoveryMarker(navigationState.selectedHistoryRecord));
     }
   }, [navigationState]);
 
   const filtered = history.filter(s => ((s.candidate || s.candidate_name || '')).toLowerCase().includes(search.toLowerCase()));
-  const badgeClass = (s) => ({ Pass: 'badge-pass', 'RESUMED-PASS': 'badge-pass', Fail: 'badge-fail', 'FAIL-Final Attempt': 'badge-fail', Incomplete: 'badge-incomplete', 'NC/NS': 'badge-ncns' }[s] || 'badge-ncns');
-  const formBadgeClass = (record) => ({
-    success: 'badge-pass',
-    danger: 'badge-fail',
-    warning: 'badge-incomplete',
-  }[formFillStatusTone(record?.form_fill_status, { legacy: !record?.form_fill_status })] || 'badge-incomplete');
 
   const getHistoryIdentity = (record) => {
     if (record?.history_id) return record.history_id;
@@ -145,16 +190,56 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   };
 
   const handleHistoricalFillForm = async (record) => {
+    if (record?.form_fill_status === 'filled' || hasFormRecoveryMarker(record)) {
+      const confirmed = await modal.confirm(
+        'Form Already Filled',
+        'This history record is already marked Form Filled. Running Form Fill again can duplicate work in Microsoft Forms. Continue only if you intentionally need to refill it.',
+        'alert-triangle',
+        'warning'
+      );
+      if (!confirmed) return;
+    }
     try {
       const coaching = (record?.coaching_summary || '').trim();
       const failSummary = (record?.fail_summary || '').trim();
       const response = await api.fillForm(coaching, failSummary, record);
-      if (response.ok) {
-        await modal.alert('Form Filled', response.message, 'check-circle', 'success');
+      if (response.ok || response.form_filled || response.automation_completed) {
+        const now = new Date().toISOString();
+        const statusUpdate = response.status_update || {};
+        const nextRecord = {
+          ...record,
+          ...statusUpdate,
+          form_fill_status: 'filled',
+          form_filled_at: statusUpdate.form_filled_at || now,
+        };
+        setFormRecoveryMarker(record, response.local_status_saved === false);
+        setDetail((current) => (current && getHistoryIdentity(current) === getHistoryIdentity(record) ? { ...current, ...nextRecord } : current));
+        setHistory((current) => current.map((item) => (
+          getHistoryIdentity(item) === getHistoryIdentity(record) ? { ...item, ...nextRecord } : item
+        )));
+        if (response.warning || response.local_status_saved === false) {
+          await modal.warning(
+            'Form Filled - Status Warning',
+            response.warning || 'The Microsoft Form was filled, but MTS could not update the session status. Do not run Form Fill again. Refresh or update the status manually if needed.'
+          );
+        } else {
+          setFormRecoveryMarker(record, false);
+          await modal.alert('Form Filled', response.message || 'The Microsoft Form was filled.', 'check-circle', 'success');
+        }
+        await load();
         return;
       }
       await modal.error('Form Fill Failed', response.message || 'Unable to send this historical session to the Cert Form.');
     } catch (error) {
+      const data = error?.response?.data || {};
+      if (data.form_filled || data.automation_completed) {
+        setFormRecoveryMarker(record, true);
+        await modal.warning(
+          'Form Filled - Status Warning',
+          data.warning || 'The Microsoft Form was filled, but MTS could not update the session status. Do not run Form Fill again. Refresh or update the status manually if needed.'
+        );
+        return;
+      }
       await modal.error('Form Fill Failed', error.message || 'Unable to send this historical session to the Cert Form.');
     }
   };
@@ -230,38 +315,47 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         {filtered.length === 0 ? (
           <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-tertiary)' }}>No session history yet.</div>
         ) : (
-          <table className="hist-table">
-            <thead><tr><th>Date</th><th>Candidate</th><th>Tester</th><th>Status</th><th>Follow-up</th><th>Form</th><th style={{ width: 210 }}>Actions</th></tr></thead>
-            <tbody>
+          <div className="hist-grid" role="table" aria-label="Session history">
+            <div className="hist-grid-head" role="row">
+              <div role="columnheader">Date</div>
+              <div role="columnheader">Candidate</div>
+              <div role="columnheader">Tester</div>
+              <div role="columnheader">Session Status</div>
+              <div role="columnheader">Follow-Up</div>
+              <div role="columnheader">Form Status</div>
+              <div role="columnheader">Actions</div>
+            </div>
               {filtered.map((s, i) => (
-                <tr key={getHistoryIdentity(s) || i} className="hist-row">
-                  <td className="hist-date">{s.timestamp || 'Unknown'}</td>
-                  <td className="hist-name">{s.candidate || s.candidate_name || 'Unknown'}</td>
-                  <td className="hist-tester">{s.tester_name || ''}</td>
-                  <td><span className={`badge ${badgeClass(s.status)}`}>{s.status || '?'}</span></td>
-                  <td className="text-sm">
-                    {s.newbie_shift_data ? (
-                      <span title={`Approval status: ${s.newbie_shift_request_status || 'Pending'}`}>
-                        {formatNewbieSchedule(s.newbie_shift_data)} · {s.newbie_shift_request_status || 'Pending'}
-                      </span>
-                    ) : <span className="text-muted">-</span>}
-                  </td>
-                  <td>
-                    <span className={`badge ${formBadgeClass(s)}`} title={formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })} aria-label={formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}>
-                      {formFillStatusLabel(s.form_fill_status, { legacy: !s.form_fill_status })}
-                    </span>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div key={getHistoryIdentity(s) || i} className="hist-row" role="row" data-testid={`history-row-${i}`}>
+                  <div className="hist-cell hist-date" role="cell" data-label="Date">{s.timestamp || 'Unknown'}</div>
+                  <div className="hist-cell hist-name" role="cell" data-label="Candidate">{s.candidate || s.candidate_name || 'Unknown'}</div>
+                  <div className="hist-cell hist-tester" role="cell" data-label="Tester">{s.tester_name || ''}</div>
+                  <div className="hist-cell hist-status" role="cell" data-label="Session Status"><StatusChip meta={sessionStatusMeta(s.status)} /></div>
+                  <div className="hist-cell hist-followup text-sm" role="cell" data-label="Follow-Up">
+                    {(s.newbie_shift_data || s.newbie_shift_request_id) ? (() => {
+                      const followUp = formatFollowUpParts(s);
+                      return (
+                        <>
+                          <span className="hist-followup-date" title={formatNewbieSchedule(s.newbie_shift_data)}>{followUp.dateTime}</span>
+                          {followUp.timezone && <span className="hist-followup-tz">{followUp.timezone}</span>}
+                          <StatusChip meta={followUpStatusMeta(s.newbie_shift_request_status || NEWBIE_REQUEST_STATUS.PENDING)} />
+                        </>
+                      );
+                    })() : <span className="text-muted">No follow-up</span>}
+                  </div>
+                  <div className="hist-cell hist-form-status" role="cell" data-label="Form Status">
+                    <StatusChip meta={formFillStatusMeta(s.form_fill_status, { legacy: !s.form_fill_status })} />
+                  </div>
+                  <div className="hist-cell hist-actions" role="cell" data-label="Actions">
+                    <div className="hist-actions-group">
                       <button className="btn btn-primary btn-sm" onClick={() => setDetail(s)} data-testid={`history-view-${i}`}>View</button>
                       {canReschedule(s) && <button className="btn btn-warning btn-sm" onClick={() => handleRescheduleSession(s)} data-testid={`history-reschedule-${i}`}>Reschedule</button>}
                       <button className="btn btn-danger btn-sm" onClick={() => handleDeleteSession(s)} data-testid={`history-delete-${i}`}>Delete</button>
                     </div>
-                  </td>
-                </tr>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+          </div>
         )}
       </div>
 
@@ -269,7 +363,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         <div className="modal-overlay open">
           <div className="modal" style={{ width: 700, maxHeight: '85vh' }}>
             <div className="modal-header">
-              <h2>{detail.candidate || detail.candidate_name || 'Unknown'} - <span style={{ color: ({ Pass: 'var(--color-success)', 'RESUMED-PASS': 'var(--color-success)', Fail: 'var(--color-danger)', 'FAIL-Final Attempt': 'var(--color-danger)', Incomplete: 'var(--color-warning)' }[detail.status]) || 'var(--text-secondary)' }}>{(detail.status || '').toUpperCase()}</span></h2>
+              <h2>{detail.candidate || detail.candidate_name || 'Unknown'} - <StatusChip meta={sessionStatusMeta(detail.status || detail.final_status)} /></h2>
               <button className="modal-close" onClick={() => setDetail(null)}>&times;</button>
             </div>
             <div className="modal-body" style={{ lineHeight: 1.7 }}>
@@ -277,7 +371,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
               <div className="card" style={{ padding: 14, marginBottom: 14 }}>
                 <div className="text-sm"><strong>Candidate:</strong> {detail.candidate || detail.candidate_name || 'Unknown'}</div>
                 <div className="text-sm"><strong>Tester:</strong> {detail.tester_name || 'N/A'}</div>
-                <div className="text-sm"><strong>Status:</strong> {detail.status || detail.final_status || 'Unknown'}</div>
+                <div className="text-sm"><strong>Status:</strong> <StatusChip meta={sessionStatusMeta(detail.status || detail.final_status)} /></div>
                 {readinessJudgment(detail).calculatedResult && (
                   <div className="text-sm"><strong>Calculated Result:</strong> {readinessJudgment(detail).calculatedResult}</div>
                 )}
@@ -290,7 +384,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 <div className="text-sm"><strong>Date:</strong> {detailDate(detail) || 'Unknown'}</div>
                 <div className="text-sm"><strong>Final Attempt:</strong> {detail.final_attempt ? 'Yes' : 'No'}</div>
                 {detail.headset_brand && <div className="text-sm"><strong>Headset:</strong> {detail.headset_brand}</div>}
-                <div className="text-sm"><strong>Form Fill:</strong> {formFillStatusLabel(detail.form_fill_status, { legacy: !detail.form_fill_status })}</div>
+                <div className="text-sm"><strong>Form Fill:</strong> <StatusChip meta={formFillStatusMeta(detail.form_fill_status, { legacy: !detail.form_fill_status })} /></div>
               </div>
               <strong>Tester:</strong> {detail.tester_name || 'N/A'}<br />
               {detail.auto_fail_reason && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{detail.auto_fail_reason}</span><br /></>}
@@ -321,8 +415,8 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   </div>
                 );
               })}
-              {detail.newbie_shift_data && (
-                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data)}<br /><strong>Approval Status:</strong> {detail.newbie_shift_request_status || 'Pending'}{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}</>
+              {(detail.newbie_shift_data || detail.newbie_shift_request_id) && (
+                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data || {})}<br /><strong>Approval Status:</strong> <StatusChip meta={followUpStatusMeta(detail.newbie_shift_request_status || NEWBIE_REQUEST_STATUS.PENDING)} />{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}{detail.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && detail.newbie_shift_denial_reason && <><br /><strong>Denial Reason:</strong> {detail.newbie_shift_denial_reason}</>}</>
               )}
               <div style={{ marginTop: 16 }}>
                 <div className="text-sm font-bold">Coaching Summary</div>
@@ -357,7 +451,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
             <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
               <button className="btn btn-muted" onClick={() => setDetail(null)}>Close</button>
               <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
-              <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">Fill Cert Form</button>
+              <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">{detail.form_fill_status === 'filled' ? 'Refill Cert Form' : 'Fill Cert Form'}</button>
               <button
                 className="btn btn-primary"
                 onClick={() => onNavigate('review', { historyRecord: detail })}
@@ -375,4 +469,14 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
 
 function SC({ label, value, color }) {
   return <div className="stat-card"><div className="stat-label">{label}</div><div className="stat-value" style={color ? { color } : {}}>{value ?? 0}</div></div>;
+}
+
+function StatusChip({ meta }) {
+  const safe = meta || { label: 'Unknown', title: 'Unknown', ariaLabel: 'Status: Unknown', className: 'status-chip-form-legacy' };
+  return (
+    <span className={`status-chip ${safe.className}`} title={safe.title || safe.label} aria-label={safe.ariaLabel || safe.label}>
+      <span className="status-chip-icon" aria-hidden="true" />
+      <span className="status-chip-label">{safe.label}</span>
+    </span>
+  );
 }
