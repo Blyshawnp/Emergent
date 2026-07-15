@@ -6061,14 +6061,13 @@ def _shared_pending_request_action(payload):
                 row["_row_number"],
                 _shared_row_values(row, SHARED_CANDIDATE_DELETION_REQUEST_HEADERS),
             )
-            deletion_result = {}
-            if decision == "approved":
-                deletion_result = _shared_admin_candidate_action({
-                    "action": "delete_candidate_history",
-                    "targets": [{"session_id": row.get("session_id") or "", "candidate_name": row.get("candidate_name") or ""}],
-                    "actor": actor,
-                })
-            return {"ok": True, "request_id": request_id, "category": category, "status": decision, "deletion": deletion_result}
+            return {
+                "ok": True,
+                "request_id": request_id,
+                "category": category,
+                "status": decision,
+                "deletion_action_required": decision == "approved",
+            }
 
         return {"ok": False, "error": "Unsupported request category."}
     except Exception as exc:

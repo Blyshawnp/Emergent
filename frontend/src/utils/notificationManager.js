@@ -1,5 +1,127 @@
 export const NOTIFICATION_MANAGER_STORAGE_KEY = 'sam-notification-manager-draft';
 
+export const PENDING_REQUEST_SUPPRESSION_STORAGE_KEY = 'sam:pending-request-suppressions:v1';
+export const PENDING_REQUEST_SUPPRESSION_MS = 30 * 60 * 1000;
+export const MAX_PENDING_REQUEST_SUPPRESSIONS = 250;
+
+const PENDING_REQUEST_SUPPRESSION_TYPES = new Set(['remind', 'dismiss']);
+
+function suppressionEntriesEqual(left, right) {
+  return JSON.stringify(left || []) === JSON.stringify(right || []);
+}
+
+export function normalizePendingRequestSuppressions(value, now = Date.now(), unresolvedRequestIds = null) {
+  const entries = Array.isArray(value) ? value : [];
+  const unresolvedIds = unresolvedRequestIds === null
+    ? null
+    : new Set(Array.from(unresolvedRequestIds || []).map((requestId) => String(requestId || '').trim()).filter(Boolean));
+  const latestByRequestId = new Map();
+
+  entries.forEach((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+    const requestId = String(entry.request_id || '').trim();
+    const suppressionType = String(entry.suppression_type || '').trim().toLowerCase();
+    const expiresAt = Number(entry.expires_at);
+    if (!requestId || !PENDING_REQUEST_SUPPRESSION_TYPES.has(suppressionType)) return;
+    if (!Number.isFinite(expiresAt) || expiresAt <= now || expiresAt > now + PENDING_REQUEST_SUPPRESSION_MS) return;
+    if (unresolvedIds && !unresolvedIds.has(requestId)) return;
+    const current = latestByRequestId.get(requestId);
+    if (!current || expiresAt >= current.expires_at) {
+      latestByRequestId.set(requestId, {
+        request_id: requestId,
+        suppression_type: suppressionType,
+        expires_at: expiresAt,
+      });
+    }
+  });
+
+  return Array.from(latestByRequestId.values())
+    .sort((left, right) => left.expires_at - right.expires_at || left.request_id.localeCompare(right.request_id))
+    .slice(-MAX_PENDING_REQUEST_SUPPRESSIONS);
+}
+
+export function savePendingRequestSuppressions(storage, value, now = Date.now()) {
+  const normalized = normalizePendingRequestSuppressions(value, now);
+  try {
+    if (!normalized.length) {
+      storage?.removeItem?.(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY);
+    } else {
+      storage?.setItem?.(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY, JSON.stringify(normalized));
+    }
+  } catch (_error) {}
+  return normalized;
+}
+
+export function loadPendingRequestSuppressions(storage, now = Date.now()) {
+  let parsed = [];
+  let storedValue = null;
+  let parseFailed = false;
+  try {
+    storedValue = storage?.getItem?.(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY);
+    parsed = storedValue ? JSON.parse(storedValue) : [];
+  } catch (_error) {
+    parsed = [];
+    parseFailed = true;
+  }
+  const normalized = normalizePendingRequestSuppressions(parsed, now);
+  if (storedValue !== null && (parseFailed || !suppressionEntriesEqual(parsed, normalized))) {
+    savePendingRequestSuppressions(storage, normalized, now);
+  }
+  return normalized;
+}
+
+export function suppressPendingRequest(value, requestId, suppressionType, now = Date.now()) {
+  const normalizedRequestId = String(requestId || '').trim();
+  const normalizedType = String(suppressionType || '').trim().toLowerCase();
+  const current = normalizePendingRequestSuppressions(value, now)
+    .filter((entry) => entry.request_id !== normalizedRequestId);
+  if (!normalizedRequestId || !PENDING_REQUEST_SUPPRESSION_TYPES.has(normalizedType)) return current;
+  return normalizePendingRequestSuppressions([
+    ...current,
+    {
+      request_id: normalizedRequestId,
+      suppression_type: normalizedType,
+      expires_at: now + PENDING_REQUEST_SUPPRESSION_MS,
+    },
+  ], now);
+}
+
+export function getUnresolvedPendingRequests(requests) {
+  return (Array.isArray(requests) ? requests : []).filter((request) => (
+    String(request?.request_id || '').trim()
+    && String(request?.raw_status || request?.status || '').trim().toLowerCase() === 'pending'
+  ));
+}
+
+export function prunePendingRequestSuppressions(value, requests, now = Date.now()) {
+  const unresolvedIds = getUnresolvedPendingRequests(requests).map((request) => request.request_id);
+  return normalizePendingRequestSuppressions(value, now, unresolvedIds);
+}
+
+export function isPendingRequestSuppressed(value, requestId, now = Date.now()) {
+  const normalizedRequestId = String(requestId || '').trim();
+  return normalizePendingRequestSuppressions(value, now)
+    .some((entry) => entry.request_id === normalizedRequestId && entry.expires_at > now);
+}
+
+export function getNearestPendingRequestSuppressionExpiry(value, now = Date.now()) {
+  const normalized = normalizePendingRequestSuppressions(value, now);
+  return normalized.length ? normalized[0].expires_at : null;
+}
+
+export function selectPendingRequestAlert(requests, suppressions, handledRequestIds = [], now = Date.now()) {
+  const handledIds = new Set(Array.from(handledRequestIds || []).map((requestId) => String(requestId || '').trim()));
+  return getUnresolvedPendingRequests(requests)
+    .filter((request) => !handledIds.has(String(request.request_id)) && !isPendingRequestSuppressed(suppressions, request.request_id, now))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.created_at || left.request_created_at || '');
+      const rightTime = Date.parse(right.created_at || right.request_created_at || '');
+      const safeLeftTime = Number.isFinite(leftTime) ? leftTime : Number.POSITIVE_INFINITY;
+      const safeRightTime = Number.isFinite(rightTime) ? rightTime : Number.POSITIVE_INFINITY;
+      return safeLeftTime - safeRightTime || String(left.request_id).localeCompare(String(right.request_id));
+    })[0] || null;
+}
+
 export const NOTIFICATION_TYPES = ['info', 'warning', 'urgent'];
 
 export const NOTIFICATION_CSV_COLUMNS = [

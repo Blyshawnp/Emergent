@@ -1,7 +1,25 @@
 const fs = require('fs');
 const path = require('path');
+const React = require('react');
+const { act } = React;
+const { createRoot } = require('react-dom/client');
+const PendingRequestAlert = require('./components/PendingRequestAlert').default;
+const {
+  MAX_PENDING_REQUEST_SUPPRESSIONS,
+  PENDING_REQUEST_SUPPRESSION_MS,
+  PENDING_REQUEST_SUPPRESSION_STORAGE_KEY,
+  getUnresolvedPendingRequests,
+  loadPendingRequestSuppressions,
+  normalizePendingRequestSuppressions,
+  savePendingRequestSuppressions,
+  selectPendingRequestAlert,
+  suppressPendingRequest,
+} = require('./utils/notificationManager');
+
+global.IS_REACT_ACT_ENVIRONMENT = true;
 
 const appSource = fs.readFileSync(path.join(__dirname, 'NotificationManagerApp.jsx'), 'utf8');
+const pendingRequestAlertSource = fs.readFileSync(path.join(__dirname, 'components', 'PendingRequestAlert.jsx'), 'utf8');
 const mtsAppSource = fs.readFileSync(path.join(__dirname, 'App.js'), 'utf8');
 const indexSource = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
 const appCss = fs.readFileSync(path.join(__dirname, 'notification-manager.css'), 'utf8');
@@ -65,12 +83,219 @@ test('SAM pending request inbox, bell, and denial safeguards are wired', () => {
   expect(appSource).toContain('Candidate Deletion Requests');
   expect(appSource).toContain('Headset Reviews');
   expect(appSource).toContain('A denial reason is required.');
-  expect(appSource).toContain('Remind Me in 30 Minutes');
-  expect(appSource).toContain('There is a Newbie Shift request to reschedule awaiting approval.');
+  expect(pendingRequestAlertSource).toContain('Remind Me in 30 Minutes');
+  expect(appSource).toContain('PendingRequestAlert');
+  expect(appSource).toContain('pendingRequestsRefreshCycle');
+  expect(appSource).toContain('pendingRequestsCacheRef.current = { data: null, timestamp: 0 };');
   expect(appSource).toContain('Single session request');
   expect(samPolishCss).toContain('.nm-request-bell-badge');
   expect(samPolishCss).toContain('.nm-request-status.is-approved');
   expect(samPolishCss).toContain('.nm-request-status.is-denied');
+});
+
+describe('SAM pending request reminder lifecycle', () => {
+  let container;
+  let root;
+
+  const request = (requestId, createdAt, overrides = {}) => ({
+    request_id: requestId,
+    category: 'newbie_reschedule',
+    categoryLabel: `Request ${requestId}`,
+    raw_status: 'pending',
+    created_at: createdAt,
+    ...overrides,
+  });
+
+  const renderAlert = (props) => {
+    if (!container) {
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+    }
+    act(() => {
+      root.render(React.createElement(PendingRequestAlert, props));
+    });
+  };
+
+  const clickButton = (label) => {
+    const button = Array.from(container.querySelectorAll('button'))
+      .find((candidate) => candidate.textContent.trim() === label);
+    expect(button).toBeTruthy();
+    act(() => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  };
+
+  const unmountAlert = () => {
+    if (root) {
+      act(() => root.unmount());
+    }
+    container?.remove();
+    root = null;
+    container = null;
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-15T12:00:00.000Z'));
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    unmountAlert();
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  test('Remind Me stores a 30-minute expiry, survives remount, and becomes eligible at expiry', () => {
+    const requests = [request('request-1', '2026-07-15T11:00:00.000Z')];
+    renderAlert({ requests, refreshCycle: 1 });
+    clickButton('Remind Me in 30 Minutes');
+
+    const stored = JSON.parse(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY));
+    expect(stored).toEqual([{
+      request_id: 'request-1',
+      suppression_type: 'remind',
+      expires_at: Date.now() + PENDING_REQUEST_SUPPRESSION_MS,
+    }]);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+    unmountAlert();
+    renderAlert({ requests, refreshCycle: 1 });
+    expect(loadPendingRequestSuppressions(localStorage)).toEqual(stored);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+    act(() => jest.advanceTimersByTime(PENDING_REQUEST_SUPPRESSION_MS - 1));
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    act(() => jest.advanceTimersByTime(1));
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  test('startup placeholder data cannot prune a valid persisted reminder before live requests load', () => {
+    const requests = [request('request-1', '2026-07-15T11:00:00.000Z')];
+    savePendingRequestSuppressions(localStorage, suppressPendingRequest([], 'request-1', 'remind'));
+
+    renderAlert({ requests: [], requestsAvailable: false, refreshCycle: 0 });
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).not.toBeNull();
+
+    renderAlert({ requests, requestsAvailable: true, refreshCycle: 1 });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).not.toBeNull();
+  });
+
+  test('Dismiss suppresses only the alert while preserving unresolved count and inbox data', () => {
+    const requests = [request('request-1', '2026-07-15T11:00:00.000Z')];
+    const onView = jest.fn();
+    renderAlert({ requests, refreshCycle: 1, onView });
+    clickButton('Dismiss');
+
+    expect(getUnresolvedPendingRequests(requests)).toHaveLength(1);
+    expect(requests).toHaveLength(1);
+    expect(onView).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY))[0].suppression_type).toBe('dismiss');
+    expect(appSource).toContain('const unresolvedRequestCount = Number(pendingRequestCounts.unresolved || 0);');
+    expect(appSource).toContain('data-testid="sam-pending-requests"');
+  });
+
+  test('multiple unresolved requests produce one alert and View advances oldest-first', () => {
+    const requests = [
+      request('newer', '2026-07-15T11:30:00.000Z'),
+      request('oldest', '2026-07-15T10:30:00.000Z'),
+    ];
+    const onView = jest.fn();
+    renderAlert({ requests, refreshCycle: 1, onView });
+
+    expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    clickButton('View');
+    expect(onView.mock.calls[0][0].request_id).toBe('oldest');
+    expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    clickButton('View');
+    expect(onView.mock.calls[1][0].request_id).toBe('newer');
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  test('approval or denial removes stored suppression state and resolved requests never re-alert', () => {
+    const pending = request('request-1', '2026-07-15T11:00:00.000Z');
+    renderAlert({ requests: [pending], refreshCycle: 1 });
+    clickButton('Dismiss');
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).not.toBeNull();
+
+    const approved = { ...pending, raw_status: 'approved', status: 'Approved' };
+    renderAlert({ requests: [approved], refreshCycle: 2 });
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).toBeNull();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(selectPendingRequestAlert([approved], [], [])).toBeNull();
+
+    const denied = { ...pending, raw_status: 'denied', status: 'Denied' };
+    renderAlert({ requests: [denied], refreshCycle: 3 });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  test('expired, invalid, corrupt, missing, and oversized storage entries are cleaned safely', () => {
+    localStorage.setItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY, '{corrupt-json');
+    expect(loadPendingRequestSuppressions(localStorage)).toEqual([]);
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).toBeNull();
+
+    const oversized = Array.from({ length: MAX_PENDING_REQUEST_SUPPRESSIONS + 30 }, (_, index) => ({
+      request_id: `request-${index}`,
+      suppression_type: index % 2 ? 'dismiss' : 'remind',
+      expires_at: Date.now() + 1000 + index,
+    }));
+    const normalized = normalizePendingRequestSuppressions([
+      null,
+      { request_id: 'expired', suppression_type: 'dismiss', expires_at: Date.now() },
+      { request_id: 'invalid-time', suppression_type: 'remind', expires_at: 'not-a-time' },
+      { request_id: 'invalid-type', suppression_type: 'forever', expires_at: Date.now() + 1000 },
+      ...oversized,
+    ]);
+    expect(normalized).toHaveLength(MAX_PENDING_REQUEST_SUPPRESSIONS);
+
+    savePendingRequestSuppressions(localStorage, suppressPendingRequest([], 'missing-request', 'dismiss'));
+    renderAlert({ requests: [], refreshCycle: 1 });
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  test('one bounded expiry timer and one Escape listener are registered without duplication', () => {
+    const requests = [request('request-1', '2026-07-15T11:00:00.000Z')];
+    savePendingRequestSuppressions(localStorage, suppressPendingRequest([], 'request-1', 'remind'));
+    renderAlert({ requests, refreshCycle: 1 });
+    expect(jest.getTimerCount()).toBe(1);
+    renderAlert({ requests, refreshCycle: 1 });
+    expect(jest.getTimerCount()).toBe(1);
+    unmountAlert();
+    expect(jest.getTimerCount()).toBe(0);
+
+    localStorage.clear();
+    const addListener = jest.spyOn(document, 'addEventListener');
+    const removeListener = jest.spyOn(document, 'removeEventListener');
+    renderAlert({ requests, refreshCycle: 1 });
+    renderAlert({ requests, refreshCycle: 1 });
+    expect(addListener.mock.calls.filter(([eventName]) => eventName === 'keydown')).toHaveLength(1);
+    unmountAlert();
+    expect(removeListener.mock.calls.filter(([eventName]) => eventName === 'keydown')).toHaveLength(1);
+  });
+
+  test('Escape closes the immediate alert without resolving and a later refresh may alert again', () => {
+    const requests = [request('request-1', '2026-07-15T11:00:00.000Z')];
+    renderAlert({ requests, refreshCycle: 1 });
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(getUnresolvedPendingRequests(requests)).toHaveLength(1);
+    expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).toBeNull();
+
+    renderAlert({ requests, refreshCycle: 2 });
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  test('pending request polling and backoff constants remain unchanged', () => {
+    expect(appSource).toContain('const SAM_AUTO_REFRESH_INTERVAL_MS = 45000;');
+    expect(appSource).toContain('const SAM_PENDING_REQUESTS_CACHE_MS = 15000;');
+    expect(appSource).toContain('const SAM_PENDING_REQUESTS_BACKOFF_MS = 60000;');
+    expect(appSource).toContain('}, SAM_AUTO_REFRESH_INTERVAL_MS);');
+  });
 });
 
 test('SAM operations layout uses pending requests instead of duplicate candidate tracking metric card', () => {

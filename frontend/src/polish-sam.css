@@ -1011,6 +1011,43 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
   justify-content: flex-end;
 }
 
+.nm-pending-request-alert {
+  position: relative;
+  z-index: 1;
+}
+
+.nm-pending-request-alert .nm-status-card-main {
+  flex-direction: column;
+  gap: 3px;
+}
+
+.nm-pending-request-alert .nm-status-actions {
+  margin-left: auto;
+}
+
+.nm-pending-request-alert :focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+@media (max-width: 820px) {
+  .nm-pending-request-alert .nm-status-card-main,
+  .nm-pending-request-alert .nm-status-actions {
+    flex: 1 1 100%;
+  }
+
+  .nm-pending-request-alert .nm-status-actions {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .nm-pending-request-alert .nm-status-actions .nm-btn {
+    width: 100%;
+  }
+}
+
 .nm-modal-backdrop {
   position: fixed;
   inset: 0;

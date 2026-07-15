@@ -2,7 +2,7 @@
 
 > This is the living technical and release handoff document for MTS and SAM. Update it whenever a major workflow, fallback, release rule, build command, security decision, or architecture detail changes. Repository code and validated runtime behavior remain the final source of truth.
 
-Last verified: 2026-07-14 by static repository inspection, focused and full automated tests, frontend production build, and sequential SAM/MTS package builds. Live pending-request approval/denial and packaged-app restart verification still requires the Apps Script deployment used by MTS/SAM.
+Last verified: 2026-07-15 by static repository inspection, focused and full automated tests, backend compile/workflow/reconciliation tests, Apps Script syntax checking, frontend production build, and sequential SAM/MTS package builds. Live pending-request approval/denial, high-DPI UI, simultaneous packaged operation, port cleanup, and packaged-app restart verification still require the controlled Apps Script deployment and hands-on configured runtime.
 Active branch: `feature/newbie-shift-request-workflows`
 Release target: `v1.0.1`
 Release stage: Release Candidate stabilization. Some current RC fixes are uncommitted.
@@ -29,10 +29,10 @@ Commercial desktop expectations for this release:
 Verified branch:
 
 ```text
-release/v1.0.1
+feature/newbie-shift-request-workflows
 ```
 
-Verified current Git status at the start of this document update showed uncommitted RC stabilization changes in backend, frontend, styles, tests, and docs. Do not describe the tree as clean unless a fresh `git status --short --branch` proves it.
+Verified Git status at the start of the 2026-07-15 Pending Requests completion task showed no file changes. The task intentionally leaves the source, tests, styles, and documentation changes listed in the final report uncommitted and unstaged. Do not describe the tree as clean unless a fresh `git status --short --branch` proves it.
 
 Current release target:
 
@@ -222,14 +222,17 @@ Current feature-branch behavior:
 
 - The Pending Requests inbox combines initial Newbie Shift requests, Newbie Shift reschedule requests, candidate-list deletion requests, and a linkable headset-review queue.
 - Supported filters are All Pending, Newbie Shifts, Reschedules, Candidate Deletions, Headset Reviews, Approved, and Denied.
-- The SAM header bell shows unresolved actionable counts by category. Reschedule alerts can be viewed, dismissed, or reminded in 30 minutes; dismiss/reminder state is local per browser/admin session when no stronger admin identity store is available.
+- The SAM header bell and category counts include every unresolved actionable request even while its immediate alert is suppressed. One compact alert is shown at a time, with the oldest unresolved eligible request selected deterministically.
+- `Remind Me in 30 Minutes` and `Dismiss` both suppress only the immediate alert for exactly 30 minutes. They do not resolve the request, decrement counts, or remove its inbox row. `View` advances to the next eligible request for the current refresh cycle, and Escape closes the immediate alert without resolving it.
+- Reminder/dismiss state is local per SAM installation/browser profile under one versioned key. Stored entries contain only request ID, suppression type, and epoch expiry; corrupt, invalid, expired, resolved, missing, and excess entries are removed. One nearest-expiry timer is used rather than one timer per request.
+- Approved/Denied refresh results clear reminder/dismiss state and the active alert without a restart. Resolved rows remain under the Approved/Denied filters, and the successful decision path invalidates the short pending-request cache before refreshing so stale Pending data cannot retain the bell or banner.
 - Approve and Deny decisions are idempotent against the expected current request status. Denials require a readable reason. Decisions record admin identity when supplied by the SAM setup flow plus a UTC decision timestamp.
 - Initial and reschedule approvals/denials update the shared Candidate Sessions Newbie Shift request fields so MTS History/Home/Smart Resume/Candidate Tracking can display Pending, Approved, or Denied from the shared contract.
-- Candidate deletion requests target the single source session represented by Prompt 1's request contract. Approval delegates to the existing shared candidate-history deletion behavior for that targeted session; denial leaves shared candidate history intact and records the reason.
+- Candidate deletion requests target the single source session represented by Prompt 1's request contract. Approval is non-destructive and returns `deletion_action_required=true`; any authorized candidate-history deletion remains a separate explicit admin action. Denial leaves shared candidate history intact and records the reason.
 - SAM Candidate Tracking displays distinct form-fill and Newbie Shift approval indicators. Form-fill labels remain Form Filled, Form Skipped, Not Yet Filled, Fill Failed, or Not Recorded and must not be described as submitted.
 - Per-admin targeting cannot be reliably proven from the current admin identity source, so pending requests are visible to all authorized SAM admins. Duplicate decisions are prevented by status/version checks in the backend action.
 - Google Sheet request tabs are `newbie-shift-requests` and `candidate-deletion-requests`; required columns are centralized in `backend/server.py` and are verified through the shared tracking setup path. Private sheet IDs and URLs must not be documented.
-- The direct Google Sheets service path is authoritative for request approvals. If the runtime is using an Apps Script transport that does not yet expose these request APIs, SAM shows sanitized temporary-unavailable copy rather than raw Google or credential details.
+- Apps Script and direct Google Sheets transports implement the same request decision rules. If the configured Apps Script deployment does not yet expose the repository request routes, SAM shows sanitized temporary-unavailable copy rather than raw Google or credential details.
 
 ### Approved Headset Lookup
 
@@ -947,7 +950,7 @@ Unresolved blocker vs future enhancement must be decided from current validation
 
 ### Repository safety
 
-- [ ] Correct branch is `release/v1.0.1`.
+- [ ] Correct branch is `feature/newbie-shift-request-workflows` for Pending Requests completion work.
 - [ ] No merge/rebase/cherry-pick/revert state.
 - [ ] No unresolved conflicts.
 - [ ] Working tree reviewed and understood.
@@ -1060,6 +1063,16 @@ Verification needed from current packaged-app smoke testing:
 - Improve observability for live-vs-fallback data source selection without exposing sensitive details.
 
 ## 14. Recent Major Changes
+
+### 2026-07-15: Pending Requests reminder lifecycle and deployment readiness
+
+- Replaced the unversioned ad hoc SAM alert map with one bounded, versioned per-install suppression store containing only request ID, suppression type, and epoch expiry. Remind Me and Dismiss suppress immediate alerts for 30 minutes while bell/category counts and inbox rows remain unchanged.
+- Added deterministic oldest-first single-alert selection, current-cycle advancement after View/Remind/Dismiss, Escape close without resolution, one nearest-expiry timer, remount/restart persistence, and idempotent cleanup for expired, corrupt, missing, Approved, and Denied requests.
+- Fixed the successful SAM decision refresh to invalidate its 15-second pending-request cache before reload, preventing stale Pending state from retaining the alert or bell count after approval/denial.
+- Aligned the direct-Sheets candidate-deletion approval fallback with Apps Script: approval records the decision and returns `deletion_action_required=true` without automatically deleting candidate/session rows.
+- Documented the exact pending-request Apps Script routes, existing-deployment update process, request tab/header contract, and manual MTS -> SAM -> MTS acceptance checklist in `docs/apps-script-api-packaged-config.md` and `docs/pending-requests-admin.md`.
+- Final-source validation passed: focused SAM release-polish tests (30), full frontend tests (152), backend RC workflow tests (48), pending-request reconciliation tests (14), backend Python compile, Apps Script syntax checking, frontend production build, SAM Windows package build, and MTS Windows package build. The in-app Browser could not acquire a session because the environment did not provide the required sandbox metadata, so rendered/high-DPI claims remain manual.
+- Live deployment and configured packaged-app round-trip validation are not claimed by repository changes and remain `REQUIRES MANUAL VERIFICATION` until the controlled Apps Script deployment is updated and the documented checklist passes.
 
 ### 2026-07-14: Remote pending-request decision reconciliation into MTS
 

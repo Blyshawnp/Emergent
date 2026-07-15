@@ -52,11 +52,14 @@ Supported actions:
 - `getScreenshots`
 - `getDiscordPosts`
 - `getCandidateTracking`
+- `getPendingRequests`
 - `getHeadsetReviewLog`
 - `submitHeadsetReview`
 - `approveHeadset`
 - `denyHeadset`
 - `updateCandidateTracking`
+- `upsertPendingRequest`
+- `decidePendingRequest`
 - `getSamAdmins` / `getAdminPins` (`sam-authorized-users`)
 - `getTickerMessages` / `getAlerts` (`sam-notifications`)
 - `getSharedCandidates` (`Candidate Sessions` and `Pending Sup Transfers`)
@@ -93,6 +96,16 @@ Rejected requests should use a generic message that contains no token or private
 
 The endpoint should implement only the operations required by the configured spreadsheets. It should not accept arbitrary URLs, script source, formulas, or file-system paths from clients.
 
+## Pending request sheet contract
+
+The current repository source uses the following exact tab names. Do not rename deployed tabs or headers. The Apps Script adapter accepts the documented `source_session_id` request alias while preserving the deployed `session_id` header.
+
+- `newbie-shift-requests`: `request_id`, `session_id`, `candidate_name`, `candidate_first_name`, `candidate_last_initial`, `tester_name`, `request_type`, `request_status`, `requested_by`, `request_reason`, `request_details`, `request_created_at`, `original_scheduled_at`, `rescheduled_at`, `scheduled_at`, `timezone`, `within_24_hours`, `counts_as_attempt`, `final_attempt`, `admin_decision_at`, `admin_decision_by`, `denial_reason`, `updated_at`.
+- `candidate-deletion-requests`: `request_id`, `session_id`, `candidate_name`, `candidate_first_name`, `candidate_last_initial`, `tester_name`, `created_at`, `status`, `local_history_deleted`, `reason`, `session_status`, `completed_at`, `audit_summary`, `admin_decision_at`, `admin_decision_by`, `denial_reason`, `updated_at`.
+- `Candidate Sessions` request synchronization fields: `session_id`, `newbie_shift_scheduled_at`, `newbie_shift_timezone`, `newbie_shift_request_id`, `newbie_shift_request_type`, `newbie_shift_request_status`, `newbie_shift_requested_by`, `newbie_shift_request_reason`, `newbie_shift_request_details`, `newbie_shift_request_created_at`, `newbie_shift_original_scheduled_at`, `newbie_shift_rescheduled_at`, `newbie_shift_within_24_hours`, `newbie_shift_counts_as_attempt`, `newbie_shift_admin_decision_at`, `newbie_shift_admin_decision_by`, `newbie_shift_denial_reason`, `deletion_request_id`, `deletion_request_status`, `deletion_request_created_at`.
+
+`decidePendingRequest` accepts only command values `approve` and `deny`, requires `expected_status` to be `pending`, and stores `approved` or `denied`. Denial requires a non-empty reason. Initial/reschedule decisions synchronize the matching `Candidate Sessions` row by source `session_id`. Candidate-deletion approval is non-destructive and returns `deletion_action_required=true`; it must not broadly delete candidate or session rows.
+
 ## Features using the API
 
 The shared transport covers:
@@ -103,20 +116,20 @@ The shared transport covers:
 - `headset-review-log` reads and writes
 - headset approval and denial updates
 - Candidate Sessions and Pending Sup Transfers tracking
+- Pending request listing, creation/update, approval, denial, and Candidate Sessions decision synchronization
 - SAM authorized-user and notification sheet operations used by the existing shared-sheet workflows
 
 ## Deploying the Apps Script server
 
-1. Copy `docs/apps-script-api-web-app.gs` into the Apps Script project attached
-   to the controlled deployment.
-2. Add Script Property `API_TOKEN` with the same secret used by the ignored
-   build-local config. Never place the value in source or logs.
-3. Add Script Property `MASTER_SPREADSHEET_ID` with the configured master Google
-   Sheet ID.
-4. Deploy a new version of the existing Web app deployment. Updating the
-   existing deployment keeps the packaged `/exec` URL stable.
-5. Verify `ping`, `getSheetMetadata`, `getSamAdmins`, `getTickerMessages`,
-   `getCandidateTracking`, and the existing content actions before rebuilding.
+1. Open the controlled Apps Script project for the existing web-app deployment.
+2. Replace the project code with the current `docs/apps-script-api-web-app.gs` repository source and save it.
+3. In Project Settings > Script Properties, confirm `API_TOKEN` and `MASTER_SPREADSHEET_ID` already exist. Add them only if missing; never paste either value into source, logs, screenshots, or documentation.
+4. Confirm the three pending-request tabs and headers above already exist. Setup verification should happen during deployment/setup, not during every polling request.
+5. Select Deploy > Manage deployments, edit the existing Web app deployment, choose New version, add a deployment description, and deploy. Do not create a second deployment when the packaged endpoint must remain stable.
+6. Confirm the deployment still executes as the owner and retains its existing access policy. Do not publish the deployment URL in tickets or documentation.
+7. Using the protected configured client or admin diagnostics, verify `ping`, `getSheetMetadata`, `getPendingRequests`, `getSamAdmins`, `getTickerMessages`, `getCandidateTracking`, and existing content reads.
+8. In safe test data, verify `upsertPendingRequest` and `decidePendingRequest` with `expected_status=pending`; confirm approve/deny normalization, required denial reason, Candidate Sessions synchronization by source session ID, and non-destructive candidate-deletion approval.
+9. Rebuild only after the protected checks pass. If deployment access is unavailable, mark the live validation `REQUIRES MANUAL VERIFICATION`; repository source readiness is not proof of live deployment.
 
 The real tabs are `sam-authorized-users`, `sam-notifications`, `Candidate
 Sessions`, and `Pending Sup Transfers`; the deployment must not substitute a
@@ -146,8 +159,11 @@ Before distribution, use the packaged applications or the protected admin diagno
 4. Discord posts load, including Wrong Headset and VPN Fail.
 5. A test candidate can be created, updated, and read through Candidate Sessions/Pending Sup Transfers.
 6. A test unknown headset reaches `headset-review-log`, then approval and denial update both review and headset state.
-7. No token appears in backend logs, frontend output, status payloads, or error messages.
-8. Package scans find `apps-script-api.json` but no service-account file or private-key material.
+7. An initial Newbie Shift request and a reschedule request round-trip through MTS, SAM, and MTS with Pending then Approved/Denied state.
+8. Denial without a reason is rejected; denial with a reason persists and reconciles into MTS.
+9. Candidate-deletion approval returns `deletion_action_required=true` without broad automatic candidate/session deletion.
+10. No token appears in backend logs, frontend output, status payloads, or error messages.
+11. Package scans find `apps-script-api.json` but no service-account file or private-key material.
 
 ## Fallback behavior
 

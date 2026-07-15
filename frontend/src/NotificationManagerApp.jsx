@@ -25,6 +25,7 @@ import {
 import './notification-manager.css';
 import './polish-sam.css';
 import api from './api';
+import PendingRequestAlert from './components/PendingRequestAlert';
 import { playSound, setSoundSettings } from './utils/sound';
 import {
   NOTIFICATION_CSV_COLUMNS,
@@ -111,7 +112,7 @@ const SAM_HELP_SECTIONS = [
   {
     id: 'pending-requests',
     title: 'Pending Requests',
-    body: 'Pending Requests is the SAM inbox for initial Newbie Shift requests, Newbie Shift reschedules, candidate-list deletion requests, and headset review links. Approve records the admin and timestamp. Deny requires a readable reason. The bell count reflects unresolved actionable requests and dismissed reschedule alerts return after 30 minutes until the request is approved or denied.',
+    body: 'Pending Requests is the SAM inbox for initial Newbie Shift requests, Newbie Shift reschedules, candidate-list deletion requests, and headset review links. Approve records the admin and timestamp. Deny requires a readable reason. Remind Me and Dismiss suppress only the immediate alert for 30 minutes; unresolved requests stay in the inbox and bell count until approved or denied.',
   },
   {
     id: 'diagnostics',
@@ -211,8 +212,6 @@ const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS = 1200;
 const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_LIMIT = 2;
 const SAM_PENDING_REQUESTS_CACHE_MS = 15000;
 const SAM_PENDING_REQUESTS_BACKOFF_MS = 60000;
-const SAM_REQUEST_REMINDER_MS = 30 * 60 * 1000;
-const SAM_REQUEST_ALERT_KEY = 'sam:pending-request-alerts';
 
 function getErrorMessage(error, fallback) {
   if (!error) return fallback;
@@ -925,20 +924,6 @@ function StatusChip({ meta, className = '', title }) {
 
 function formatRequestTime(value) {
   return formatSamTimestamp(value) || value || 'N/A';
-}
-
-function loadRequestAlertState() {
-  try {
-    return JSON.parse(localStorage.getItem(SAM_REQUEST_ALERT_KEY) || '{}') || {};
-  } catch (_error) {
-    return {};
-  }
-}
-
-function saveRequestAlertState(state) {
-  try {
-    localStorage.setItem(SAM_REQUEST_ALERT_KEY, JSON.stringify(state || {}));
-  } catch (_error) {}
 }
 
 function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh, onDecision, onOpenHeadsets, actor }) {
@@ -2436,11 +2421,11 @@ export default function NotificationManagerApp() {
   const candidateTrackingBackoffUntilRef = useRef(0);
   const [headsetReviews, setHeadsetReviews] = useState({ ok: true, pending: [], approved: [], denied: [], error: '' });
   const [headsetReviewsLoading, setHeadsetReviewsLoading] = useState(false);
-  const [pendingRequests, setPendingRequests] = useState({ ok: true, requests: [], headsetReviews: [], counts: {}, error: '', targeting: {} });
+  const [pendingRequests, setPendingRequests] = useState({ ok: true, loaded: false, requests: [], headsetReviews: [], counts: {}, error: '', targeting: {} });
   const [pendingRequestsLoading, setPendingRequestsLoading] = useState(false);
   const [pendingRequestFilter, setPendingRequestFilter] = useState('pending');
   const [requestBellOpen, setRequestBellOpen] = useState(false);
-  const [requestAlertState, setRequestAlertState] = useState(() => loadRequestAlertState());
+  const [pendingRequestsRefreshCycle, setPendingRequestsRefreshCycle] = useState(0);
   const pendingRequestsRequestRef = useRef(null);
   const pendingRequestsCacheRef = useRef({ data: null, timestamp: 0 });
   const pendingRequestsBackoffUntilRef = useRef(0);
@@ -2860,6 +2845,7 @@ export default function NotificationManagerApp() {
       .then((result) => {
         const next = {
           ok: result?.ok !== false,
+          loaded: true,
           requests: Array.isArray(result?.requests) ? result.requests : [],
           headsetReviews: Array.isArray(result?.headsetReviews) ? result.headsetReviews : [],
           counts: result?.counts || {},
@@ -2868,13 +2854,19 @@ export default function NotificationManagerApp() {
         };
         setPendingRequests(next);
         pendingRequestsCacheRef.current = { data: next, timestamp: Date.now() };
-        if (!next.ok) pendingRequestsBackoffUntilRef.current = Date.now() + SAM_PENDING_REQUESTS_BACKOFF_MS;
+        if (next.ok) {
+          pendingRequestsBackoffUntilRef.current = 0;
+          setPendingRequestsRefreshCycle((cycle) => cycle + 1);
+        } else {
+          pendingRequestsBackoffUntilRef.current = Date.now() + SAM_PENDING_REQUESTS_BACKOFF_MS;
+        }
         return next;
       })
       .catch((error) => {
         const message = getSharedDataErrorMessage(error, 'Pending requests are temporarily unavailable.');
         const next = {
           ok: false,
+          loaded: Boolean(pendingRequestsCacheRef.current.data?.loaded),
           requests: pendingRequestsCacheRef.current.data?.requests || [],
           headsetReviews: pendingRequestsCacheRef.current.data?.headsetReviews || [],
           counts: pendingRequestsCacheRef.current.data?.counts || {},
@@ -2905,6 +2897,7 @@ export default function NotificationManagerApp() {
       const message = payload.decision === 'approved' ? 'Request approved.' : 'Request denied.';
       setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: message }));
       playSamActionSound('success');
+      pendingRequestsCacheRef.current = { data: null, timestamp: 0 };
       await Promise.all([
         loadPendingRequests({ silent: true }),
         loadCandidateTracking({ silent: true, startup: true }),
@@ -3775,27 +3768,6 @@ export default function NotificationManagerApp() {
     : (isConnecting ? 'Reaching data source' : 'Working from local draft');
   const lastSyncLabel = formatRelativeSyncTime(lastSyncAt);
   const operatorName = samSetupStatus.userName || samSetupStatus.userRole || '';
-  const pendingRescheduleAlert = (pendingRequests.requests || []).find((request) => (
-    request.category === 'newbie_reschedule'
-    && String(request.raw_status || '').toLowerCase() === 'pending'
-  ));
-  const alertMeta = pendingRescheduleAlert ? requestAlertState[pendingRescheduleAlert.request_id] || {} : {};
-  const alertHiddenUntil = Number(alertMeta.hiddenUntil || 0);
-  const showPendingRescheduleAlert = Boolean(pendingRescheduleAlert && alertHiddenUntil <= Date.now());
-
-  const updateRequestAlert = useCallback((requestId, patch) => {
-    setRequestAlertState((current) => {
-      const next = {
-        ...current,
-        [requestId]: {
-          ...(current[requestId] || {}),
-          ...patch,
-        },
-      };
-      saveRequestAlertState(next);
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
     if (sheetState.backendStatus === 'connected' && !sheetState.isLoading && !sheetState.readError) {
@@ -4047,22 +4019,19 @@ export default function NotificationManagerApp() {
           })}
         </nav>
 
-        {showPendingRescheduleAlert ? (
-          <section className="nm-status-card is-warning" data-testid="sam-reschedule-alert">
-            <div className="nm-status-card-main">
-              <strong>There is a Newbie Shift request to reschedule awaiting approval.</strong>
-              <span>{pendingRescheduleAlert.candidate || 'A candidate'} · {formatRequestTime(pendingRescheduleAlert.created_at)}</span>
-            </div>
-            <div className="nm-status-actions">
-              <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => {
-                setActiveSection('requests');
-                setPendingRequestFilter('reschedules');
-              }}>View</button>
-              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => updateRequestAlert(pendingRescheduleAlert.request_id, { hiddenUntil: Date.now() + SAM_REQUEST_REMINDER_MS, dismissedAt: 0 })}>Remind Me in 30 Minutes</button>
-              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => updateRequestAlert(pendingRescheduleAlert.request_id, { hiddenUntil: Date.now() + SAM_REQUEST_REMINDER_MS, dismissedAt: Date.now() })}>Dismiss</button>
-            </div>
-          </section>
-        ) : null}
+        <PendingRequestAlert
+          requests={pendingRequests.requests || []}
+          requestsAvailable={pendingRequests.loaded === true && pendingRequests.ok !== false}
+          refreshCycle={pendingRequestsRefreshCycle}
+          onView={(request) => {
+            setActiveSection('requests');
+            setPendingRequestFilter(request.category === 'newbie_reschedule'
+              ? 'reschedules'
+              : request.category === 'candidate_deletion'
+                ? 'deletions'
+                : 'newbie');
+          }}
+        />
 
         {sheetState.statusMessage ? (
           <section className={`nm-status-card is-${sheetState.statusKind || 'info'}`}>

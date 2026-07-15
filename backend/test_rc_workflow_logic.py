@@ -1004,6 +1004,40 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             mock_update.assert_called_once()
             mock_fields_update.assert_called_once()
 
+    @mock.patch("server._shared_read_rows")
+    @mock.patch("server._shared_sheet_context")
+    def test_direct_sheets_candidate_deletion_approval_is_non_destructive(self, mock_sheet_context, mock_read_rows):
+        mock_sheet_context.return_value = {
+            "ok": True,
+            "service": mock.MagicMock(),
+            "sheet_id": "test-sheet-id",
+        }
+        mock_read_rows.return_value = [
+            {
+                "request_id": "delete-request",
+                "status": "pending",
+                "session_id": "session-1",
+                "candidate_name": "Test Candidate",
+                "_row_number": 2,
+            }
+        ]
+
+        with mock.patch("server._shared_update_existing_row") as mock_update, \
+             mock.patch("server._shared_admin_candidate_action") as mock_candidate_action:
+            response = server._shared_pending_request_action({
+                "request_id": "delete-request",
+                "category": "candidate_deletion",
+                "decision": "approve",
+                "expected_status": "pending",
+                "actor": "AdminTester",
+            })
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["status"], "approved")
+        self.assertTrue(response["deletion_action_required"])
+        mock_update.assert_called_once()
+        mock_candidate_action.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
