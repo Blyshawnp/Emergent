@@ -7021,9 +7021,52 @@ def _parse_update_notes(value):
 def _get_update_metadata(app_name):
     normalized = str(app_name or "").strip().lower()
     tab_name = UPDATE_SAM_TAB if normalized in {"sam", "notification-manager", "notification"} else UPDATE_MTS_TAB
+    expected_app = "sam" if tab_name == UPDATE_SAM_TAB else "mts"
     service_result = _get_shared_tracking_sheet_service()
     if not service_result.get("ok"):
         return {"ok": False, "error": service_result.get("error"), "setup": _update_sheet_required_setup()}
+
+    apps_script_client = service_result.get("appsScriptClient")
+    if apps_script_client:
+        try:
+            result = apps_script_client.get("getUpdateMetadata")
+            returned_app = str((result or {}).get("app") or "").strip().lower()
+            returned_tab = str((result or {}).get("tab") or "").strip()
+            if returned_app != expected_app or returned_tab != tab_name:
+                logger.warning(
+                    "[UPDATE] Apps Script update metadata role mismatch expected_app=%s returned_app=%s",
+                    expected_app,
+                    returned_app or "missing",
+                )
+                return {
+                    "ok": False,
+                    "error": "The update service configuration does not match this application.",
+                    "setup": _update_sheet_required_setup(),
+                }
+            row = (result or {}).get("row")
+            if not isinstance(row, dict):
+                row = {}
+            return {
+                "ok": True,
+                "app": expected_app,
+                "tab": tab_name,
+                "latestVersion": str(row.get("Version") or "").strip(),
+                "requiredVersion": str(row.get("RequiredVersion") or "").strip(),
+                "releaseDate": str(row.get("Release Date") or "").strip(),
+                "releaseTitle": str(row.get("Release Title") or "").strip(),
+                "downloadUrl": str(row.get("URL") or "").strip(),
+                "notes": _parse_update_notes(row.get("Notes") or ""),
+                "source": "master-google-sheet",
+                "setup": _update_sheet_required_setup(),
+            }
+        except Exception:
+            logger.warning("[UPDATE] Apps Script update metadata read failed for %s.", expected_app)
+            return {
+                "ok": False,
+                "error": "Unable to read update metadata through the configured update service.",
+                "setup": _update_sheet_required_setup(),
+            }
+
     ensure_result = _ensure_update_tabs(service_result["service"], service_result["sheet_id"])
     if not ensure_result.get("ok"):
         return ensure_result

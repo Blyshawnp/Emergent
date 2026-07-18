@@ -62,6 +62,7 @@ Supported actions:
 - `getDiscordPosts`
 - `getCandidateTracking`
 - `getPendingRequests`
+- `getUpdateMetadata` (read-only; the authenticated MTS or SAM role selects `update-MTS` or `update-SAM` and cannot override the tab)
 - `getHeadsetReviewLog`
 - `submitHeadsetReview`
 - `approveHeadset`

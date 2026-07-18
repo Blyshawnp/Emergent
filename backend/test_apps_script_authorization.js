@@ -208,6 +208,31 @@ test('MTS current, previous, and legacy credentials keep intended read-only oper
   }
 });
 
+test('update metadata reads are bound to the authenticated MTS or SAM role', () => {
+  const headers = ['Version', 'RequiredVersion', 'Release Date', 'Release Title', 'URL', 'Notes'];
+  const mtsSheet = createFakeSheet('update-MTS', headers, [[
+    '1.0.1', '', '2026-07-18', 'MTS release', '', 'MTS notes',
+  ]]);
+  const samSheet = createFakeSheet('update-SAM', headers, [[
+    '1.0.2', '1.0.1', '2026-07-18', 'SAM release', '', 'SAM notes',
+  ]]);
+  const { api } = createRuntime({ __workbook: createFakeWorkbook([mtsSheet, samSheet]) });
+
+  const mts = responsePayload(api.doGet(getEvent('getUpdateMetadata', 'mts-current', { app: 'sam' })));
+  assert.equal(mts.ok, true);
+  assert.equal(mts.result.app, 'mts');
+  assert.equal(mts.result.tab, 'update-MTS');
+  assert.equal(mts.result.row.Version, '1.0.1');
+  assert.equal(mts.result.row['Release Title'], 'MTS release');
+
+  const sam = responsePayload(api.doGet(getEvent('getUpdateMetadata', 'sam-current', { app: 'mts' })));
+  assert.equal(sam.ok, true);
+  assert.equal(sam.result.app, 'sam');
+  assert.equal(sam.result.tab, 'update-SAM');
+  assert.equal(sam.result.row.Version, '1.0.2');
+  assert.equal(sam.result.row['Release Title'], 'SAM release');
+});
+
 test('MTS credentials cannot invoke SAM-only decisions or generic sheet administration', () => {
   const { api } = createRuntime();
 

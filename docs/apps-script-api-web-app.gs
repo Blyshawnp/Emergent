@@ -62,6 +62,7 @@ const MTS_GET_ACTIONS = Object.freeze([
   'getAlerts',
   'getSettings',
   'getNotificationRecipients',
+  'getUpdateMetadata',
 ]);
 
 const SAM_ONLY_GET_ACTIONS = Object.freeze([
@@ -192,8 +193,8 @@ function doGet(event) {
   try {
     const params = (event && event.parameter) || {};
     const action = String(params.action || '');
-    authorizeAction_(params.token, 'GET', action, params);
-    return jsonResponse_({ ok: true, result: dispatchGet_(action, params) });
+    const role = authorizeAction_(params.token, 'GET', action, params);
+    return jsonResponse_({ ok: true, result: dispatchGet_(action, params, role) });
   } catch (error) {
     return jsonResponse_({ ok: false, error: safeError_(error) });
   }
@@ -210,7 +211,7 @@ function doPost(event) {
   }
 }
 
-function dispatchGet_(action, params) {
+function dispatchGet_(action, params, role) {
   switch (action) {
     case 'ping':
       return { status: 'ready' };
@@ -269,6 +270,8 @@ function dispatchGet_(action, params) {
         }
         throw error;
       }
+    case 'getUpdateMetadata':
+      return getUpdateMetadata_(role);
     default:
       throw new Error('Unknown action: ' + action);
   }
@@ -488,6 +491,18 @@ function readOptionalTableRows_(title) {
     if (String(error && error.message || error).indexOf('Missing sheet') !== -1) return [];
     throw error;
   }
+}
+
+function getUpdateMetadata_(role) {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  const title = normalizedRole === 'sam' ? 'update-SAM' : 'update-MTS';
+  const rows = readOptionalTableRows_(title);
+  const row = rows.find((candidate) => String(candidate.Version || '').trim()) || {};
+  return {
+    app: normalizedRole === 'sam' ? 'sam' : 'mts',
+    tab: title,
+    row: row,
+  };
 }
 
 function getPendingRequests_(params) {
