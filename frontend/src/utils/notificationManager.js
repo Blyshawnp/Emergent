@@ -3,8 +3,46 @@ export const NOTIFICATION_MANAGER_STORAGE_KEY = 'sam-notification-manager-draft'
 export const PENDING_REQUEST_SUPPRESSION_STORAGE_KEY = 'sam:pending-request-suppressions:v1';
 export const PENDING_REQUEST_SUPPRESSION_MS = 30 * 60 * 1000;
 export const MAX_PENDING_REQUEST_SUPPRESSIONS = 250;
+export const HEADSET_REVIEW_REMINDER_STORAGE_KEY = 'sam:headset-review-reminder:v1';
+export const HEADSET_REVIEW_REMINDER_MS = 2 * 60 * 60 * 1000;
 
 const PENDING_REQUEST_SUPPRESSION_TYPES = new Set(['remind', 'dismiss']);
+
+export function getHeadsetReviewReminderSignature(reviews) {
+  const identities = (Array.isArray(reviews) ? reviews : [])
+    .filter((review) => String(review?.status || 'pending').toLowerCase() === 'pending')
+    .map((review) => String(review?.review_id || review?.id || `${review?.brand || ''}::${review?.model || ''}`).trim())
+    .filter(Boolean)
+    .sort();
+  let hash = 2166136261;
+  identities.join('|').split('').forEach((character) => {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  });
+  return identities.length ? `${identities.length}:${(hash >>> 0).toString(36)}` : '';
+}
+
+export function loadHeadsetReviewReminder(storage) {
+  try {
+    const parsed = JSON.parse(storage?.getItem?.(HEADSET_REVIEW_REMINDER_STORAGE_KEY) || 'null');
+    const signature = String(parsed?.signature || '');
+    const nextEligibleAt = Number(parsed?.next_eligible_at || 0);
+    return signature && Number.isFinite(nextEligibleAt) ? { signature, next_eligible_at: nextEligibleAt } : null;
+  } catch (_error) {
+    storage?.removeItem?.(HEADSET_REVIEW_REMINDER_STORAGE_KEY);
+    return null;
+  }
+}
+
+export function saveHeadsetReviewReminder(storage, signature, now = Date.now()) {
+  if (!signature) {
+    storage?.removeItem?.(HEADSET_REVIEW_REMINDER_STORAGE_KEY);
+    return null;
+  }
+  const next = { signature, next_eligible_at: now + HEADSET_REVIEW_REMINDER_MS };
+  storage?.setItem?.(HEADSET_REVIEW_REMINDER_STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
 
 function suppressionEntriesEqual(left, right) {
   return JSON.stringify(left || []) === JSON.stringify(right || []);

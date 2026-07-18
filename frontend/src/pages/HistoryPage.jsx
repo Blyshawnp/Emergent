@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
+import RescheduleIntakeModal from '../components/RescheduleIntakeModal';
 import {
-  followUpStatusMeta,
+  canRescheduleNewbieShift,
   formFillStatusMeta,
   formatNewbieScheduleParts,
   formatNewbieSchedule,
+  getNewbieShiftEligibility,
+  newbieShiftStatusMeta,
   NEWBIE_REQUEST_STATUS,
-  NEWBIE_REQUEST_TYPE,
   sessionStatusMeta,
 } from '../utils/certificationWorkflow';
+import { buildNewbieShiftRescheduleSession } from '../utils/newbieShiftWorkflow';
 
 function adminHistoryControlsEnabled() {
   try {
@@ -78,6 +81,9 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   const [history, setHistory] = useState([]);
   const [search, setSearch] = useState('');
   const [detail, setDetail] = useState(null);
+  const [deletionRequestDraft, setDeletionRequestDraft] = useState(null);
+  const [rescheduleDraft, setRescheduleDraft] = useState(null);
+  const [rescheduleSubmitting, setRescheduleSubmitting] = useState(false);
   const [showAdminHistoryControls] = useState(() => adminHistoryControlsEnabled());
 
   const load = useCallback(async () => {
@@ -128,40 +134,24 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       || record?.resume_source_timestamp_iso
   );
 
-  const canReschedule = (record) => {
-    const status = record?.status || record?.final_status;
-    const prompt = record?.newbie_shift_prompt || {};
-    return status === 'Incomplete' && (
-      record?.time_for_sup === false
-      || record?.newbie_shift_data
-      || record?.needs_sup_transfer
-      || record?.pending_sup_transfer_id
-      || prompt.trigger === 'not_enough_time_sup_transfer'
-      || prompt.trigger === 'both_sup_transfers_failed'
-    );
+  const handleRescheduleSession = (record) => {
+    if (!canRescheduleNewbieShift(record)) return;
+    setRescheduleDraft(record);
   };
 
-  const handleRescheduleSession = async (record) => {
-    const identity = getHistoryIdentity(record);
-    const existingNewbie = record?.newbie_shift_data || {};
-    const originalScheduledAt = record?.newbie_shift_original_scheduled_at
-      || record?.newbie_shift_scheduled_at
-      || '';
-    await api.startSession({
-      ...record,
-      status: 'In Progress',
-      final_status: 'Incomplete',
-      history_id: record.history_id || identity,
-      newbie_shift_request_type: NEWBIE_REQUEST_TYPE.RESCHEDULE,
-      newbie_shift_request_status: NEWBIE_REQUEST_STATUS.PENDING,
-      newbie_shift_requested_by: '',
-      newbie_shift_request_reason: '',
-      newbie_shift_request_details: '',
-      newbie_shift_original_scheduled_at: originalScheduledAt,
-      newbie_shift_scheduled_at: record?.newbie_shift_scheduled_at || originalScheduledAt,
-      newbie_shift_data: existingNewbie,
-    });
-    onNavigate('newbieshift');
+  const continueReschedule = async (intake) => {
+    if (!rescheduleDraft) return;
+    setRescheduleSubmitting(true);
+    try {
+      await api.startSession(buildNewbieShiftRescheduleSession(rescheduleDraft, intake));
+      setRescheduleDraft(null);
+      setDetail(null);
+      onNavigate('newbieshift');
+    } catch (error) {
+      await modal.error('Reschedule Failed', error.message || 'Unable to save the reschedule details. Your selections were preserved.');
+    } finally {
+      setRescheduleSubmitting(false);
+    }
   };
 
   const colorResult = (r) => {
@@ -260,17 +250,14 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       graphic: 'warning',
       buttons: [
         { label: 'Cancel', cls: 'btn-muted', value: 'cancel' },
-        { label: 'History & Candidate List Request', cls: 'btn-warning', value: 'request' },
+        { label: 'History & Candidate List Request', cls: 'btn-warning deletion-request-primary', value: 'request' },
         { label: 'History Only', cls: 'btn-danger', value: 'history-only' },
       ],
     });
     if (choice === 'cancel' || !choice) return;
     try {
       if (choice === 'request') {
-        const response = await api.requestHistorySessionDeletion(identity);
-        if (detail && getHistoryIdentity(detail) === identity) setDetail(null);
-        await load();
-        await modal.alert('Deletion Request Pending', response.message || 'The session was removed from local history. SAM review is pending.');
+        setDeletionRequestDraft({ record, identity, reason: '', error: '', submitting: false });
         return;
       }
       await api.deleteHistorySession(identity);
@@ -282,8 +269,61 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
     }
   };
 
+  const submitCandidateDeletionRequest = async () => {
+    const reason = String(deletionRequestDraft?.reason || '').trim();
+    if (reason.length < 10) {
+      setDeletionRequestDraft((current) => ({ ...current, error: 'Enter at least 10 characters explaining why Candidate Tracking should be updated.' }));
+      return;
+    }
+    setDeletionRequestDraft((current) => ({ ...current, reason, error: '', submitting: true }));
+    try {
+      const response = await api.requestHistorySessionDeletion(deletionRequestDraft.identity, reason);
+      if (detail && getHistoryIdentity(detail) === deletionRequestDraft.identity) setDetail(null);
+      setDeletionRequestDraft(null);
+      await load();
+      await modal.alert(
+        'Deletion Request Submitted',
+        response.message || 'This session was removed from MTS History. Its Candidate Tracking record will remain until a SAM administrator approves the deletion request.',
+        'clock',
+        'success'
+      );
+    } catch (error) {
+      setDeletionRequestDraft((current) => ({
+        ...current,
+        submitting: false,
+        error: error.response?.data?.detail || error.message || 'Unable to submit the deletion request. Your reason has been preserved.',
+      }));
+    }
+  };
+
+  const retryHeadsetReview = async (record) => {
+    let result;
+    try {
+      result = await api.logHeadsetReview({
+        review_id: record.headset_review_id || '',
+        source_session_id: record.session_id || record.history_id || '',
+        candidate_name: record.candidate_name || record.candidate || '',
+        tester_name: record.tester_name || '',
+        headset_model: record.headset_brand || '',
+        note: record.headset_review_note || '',
+      });
+    } catch (_error) {
+      result = { ok: false };
+    }
+    if (!result?.ok) {
+      await modal.warning('Headset Review Not Submitted', 'The headset review request is still unavailable. Your session remains saved; try again later.');
+      return;
+    }
+    setHistory((current) => current.map((item) => (
+      getHistoryIdentity(item) === getHistoryIdentity(record)
+        ? { ...item, headset_review_id: result.review_id || item.headset_review_id, headset_review_sync_status: 'synced', headset_review_status: result.status || 'pending' }
+        : item
+    )));
+    await modal.alert('Headset Review Submitted', 'The headset review request is now pending in SAM.');
+  };
+
   return (
-    <div data-testid="history-page">
+    <div className="history-page" data-testid="history-page">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <h1>Session History</h1>
         {showAdminHistoryControls && (
@@ -311,7 +351,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
 
       <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by candidate name..." style={{ marginBottom: 16, maxWidth: 400 }} data-testid="history-search" />
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card history-list-card" style={{ padding: 0 }}>
         {filtered.length === 0 ? (
           <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-tertiary)' }}>No session history yet.</div>
         ) : (
@@ -332,13 +372,14 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   <div className="hist-cell hist-tester" role="cell" data-label="Tester">{s.tester_name || ''}</div>
                   <div className="hist-cell hist-status" role="cell" data-label="Session Status"><StatusChip meta={sessionStatusMeta(s.status)} /></div>
                   <div className="hist-cell hist-followup text-sm" role="cell" data-label="Follow-Up">
-                    {(s.newbie_shift_data || s.newbie_shift_request_id) ? (() => {
+                    {getNewbieShiftEligibility(s).active || getNewbieShiftEligibility(s).denied ? (() => {
                       const followUp = formatFollowUpParts(s);
+                      const meta = newbieShiftStatusMeta(s);
                       return (
                         <>
                           <span className="hist-followup-date" title={formatNewbieSchedule(s.newbie_shift_data)}>{followUp.dateTime}</span>
                           {followUp.timezone && <span className="hist-followup-tz">{followUp.timezone}</span>}
-                          <StatusChip meta={followUpStatusMeta(s.newbie_shift_request_status || NEWBIE_REQUEST_STATUS.PENDING)} />
+                          {meta ? <StatusChip meta={meta} /> : null}
                         </>
                       );
                     })() : <span className="text-muted">No follow-up</span>}
@@ -349,7 +390,8 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   <div className="hist-cell hist-actions" role="cell" data-label="Actions">
                     <div className="hist-actions-group">
                       <button className="btn btn-primary btn-sm" onClick={() => setDetail(s)} data-testid={`history-view-${i}`}>View</button>
-                      {canReschedule(s) && <button className="btn btn-warning btn-sm" onClick={() => handleRescheduleSession(s)} data-testid={`history-reschedule-${i}`}>Reschedule</button>}
+                      {canRescheduleNewbieShift(s) && <button className="btn btn-warning btn-sm" onClick={() => handleRescheduleSession(s)} data-testid={`history-reschedule-${i}`}>Reschedule</button>}
+                      {s.headset_review_sync_status === 'failed' && <button className="btn btn-warning btn-sm" onClick={() => retryHeadsetReview(s)} data-testid={`history-headset-retry-${i}`}>Retry Headset Review</button>}
                       <button className="btn btn-danger btn-sm" onClick={() => handleDeleteSession(s)} data-testid={`history-delete-${i}`}>Delete</button>
                     </div>
                   </div>
@@ -358,6 +400,52 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
           </div>
         )}
       </div>
+
+      {deletionRequestDraft && (
+        <div className="modal-overlay open">
+          <section className="modal deletion-reason-modal" role="dialog" aria-modal="true" aria-labelledby="deletion-reason-title">
+            <div className="modal-header">
+              <div className="deletion-modal-heading">
+                <span className="deletion-warning-icon" aria-hidden="true">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                </span>
+                <div><h2 id="deletion-reason-title">Candidate List Deletion Request</h2><p className="text-muted text-sm">Candidate Tracking deletion requires SAM approval.</p></div>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setDeletionRequestDraft(null)} aria-label="Cancel deletion request">×</button>
+            </div>
+            <div className="modal-body">
+              <label className="deletion-reason-field">
+                <span>Reason for candidate-list deletion request</span>
+                <textarea
+                  rows={5}
+                  value={deletionRequestDraft.reason}
+                  onChange={(event) => setDeletionRequestDraft((current) => ({ ...current, reason: event.target.value, error: '' }))}
+                  placeholder="Explain why this session should also be removed from Candidate Tracking."
+                  data-testid="candidate-deletion-reason"
+                  autoFocus
+                />
+                <small>Explain why this session should also be removed from Candidate Tracking.</small>
+              </label>
+              {deletionRequestDraft.error ? <div className="form-error" role="alert">{deletionRequestDraft.error}</div> : null}
+            </div>
+            <div className="modal-footer-actions">
+              <button type="button" className="btn btn-muted" onClick={() => setDeletionRequestDraft(null)} disabled={deletionRequestDraft.submitting}>Cancel</button>
+              <button type="button" className="btn btn-warning" onClick={submitCandidateDeletionRequest} disabled={deletionRequestDraft.submitting} data-testid="candidate-deletion-submit">
+                {deletionRequestDraft.submitting ? 'Submitting…' : 'Submit Deletion Request'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {rescheduleDraft && (
+        <RescheduleIntakeModal
+          record={rescheduleDraft}
+          onCancel={() => setRescheduleDraft(null)}
+          onContinue={continueReschedule}
+          submitting={rescheduleSubmitting}
+        />
+      )}
 
       {detail && (
         <div className="modal-overlay open">
@@ -415,8 +503,8 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   </div>
                 );
               })}
-              {(detail.newbie_shift_data || detail.newbie_shift_request_id) && (
-                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data || {})}<br /><strong>Approval Status:</strong> <StatusChip meta={followUpStatusMeta(detail.newbie_shift_request_status || NEWBIE_REQUEST_STATUS.PENDING)} />{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}{detail.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && detail.newbie_shift_denial_reason && <><br /><strong>Denial Reason:</strong> {detail.newbie_shift_denial_reason}</>}</>
+              {(getNewbieShiftEligibility(detail).active || getNewbieShiftEligibility(detail).denied) && (
+                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data || {})}<br /><strong>Approval Status:</strong> <StatusChip meta={newbieShiftStatusMeta(detail)} />{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}{detail.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && detail.newbie_shift_denial_reason && <><br /><strong>Denial Reason:</strong> {detail.newbie_shift_denial_reason}</>}</>
               )}
               <div style={{ marginTop: 16 }}>
                 <div className="text-sm font-bold">Coaching Summary</div>
@@ -452,6 +540,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
               <button className="btn btn-muted" onClick={() => setDetail(null)}>Close</button>
               <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
               <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">{detail.form_fill_status === 'filled' ? 'Refill Cert Form' : 'Fill Cert Form'}</button>
+              {canRescheduleNewbieShift(detail) && <button className="btn btn-warning" onClick={() => handleRescheduleSession(detail)} data-testid="history-detail-reschedule">Reschedule</button>}
               <button
                 className="btn btn-primary"
                 onClick={() => onNavigate('review', { historyRecord: detail })}

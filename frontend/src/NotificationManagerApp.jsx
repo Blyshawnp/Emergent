@@ -29,6 +29,8 @@ import PendingRequestAlert from './components/PendingRequestAlert';
 import PostSetupQuickStart from './components/PostSetupQuickStart';
 import { TutorialVideoLibrary } from './components/TutorialVideoPlayer';
 import { normalizeTutorialVideos } from './utils/tutorialVideos';
+import { createSamSnapshotCoordinator } from './utils/samSnapshotCoordinator';
+import { newbieShiftStatusMeta } from './utils/certificationWorkflow';
 import { playSound, setSoundSettings } from './utils/sound';
 import {
   NOTIFICATION_CSV_COLUMNS,
@@ -64,7 +66,7 @@ const SAM_SETTINGS_KEY = 'sam:settings';
 const SAM_BACKEND_RETRY_LIMIT = 6;
 const SAM_BACKEND_RETRY_BASE_DELAY_MS = 2000;
 const SAM_BACKEND_RETRY_MAX_DELAY_MS = 12000;
-const SAM_AUTO_REFRESH_INTERVAL_MS = 45000;
+const SAM_AUTO_REFRESH_INTERVAL_MS = 60000;
 const DEFAULT_SAM_SETTINGS = {
   soundVolume: 'medium',
   statusBannerDurationSeconds: 60,
@@ -126,7 +128,7 @@ const SAM_HELP_SECTIONS = [
   {
     id: 'pending-requests',
     title: 'Pending Requests',
-    body: 'Pending Requests is the SAM inbox for initial Newbie Shift requests, Newbie Shift reschedules, candidate-list deletion requests, and headset review links. Approve records the admin and timestamp. Deny requires a readable reason. Remind Me and Dismiss suppress only the immediate alert for 30 minutes; unresolved requests stay in the inbox and bell count until approved or denied.',
+    body: 'Pending Requests is the SAM inbox for initial Newbie Shift requests, Newbie Shift reschedules, and candidate-list deletion requests. Approve records the admin and timestamp. Deny requires a readable reason. Remind Me and Dismiss suppress only the immediate workflow alert for 30 minutes; unresolved requests stay in the inbox and bell count until approved or denied. Headset Review uses a separate grouped reminder after two hours and remains visible in its own badge.',
   },
   {
     id: 'troubleshooting',
@@ -218,14 +220,12 @@ const SAM_TUTORIAL_STEPS = [
   },
 ];
 let notificationStartupSoundAttempted = false;
-const SAM_SHARED_DATA_TEMPORARY_MESSAGE = 'Shared data is temporarily unavailable.\n\nPlease wait about 60 seconds and try again.';
-const SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE = 'Candidate Tracking is temporarily unavailable.\n\nGoogle Sheets is currently receiving too many requests or could not be reached.\n\nSAM will retry automatically. Please wait a moment and select Refresh if needed.';
-const SAM_CANDIDATE_TRACKING_CACHE_MS = 15000;
-const SAM_CANDIDATE_TRACKING_BACKOFF_MS = 60000;
-const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS = 1200;
-const SAM_CANDIDATE_TRACKING_STARTUP_RETRY_LIMIT = 2;
-const SAM_PENDING_REQUESTS_CACHE_MS = 15000;
-const SAM_PENDING_REQUESTS_BACKOFF_MS = 60000;
+const SAM_SHARED_DATA_TEMPORARY_MESSAGE = 'Shared data is taking longer than usual. SAM will keep trying.';
+const SAM_SHARED_DATA_STALE_MESSAGE = 'Shared data is temporarily delayed. Showing the last successful data while SAM keeps trying.';
+const SAM_SHARED_DATA_OFFLINE_MESSAGE = 'SAM is offline and showing the last successful shared data. SAM will keep trying.';
+const SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE = 'Candidate Tracking is temporarily unavailable. SAM will retry automatically.';
+const SAM_PENDING_REQUESTS_TEMPORARY_MESSAGE = 'Pending Requests are temporarily unavailable. SAM will retry automatically. Please wait a moment and select Refresh if needed.';
+const SAM_HEADSET_REVIEW_TEMPORARY_MESSAGE = 'Headset Review is temporarily unavailable. SAM will retry automatically.';
 
 function getErrorMessage(error, fallback) {
   if (!error) return fallback;
@@ -233,7 +233,7 @@ function getErrorMessage(error, fallback) {
   if (error.response?.data?.error) return fallback;
   if (typeof error.response?.data?.message === 'string') return error.response.data.message;
   if (error.response?.status === 429) return 'HTTP 429 rate limit';
-  if (error.code === 'ECONNABORTED') return 'Connecting is taking longer than expected. Please try again in a moment.';
+  if (error.code === 'ECONNABORTED') return SAM_SHARED_DATA_TEMPORARY_MESSAGE;
   if (/network error/i.test(error.message || '')) return 'Unable to reach live content. Please try Refresh or contact support.';
   return typeof error.message === 'string' ? error.message : fallback;
 }
@@ -246,7 +246,7 @@ function isSharedDataTemporaryError(value) {
 function getSharedDataErrorMessage(error, fallback = SAM_SHARED_DATA_TEMPORARY_MESSAGE) {
   const raw = getErrorMessage(error, fallback);
   if (isSharedDataTemporaryError(raw)) {
-    console.warn('[SAM] Shared data request failed; user-facing details were sanitized.', raw);
+        console.warn('[SAM] Shared data request failed; user-facing details were sanitized.');
     return fallback;
   }
   return raw || fallback;
@@ -254,6 +254,10 @@ function getSharedDataErrorMessage(error, fallback = SAM_SHARED_DATA_TEMPORARY_M
 
 function getCandidateTrackingErrorMessage(error) {
   return getSharedDataErrorMessage(error, SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE);
+}
+
+function isSharedDataStatusMessage(value) {
+  return [SAM_SHARED_DATA_TEMPORARY_MESSAGE, SAM_SHARED_DATA_STALE_MESSAGE, SAM_SHARED_DATA_OFFLINE_MESSAGE].includes(String(value || ''));
 }
 
 function formatSamTimestamp(value) {
@@ -397,6 +401,7 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
   const [supportError, setSupportError] = useState('');
   const [query, setQuery] = useState('');
   const [helpContent, setHelpContent] = useState({});
+  const [helpLoadError, setHelpLoadError] = useState('');
   const [selectedTutorial, setSelectedTutorial] = useState(null);
 
   useEffect(() => {
@@ -421,12 +426,28 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
   useEffect(() => {
     let active = true;
     api.getHelpContent().then((content) => {
-      if (active) setHelpContent(content || {});
+      if (active) {
+        setHelpContent(content || {});
+        setHelpLoadError('');
+      }
     }).catch(() => {
-      if (active) setHelpContent({});
+      if (active) {
+        setHelpContent({});
+        setHelpLoadError('Unable to load tutorial videos right now.');
+      }
     });
     return () => { active = false; };
   }, []);
+
+  const retryHelpContent = async () => {
+    try {
+      const content = await api.getHelpContent();
+      setHelpContent(content || {});
+      setHelpLoadError('');
+    } catch (_error) {
+      setHelpLoadError('Unable to load tutorial videos right now.');
+    }
+  };
 
   const handleRequestSupport = async () => {
     setSupportError('');
@@ -453,7 +474,6 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
     () => SAM_HELP_SECTIONS.filter((section) => !normalizedQuery || `${section.title} ${section.body}`.toLowerCase().includes(normalizedQuery)),
     [normalizedQuery],
   );
-  const mtsTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.mts, 'mts'), [helpContent]);
   const samTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.sam, 'sam'), [helpContent]);
 
   return (
@@ -514,6 +534,9 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
               {section.title}
             </button>
           ))}
+          <button type="button" className="nm-help-toc-button" onClick={() => document.getElementById('sam-tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })}>
+            Tutorial Videos
+          </button>
         </div>
 
         <div className="nm-help-grid">
@@ -548,8 +571,7 @@ function HelpModal({ version, settings, onSettingsChange, onClose, onReplayTutor
           ))}
         </div>
         <div className="nm-help-grid">
-          <TutorialVideoLibrary videos={mtsTutorials} title="MTS Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="mts-tutorial-videos" />
-          <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" />
+          <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" loadError={helpLoadError} onRetry={retryHelpContent} />
         </div>
         <div className="nm-help-actions">
           <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayQuickStart}>Quick Start Choices</button>
@@ -947,16 +969,37 @@ function approvalLabel(status) {
 function formFillMeta(status) {
   const normalized = String(status || '').toLowerCase();
   if (normalized === 'filled') return { label: 'Form Filled', tone: 'filled', Icon: CheckCircle };
-  if (normalized === 'failed') return { label: 'Fill Failed', tone: 'failed', Icon: AlertTriangle };
-  if (normalized === 'skipped') return { label: 'Form Skipped', tone: 'skipped', Icon: Clock };
-  if (normalized === 'not_recorded') return { label: 'Not Recorded', tone: 'not-filled', Icon: Clock };
-  return { label: 'Not Yet Filled', tone: 'not-filled', Icon: Clock };
+  if (normalized === 'submitted') return { label: 'Form Submitted', tone: 'filled', Icon: CheckCircle };
+  if (normalized === 'failed') return { label: 'Form Not Submitted', tone: 'failed', Icon: AlertTriangle };
+  if (normalized === 'skipped') return { label: 'Form Not Submitted', tone: 'skipped', Icon: Clock };
+  return { label: 'Form Not Submitted', tone: 'not-filled', Icon: Clock };
 }
 
-function newbieApprovalMeta(status) {
+function workflowApprovalMeta(label, status) {
   const tone = approvalTone(status);
   const Icon = tone === 'approved' ? CheckCircle : tone === 'denied' ? XCircle : Clock;
-  return { label: approvalLabel(status), tone, Icon };
+  return { label: `${label} ${approvalLabel(status)}`, tone, Icon };
+}
+
+function newbieApprovalMeta(status, requestType) {
+  const isReschedule = String(requestType || '').toLowerCase().includes('reschedule');
+  return workflowApprovalMeta(isReschedule ? 'Newbie Shift Reschedule' : 'Newbie Shift', status);
+}
+
+function candidateCertificationMeta(row = {}) {
+  const raw = String(row.latest_status || row.status || '').trim().toUpperCase();
+  const callResults = [row.call_1_result, row.call_2_result, row.call_3_result]
+    .map((value) => String(value || '').trim().toLowerCase());
+  if (raw === 'RESUMED-PASS') return { label: 'Resumed – Pass', tone: 'approved', Icon: CheckCircle };
+  if (['PASS', 'PASSED'].includes(raw) || callResults.filter((value) => value === 'pass').length >= 2) {
+    return { label: 'Pass', tone: 'approved', Icon: CheckCircle };
+  }
+  if (raw === 'FAIL-FINAL ATTEMPT') return { label: 'Fail – Final Attempt', tone: 'denied', Icon: XCircle };
+  if (['FAIL', 'FAILED'].includes(raw)) return { label: 'Fail', tone: 'denied', Icon: XCircle };
+  if (raw === 'WITHDREW FROM CERTIFICATION') return { label: 'Withdrawn', tone: 'denied', Icon: XCircle };
+  if (raw === 'INCOMPLETE' || row.pending_id) return { label: 'Incomplete', tone: 'pending', Icon: Clock };
+  if (raw === 'ARCHIVED') return { label: 'Archived', tone: 'neutral', Icon: Clock };
+  return { label: 'In Progress', tone: 'pending', Icon: Clock };
 }
 
 function StatusChip({ meta, className = '', title }) {
@@ -974,10 +1017,26 @@ function formatRequestTime(value) {
   return formatSamTimestamp(value) || value || 'N/A';
 }
 
+function isTimestampLikeHeadsetLabel(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}[T\s]/.test(text) || /^\d{1,2}\/\d{1,2}\/\d{2,4}[,\s]/.test(text);
+}
+
+export function getHeadsetReviewDisplayTitle(item = {}) {
+  const brand = isTimestampLikeHeadsetLabel(item.brand) ? '' : String(item.brand || '').trim();
+  const model = isTimestampLikeHeadsetLabel(item.model) ? '' : String(item.model || '').trim();
+  const headset = `${brand} ${model}`.trim();
+  if (headset) return headset;
+  const requestedLabel = String(item.requested_headset_label || item.candidate || '').trim();
+  return requestedLabel && !isTimestampLikeHeadsetLabel(requestedLabel) ? requestedLabel : 'Unknown headset';
+}
+
 function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh, onDecision, onOpenHeadsets, actor }) {
   const [denialRequest, setDenialRequest] = useState(null);
   const [denialReason, setDenialReason] = useState('');
   const [denialError, setDenialError] = useState('');
+  const [submittingRequestId, setSubmittingRequestId] = useState('');
+  const [decisionError, setDecisionError] = useState('');
   const requests = Array.isArray(data?.requests) ? data.requests : [];
   const headsetRows = Array.isArray(data?.headsetReviews) ? data.headsetReviews : [];
   const filteredRequests = requests.filter((request) => {
@@ -992,13 +1051,20 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
   });
 
   const approve = async (request) => {
-    await onDecision({
-      request_id: request.request_id,
-      category: request.category,
-      decision: 'approved',
-      expected_status: request.raw_status || 'pending',
-      actor,
-    });
+    setSubmittingRequestId(request.request_id);
+    setDecisionError('');
+    try {
+      const result = await onDecision({
+        request_id: request.request_id,
+        category: request.category,
+        decision: 'approved',
+        expected_status: request.raw_status || 'pending',
+        actor,
+      });
+      if (!result?.ok) setDecisionError(result?.error || 'The request decision could not be saved.');
+    } finally {
+      setSubmittingRequestId('');
+    }
   };
 
   const openDeny = (request) => {
@@ -1012,17 +1078,27 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
       setDenialError('A denial reason is required.');
       return;
     }
-    await onDecision({
-      request_id: denialRequest.request_id,
-      category: denialRequest.category,
-      decision: 'denied',
-      expected_status: denialRequest.raw_status || 'pending',
-      denial_reason: denialReason.trim(),
-      actor,
-    });
-    setDenialRequest(null);
-    setDenialReason('');
+    setSubmittingRequestId(denialRequest.request_id);
     setDenialError('');
+    try {
+      const result = await onDecision({
+        request_id: denialRequest.request_id,
+        category: denialRequest.category,
+        decision: 'denied',
+        expected_status: denialRequest.raw_status || 'pending',
+        denial_reason: denialReason.trim(),
+        actor,
+      });
+      if (!result?.ok) {
+        setDenialError(result?.error || 'The request decision could not be saved.');
+        return;
+      }
+      setDenialRequest(null);
+      setDenialReason('');
+      setDecisionError('');
+    } finally {
+      setSubmittingRequestId('');
+    }
   };
 
   const renderStatus = (request) => {
@@ -1055,12 +1131,7 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
           <span>{data.error}</span>
         </div>
       ) : null}
-      {data?.targeting?.message ? (
-        <div className="nm-status-card is-info">
-          <strong>Admin targeting</strong>
-          <span>{data.targeting.message}</span>
-        </div>
-      ) : null}
+      {decisionError ? <div className="nm-status-card is-warning"><strong>Action failed</strong><span>{decisionError}</span></div> : null}
       <div className="nm-view-tabs" role="tablist" aria-label="Pending request filters">
         {REQUEST_FILTERS.map((item) => (
           <button key={item.key} type="button" className={`nm-view-tab ${filter === item.key ? 'is-active' : ''}`} onClick={() => onFilterChange(item.key)}>
@@ -1071,16 +1142,17 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
       {filter === 'headsets' ? (
         <div className="nm-note-cards" role="list">
           {headsetRows.length ? headsetRows.map((row, index) => (
-            <article key={`${row.brand}-${row.model}-${index}`} className="nm-note-card" role="listitem">
+            <article key={row.review_id || `${row.brand}-${row.model}-${index}`} className="nm-note-card" role="listitem">
               <div className="nm-note-card-main">
                 <div className="nm-note-card-head">
                   <span className="nm-badge nm-badge-info">Headset Review</span>
                   <span className="nm-request-status is-pending"><Clock size={14} aria-hidden="true" />Pending</span>
                 </div>
-                <div className="nm-note-title">{row.brand} {row.model}</div>
+                <div className="nm-note-title">{getHeadsetReviewDisplayTitle(row)}</div>
                 <div className="nm-note-preview">{row.note || 'No note provided.'}</div>
                 <div className="nm-note-meta">
                   <span className="nm-note-meta-chip">Tester: {row.tester || 'N/A'}</span>
+                  <span className="nm-note-meta-chip">Candidate: {row.candidate || 'N/A'}</span>
                   <span className="nm-note-meta-chip">Submitted: {formatRequestTime(row.submitted_date)}</span>
                 </div>
               </div>
@@ -1100,27 +1172,35 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
                   {renderStatus(request)}
                 </div>
                 <div className="nm-note-title">{request.candidate || 'Unknown candidate'}</div>
-                <div className="nm-note-preview">
-                  {request.reason || 'No reason provided.'}
-                  {request.details ? ` ${request.details}` : ''}
+                <div className={`nm-note-preview ${request.category === 'candidate_deletion' ? 'nm-deletion-reason' : ''}`}>
+                  {request.category === 'candidate_deletion' ? <><strong>Deletion Reason</strong><span>{request.reason || 'No reason provided.'}</span></> : <>{request.reason || 'No reason provided.'}{request.details ? ` ${request.details}` : ''}</>}
                 </div>
                 <div className="nm-request-grid">
-                  <div><strong>Tester</strong><span>{request.tester || 'N/A'}</span></div>
-                  <div><strong>Created</strong><span>{formatRequestTime(request.created_at)}</span></div>
-                  <div><strong>Requested Schedule</strong><span>{formatRequestTime(request.requested_schedule)} {request.timezone || ''}</span></div>
-                  <div><strong>Original Schedule</strong><span>{formatRequestTime(request.original_schedule)}</span></div>
-                  <div><strong>Requester</strong><span>{request.requester || 'N/A'}</span></div>
-                  <div><strong>24-Hour Rule</strong><span>{request.within_24_hours ? 'Less than 24 hours' : '24 hours or more / not candidate penalty'}</span></div>
-                  <div><strong>Counts as Attempt</strong><span>{request.counts_as_attempt ? 'Yes' : 'No'}</span></div>
-                  <div><strong>Final Attempt</strong><span>{request.final_attempt ? 'Yes' : 'No'}</span></div>
-                  {request.category === 'candidate_deletion' ? <div><strong>Deletion Scope</strong><span>Single session request</span></div> : null}
+                  {request.category === 'candidate_deletion' ? <>
+                    <div><strong>Certification Result</strong><span><StatusChip meta={candidateCertificationMeta({ latest_status: request.session_status })} /></span></div>
+                    <div><strong>Final Attempt</strong><span>{request.final_attempt ? 'Yes' : 'No'}</span></div>
+                    <div><strong>Form Status</strong><span><StatusChip meta={formFillMeta(request.form_fill_status)} /></span></div>
+                    <div><strong>Requested By</strong><span>{request.tester ? `${request.tester} / Tester` : 'Tester'}</span></div>
+                    <div><strong>Deletion Scope</strong><span>{request.deletion_scope || 'Session History and Candidate Tracking'}</span></div>
+                    <div><strong>Requested</strong><span>{formatRequestTime(request.created_at)}</span></div>
+                  </> : <>
+                    <div><strong>Tester/Requester</strong><span>{request.tester || 'N/A'}</span></div>
+                    <div><strong>Request Created</strong><span>{formatRequestTime(request.created_at)}</span></div>
+                    <div><strong>Requested Schedule</strong><span>{formatRequestTime(request.requested_schedule)} {request.timezone || ''}</span></div>
+                    <div><strong>Original Schedule</strong><span>{formatRequestTime(request.original_schedule)}</span></div>
+                    <div><strong>{request.category === 'newbie_reschedule' ? 'Who Needs the Reschedule' : 'Requested By'}</strong><span>{request.requester || 'N/A'}</span></div>
+                    <div className="nm-request-grid-wide"><strong>Reason</strong><span>{request.reason || 'No reason provided.'}{request.details ? ` — ${request.details}` : ''}</span></div>
+                    <div><strong>24-Hour Rule</strong><span>{request.within_24_hours ? 'Less than 24 hours' : '24 hours or more / not candidate penalty'}</span></div>
+                    <div><strong>Counts as Attempt</strong><span>{request.counts_as_attempt ? 'Yes' : 'No'}</span></div>
+                    <div><strong>Final Attempt</strong><span>{request.final_attempt ? 'Yes' : 'No'}</span></div>
+                  </>}
                   {request.denial_reason ? <div className="nm-request-grid-wide"><strong>Denial Reason</strong><span>{request.denial_reason}</span></div> : null}
                 </div>
               </div>
               {String(request.raw_status || '').toLowerCase() === 'pending' ? (
                 <div className="nm-note-card-actions">
-                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => approve(request)}>Approve</button>
-                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => openDeny(request)}>Deny</button>
+                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={Boolean(submittingRequestId)} onClick={() => approve(request)}>{submittingRequestId === request.request_id ? 'Approving...' : 'Approve'}</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={Boolean(submittingRequestId)} onClick={() => openDeny(request)}>Deny</button>
                 </div>
               ) : null}
             </article>
@@ -1141,8 +1221,8 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
             />
             {denialError ? <div className="nm-form-error">{denialError}</div> : null}
             <div className="nm-modal-actions">
-              <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setDenialRequest(null)}>Cancel</button>
-              <button type="button" className="nm-btn nm-btn-danger" onClick={submitDeny}>Deny Request</button>
+              <button type="button" className="nm-btn nm-btn-secondary" disabled={Boolean(submittingRequestId)} onClick={() => setDenialRequest(null)}>Cancel</button>
+              <button type="button" className="nm-btn nm-btn-danger" disabled={Boolean(submittingRequestId)} onClick={submitDeny}>{submittingRequestId ? 'Denying...' : 'Deny Request'}</button>
             </div>
           </section>
         </div>
@@ -1537,8 +1617,8 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const renderCandidateDetails = (row) => {
     const { notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts } = computeRowMeta(row);
     const formMeta = formFillMeta(row.form_fill_status);
-    const approvalMeta = newbieApprovalMeta(row.newbie_shift_request_status);
-    const hasNewbieRequest = Boolean(row.newbie_shift_request_id || row.newbie_shift_scheduled_at || row.newbie_shift_request_status);
+    const approvalMeta = newbieShiftStatusMeta(row);
+    const hasNewbieRequest = Boolean(approvalMeta);
     return (
       <div className="nm-candidate-details">
         <section className="nm-detail-card">
@@ -1723,15 +1803,18 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
             ) : visibleEntries.map(({ row, index, key: rowKey }) => {
               const { results, notes, hasFinalNotes, isFinalNotesHistoryOnly, attempts, isArchived } = computeRowMeta(row);
               const formMeta = formFillMeta(row.form_fill_status);
-              const approvalMeta = newbieApprovalMeta(row.newbie_shift_request_status);
-              const hasNewbieRequest = Boolean(row.newbie_shift_request_id || row.newbie_shift_scheduled_at || row.newbie_shift_request_status);
+              const approvalMeta = newbieShiftStatusMeta(row);
+              const certificationMeta = candidateCertificationMeta(row);
+              const supervisorTransferMeta = row.pending_id ? workflowApprovalMeta('Supervisor Transfer', 'pending') : null;
+              const deletionMeta = row.deletion_request_status ? workflowApprovalMeta('Candidate Deletion', row.deletion_request_status) : null;
+              const hasNewbieRequest = Boolean(approvalMeta);
               const isExpanded = detailKey === rowKey;
               const isPreviewExpanded = Boolean(expandedRowPreviews[rowKey]);
               const canExpandPreview = hasExpandablePreview(results, notes);
               return (
                 <React.Fragment key={rowKey}>
                   <tr className={`${isExpanded ? 'is-selected' : ''} ${isPreviewExpanded ? 'is-preview-expanded' : ''}`}>
-                    <td className="nm-select-column">
+                    <td className="nm-select-column" data-label="Select">
                       <input
                         type="checkbox"
                         aria-label={`Select ${row.candidate_name || 'candidate'}`}
@@ -1739,7 +1822,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                         onChange={(event) => toggleRowSelection({ row, index, key: rowKey }, event.target.checked)}
                       />
                     </td>
-                    <td>
+                    <td data-label="Candidate">
                       <div className="nm-row-title" title={row.candidate_name || 'Unknown'} aria-label={row.candidate_name || 'Unknown'}>
                         {row.candidate_name || 'Unknown'}
                       </div>
@@ -1747,16 +1830,18 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                       <div className="nm-row-chip-list">
                         <StatusChip meta={formMeta} title={`Form fill status: ${formMeta.label}`} />
                         {hasNewbieRequest ? <StatusChip meta={approvalMeta} title={`Newbie Shift approval status: ${approvalMeta.label}`} /> : null}
+                        {supervisorTransferMeta ? <StatusChip meta={supervisorTransferMeta} /> : null}
+                        {deletionMeta ? <StatusChip meta={deletionMeta} /> : null}
                       </div>
                     </td>
-                    <td title={row.status || row.latest_status || 'Unknown'}>{row.status || row.latest_status || 'Unknown'}</td>
-                    <td>{row.attempt_count ?? row.attempt_number ?? attempts.length ?? '0'}</td>
-                    <td title={row.original_tester_name || row.tester_name || 'Unknown'}>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
-                    <td className="nm-meta">{formatSamTimestamp(row.completed_at || row.last_session_date || row.created_at)}</td>
-                    <td className="nm-meta" title={results}>
+                    <td data-label="Status"><StatusChip meta={certificationMeta} title={`Certification status: ${certificationMeta.label}`} /></td>
+                    <td data-label="Attempts">{row.attempt_count ?? row.attempt_number ?? attempts.length ?? '0'}</td>
+                    <td data-label="Tester" title={row.original_tester_name || row.tester_name || 'Unknown'}>{row.original_tester_name || row.tester_name || 'Unknown'}</td>
+                    <td data-label="Date" className="nm-meta">{formatSamTimestamp(row.completed_at || row.last_session_date || row.created_at)}</td>
+                    <td data-label="Results" className="nm-meta" title={results}>
                       <div className="nm-results-preview" title={results} tabIndex={0} aria-label={results}>{results}</div>
                     </td>
-                    <td className="nm-meta nm-notes-cell">
+                    <td data-label="Notes" className="nm-meta nm-notes-cell">
                       <div className="nm-notes-preview" title={notes} tabIndex={0} aria-label={notes}>{notes}</div>
                       {hasFinalNotes ? <span className="nm-final-notes-badge" title={isFinalNotesHistoryOnly ? 'Final notes (history only — not in review summary)' : 'Final evaluator notes available'}>📝 Final Notes{isFinalNotesHistoryOnly ? ' (History)' : ''}</span> : null}
                       {canExpandPreview ? (
@@ -1771,7 +1856,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                         </button>
                       ) : null}
                     </td>
-                    <td>
+                    <td data-label="Actions">
                       {renderCandidateActions(row, rowKey)}
                     </td>
                   </tr>
@@ -1789,7 +1874,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
               <div className="nm-candidate-detail-header">
                 <div className="nm-detail-id">
                   <div className="nm-detail-name" id="sam-candidate-detail-title">{detailRow.candidate_name || 'Unknown'}</div>
-                  <span className={`nm-badge ${detailMeta.isWithdrawn ? 'nm-badge-urgent' : detailMeta.isPendingTransfer ? 'nm-badge-warning' : detailMeta.isIncomplete ? 'nm-badge-info' : detailMeta.isArchived ? 'nm-badge-offline' : 'nm-badge-success'}`}>{detailRow.status || detailRow.latest_status || 'Unknown'}</span>
+                  <StatusChip meta={candidateCertificationMeta(detailRow)} title={`Certification status: ${candidateCertificationMeta(detailRow).label}`} />
                 </div>
                 <button type="button" className="nm-modal-close" aria-label="Close candidate details" onClick={() => setDetailKey(null)}>×</button>
               </div>
@@ -2186,6 +2271,8 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
   const [denial, setDenial] = useState(null);
   const [lookupReview, setLookupReview] = useState(null);
   const [activeTab, setActiveTab] = useState('pending');
+  const [pendingDecisionKey, setPendingDecisionKey] = useState('');
+  const [decisionError, setDecisionError] = useState('');
   const pending = (data?.pending || []).filter((item) => !deferred[`${item.brand}::${item.model}`]);
 
   const lookUp = async (item) => {
@@ -2209,8 +2296,15 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
   });
 
   const decide = async (item, action, extra = {}) => {
-    const result = await onDecision(buildDecisionPayload(item, action, extra));
-    if (result?.ok) {
+    const decisionKey = item.review_id || `${item.brand}::${item.model}`;
+    setPendingDecisionKey(decisionKey);
+    setDecisionError('');
+    try {
+      const result = await onDecision(buildDecisionPayload(item, action, extra));
+      if (!result?.ok) {
+        setDecisionError(result?.error || 'The headset decision could not be saved.');
+        return result;
+      }
       setDeferred((current) => {
         const next = { ...current };
         delete next[`${item.brand}::${item.model}`];
@@ -2218,6 +2312,9 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
       });
       setDenial(null);
       setLookupReview(null);
+      return result;
+    } finally {
+      setPendingDecisionKey('');
     }
   };
 
@@ -2298,10 +2395,10 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
     ) : (
       <div className="nm-ticket-queue">
         {rows.map((item, index) => (
-          <article className="nm-ticket" key={`pending-${item.brand}-${item.model}-${index}`}>
+          <article className="nm-ticket" key={item.review_id || `pending-${item.brand}-${item.model}-${index}`}>
             <div className="nm-ticket-head">
               <div className="nm-ticket-id">
-                <div className="nm-ticket-title">{item.brand} {item.model}</div>
+                <div className="nm-ticket-title">{getHeadsetReviewDisplayTitle(item)}</div>
                 <div className="nm-ticket-sub">Awaiting review decision</div>
               </div>
               <span className="nm-badge nm-badge-warning">Pending</span>
@@ -2311,12 +2408,13 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
               <div><dt>Model</dt><dd>{item.model || 'N/A'}</dd></div>
               <div><dt>Submitted</dt><dd>{formatHeadsetSubmittedDate(item.submitted_date)}</dd></div>
               <div><dt>Tester</dt><dd>{item.tester || 'N/A'}</dd></div>
+              <div><dt>Candidate</dt><dd>{item.candidate || 'N/A'}</dd></div>
               <div className="nm-ticket-note-field"><dt>Notes</dt><dd>{item.note || 'N/A'}</dd></div>
             </dl>
             <div className="nm-ticket-actions nm-row-actions">
               <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Look Up</button>
-              <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
-              <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
+              <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={Boolean(pendingDecisionKey)} onClick={() => decide(item, 'approve')}>{pendingDecisionKey === (item.review_id || `${item.brand}::${item.model}`) ? 'Saving...' : 'Approve'}</button>
+              <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={Boolean(pendingDecisionKey)} onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
               <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
               <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
               <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
@@ -2334,6 +2432,7 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
         <button type="button" className="nm-btn nm-btn-secondary" onClick={onRefresh} disabled={loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
       </div>
       {!data?.ok && data?.error ? <div className="nm-status-card is-warning"><strong>Headset review unavailable</strong><span>{data.error}</span></div> : null}
+      {decisionError ? <div className="nm-status-card is-warning"><strong>Action failed</strong><span>{decisionError}</span></div> : null}
       <div className="nm-view-tabs" role="tablist" aria-label="Headset review views">
         {[
           ['pending', `Pending Review (${pending.length})`],
@@ -2353,7 +2452,7 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
             <div className="modal-body">
               <p>Use the search results to decide whether <strong>{lookupReview.brand} {lookupReview.model}</strong> meets both headset requirements.</p>
               <div className="nm-row-actions" style={{ marginTop: 18 }}>
-                <button type="button" className="nm-btn nm-btn-primary" onClick={() => decide(lookupReview, 'approve')}>Approve Headset</button>
+                <button type="button" className="nm-btn nm-btn-primary" disabled={Boolean(pendingDecisionKey)} onClick={() => decide(lookupReview, 'approve')}>{pendingDecisionKey ? 'Saving...' : 'Approve Headset'}</button>
                 <button type="button" className="nm-btn nm-btn-danger" onClick={() => { setDenial({ item: lookupReview, reason: '', note: '' }); setLookupReview(null); }}>Deny Headset</button>
                 <button type="button" className="nm-btn nm-btn-secondary" onClick={() => reviewLater(lookupReview)}>Review Later</button>
                 <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setLookupReview(null)}>Cancel</button>
@@ -2372,9 +2471,10 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
                 <label key={reason} className="nm-checkbox"><input type="radio" name="headset-denial-reason" checked={denial.reason === reason} onChange={() => setDenial((current) => ({ ...current, reason }))} /> {reason}</label>
               ))}
               {denial.reason === 'Other' ? <textarea rows={3} value={denial.note} onChange={(event) => setDenial((current) => ({ ...current, note: event.target.value }))} placeholder="Denial note is required" /> : null}
+              {decisionError ? <div className="nm-form-error">{decisionError}</div> : null}
               <div className="nm-row-actions">
-                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setDenial(null)}>Cancel</button>
-                <button type="button" className="nm-btn nm-btn-danger" disabled={!denial.reason || (denial.reason === 'Other' && !denial.note.trim())} onClick={() => decide(denial.item, 'deny', { reason: denial.reason, note: denial.note })}>Deny</button>
+                <button type="button" className="nm-btn nm-btn-secondary" disabled={Boolean(pendingDecisionKey)} onClick={() => setDenial(null)}>Cancel</button>
+                <button type="button" className="nm-btn nm-btn-danger" disabled={Boolean(pendingDecisionKey) || !denial.reason || (denial.reason === 'Other' && !denial.note.trim())} onClick={() => decide(denial.item, 'deny', { reason: denial.reason, note: denial.note })}>{pendingDecisionKey ? 'Saving...' : 'Deny'}</button>
               </div>
             </div>
           </div>
@@ -2465,9 +2565,6 @@ export default function NotificationManagerApp() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [candidateTracking, setCandidateTracking] = useState({ ok: true, views: {}, candidates: [], pending: [], error: '' });
   const [candidateTrackingLoading, setCandidateTrackingLoading] = useState(false);
-  const candidateTrackingRequestRef = useRef(null);
-  const candidateTrackingCacheRef = useRef({ data: null, timestamp: 0 });
-  const candidateTrackingBackoffUntilRef = useRef(0);
   const [headsetReviews, setHeadsetReviews] = useState({ ok: true, pending: [], approved: [], denied: [], error: '' });
   const [headsetReviewsLoading, setHeadsetReviewsLoading] = useState(false);
   const [pendingRequests, setPendingRequests] = useState({ ok: true, loaded: false, requests: [], headsetReviews: [], counts: {}, error: '', targeting: {} });
@@ -2475,9 +2572,10 @@ export default function NotificationManagerApp() {
   const [pendingRequestFilter, setPendingRequestFilter] = useState('pending');
   const [requestBellOpen, setRequestBellOpen] = useState(false);
   const [pendingRequestsRefreshCycle, setPendingRequestsRefreshCycle] = useState(0);
-  const pendingRequestsRequestRef = useRef(null);
-  const pendingRequestsCacheRef = useRef({ data: null, timestamp: 0 });
-  const pendingRequestsBackoffUntilRef = useRef(0);
+  const samSnapshotCoordinatorRef = useRef(null);
+  if (!samSnapshotCoordinatorRef.current) {
+    samSnapshotCoordinatorRef.current = createSamSnapshotCoordinator(() => api.getSharedAdminSnapshot());
+  }
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
   const showStatusModal = useCallback((message, kind = 'info') => {
     setStatusModal({ message, kind });
@@ -2712,140 +2810,90 @@ export default function NotificationManagerApp() {
     await handleCheckForUpdates({ silent: true });
   }, [handleCheckForUpdates]);
 
-  const loadCandidateTracking = useCallback(async ({ silent = false, startup = false } = {}) => {
-    const now = Date.now();
-    const cached = candidateTrackingCacheRef.current;
-    if (silent && cached.data && now - cached.timestamp < SAM_CANDIDATE_TRACKING_CACHE_MS) {
-      return cached.data;
+  const loadSamSnapshot = useCallback(async ({ silent = false, force = false, showPendingNotice = false } = {}) => {
+    if (!silent) {
+      setCandidateTrackingLoading(true);
+      setHeadsetReviewsLoading(true);
+      setPendingRequestsLoading(true);
     }
-    if (candidateTrackingRequestRef.current) {
-      if (!silent) setCandidateTrackingLoading(true);
-      try {
-        return await candidateTrackingRequestRef.current;
-      } finally {
-        if (!silent) setCandidateTrackingLoading(false);
-      }
-    }
-    if (now < candidateTrackingBackoffUntilRef.current) {
-      setCandidateTracking((current) => ({
-        ...current,
-        ok: false,
-        error: SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
-      }));
-      if (!silent) {
-        setSheetState((current) => ({
-          ...current,
-          statusKind: 'warning',
-          statusMessage: SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
-        }));
-      }
-      return cached.data || null;
-    }
-
-    if (!silent) setCandidateTrackingLoading(true);
-    const requestPromise = (async () => {
-      let result = null;
-      let caughtError = null;
-      const maxAttempts = startup ? SAM_CANDIDATE_TRACKING_STARTUP_RETRY_LIMIT + 1 : 1;
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        try {
-          result = await api.getSharedAdminCandidates();
-          caughtError = null;
-          if (result?.ok !== false) break;
-        } catch (error) {
-          caughtError = error;
-        }
-        if (attempt < maxAttempts - 1) {
-          await new Promise((resolve) => window.setTimeout(resolve, SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS));
-        }
-      }
-      if (caughtError) throw caughtError;
-      const next = {
-        ok: Boolean(result?.ok),
-        views: result?.views || {},
-        candidates: result?.candidates || [],
-        pending: result?.pending || [],
-        error: result?.ok === false ? getCandidateTrackingErrorMessage({ message: result?.error }) : '',
-      };
-      if (next.ok) {
-        candidateTrackingCacheRef.current = { data: next, timestamp: Date.now() };
-        candidateTrackingBackoffUntilRef.current = 0;
-        setCandidateTracking(next);
-        return next;
-      }
-      candidateTrackingBackoffUntilRef.current = Date.now() + SAM_CANDIDATE_TRACKING_BACKOFF_MS;
-      setCandidateTracking((current) => ({
-        ...current,
-        ok: false,
-        error: next.error || SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
-      }));
-      if (!silent) {
-        setSheetState((current) => ({
-          ...current,
-          statusKind: 'warning',
-          statusMessage: next.error || SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE,
-        }));
-      }
-      return next;
-    })();
-    candidateTrackingRequestRef.current = requestPromise;
     try {
-      return await requestPromise;
-    } catch (error) {
-      const message = getCandidateTrackingErrorMessage(error);
-      candidateTrackingBackoffUntilRef.current = Date.now() + SAM_CANDIDATE_TRACKING_BACKOFF_MS;
+      const snapshot = await samSnapshotCoordinatorRef.current.load({ force });
+      const candidateNext = snapshot?.candidateTracking || {};
+      const headsetNext = snapshot?.headsetReviews || {};
+      const pendingNext = snapshot?.pendingRequests || {};
       setCandidateTracking((current) => ({
         ...current,
-        ok: false,
-        error: message,
+        ...candidateNext,
+        error: candidateNext.ok === false ? SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE : (candidateNext.error || ''),
       }));
-      if (!silent) {
-        setSheetState((current) => ({
-          ...current,
-          statusKind: 'warning',
-          statusMessage: message,
-        }));
-      }
-      return null;
-    } finally {
-      candidateTrackingRequestRef.current = null;
-      setCandidateTrackingLoading(false);
-    }
-  }, []);
-
-  const loadHeadsetReviews = useCallback(async ({ silent = false, showPendingNotice = false } = {}) => {
-    if (!silent) setHeadsetReviewsLoading(true);
-    try {
-      const result = await api.getHeadsetReviews();
-      const next = {
-        ok: result?.ok !== false,
-        pending: result?.pending || [],
-        approved: result?.approved || [],
-        denied: result?.denied || [],
-        error: result?.error || '',
-      };
-      setHeadsetReviews(next);
-      if (showPendingNotice && next.pending.length > 0 && !headsetPendingNoticeShownRef.current) {
+      setHeadsetReviews((current) => ({
+        ...current,
+        ...headsetNext,
+        error: headsetNext.ok === false ? SAM_HEADSET_REVIEW_TEMPORARY_MESSAGE : (headsetNext.error || ''),
+      }));
+      setPendingRequests((current) => ({
+        ...current,
+        ...pendingNext,
+        loaded: true,
+        error: pendingNext.ok === false ? SAM_PENDING_REQUESTS_TEMPORARY_MESSAGE : (pendingNext.error || ''),
+      }));
+      if (pendingNext.ok !== false) setPendingRequestsRefreshCycle((cycle) => cycle + 1);
+      if (showPendingNotice && (headsetNext.pending || []).length > 0 && !headsetPendingNoticeShownRef.current) {
         headsetPendingNoticeShownRef.current = true;
-        setSheetState((current) => ({
-          ...current,
-          statusKind: 'info',
-          statusMessage: 'Headset review queue updated.',
-        }));
+        setSheetState((current) => ({ ...current, statusKind: 'info', statusMessage: 'Headset review queue updated.' }));
       }
-      return next;
+      if (snapshot?.ok === false) {
+        const message = snapshot?.coordinatorError
+          ? SAM_SHARED_DATA_OFFLINE_MESSAGE
+          : snapshot?.stale
+            ? SAM_SHARED_DATA_STALE_MESSAGE
+            : SAM_SHARED_DATA_TEMPORARY_MESSAGE;
+        setSheetState((current) => current.statusMessage === message
+          ? current
+          : { ...current, statusKind: 'warning', statusMessage: message });
+      } else if (snapshot?.ok !== false) {
+        setSheetState((current) => isSharedDataStatusMessage(current.statusMessage)
+          ? { ...current, statusKind: 'success', statusMessage: '' }
+          : current);
+      }
+      return snapshot;
     } catch (error) {
-      const message = getSharedDataErrorMessage(error, 'Unable to load headset reviews.');
-      setHeadsetReviews((current) => ({ ...current, ok: false, error: message }));
+      console.warn('[SAM] Shared snapshot request failed; user-facing details were sanitized.');
+      setCandidateTracking((current) => ({ ...current, ok: false, error: SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE }));
+      setHeadsetReviews((current) => ({ ...current, ok: false, error: SAM_HEADSET_REVIEW_TEMPORARY_MESSAGE }));
+      setPendingRequests((current) => ({ ...current, ok: false, loaded: true, error: SAM_PENDING_REQUESTS_TEMPORARY_MESSAGE }));
+      setSheetState((current) => current.statusMessage === SAM_SHARED_DATA_TEMPORARY_MESSAGE
+        ? current
+        : { ...current, statusKind: 'warning', statusMessage: SAM_SHARED_DATA_TEMPORARY_MESSAGE });
       return null;
     } finally {
+      setCandidateTrackingLoading(false);
       setHeadsetReviewsLoading(false);
+      setPendingRequestsLoading(false);
     }
   }, []);
+
+  const loadCandidateTracking = useCallback(async ({ silent = false, force = !silent } = {}) => {
+    const snapshot = await loadSamSnapshot({ silent, force });
+    return snapshot?.candidateTracking || null;
+  }, [loadSamSnapshot]);
+
+  const loadHeadsetReviews = useCallback(async ({ silent = false, force = !silent, showPendingNotice = false } = {}) => {
+    const snapshot = await loadSamSnapshot({ silent, force, showPendingNotice });
+    return snapshot?.headsetReviews || null;
+  }, [loadSamSnapshot]);
+
+  const loadPendingRequests = useCallback(async ({ silent = false, force = !silent } = {}) => {
+    const snapshot = await loadSamSnapshot({ silent, force });
+    return snapshot?.pendingRequests || null;
+  }, [loadSamSnapshot]);
 
   const runHeadsetDecision = useCallback(async (payload) => {
     try {
-      const result = await api.updateHeadsetReview(payload);
+      const result = await api.updateHeadsetReview({
+        ...payload,
+        actor: samSetupStatus.userName || samSetupStatus.userRole || 'SAM',
+      });
       if (!result?.ok) {
         const message = getSharedDataErrorMessage({ message: result?.error }, 'Unable to save the headset review decision.');
         setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
@@ -2866,7 +2914,8 @@ export default function NotificationManagerApp() {
       setSheetState((current) => ({ ...current, statusKind: reviewLater ? 'info' : 'success', statusMessage: message }));
       if (!reviewLater) {
         playSamActionSound('success');
-        await loadHeadsetReviews({ silent: true });
+        showStatusModal(message, 'success');
+        await loadSamSnapshot({ silent: true, force: true });
       }
       return result;
     } catch (error) {
@@ -2876,62 +2925,7 @@ export default function NotificationManagerApp() {
       showStatusModal(message, 'error');
       return { ok: false, error: message };
     }
-  }, [loadHeadsetReviews, playSamActionSound, showStatusModal]);
-
-  const loadPendingRequests = useCallback(async ({ silent = false } = {}) => {
-    const now = Date.now();
-    if (silent && pendingRequestsCacheRef.current.data && now - pendingRequestsCacheRef.current.timestamp < SAM_PENDING_REQUESTS_CACHE_MS) {
-      return pendingRequestsCacheRef.current.data;
-    }
-    if (silent && pendingRequestsBackoffUntilRef.current > now) {
-      return pendingRequestsCacheRef.current.data;
-    }
-    if (pendingRequestsRequestRef.current) {
-      return pendingRequestsRequestRef.current;
-    }
-    if (!silent) setPendingRequestsLoading(true);
-    pendingRequestsRequestRef.current = api.getSharedAdminPendingRequests()
-      .then((result) => {
-        const next = {
-          ok: result?.ok !== false,
-          loaded: true,
-          requests: Array.isArray(result?.requests) ? result.requests : [],
-          headsetReviews: Array.isArray(result?.headsetReviews) ? result.headsetReviews : [],
-          counts: result?.counts || {},
-          targeting: result?.targeting || {},
-          error: result?.error || '',
-        };
-        setPendingRequests(next);
-        pendingRequestsCacheRef.current = { data: next, timestamp: Date.now() };
-        if (next.ok) {
-          pendingRequestsBackoffUntilRef.current = 0;
-          setPendingRequestsRefreshCycle((cycle) => cycle + 1);
-        } else {
-          pendingRequestsBackoffUntilRef.current = Date.now() + SAM_PENDING_REQUESTS_BACKOFF_MS;
-        }
-        return next;
-      })
-      .catch((error) => {
-        const message = getSharedDataErrorMessage(error, 'Pending requests are temporarily unavailable.');
-        const next = {
-          ok: false,
-          loaded: Boolean(pendingRequestsCacheRef.current.data?.loaded),
-          requests: pendingRequestsCacheRef.current.data?.requests || [],
-          headsetReviews: pendingRequestsCacheRef.current.data?.headsetReviews || [],
-          counts: pendingRequestsCacheRef.current.data?.counts || {},
-          targeting: pendingRequestsCacheRef.current.data?.targeting || {},
-          error: message,
-        };
-        setPendingRequests(next);
-        pendingRequestsBackoffUntilRef.current = Date.now() + SAM_PENDING_REQUESTS_BACKOFF_MS;
-        return next;
-      })
-      .finally(() => {
-        pendingRequestsRequestRef.current = null;
-        setPendingRequestsLoading(false);
-      });
-    return pendingRequestsRequestRef.current;
-  }, []);
+  }, [loadSamSnapshot, playSamActionSound, samSetupStatus.userName, samSetupStatus.userRole, showStatusModal]);
 
   const runPendingRequestDecision = useCallback(async (payload) => {
     try {
@@ -2946,11 +2940,8 @@ export default function NotificationManagerApp() {
       const message = payload.decision === 'approved' ? 'Request approved.' : 'Request denied.';
       setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: message }));
       playSamActionSound('success');
-      pendingRequestsCacheRef.current = { data: null, timestamp: 0 };
-      await Promise.all([
-        loadPendingRequests({ silent: true }),
-        loadCandidateTracking({ silent: true, startup: true }),
-      ]);
+      showStatusModal(message, 'success');
+      await loadSamSnapshot({ silent: true, force: true });
       return result;
     } catch (error) {
       const message = getSharedDataErrorMessage(error, 'Pending request update failed.');
@@ -2959,7 +2950,7 @@ export default function NotificationManagerApp() {
       showStatusModal(message, 'error');
       return { ok: false, error: message };
     }
-  }, [loadCandidateTracking, loadPendingRequests, playSamActionSound, showStatusModal]);
+  }, [loadSamSnapshot, playSamActionSound, showStatusModal]);
 
   const runCandidateAction = useCallback(async (payload) => {
     try {
@@ -2991,7 +2982,7 @@ export default function NotificationManagerApp() {
       }));
       playSamActionSound('success');
       showStatusModal(actionLabels[payload?.action] || 'Candidate tracking successfully updated.', 'success');
-      await loadCandidateTracking({ silent: true, startup: true });
+      await loadCandidateTracking({ silent: true, force: true });
     } catch (error) {
       const message = getSharedDataErrorMessage(error, 'Candidate tracking update failed.');
       setSheetState((current) => ({
@@ -3200,13 +3191,8 @@ export default function NotificationManagerApp() {
 
   useEffect(() => {
     if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) return;
-    void loadHeadsetReviews({ silent: true, showPendingNotice: true });
-  }, [loadHeadsetReviews, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
-
-  useEffect(() => {
-    if (!sheetState.backendReady || samSetupStatus.loading || !samSetupStatus.setupComplete) return;
-    void loadPendingRequests({ silent: true });
-  }, [loadPendingRequests, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
+    void loadSamSnapshot({ silent: true, showPendingNotice: true });
+  }, [loadSamSnapshot, samSetupStatus.loading, samSetupStatus.setupComplete, sheetState.backendReady]);
 
   const selectedItem = items[selectedIndex] || items[0];
   const editorValidation = useMemo(() => {
@@ -3303,15 +3289,13 @@ export default function NotificationManagerApp() {
         return;
       }
       void loadSheetItems({ silent: true });
-      void loadCandidateTracking({ silent: true });
-      void loadPendingRequests({ silent: true });
+      void loadSamSnapshot({ silent: true });
     }, SAM_AUTO_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(interval);
   }, [
     confirmModal,
     editorOpen,
-    loadCandidateTracking,
-    loadPendingRequests,
+    loadSamSnapshot,
     loadSheetItems,
     samSetupStatus.loading,
     samSetupStatus.setupComplete,
@@ -3809,8 +3793,11 @@ export default function NotificationManagerApp() {
   const enabledCount = items.filter((item) => item.Enabled).length;
   const pendingHeadsetCount = Array.isArray(headsetReviews?.pending) ? headsetReviews.pending.length : 0;
   const pendingRequestCounts = pendingRequests?.counts || {};
-  const unresolvedRequestCount = Number(pendingRequestCounts.unresolved || 0);
-  const pendingWorkflowRequestCount = Math.max(0, unresolvedRequestCount - Number(pendingRequestCounts.headsetReviews || 0));
+  const pendingWorkflowRequestCount = Number(
+    pendingRequestCounts.workflowRequests
+      ?? ((pendingRequestCounts.newbieInitial || 0) + (pendingRequestCounts.reschedules || 0) + (pendingRequestCounts.candidateDeletions || 0))
+  );
+  const combinedActionableCount = pendingWorkflowRequestCount + pendingHeadsetCount;
   const pendingCandidateCount = Array.isArray(candidateTracking?.views?.pending)
     ? candidateTracking.views.pending.length
     : (Array.isArray(candidateTracking?.pending) ? candidateTracking.pending.length : 0);
@@ -3893,22 +3880,20 @@ export default function NotificationManagerApp() {
             <div className="nm-request-bell-wrap">
               <button
                 type="button"
-                className={`nm-ops-icon-btn nm-request-bell ${unresolvedRequestCount ? 'has-attention' : ''}`}
+                className={`nm-ops-icon-btn nm-request-bell ${combinedActionableCount ? 'has-attention' : ''}`}
                 onClick={() => setRequestBellOpen((open) => !open)}
                 title="Pending request summary"
-                aria-label={`Pending request summary: ${unresolvedRequestCount} unresolved actionable requests`}
+                aria-label={`Pending request summary: ${combinedActionableCount} unresolved actionable items`}
                 aria-expanded={requestBellOpen}
               >
                 <Bell size={18} aria-hidden="true" />
-                {unresolvedRequestCount ? <span className="nm-request-bell-badge">{unresolvedRequestCount}</span> : null}
+                {combinedActionableCount ? <span className="nm-request-bell-badge">{combinedActionableCount}</span> : null}
               </button>
               {requestBellOpen ? (
                 <div className="nm-request-popover" role="dialog" aria-label="Pending request category summary">
                   {[
-                    ['Newbie Shift Requests', pendingRequestCounts.newbieInitial || 0, 'newbie'],
-                    ['Reschedule Requests', pendingRequestCounts.reschedules || 0, 'reschedules'],
-                    ['Candidate Deletion Requests', pendingRequestCounts.candidateDeletions || 0, 'deletions'],
-                    ['Headset Reviews', pendingRequestCounts.headsetReviews || pendingHeadsetCount, 'headsets'],
+                    ['Workflow Requests', pendingWorkflowRequestCount, 'pending'],
+                    ['Headset Reviews', pendingHeadsetCount, 'headsets'],
                   ].map(([label, count, targetFilter]) => (
                     <button
                       key={label}
@@ -3980,7 +3965,7 @@ export default function NotificationManagerApp() {
             <div className="nm-metric-body">
               <div className="nm-metric-label">Pending Headsets</div>
               <div className="nm-metric-value">{pendingHeadsetCount}</div>
-              <div className="nm-metric-sub">{pendingHeadsetCount ? 'Awaiting review' : 'Queue clear'}</div>
+              <div className="nm-metric-sub">{pendingHeadsetCount} awaiting review</div>
             </div>
           </button>
           <button type="button" className={`nm-metric nm-metric-btn ${pendingCandidateCount ? 'has-attention' : ''}`} onClick={() => { setActiveSection('candidates'); setCandidateView('pending'); }}>
@@ -3999,12 +3984,12 @@ export default function NotificationManagerApp() {
               <div className="nm-metric-sub">Start a new alert</div>
             </div>
           </button>
-          <button type="button" className={`nm-metric nm-metric-btn ${unresolvedRequestCount ? 'has-attention' : ''}`} onClick={() => { setActiveSection('requests'); setPendingRequestFilter('pending'); }}>
+          <button type="button" className={`nm-metric nm-metric-btn ${pendingWorkflowRequestCount ? 'has-attention' : ''}`} onClick={() => { setActiveSection('requests'); setPendingRequestFilter('pending'); }}>
             <div className="nm-metric-icon"><Inbox size={20} aria-hidden="true" /></div>
             <div className="nm-metric-body">
               <div className="nm-metric-label">Pending Requests</div>
-              <div className="nm-metric-value">{unresolvedRequestCount}</div>
-              <div className="nm-metric-sub">{pendingWorkflowRequestCount ? `${pendingWorkflowRequestCount} workflow` : 'Workflow clear'} · {pendingHeadsetCount} headset</div>
+              <div className="nm-metric-value">{pendingWorkflowRequestCount}</div>
+              <div className="nm-metric-sub">{pendingWorkflowRequestCount} workflow request{pendingWorkflowRequestCount === 1 ? '' : 's'}</div>
             </div>
           </button>
         </section>
@@ -4055,7 +4040,7 @@ export default function NotificationManagerApp() {
             const badge = item.target === 'sam-headset-review'
               ? pendingHeadsetCount
               : item.target === 'sam-pending-requests'
-                ? unresolvedRequestCount
+                ? pendingWorkflowRequestCount
                 : (item.candidateView === 'pending' ? pendingCandidateCount : 0);
             return (
               <button
@@ -4078,6 +4063,10 @@ export default function NotificationManagerApp() {
           requests={pendingRequests.requests || []}
           requestsAvailable={pendingRequests.loaded === true && pendingRequests.ok !== false}
           refreshCycle={pendingRequestsRefreshCycle}
+          headsetReviews={headsetReviews.pending || []}
+          headsetReviewsAvailable={headsetReviews.ok !== false}
+          onViewHeadsets={() => setActiveSection('headsets')}
+          onAlertSound={() => playSamActionSound('error')}
           onView={(request) => {
             setActiveSection('requests');
             setPendingRequestFilter(request.category === 'newbie_reschedule'

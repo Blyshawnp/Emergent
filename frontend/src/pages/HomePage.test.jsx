@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import fs from 'fs';
 import path from 'path';
-import HomePage, { buildResumedSession } from './HomePage';
+import HomePage, { buildResumedSession, ResumeSupTransferModal } from './HomePage';
 
 const mockModal = {
   showModal: jest.fn(),
@@ -141,6 +141,11 @@ test('recent activity uses clean status labels without visible symbol prefixes',
   expect(view.container.textContent).not.toContain('OK Resumed');
   expect(view.container.textContent).not.toContain('x Fail');
   expect(view.container.textContent).not.toContain('- Not Yet Filled');
+  view.container.querySelectorAll('.status-chip').forEach((chip) => {
+    const markers = chip.querySelectorAll(':scope > .status-chip-icon');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].getAttribute('aria-hidden')).toBe('true');
+  });
 
   await view.unmount();
 });
@@ -155,6 +160,7 @@ test('recent activity displays reconciled request status without changing Form F
       form_fill_status: 'filled',
       newbie_shift_request_id: 'newbie-request-1',
       newbie_shift_request_status: 'approved',
+      newbie_shift_data: { newbie_date: '07/16/2026', newbie_time: '2:00 PM', newbie_tz: 'EST (Eastern)' },
     },
     {
       history_id: 'request-2',
@@ -164,6 +170,7 @@ test('recent activity displays reconciled request status without changing Form F
       form_fill_status: 'filled',
       newbie_shift_request_id: 'newbie-request-2',
       newbie_shift_request_status: 'denied',
+      newbie_shift_data: { newbie_date: '07/17/2026', newbie_time: '3:00 PM', newbie_tz: 'EST (Eastern)' },
     },
   ];
   const view = await renderComponent(
@@ -177,8 +184,8 @@ test('recent activity displays reconciled request status without changing Form F
     />
   );
 
-  expect(view.container.textContent).toContain('Approved');
-  expect(view.container.textContent).toContain('Denied');
+  expect(view.container.textContent).toContain('Newbie Shift Scheduled');
+  expect(view.container.textContent).toContain('Newbie Shift Denied');
   expect(view.container.textContent.match(/Form Filled/g)).toHaveLength(2);
   await view.unmount();
 });
@@ -207,4 +214,33 @@ test('Smart Resume carries the authoritative request decision and original workf
   expect(resumed.newbie_shift_denial_reason).toBe('No availability');
   expect(resumed.newbie_shift_admin_decision_by).toBe('SAM Admin');
   expect(resumed.newbie_shift_data).toEqual(entry.newbie_shift_data);
+});
+
+test('Smart Resume cards require an explicit selection and expose the required fields', async () => {
+  const entries = [
+    { history_id: 'one', timestamp: '07/14/2026 4:00 PM', candidate: 'Taylor Example', status: 'Incomplete', call_1: { result: 'Pass' } },
+    { history_id: 'two', timestamp: '07/15/2026 5:00 PM', candidate: 'Jordan Example', status: 'Saved', call_1: { result: 'Pass' }, call_2: { result: 'Fail' } },
+  ];
+  function ControlledResumeModal() {
+    const [selected, setSelected] = useState(null);
+    return <ResumeSupTransferModal entries={entries} selectedEntry={selected} onSelect={setSelected} onClose={jest.fn()} onConfirm={jest.fn()} />;
+  }
+  const view = await renderComponent(<ControlledResumeModal />);
+
+  const continueButton = view.container.querySelector('[data-testid="resume-sup-confirm"]');
+  expect(continueButton.disabled).toBe(true);
+  expect(view.container.textContent).toContain('Date');
+  expect(view.container.textContent).toContain('Candidate');
+  expect(view.container.textContent).toContain('Calls completed');
+  expect(view.container.textContent).toContain('Status');
+  expect(view.container.textContent).toContain('Taylor Example');
+  expect(view.container.textContent).toContain('Jordan Example');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="resume-entry-1"]').click();
+    await flushPromises();
+  });
+  expect(continueButton.disabled).toBe(false);
+  expect(view.container.querySelector('.resume-session-card.is-selected').textContent).toContain('Jordan Example');
+  await view.unmount();
 });

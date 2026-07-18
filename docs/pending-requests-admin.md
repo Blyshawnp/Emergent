@@ -4,17 +4,19 @@ This is the administrator/release checklist for the MTS/SAM Pending Requests sub
 
 ## SAM alert lifecycle
 
-- SAM selects at most one immediate Pending Requests alert at a time, deterministically preferring the oldest unresolved eligible request.
-- `View` opens the appropriate Pending Requests filter and advances to the next eligible request during the current refresh cycle.
-- `Remind Me in 30 Minutes` suppresses only that request's immediate alert until the exact 30-minute expiry.
-- `Dismiss` uses the same 30-minute immediate-alert suppression. It does not approve, deny, delete, or permanently hide a request.
-- The bell count, category counts, and Pending Requests inbox continue to include every unresolved request while its immediate alert is suppressed.
-- Escape closes the immediate alert for the current refresh cycle without resolving or persistently suppressing the request. No focus trap is retained.
-- A normal successful refresh starts a new alert cycle. Expired suppressions become eligible again without requiring a restart.
+- SAM selects at most one immediate workflow alert at a time, deterministically preferring the oldest unresolved eligible workflow request.
+- `View` opens the appropriate Pending Requests filter and advances to the next eligible workflow request during the current refresh cycle.
+- `Remind Me in 30 Minutes` suppresses only that workflow request's immediate alert until the exact 30-minute expiry.
+- `Dismiss` uses the same 30-minute immediate-alert suppression. It does not approve, deny, delete, or permanently hide a workflow request.
+- Headset Review reminders are grouped, repeat after about 2 hours while SAM remains open, and are eligible once per new SAM login/session when unresolved.
+- Opening Headset Review acknowledges the immediate headset reminder for that SAM session. The Headset Review badge and bell count remain until approve/deny resolves the rows.
+- The bell count, category counts, Headset Review badge, and Pending Requests inbox continue to include every unresolved actionable item while immediate alerts are suppressed.
+- Escape closes the immediate alert for the current refresh cycle without resolving or persistently suppressing a workflow request. No focus trap is retained.
+- A normal successful refresh starts a new alert cycle. Expired workflow suppressions and eligible headset reminders become available again without requiring a restart.
 
-Suppression state is local to the SAM installation/browser profile. The versioned storage record contains only `request_id`, suppression type (`remind` or `dismiss`), and an epoch expiry timestamp. It never stores candidate names, notes, denial reasons, request objects, spreadsheet identifiers, or transport details. Corrupt, invalid, expired, resolved, or missing entries are removed, and the collection is bounded.
+Suppression state is local to the SAM installation/browser profile. Workflow suppression records contain only `request_id`, suppression type (`remind` or `dismiss`), and an epoch expiry timestamp. Headset reminder state contains only a grouped signature and next eligible timestamp. It never stores candidate names, headset brand/model, notes, denial reasons, request objects, spreadsheet identifiers, or transport details. Corrupt, invalid, expired, resolved, or missing entries are removed, and the collection is bounded.
 
-When a request refresh reports Approved or Denied, SAM removes that request's suppression state and immediate alert, decrements the unresolved bell/category counts from the refreshed server snapshot, and keeps the resolved record available under Approved or Denied filters. Cleanup is safe to repeat.
+When a workflow request refresh reports Approved or Denied, SAM removes that request's suppression state and immediate alert, decrements the workflow and bell counts from the refreshed server snapshot, and keeps the resolved record available under Approved or Denied filters. When a headset review is approved or denied, SAM clears the grouped headset reminder state and decrements the Headset Review count from the refreshed snapshot. Cleanup is safe to repeat.
 
 ## Repository and deployment status
 
@@ -53,6 +55,7 @@ Use safe test records in the configured environment after updating the existing 
 2. Close each app normally in both orders; confirm only its owned processes stop and its port is released.
 3. Confirm normal errors remain sanitized and contain no deployment URL, sheet ID, token, credential, or raw request object.
 4. Check the alert/banner and its View, Remind Me, and Dismiss actions at restored/maximized widths and 100%, 125%, 150%, and 200% display scaling.
-5. Confirm no popup loop, timer storm, duplicate listener, clipped action, covered navigation/content, or lingering focus trap.
+5. Confirm Headset Review shows one grouped reminder for multiple pending headsets, repeats after about 2 hours, and clears after approve/deny.
+6. Confirm no popup loop, timer storm, duplicate listener, clipped action, covered navigation/content, or lingering focus trap.
 
 Record the date, deployment version description, pass/fail result for each numbered item, and sanitized blocker summary. Do not record secrets or private request content.

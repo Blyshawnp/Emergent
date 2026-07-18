@@ -2,7 +2,10 @@ const assert = require('assert');
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
-const { createOwnedProcessRegistry } = require('../src/processOwnership');
+const {
+  classifyBackendListenerOwnership,
+  createOwnedProcessRegistry,
+} = require('../src/processOwnership');
 
 function createMockChild(pid) {
   const child = new EventEmitter();
@@ -21,6 +24,42 @@ function createMockChild(pid) {
 }
 
 async function run() {
+  const now = Date.now();
+  const owner = {
+    pid: 4242,
+    ownerPid: 2121,
+    ownerMode: 'main',
+  };
+  const heartbeat = {
+    pid: 2121,
+    mode: 'main',
+    updatedAt: now - 1000,
+  };
+  assert.equal(classifyBackendListenerOwnership({
+    mode: 'main',
+    listenerPids: [4242],
+    owner,
+    heartbeat,
+    ownerProcessRunning: true,
+    now,
+  }).classification, 'active-owned');
+  assert.equal(classifyBackendListenerOwnership({
+    mode: 'main',
+    listenerPids: [4242],
+    owner,
+    heartbeat: { ...heartbeat, updatedAt: now - 30000 },
+    ownerProcessRunning: false,
+    now,
+  }).classification, 'stale-owned');
+  assert.equal(classifyBackendListenerOwnership({
+    mode: 'notification-manager',
+    listenerPids: [4242],
+    owner,
+    heartbeat,
+    ownerProcessRunning: true,
+    now,
+  }).classification, 'unmanaged');
+
   const forced = [];
   const logs = [];
   const logger = {
@@ -102,6 +141,9 @@ async function run() {
   assert.match(mainSource, /QUIT_CONFIRMATION_TIMEOUT_MS\s*=\s*4000/);
   assert.match(mainSource, /Renderer did not acknowledge quit confirmation; using native fallback dialog\./);
   assert.match(mainSource, /buttons:\s*\['No', 'Yes'\]/);
+  assert.match(mainSource, /\$\{mode\}\.backend-owner\.json/);
+  assert.match(mainSource, /ownership\.classification === 'stale-owned'/);
+  assert.match(mainSource, /ownership\.classification === 'unmanaged' && !isDev/);
   assert.doesNotMatch(mainSource, /taskkill\s+\/IM/i);
   assert.doesNotMatch(mainSource, /wmic/i);
 }

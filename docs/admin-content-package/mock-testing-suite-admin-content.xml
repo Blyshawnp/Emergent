@@ -20,33 +20,117 @@
         <Cell ss:StyleID="Header"><Data ss:Type="String">Title</Data></Cell>
         <Cell ss:StyleID="Header"><Data ss:Type="String">Message</Data></Cell>
       </Row>
-      <Row><Cell><Data ss:Type="String">Pass</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">**:tada: Congratulations! You passed your test calls! :tada:**
-- 24-48hrs to go live. Watch your inbox.
-- Log out of Call Corp and Simple Script.
-- Complete TLMS courses.
-- Remove extra mock shifts from Gateway.
-**Welcome to ACDD!**</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Fail</Data></Cell><Cell><Data ss:Type="String">Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Fail Final</Data></Cell><Cell><Data ss:Type="String">Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Incomplete</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Our time is up. We'll schedule another session for Supervisor Transfers.
-Please give me a moment.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Ncns</Data></Cell><Cell><Data ss:Type="String">Candidate was a No Call / No Show for mock testing.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Intro</Data></Cell><Cell><Data ss:Type="String">I'll help you complete the Supervisor Transfer test call. I'll provide instructions step by step. OK?</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Instructions</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">When you need to transfer:
-1) Ask in chat first
-2) Give CCM time to check
-3) When CCM says ok - let caller know you are transferring</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Transfer</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">1. Click Transfer in CC
-2. Select Queue &gt; ACD Direct Supervisor
-3. Tell caller to hold, click Blind Transfer</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Dte</Data></Cell><Cell><Data ss:Type="String">Change DTE to Ready (green).</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Status</Data></Cell><Cell><Data ss:Type="String">I show Ready. Calling now.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Transfer Now</Data></Cell><Cell><Data ss:Type="String">You may transfer the call now.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Stars</Data></Cell><Cell><Data ss:Type="String">WXYZ Supervisor Test Call Being Queued</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Disposition</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Click cancel (red phone), disposition as Test/Training.
-Then disposition in Call Corp.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Sup Retry</Data></Cell><Cell><Data ss:Type="String">Transfer was not successful. Review steps and let me know when ready.</Data></Cell></Row>
-      <Row><Cell><Data ss:Type="String">Ran Out Of Time</Data></Cell><Cell><Data ss:Type="String">We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Welcome</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Hello. I will be helping you with your mock calls today. To get started, please respond to the direct message I sent you. You can locate your Direct Messages in the Top, lefthand corner of Discord. I will then call you on Discord. Below you will find instructions on how to join the call. Once we are connected on the audio call, I will give you instructions to share your screen, ok? https://gyazo.com/64ebbf56abfa200efe8694e185f15ba6</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Out of Time (Needs Sup)</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Our time has come to an end for this shift. We will need to schedule a time to meet again to complete your Supervisor Transfers. You will not need to schedule anything on your end. Please give me one moment to check availability.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Intro</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Hello! I&#x27;ll be helping you complete the Supervisor Transfer test call to complete your Certification. I&#x27;ll provide the next instructions a step at a time, please acknowledge as we go so we can make sure all is ready for the Supervisor Transfer call. OK?</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Intro Alt</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Okay, now that you&#x27;ve finished your mock calls, I&#x27;ll assist you in completing the Supervisor Transfer test call to finalize your certification. We&#x27;ve already ensured you&#x27;re signed out of Playground, signed into Simple Script, and logged into DTE. I will now provide the next steps, one at a time. Please acknowledge each step so we can confirm everything is ready for the Supervisor Transfer call, ok?</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup-Logout of Playground</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Please log out of the Playground (if you&#x27;re logged in), the log out is in the upper right corner, once logged out go ahead and close that window. -let me know when that’s done please.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup-Launch Simple Script</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Next, let&#x27;s go ahead and next launch Simple Script. Please make sure you are logging in on Simple Script from the External Services menu with your *Gateway Username and password* (example: first.last or first.initial) - if you are logged in using your email you will need to log out and enter the correct login credentials. Do not click on anything within the Simple Script window please.
+
+
+
+-Let me know when you have that set please</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup-Launch DTE #1</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Next, Please Launch Call Corp DTE from your Desktop (bottom task bar). https://gyazo.com/6265bf871817789537c8e640e54893b6 -Let me know when that&#x27;s done please</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup-Launch DTE #2</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Next, you may be met with a small pop-up box to Allow DTE permission to load. Please Click the BLUE “Allow” option. And DTE will then load. https://gyazo.com/f05aaeecb5905945adc60c1411980e76</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup-Launch DTE #3</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">You may also receive another small pop-up box in the browser window to allow permission. Please click the always allow button, and click Open Desktop Experience. https://gyazo.com/3f940700dd6ee0bf15bba4c60179dcaa     Let me know when that’s done please.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup-Launch DTE #4</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Next, Call Corp DTE will prompt you to choose a Profile Option. Please Choose “PRIMARY”. https://gyazo.com/3c93129bd587ea2f016071b8ddb6aa72     Let me know when you are there please.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Instructions #1</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">We are now going to proceed with the instructions for the Supervisor transfer.
+
+When a call is routed to you.... the script will load on it&#x27;s own. As soon as the whisper completes  ̶  immediately greet your caller wearing a smile. Follow the script as written, and verify all data entered as you go. Any issues such as no script load or questions during the call please ask here in chat for assistance  ̶ ok? (Once you&#x27;re taking live calls it will be in the Welcome Team chat)</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Instructions #2</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">If the script is slow to load, use a generic greeting, such as: &quot;Thank you for calling to support WXYZ, my name is ________. One moment, our system is experiencing a slight delay.&quot; By then, your script should be fully loaded and ready for you to continue. Please notify the CCM of this or any technical issues in the chat – today, that&#x27;s in this ACD Certification Chat. Okay?</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Sup Request Instructions</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">When you need to transfer, you will….
+
+1) Ask in chat first before transferring - include the station, caller&#x27;s name, and issue ex.: WXYZ, sup request, member&#x27;s name, and member issue
+
+2) Give the CCM time to check to see if a Supervisor is available
+
+We never put our caller on hold so try to minimize dead air.
+
+3) When the CCM says ok to transfer...
+
+— Let your caller know you are transferring</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Transfer Instructions #1</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Once you have received Permission from the CCM to Transfer the call-
+
+Click Transfer Button In CC
+
+https://gyazo.com/d4039d8d764ad45da252c86d096a6489</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Transfer Instructions #2</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">On the box that pops up, in the first box make sure it says &quot;Queue&quot;
+
+In the second box, select &quot;ACD Direct Supervisor&quot;
+
+(if you start typing ACD it will scroll to that section)
+
+Be sure to close the call and let the caller know to please hold for the transfer.
+
+Then click Blind Transfer, and the call will be transferred to the Supervisor.
+
+https://gyazo.com/2971f576b153052395f7be7ac7e4b19b
+
+https://gyazo.com/b7b946df7c0d6aa4d18729e00480e0b9</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Change DTE Status</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">OK, so that you can receive the call I need to have you change your DTE to Ready status.
+
+
+
+On DTE, click the Icon with the Person and Check Mark till it shows
+
+
+
+“Ready” and is GREEN. And we will do the FIRST call.
+
+
+
+https://gyazo.com/01a435d23c45e300087dd5c39d172fd5</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">DTE Status</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Ok, I show your status as Ready on my end. I am now going to call. You should receive the call in a moment.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Stars Post-Sup Transfer</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">WXYZ: Supervisor Test Call Being Queued</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">You May Transfer</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">You may transfer the call now.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Disposition</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">After you click blind transfer, you will need to disposition the call in the script and in Call Corp DTE.
+
+*Script*
+- Click the cancel button in the script (red phone) and disposition as **Test / Training**.
+
+Next, Please Disposition the call in Call Corp *DTE*.
+
+- You will choose the option from the list that best matches what happened on the call.
+- This call should be dispositioned as **Test Call**.
+- DTE will go back to “Ready Status” automatically in 30 seconds or when you click Complete Wrap-Up.
+
+Let me know when you have done, please.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Passed All</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">**:tada: Congratulations! Great job! You have successfully completed your test calls.**
+
+- Watch your inbox for your step 4 final instructions - your Welcome Team TLMS information.
+
+- Please log out of Call Corp and Simple Script with the Log Out links (never &quot;X&quot; out of these windows).
+
+- If you haven&#x27;t already done so be sure to complete any additional courses assigned in your TLMS. You may email certification@acdsupport.com for any questions on courses.
+
+- If you&#x27;re signed up on any additional mock or testing shifts, please take a moment to go to Current Schedule under My Schedule in Gateway and remove them.
+
+**Welcome to ACDD! Have a fabulous remainder of your day!**
+
+https://gyazo.com/54533787846921462083e8029c028304</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Failed 1st Sup Transfer</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Unfortunately our call did not result in a successful transfer to a supervisor. Please take a moment to review the steps that we went through here in chat and let me know when you&#x27;re ready to try again.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Failed Both Sup Transfers</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Unfortunately our call did not result in a successful transfer to a supervisor. Please review the steps in the presentation. Since both attempts at supervisor transfers this session were not successful, we will need to schedule a time to meet again to complete your Supervisor Transfers.
+
+You will not need to schedule anything on your end. Please give me a moment to check availability.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Fail Session</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. I think you will benefit from further practice in the WXYZ Certification script. Please reschedule for another Mock session in Gateway as soon as possible (within 24 hours).
+
+If you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Fail Final Attempt</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">Thank you for your time and interest in becoming a phone agent for ACD Direct and it was a pleasure working with you today. Unfortunately, based on our session, I&#x27;m unable to pass you. At this time you have exceeded the amount of Mock Call session attempts allowed. We wish you luck in your future endeavors and have a nice day.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">VPN Fail</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. Using a VPN is not accepted when contracting with ACD. Your VPN must be turned off or be able to be turned off for your mock session as well as when taking calls.
+
+Any further questions should be directed to certification@acdsupport.com.
+Please reschedule for another Mock session in Gateway as soon as possible (within 24 hours).
+
+
+
+If you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then.</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">Wrong Headset</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. A USB headset with a noise cancelling microphone is required to contract with ACD. Please reschedule for another Mock session in Gateway as soon as possible (within 24 hours).
+
+
+
+If you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then.
+</Data></Cell></Row>
+      <Row><Cell><Data ss:Type="String">No Candidate</Data></Cell><Cell ss:StyleID="Wrap"><Data ss:Type="String">@here Hello, if anyone in the chat needs to complete their mock calls and/or supervisor transfer and are not scheduled, I am available. Just reply to this message.</Data></Cell></Row>
     </Table>
   </Worksheet>
   <Worksheet ss:Name="Screenshots">

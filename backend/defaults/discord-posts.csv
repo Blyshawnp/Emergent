@@ -13,7 +13,7 @@
 "Sup Transfer Setup","Sup-Launch DTE #2","Next, you may be met with a small pop-up box to Allow DTE permission to load. Please Click the BLUE “Allow” option. And DTE will then load. https://gyazo.com/f05aaeecb5905945adc60c1411980e76","/DTE-allow.png"
 "Sup Transfer Setup","Sup-Launch DTE #3","You may also receive another small pop-up box in the browser window to allow permission. Please click the always allow button, and click Open Desktop Experience. https://gyazo.com/3f940700dd6ee0bf15bba4c60179dcaa     Let me know when that’s done please.","/DTE-permission.png"
 "Sup Transfer Setup","Sup-Launch DTE #4","Next, Call Corp DTE will prompt you to choose a Profile Option. Please Choose “PRIMARY”. https://gyazo.com/3c93129bd587ea2f016071b8ddb6aa72     Let me know when you are there please.","/DTE-profile.png"
-"Sup Transfer Process","Sup Instructions #1","We are now going to proceed with the Supervisor transfer.
+"Sup Transfer Process","Sup Instructions #1","We are now going to proceed with the instructions for the Supervisor transfer.
 
 When a call is routed to you.... the script will load on it's own. As soon as the whisper completes  ̶  immediately greet your caller wearing a smile. Follow the script as written, and verify all data entered as you go. Any issues such as no script load or questions during the call please ask here in chat for assistance  ̶ ok? (Once you're taking live calls it will be in the Welcome Team chat)",""
 "Sup Transfer Process","Sup Instructions #2","If the script is slow to load, use a generic greeting, such as: ""Thank you for calling to support WXYZ, my name is ________. One moment, our system is experiencing a slight delay."" By then, your script should be fully loaded and ready for you to continue. Please notify the CCM of this or any technical issues in the chat – today, that's in this ACD Certification Chat. Okay?",""
@@ -27,7 +27,7 @@ We never put our caller on hold so try to minimize dead air.
 
 3) When the CCM says ok to transfer...
 
-—Let your caller know you are transferring",""
+— Let your caller know you are transferring",""
 "Sup Transfer Process","Transfer Instructions #1","Once you have received Permission from the CCM to Transfer the call-
 
 Click Transfer Button In CC
@@ -62,18 +62,31 @@ https://gyazo.com/01a435d23c45e300087dd5c39d172fd5","/DTE-ready.png"
 "Sup Transfer Process","DTE Status","Ok, I show your status as Ready on my end. I am now going to call. You should receive the call in a moment.","/DTE-ready.png"
 "Sup Transfer Process","Stars Post-Sup Transfer","WXYZ: Supervisor Test Call Being Queued",""
 "Sup Transfer Process","You May Transfer","You may transfer the call now.",""
-"Sup Transfer Process","Disposition","Click the cancel button in the script (red phone) and disposition as Test / Training
+"Sup Transfer Process","Disposition","After you click blind transfer, you will need to disposition the call in the script and in Call Corp DTE.
 
-- let me know when you have that please
+*Script*
+- Click the cancel button in the script (red phone) and disposition as **Test / Training**.
 
-Next, Please Disposition the call in Call Corp.
+Next, Please Disposition the call in Call Corp *DTE*.
 
-You will choose the option from the list that best matches what happened on the call. And then DTE will go back to “ Ready Status” automatically.","/script-disposition.png|/DTE-disposition.png"
-"Success Outcome","Passed All","**:tada: Congratulations! Great job! You have successfully completed your test calls. Watch your inbox for your step 4 final instructions - your Welcome Team TLMS information. Please log out of CallCorp and Simple Script with the Log Out links (never X out of these windows). Welcome to ACDD! Have a fabulous remainder of your day! • If you haven't already done so be sure to complete any additional courses assigned in your TLMS. Email certification@acdsupport.com for any questions on courses.• If you're signed up on any additional mock or testing shifts, please take a moment to go to Current Schedule under My Schedule in Gateway and remove them.
+- You will choose the option from the list that best matches what happened on the call.
+- This call should be dispositioned as **Test Call**.
+- DTE will go back to “Ready Status” automatically in 30 seconds or when you click Complete Wrap-Up.
+
+Let me know when you have done, please.","/script-disposition.png|/DTE-disposition.png"
+"Success Outcome","Passed All","**:tada: Congratulations! Great job! You have successfully completed your test calls.**
+
+- Watch your inbox for your step 4 final instructions - your Welcome Team TLMS information.
+
+- Please log out of Call Corp and Simple Script with the Log Out links (never ""X"" out of these windows).
+
+- If you haven't already done so be sure to complete any additional courses assigned in your TLMS. You may email certification@acdsupport.com for any questions on courses.
+
+- If you're signed up on any additional mock or testing shifts, please take a moment to go to Current Schedule under My Schedule in Gateway and remove them.
 
 **Welcome to ACDD! Have a fabulous remainder of your day!**
 
-","/welcome-new-agent.png"
+https://gyazo.com/54533787846921462083e8029c028304","/welcome-new-agent.png"
 "Failure Outcomes","Failed 1st Sup Transfer","Unfortunately our call did not result in a successful transfer to a supervisor. Please take a moment to review the steps that we went through here in chat and let me know when you're ready to try again.",""
 "Failure Outcomes","Failed Both Sup Transfers","Unfortunately our call did not result in a successful transfer to a supervisor. Please review the steps in the presentation. Since both attempts at supervisor transfers this session were not successful, we will need to schedule a time to meet again to complete your Supervisor Transfers.
 

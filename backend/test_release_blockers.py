@@ -139,5 +139,34 @@ class ReleaseBlockerTests(unittest.TestCase):
         self.assertIn("google-service-account.json", checklist_content)
         self.assertIn("service-account-packaging-risk", checklist_content)
 
+    def test_release_packaging_excludes_service_account_credential(self):
+        repo_root = Path(server.ROOT_DIR).parent
+        package_manifest = (repo_root / "desktop" / "package.json").read_text(encoding="utf-8")
+        sam_manifest = (repo_root / "desktop" / "notification-manager-builder.json").read_text(encoding="utf-8")
+        self.assertNotIn('"google-service-account.json"', package_manifest)
+        self.assertNotIn('"**/google-service-account.json"', sam_manifest)
+        self.assertIn("apps-script-api-mts.json", package_manifest)
+        self.assertNotIn("apps-script-api-sam.json", package_manifest)
+        self.assertIn("apps-script-api-sam.json", sam_manifest)
+        self.assertNotIn("apps-script-api-mts.json", sam_manifest)
+        self.assertIn("scripts/validate-apps-script-package.js", package_manifest)
+        self.assertIn("scripts/validate-apps-script-package.js", sam_manifest)
+
+        for relative_path in (
+            "dev-tools/clean-rebuild-all.ps1",
+            "dev-tools/clean-rebuild-production-ready-only.ps1",
+            "dev-tools/clean-rebuild-desktop-only.ps1",
+        ):
+            source = (repo_root / relative_path).read_text(encoding="utf-8")
+            self.assertNotIn("Copy-FileChecked $serviceAccountSource", source)
+            self.assertIn("@('google-service-account.json', 'service-account.json')", source)
+            self.assertIn("apps-script-api-mts.json", source)
+            self.assertIn("apps-script-api-sam.json", source)
+            self.assertIn("ExpectedRole", source)
+
+        ignore_source = (repo_root / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("backend/config/apps-script-api-mts.json", ignore_source)
+        self.assertIn("backend/config/apps-script-api-sam.json", ignore_source)
+
 if __name__ == "__main__":
     unittest.main()

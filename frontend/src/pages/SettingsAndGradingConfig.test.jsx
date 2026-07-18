@@ -291,10 +291,9 @@ test('settings exposes welcome voice and sound volume controls', async () => {
   await view.unmount();
 });
 
-test('settings does not render the internally managed reschedule admin mention', async () => {
+test('settings does not render obsolete reschedule admin mention controls', async () => {
   api.getSettings.mockResolvedValue({
     tester_name: 'Trainer',
-    newbieShiftRescheduleAdminMention: '@beckysowlesacdadmin',
   });
   api.getDefaults.mockResolvedValue({});
 
@@ -462,28 +461,33 @@ test('settings payment tab shows defaults and persists add/remove edits', async 
 });
 
 test('calls page renders custom coaching and fail reasons from saved settings', async () => {
-  api.getCurrentSession.mockResolvedValue({
+  const currentSession = {
     session: {
       candidate_name: 'Taylor Example',
       final_attempt: false,
     },
-  });
-  api.getDefaults.mockResolvedValue({
+  };
+  const defaults = {
     call_types: ['New Donor - One Time Donation'],
     shows: [['Show A', '$25', '$10', 'Gift']],
     donors_new: [['Jamie', 'Doe', '1 Main', 'Austin', 'TX', '78701', '555-0100', 'jamie@example.com']],
     call_coaching: [{ id: 'default', label: 'Default Coaching', children: [] }],
     call_fails: ['Default Fail'],
-  });
-  api.getSettings.mockResolvedValue({
+  };
+  const settings = {
     call_types: ['New Donor - One Time Donation'],
     shows: [['Show A', '$25', '$10', 'Gift']],
     donors_new: [['Jamie', 'Doe', '1 Main', 'Austin', 'TX', '78701', '555-0100', 'jamie@example.com']],
     call_coaching: [{ id: 'test-coach', label: 'Test Coaching Reason', children: ['Test Coaching Subitem'] }],
     call_fails: ['Test Fail Reason'],
-  });
+  };
+  api.getCurrentSession.mockResolvedValue(currentSession);
+  api.getDefaults.mockResolvedValue(defaults);
+  api.getSettings.mockResolvedValue(settings);
 
-  const view = await renderComponent(<CallsPage onNavigate={jest.fn()} />);
+  const view = await renderComponent(
+    <CallsPage onNavigate={jest.fn()} currentSession={currentSession} defaults={defaults} settings={settings} />
+  );
 
   expect(view.container.textContent).toContain('Test Coaching Reason');
   expect(view.container.textContent).toContain('Test Coaching Subitem');
@@ -501,14 +505,14 @@ test('calls page renders custom coaching and fail reasons from saved settings', 
 });
 
 test('supervisor transfer page renders custom coaching and fail reasons from saved settings', async () => {
-  api.getCurrentSession.mockResolvedValue({
+  const currentSession = {
     session: {
       candidate_name: 'Taylor Example',
       supervisor_only: true,
       final_attempt: false,
     },
-  });
-  api.getDefaults.mockResolvedValue({
+  };
+  const defaults = {
     shows: [['Show A', '$25', '$10', 'Gift']],
     donors_new: [['Jamie', 'Doe', '1 Main', 'Austin', 'TX', '78701', '555-0100', 'jamie@example.com']],
     donors_existing: [],
@@ -516,8 +520,8 @@ test('supervisor transfer page renders custom coaching and fail reasons from sav
     sup_reasons: ['Default Sup Reason'],
     sup_coaching: [{ label: 'Default Supervisor Coaching', children: [] }],
     sup_fails: ['Default Supervisor Fail'],
-  });
-  api.getSettings.mockResolvedValue({
+  };
+  const settings = {
     shows: [['Show A', '$25', '$10', 'Gift']],
     donors_new: [['Jamie', 'Doe', '1 Main', 'Austin', 'TX', '78701', '555-0100', 'jamie@example.com']],
     donors_existing: [],
@@ -525,9 +529,14 @@ test('supervisor transfer page renders custom coaching and fail reasons from sav
     sup_reasons: ['Default Sup Reason'],
     sup_coaching: [{ label: 'Test Supervisor Coaching', children: ['Supervisor Subitem'] }],
     sup_fails: ['Test Supervisor Fail'],
-  });
+  };
+  api.getCurrentSession.mockResolvedValue(currentSession);
+  api.getDefaults.mockResolvedValue(defaults);
+  api.getSettings.mockResolvedValue(settings);
 
-  const view = await renderComponent(<SupTransferPage onNavigate={jest.fn()} />);
+  const view = await renderComponent(
+    <SupTransferPage onNavigate={jest.fn()} currentSession={currentSession} defaults={defaults} settings={settings} />
+  );
 
   expect(view.container.textContent).toContain('Test Supervisor Coaching');
   expect(view.container.textContent).toContain('Supervisor Subitem');
@@ -902,7 +911,10 @@ test('vpn proxy review verdict requires explicit manual-review decision before c
     }),
   }));
   expect(api.startSession.mock.calls[0][0].auto_fail_reason).toBeUndefined();
-  expect(onNavigate).toHaveBeenCalledWith('calls');
+  expect(onNavigate).toHaveBeenCalledWith('calls', expect.objectContaining({
+    session: expect.objectContaining({ candidate_name: 'Taylor Example' }),
+    navigationStartedAt: expect.any(Number),
+  }));
   await view.unmount();
 });
 

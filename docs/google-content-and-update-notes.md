@@ -94,10 +94,21 @@ Update metadata is stored on the Google Sheet, not in a Google Doc. The `update-
 
 `headset-review-log`:
 
+- `review_id`
+- `source_session_id`
+- `candidate_name`
+- `tester_name`
 - `Brand`
 - `Model`
 - `Status`
 - `Note`
+- `created_at`
+- `updated_at`
+- `decision_at`
+- `decision_by`
+- `denial_reason`
+
+Rows are created by stable review ID. Repeated MTS retries should update or skip the same pending row and must not reset approved or denied rows to pending.
 
 `headsets`:
 

@@ -34,6 +34,8 @@ logs/
 backend/config/google-service-account.json
 backend/config/service-account.json
 backend/config/apps-script-api.json
+backend/config/apps-script-api-mts.json
+backend/config/apps-script-api-sam.json
 
 **/backend/config/google-service-account.json
 **/backend/config/service-account.json
@@ -63,6 +65,12 @@ venv-*/
 # Pytest
 
 .pytest_cache/
+
+# Test and browser QA artifacts
+
+playwright-report/
+test-results/
+screenshots/
 
 # ============================================================
 # OS Junk

@@ -1,7 +1,12 @@
 import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import SupTransferPage from './SupTransferPage';
+import fs from 'fs';
+import path from 'path';
+import SupTransferPage, {
+  DEFAULT_SUP_REASONS,
+  getSupervisorReasonScenarioText,
+} from './SupTransferPage';
 import api from '../api';
 
 const mockModal = {
@@ -47,30 +52,51 @@ function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function selectValue(select, value) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  setter.call(select, value);
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function readReasonCsv(relativePath) {
+  return fs.readFileSync(path.resolve(__dirname, relativePath), 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(1)
+    .map((line) => line.replace(/^"|"$/g, ''));
+}
+
 beforeAll(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   window.scrollTo = jest.fn();
 });
 
-async function renderPage(sessionOverrides = {}, navigationState = null, defaults = {}) {
+async function renderPage(sessionOverrides = {}, navigationState = null, defaults = {}, settings = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
   const onNavigate = jest.fn();
 
-  api.getCurrentSession.mockResolvedValue({
+  const currentSession = {
     session: {
       candidate_name: 'Taylor Example',
       supervisor_only: false,
       final_attempt: false,
       ...sessionOverrides,
     },
-  });
-  api.getDefaults.mockResolvedValue(defaults);
-  api.getSettings.mockResolvedValue({});
+  };
+  api.getCurrentSession.mockResolvedValue(currentSession);
 
   await act(async () => {
-    root.render(<SupTransferPage onNavigate={onNavigate} navigationState={navigationState} />);
+    root.render(
+      <SupTransferPage
+        onNavigate={onNavigate}
+        navigationState={navigationState}
+        settings={settings}
+        defaults={defaults}
+        currentSession={currentSession}
+      />
+    );
     await flushPromises();
   });
 
@@ -98,6 +124,76 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.innerHTML = '';
+});
+
+test.each([
+  ['Damaged Gift', 'The caller received a damaged gift.'],
+  ['Did Not Receive Gift', 'The caller did not receive their gift.'],
+  ["Didn't Receive Gift", 'The caller did not receive their gift.'],
+  ['Cancelled Sustaining Donation Charged', 'The caller was charged for a cancelled sustaining donation.'],
+  ['Charged for a cancelled sustaining', 'The caller was charged for a cancelled sustaining donation.'],
+  ['Double Charged', 'The caller was double charged.'],
+  ['Hung Up On', 'The caller was hung up on during a previous call.'],
+  ['Use Own/Other', 'Tester’s chosen reason.'],
+])('uses reason-specific Supervisor Transfer text for %s', (reason, expected) => {
+  expect(getSupervisorReasonScenarioText(reason)).toBe(expected);
+});
+
+test('only Hung Up On uses the previous-call suffix and prohibited phrases are absent', () => {
+  const outputs = [
+    'Damaged Gift',
+    'Did Not Receive Gift',
+    'Cancelled Sustaining Donation Charged',
+    'Double Charged',
+    'Hung Up On',
+    'Use Own/Other',
+  ].map((reason) => getSupervisorReasonScenarioText(reason));
+
+  expect(outputs.filter((text) => text.includes('during a previous call'))).toEqual([
+    'The caller was hung up on during a previous call.',
+  ]);
+  expect(outputs.join(' ')).not.toMatch(/received a damaged gift during a previous call/i);
+  expect(outputs.join(' ')).not.toMatch(/did(?:n't| not) receive their gift during a previous call/i);
+  expect(outputs.join(' ')).not.toMatch(/double charged during a previous call/i);
+  expect(outputs.join(' ')).not.toMatch(/charged for a cancelled sustaining donation during a previous call/i);
+  expect(outputs.join(' ')).not.toMatch(/caller Use Own\/Other/i);
+});
+
+test('Use Own/Other can render safely supplied custom text', () => {
+  expect(getSupervisorReasonScenarioText('Use Own/Other', 'the package arrived late'))
+    .toBe('the package arrived late.');
+});
+
+test('dropdown changes update scenario text and Regenerate preserves reason semantics and caller identity', async () => {
+  const view = await renderPage({}, null, {
+    donors_new: [['Jamie', 'Caller', '1 Main St', '', 'Town', 'NC', '555-0100', 'jamie@example.test']],
+    shows: [['WXYZ']],
+    sup_reasons: ['Damaged Gift', 'Double Charged'],
+  });
+  const scenario = view.container.querySelector('[data-testid="sup-scenario-card"]');
+
+  expect(scenario.textContent).toContain('For this call you will portray Jamie Caller.');
+  expect(scenario.textContent).toContain('Jamie would like to speak with a supervisor.');
+  expect(scenario.textContent).toContain('The caller received a damaged gift.');
+
+  await act(async () => {
+    selectValue(view.container.querySelector('[data-testid="sup-reason"]'), 'Double Charged');
+  });
+  expect(scenario.textContent).toContain('The caller was double charged.');
+  expect(scenario.textContent).not.toContain('The caller received a damaged gift.');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="sup-regen"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  expect(scenario.textContent).toContain('The caller was double charged.');
+  expect(scenario.textContent).toContain('Jamie would like to speak with a supervisor.');
+
+  await view.unmount();
+});
+
+test('frontend, packaged backend, and admin-package fallback reason labels stay aligned', () => {
+  expect(readReasonCsv('../../../backend/defaults/sup-reasons.csv')).toEqual(DEFAULT_SUP_REASONS);
+  expect(readReasonCsv('../../../docs/admin-content-package/csv-tabs/sup-reasons.csv')).toEqual(DEFAULT_SUP_REASONS);
 });
 
 test('shows NC/NS and Not Ready buttons on supervisor-only transfer 1', async () => {
@@ -214,6 +310,16 @@ test('supervisor-only Back returns to Basics', async () => {
     await flushPromises();
   });
   expect(view.onNavigate).toHaveBeenCalledWith('basics');
+  await view.unmount();
+});
+
+test('uses App-cached entry data without duplicate defaults, settings, or session requests', async () => {
+  const view = await renderPage({ supervisor_only: true });
+
+  expect(api.getDefaults).not.toHaveBeenCalled();
+  expect(api.getSettings).not.toHaveBeenCalled();
+  expect(api.getCurrentSession).not.toHaveBeenCalled();
+
   await view.unmount();
 });
 

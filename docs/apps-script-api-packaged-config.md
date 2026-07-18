@@ -2,44 +2,53 @@
 
 MTS and SAM use a packaged Apps Script web-app endpoint for Google Sheet reads and writes. This replaces distribution of a Google service-account JSON and its long-lived private key.
 
-The application does not expose the API token in Settings, API status payloads, logs, error messages, or the user interface. The token is still a packaged shared secret and can be extracted by a determined local user, so the Apps Script deployment must validate it, limit its capabilities to the required sheets/actions, and support rapid rotation.
+The application does not expose API credentials in Settings, API status payloads, logs, error messages, or the user interface. Packaged credentials can still be extracted by a determined local user, so MTS and SAM use separate credentials with role/action-scoped authorization. The MTS credential cannot invoke SAM decisions, notification administration, generic sheet writes, or candidate-administration operations.
 
 ## Config locations
 
-The build-local config is:
+The ignored build-local configs are:
 
-`backend/config/apps-script-api.json`
+- MTS: `backend/config/apps-script-api-mts.json`
+- SAM: `backend/config/apps-script-api-sam.json`
 
-It is ignored by Git and must not be committed. Start from:
+They are ignored by Git and must not be committed. Start from:
 
-`backend/config/apps-script-api.example.json`
+- `backend/config/apps-script-api-mts.example.json`
+- `backend/config/apps-script-api-sam.example.json`
 
 The packaged copies are placed at:
 
 - MTS: `resources/backend/config/apps-script-api.json`
 - SAM: `resources/backend/config/apps-script-api.json`
 
-The backend resolves an explicit `APPS_SCRIPT_API_CONFIG_FILE` first, then the packaged resource path, then the config directory next to a frozen backend executable, and finally `backend/config/apps-script-api.json` during development.
+The backend resolves an explicit `APPS_SCRIPT_API_CONFIG_FILE` first, then the packaged resource path, then the config directory next to a frozen backend executable. During development it selects `apps-script-api-mts.json` or `apps-script-api-sam.json` from the active application role. The legacy unscoped `apps-script-api.json` is accepted only as an MTS migration fallback; SAM fails closed on an unscoped config.
 
 ## Preparing a build
 
-1. Copy `backend/config/apps-script-api.example.json` to `backend/config/apps-script-api.json`.
-2. Replace `DEPLOYMENT_ID` with the active Apps Script web-app deployment ID.
-3. Replace `TOKEN` with the deployment token.
-4. Keep `enabled` set to `true`.
-5. Run the normal clean rebuild. The rebuild validates that the config is enabled and has a Google Apps Script `/exec` URL and a non-empty token without printing either value.
+1. Copy the MTS and SAM example files to their corresponding ignored config paths.
+2. Put the same existing stable Web app endpoint in both files.
+3. Put the MTS credential only in the MTS file and the SAM credential only in the SAM file.
+4. Keep `enabled` set to `true` and preserve the exact `role`.
+5. Run the normal clean rebuild. The rebuild validates the expected role, an Apps Script `/exec` URL, and a non-empty credential without printing either secret or the deployment path.
 
 The config shape is:
 
 ```json
 {
   "enabled": true,
+  "role": "mts",
   "base_url": "https://script.google.com/macros/s/DEPLOYMENT_ID/exec",
-  "token": "TOKEN"
+  "token": "MTS_TOKEN"
 }
 ```
 
-Do not put this token in `runtime_config.json`, frontend code, screenshots, support logs, or documentation.
+The SAM file uses `"role": "sam"` and the separate SAM credential. Do not put either credential in `runtime_config.json`, frontend code, screenshots, support logs, or documentation.
+
+## Authorization boundary
+
+MTS is authorized for ordinary content reads, candidate/session synchronization, pending-request submission, and unknown-headset submission. Candidate synchronization must use the named `candidateRow` and optional `pendingRow` payload; MTS cannot submit an admin `operation`.
+
+SAM can perform the MTS operations plus headset decisions, pending-request decisions, candidate-administration commands, notification administration, and the allowlisted generic sheet operations required by SAM. Unknown actions, blank credentials, ambiguous cross-role credentials, and role-mismatched packaged configs fail closed.
 
 ## Apps Script request contract
 
@@ -106,6 +115,16 @@ The current repository source uses the following exact tab names. Do not rename 
 
 `decidePendingRequest` accepts only command values `approve` and `deny`, requires `expected_status` to be `pending`, and stores `approved` or `denied`. Denial requires a non-empty reason. Initial/reschedule decisions synchronize the matching `Candidate Sessions` row by source `session_id`. Candidate-deletion approval is non-destructive and returns `deletion_action_required=true`; it must not broadly delete candidate or session rows.
 
+## Headset review sheet contract
+
+New or blank `headset-review-log` tabs use the current V2 review headers:
+
+`review_id`, `source_session_id`, `candidate_name`, `tester_name`, `Brand`, `Model`, `Status`, `Note`, `created_at`, `updated_at`, `decision_at`, `decision_by`, `denial_reason`.
+
+`submitHeadsetReview` creates or updates one pending row by stable `review_id` or the same source-session/headset pair. It must preserve candidate, tester, brand, model, status, notes, and timestamps; it must not reset an already approved or denied row to pending.
+
+Existing basic `Brand, Model, Status, Note` and legacy `headset_model, candidate_name, tester_name, entered_at, review_status, notes` tabs remain supported without rewriting their headers. V2 decisions target the exact `review_id`; basic and legacy rows use the existing headset identity fallback. Decisions also upsert the corresponding `headsets` row with `Status` set to `approved` or `denied`. Duplicate same-decision submissions are safe; conflicting decisions are rejected.
+
 ## Features using the API
 
 The shared transport covers:
@@ -123,13 +142,14 @@ The shared transport covers:
 
 1. Open the controlled Apps Script project for the existing web-app deployment.
 2. Replace the project code with the current `docs/apps-script-api-web-app.gs` repository source and save it.
-3. In Project Settings > Script Properties, confirm `API_TOKEN` and `MASTER_SPREADSHEET_ID` already exist. Add them only if missing; never paste either value into source, logs, screenshots, or documentation.
-4. Confirm the three pending-request tabs and headers above already exist. Setup verification should happen during deployment/setup, not during every polling request.
+3. In Project Settings > Script Properties, confirm `MASTER_SPREADSHEET_ID`, `MTS_API_TOKEN`, and `SAM_API_TOKEN` are configured. `MTS_API_TOKEN_PREVIOUS` and `SAM_API_TOKEN_PREVIOUS` are optional bounded-rotation values. `API_TOKEN` is an MTS-only migration fallback and should be removed after migration. Never paste property values into source, logs, screenshots, or documentation.
+4. Do not manually create optional request or headset-review tabs solely for the application. Reads safely return empty results when those tabs are absent; the first authorized write creates a missing tab with the repository header contract. Existing non-empty basic or legacy headset headers are preserved.
 5. Select Deploy > Manage deployments, edit the existing Web app deployment, choose New version, add a deployment description, and deploy. Do not create a second deployment when the packaged endpoint must remain stable.
 6. Confirm the deployment still executes as the owner and retains its existing access policy. Do not publish the deployment URL in tickets or documentation.
 7. Using the protected configured client or admin diagnostics, verify `ping`, `getSheetMetadata`, `getPendingRequests`, `getSamAdmins`, `getTickerMessages`, `getCandidateTracking`, and existing content reads.
 8. In safe test data, verify `upsertPendingRequest` and `decidePendingRequest` with `expected_status=pending`; confirm approve/deny normalization, required denial reason, Candidate Sessions synchronization by source session ID, and non-destructive candidate-deletion approval.
-9. Rebuild only after the protected checks pass. If deployment access is unavailable, mark the live validation `REQUIRES MANUAL VERIFICATION`; repository source readiness is not proof of live deployment.
+9. In safe test data, submit one unique unknown headset from MTS, confirm exactly one `headset-review-log` row with stable `review_id`, restart MTS to confirm no duplicate, then approve and deny separate test rows from SAM.
+10. Rebuild only after the protected checks pass. If deployment access is unavailable, mark the live validation `REQUIRES MANUAL VERIFICATION`; repository source readiness is not proof of live deployment.
 
 The real tabs are `sam-authorized-users`, `sam-notifications`, `Candidate
 Sessions`, and `Pending Sup Transfers`; the deployment must not substitute a
@@ -139,13 +159,17 @@ Selenium certification-form filling is independent of this transport and remains
 
 ## Token rotation
 
-1. Generate a new high-entropy token.
-2. Update the Apps Script deployment to accept the new token. A short overlap with the old token may be used only during a coordinated rollout.
-3. Update the ignored `backend/config/apps-script-api.json` on the controlled build machine.
-4. Rebuild and redistribute MTS and SAM.
-5. Confirm the new builds pass `ping` and sheet read/write checks.
-6. Remove the old token from Apps Script immediately after rollout.
-7. Delete obsolete installers and unpacked folders containing the old token.
+Rotate MTS and SAM independently:
+
+1. Generate a new high-entropy credential for one role.
+2. Move that role's current Script Property value to its `_PREVIOUS` property and put the new value in the current property.
+3. Update only the matching ignored role config on the controlled build machine.
+4. Rebuild and redistribute only the affected application, or both applications if the release requires it.
+5. Confirm the new package passes `ping` and its authorized read/write checks; confirm an MTS package still receives `Forbidden` for SAM-only operations.
+6. Remove the previous property after the bounded rollout window.
+7. Delete obsolete installers and unpacked folders containing the retired credential.
+
+Do not place the same value in MTS and SAM properties. If a value accidentally appears in both roles, authorization treats it as ambiguous and rejects it.
 
 Rotation does not require any user-facing Settings change.
 
@@ -184,6 +208,25 @@ Correct the build-local config or Apps Script deployment, rebuild if necessary, 
 ## Tutorial Video Help Tabs
 
 Repository Apps Script source allowlists `mts-tutorial-videos` and `sam-tutorial-videos` and exposes `getTutorialVideos`, `getMtsTutorialVideos`, and `getSamTutorialVideos`. Both tabs use the exact header row in `docs/tutorial-video-setup.md`.
+
+After deploying the updated Apps Script version, an authorized SAM administrator can create only the missing tutorial-video tabs with the SAM-only POST action `ensureTutorialVideoTabs`. The action is idempotent, preserves existing rows, validates the exact header order, and returns only created/existing tab names and counts. MTS credentials are forbidden from invoking it.
+
+Invoke it with placeholders only from PowerShell:
+
+```powershell
+$body = @{
+  action = 'ensureTutorialVideoTabs'
+  token = 'REPLACE_WITH_CURRENT_SAM_TOKEN'
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri 'REPLACE_WITH_STABLE_APPS_SCRIPT_EXEC_URL' `
+  -ContentType 'application/json' `
+  -Body $body
+```
+
+Run this once after deploying the new version. A successful repeat reports both tabs as existing and does not change their rows. If a tab already exists with incompatible headers, correct its header row manually before retrying; the setup action will not overwrite it.
 
 Update the existing Web app deployment: open the Apps Script project, replace its source with the current `docs/apps-script-api-web-app.gs`, confirm the existing Script Properties remain configured without displaying their values, select **Deploy > Manage deployments**, edit the current Web app, choose **New version**, add a release description, and deploy. Keep the existing endpoint stable. Run read-only `ping` and tutorial-video reads before activating a video row.
 

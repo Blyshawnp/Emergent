@@ -4,6 +4,7 @@ const React = require('react');
 const { act } = React;
 const { createRoot } = require('react-dom/client');
 const PendingRequestAlert = require('./components/PendingRequestAlert').default;
+const { getHeadsetReviewDisplayTitle } = require('./NotificationManagerApp');
 const {
   MAX_PENDING_REQUEST_SUPPRESSIONS,
   PENDING_REQUEST_SUPPRESSION_MS,
@@ -25,6 +26,7 @@ const indexSource = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
 const appCss = fs.readFileSync(path.join(__dirname, 'notification-manager.css'), 'utf8');
 const samPolishCss = fs.readFileSync(path.join(__dirname, 'polish-sam.css'), 'utf8');
 const soundSource = fs.readFileSync(path.join(__dirname, 'utils', 'sound.js'), 'utf8');
+const basicsSource = fs.readFileSync(path.join(__dirname, 'pages', 'BasicsPage.jsx'), 'utf8');
 const electronMain = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'src', 'main.js'), 'utf8');
 
 test('SAM status banner is dismissible and success/info banners auto-dismiss on configured duration', () => {
@@ -54,17 +56,29 @@ test('SAM candidate tracking exposes accessible sortable headers and sort menu',
   expect(samPolishCss).toContain('.nm-sort-header');
 });
 
-test('SAM candidate tracking sanitizes quota errors and throttles duplicate refreshes', () => {
+test('SAM candidate tracking uses workflow-specific status labels and a bounded responsive card layout', () => {
+  expect(appSource).toContain("workflowApprovalMeta(isReschedule ? 'Newbie Shift Reschedule' : 'Newbie Shift', status)");
+  expect(appSource).toContain("workflowApprovalMeta('Supervisor Transfer', 'pending')");
+  expect(appSource).toContain("workflowApprovalMeta('Candidate Deletion', row.deletion_request_status)");
+  expect(appSource).toContain("label: 'Form Filled'");
+  expect(appSource).toContain("label: 'Form Submitted'");
+  expect(appSource).toContain("label: 'Form Not Submitted'");
+  expect(appSource).toContain("label: 'Resumed – Pass'");
+  expect(appSource).toContain("label: 'Fail – Final Attempt'");
+  expect(appSource).toContain('candidateCertificationMeta(row)');
+  expect(samPolishCss).toContain('@media (max-width: 1320px)');
+  expect(samPolishCss).toContain('content: attr(data-label)');
+  expect(samPolishCss).toContain('overflow-x: hidden');
+});
+
+test('SAM shared snapshot sanitizes feature errors and deduplicates refreshes', () => {
   expect(appSource).toContain('SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE');
-  expect(appSource).toContain('Google Sheets is currently receiving too many requests or could not be reached.');
-  expect(appSource).toContain('candidateTrackingRequestRef');
-  expect(appSource).toContain('candidateTrackingBackoffUntilRef');
-  expect(appSource).toContain('SAM_CANDIDATE_TRACKING_BACKOFF_MS');
-  expect(appSource).toContain('SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS');
-  expect(appSource).toContain('SAM_CANDIDATE_TRACKING_STARTUP_RETRY_LIMIT');
-  expect(appSource).toContain('startup: true');
-  expect(appSource).toContain('window.setTimeout(resolve, SAM_CANDIDATE_TRACKING_STARTUP_RETRY_DELAY_MS)');
-  expect(appSource).toContain('candidateTrackingCacheRef');
+  expect(appSource).toContain('Candidate Tracking is temporarily unavailable. SAM will retry automatically.');
+  expect(appSource).toContain('createSamSnapshotCoordinator');
+  expect(appSource).toContain('samSnapshotCoordinatorRef.current.load');
+  expect(appSource).toContain('api.getSharedAdminSnapshot');
+  expect(appSource).not.toContain('candidateTrackingRequestRef');
+  expect(appSource).not.toContain('candidateTrackingCacheRef');
   expect(appSource).not.toContain('const requiredSetup = Object.entries(setup)');
   expect(appSource).not.toContain('<pre>{requiredSetup}</pre>');
   expect(appSource).not.toContain('HTTP 429\\nRATE_LIMIT_EXCEEDED');
@@ -72,25 +86,80 @@ test('SAM candidate tracking sanitizes quota errors and throttles duplicate refr
 });
 
 test('SAM pending request inbox, bell, and denial safeguards are wired', () => {
-  expect(appSource).toContain('SAM_PENDING_REQUESTS_BACKOFF_MS');
-  expect(appSource).toContain('pendingRequestsRequestRef');
-  expect(appSource).toContain('getSharedAdminPendingRequests');
+  expect(appSource).toContain('SAM_PENDING_REQUESTS_TEMPORARY_MESSAGE');
+  expect(appSource).not.toContain('pendingRequestsRequestRef');
+  expect(appSource).toContain('getSharedAdminSnapshot');
   expect(appSource).toContain('updateSharedAdminPendingRequest');
   expect(appSource).toContain('Pending Requests');
-  expect(appSource).toContain('aria-label={`Pending request summary: ${unresolvedRequestCount} unresolved actionable requests`}');
-  expect(appSource).toContain('Newbie Shift Requests');
-  expect(appSource).toContain('Reschedule Requests');
-  expect(appSource).toContain('Candidate Deletion Requests');
+  expect(appSource).toContain('aria-label={`Pending request summary: ${combinedActionableCount} unresolved actionable items`}');
+  expect(appSource).toContain("{ key: 'newbie', label: 'Newbie Shifts' }");
+  expect(appSource).toContain("{ key: 'reschedules', label: 'Reschedules' }");
+  expect(appSource).toContain("{ key: 'deletions', label: 'Candidate Deletions' }");
   expect(appSource).toContain('Headset Reviews');
   expect(appSource).toContain('A denial reason is required.');
   expect(pendingRequestAlertSource).toContain('Remind Me in 30 Minutes');
   expect(appSource).toContain('PendingRequestAlert');
   expect(appSource).toContain('pendingRequestsRefreshCycle');
-  expect(appSource).toContain('pendingRequestsCacheRef.current = { data: null, timestamp: 0 };');
-  expect(appSource).toContain('Single session request');
+  expect(appSource).not.toContain('pendingRequestsCacheRef');
+  expect(appSource).toContain('Session History and Candidate Tracking');
   expect(samPolishCss).toContain('.nm-request-bell-badge');
   expect(samPolishCss).toContain('.nm-request-status.is-approved');
   expect(samPolishCss).toContain('.nm-request-status.is-denied');
+});
+
+test('SAM candidate deletion cards use labelled fields and suppress raw serialized metadata', () => {
+  expect(appSource).toContain('<strong>Deletion Reason</strong>');
+  expect(appSource).toContain('<strong>Certification Result</strong>');
+  expect(appSource).toContain('<strong>Deletion Scope</strong>');
+  expect(appSource).toContain("request.category === 'candidate_deletion' ?");
+  expect(appSource).toContain("request.category === 'candidate_deletion' ? <>");
+  expect(appSource).not.toContain("status=${request.session_status}; final_attempt=${request.final_attempt}");
+});
+
+test('SAM decisions prevent duplicate submissions, retain failed denial context, and omit admin-targeting copy', () => {
+  expect(appSource).toContain('submittingRequestId');
+  expect(appSource).toContain('pendingDecisionKey');
+  expect(appSource).toContain('setDecisionError');
+  expect(appSource).toContain('setDenialRequest(null)');
+  expect(appSource).not.toContain('<strong>Admin targeting</strong>');
+  expect(appSource).not.toContain('Required Admin Targeting');
+});
+
+test('SAM transient shared-data errors use calm retry language without exposing transport details', () => {
+  expect(appSource).toContain('Shared data is taking longer than usual. SAM will keep trying.');
+  expect(appSource).toContain('SAM is offline and showing the last successful shared data. SAM will keep trying.');
+  expect(appSource).not.toContain('Shared data request timed out. Check the Apps Script deployment');
+  expect(appSource).not.toContain("console.warn('[SAM] Shared snapshot request failed; user-facing details were sanitized.', error)");
+  expect(appSource).not.toContain("if (!silent && snapshot?.ok === false)");
+});
+
+test('MTS approved-headset lookup supports targeted manual and background refresh without resetting the page', () => {
+  expect(basicsSource).toContain('const loadApprovedHeadsets = useCallback');
+  expect(basicsSource).toContain('api.getApprovedHeadsets(force)');
+  expect(basicsSource).toContain('loadApprovedHeadsets({ force: true, silent: true })');
+  expect(basicsSource).toContain('}, 60000)');
+  expect(basicsSource).toContain('Refresh approved list');
+});
+
+test('SAM headset review cards use headset labels and stable review IDs', () => {
+  expect(getHeadsetReviewDisplayTitle({
+    brand: 'Acme',
+    model: 'NC-100',
+    created_at: '2026-07-15T12:00:00.000Z',
+    updated_at: '2026-07-15T12:05:00.000Z',
+  })).toBe('Acme NC-100');
+  expect(getHeadsetReviewDisplayTitle({
+    brand: '2026-07-15T12:00:00.000Z',
+    model: '2026-07-15T12:05:00.000Z',
+    candidate: '2026-07-15T12:10:00.000Z',
+  })).toBe('Unknown headset');
+  expect(getHeadsetReviewDisplayTitle({
+    requested_headset_label: 'Candidate entered headset',
+  })).toBe('Candidate entered headset');
+  expect(appSource).toContain("review_id: item.review_id || ''");
+  expect(appSource).toContain('api.updateHeadsetReview({');
+  expect(appSource).toContain('...payload,');
+  expect(appSource).toContain("actor: samSetupStatus.userName || samSetupStatus.userRole || 'SAM'");
 });
 
 describe('SAM pending request reminder lifecycle', () => {
@@ -194,11 +263,12 @@ describe('SAM pending request reminder lifecycle', () => {
     expect(requests).toHaveLength(1);
     expect(onView).not.toHaveBeenCalled();
     expect(JSON.parse(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY))[0].suppression_type).toBe('dismiss');
-    expect(appSource).toContain('const unresolvedRequestCount = Number(pendingRequestCounts.unresolved || 0);');
+    expect(appSource).toContain('const pendingWorkflowRequestCount = Number(');
+    expect(appSource).toContain('const combinedActionableCount = pendingWorkflowRequestCount + pendingHeadsetCount;');
     expect(appSource).toContain('data-testid="sam-pending-requests"');
   });
 
-  test('multiple unresolved requests produce one alert and View advances oldest-first', () => {
+  test('multiple startup requests produce one summarized alert and one navigation action', () => {
     const requests = [
       request('newer', '2026-07-15T11:30:00.000Z'),
       request('oldest', '2026-07-15T10:30:00.000Z'),
@@ -209,10 +279,19 @@ describe('SAM pending request reminder lifecycle', () => {
     expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     clickButton('View');
     expect(onView.mock.calls[0][0].request_id).toBe('oldest');
-    expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
-    clickButton('View');
-    expect(onView.mock.calls[1][0].request_id).toBe('newer');
     expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  test('startup with zero requests stays quiet while one request produces one alert and sound', () => {
+    const onAlertSound = jest.fn();
+    renderAlert({ requests: [], requestsAvailable: true, refreshCycle: 1, onAlertSound });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(onAlertSound).not.toHaveBeenCalled();
+
+    renderAlert({ requests: [request('request-1', '2026-07-15T11:00:00.000Z')], requestsAvailable: true, refreshCycle: 2, onAlertSound });
+    expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(container.textContent).toContain('1 request needs review.');
+    expect(onAlertSound).toHaveBeenCalledTimes(1);
   });
 
   test('approval or denial removes stored suppression state and resolved requests never re-alert', () => {
@@ -276,7 +355,7 @@ describe('SAM pending request reminder lifecycle', () => {
     expect(removeListener.mock.calls.filter(([eventName]) => eventName === 'keydown')).toHaveLength(1);
   });
 
-  test('Escape closes the immediate alert without resolving and a later refresh may alert again', () => {
+  test('Escape closes the immediate alert and the same IDs do not replay on refresh', () => {
     const requests = [request('request-1', '2026-07-15T11:00:00.000Z')];
     renderAlert({ requests, refreshCycle: 1 });
     act(() => {
@@ -287,13 +366,32 @@ describe('SAM pending request reminder lifecycle', () => {
     expect(localStorage.getItem(PENDING_REQUEST_SUPPRESSION_STORAGE_KEY)).toBeNull();
 
     renderAlert({ requests, refreshCycle: 2 });
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  test('pending request polling and backoff constants remain unchanged', () => {
-    expect(appSource).toContain('const SAM_AUTO_REFRESH_INTERVAL_MS = 45000;');
-    expect(appSource).toContain('const SAM_PENDING_REQUESTS_CACHE_MS = 15000;');
-    expect(appSource).toContain('const SAM_PENDING_REQUESTS_BACKOFF_MS = 60000;');
+  test('reconnect with the same IDs stays quiet while one genuinely new ID alerts once', () => {
+    const onAlertSound = jest.fn();
+    const existing = request('existing', '2026-07-15T11:00:00.000Z');
+    renderAlert({ requests: [existing], requestsAvailable: true, refreshCycle: 1, onAlertSound });
+    expect(onAlertSound).toHaveBeenCalledTimes(1);
+    clickButton('Dismiss');
+
+    renderAlert({ requests: [], requestsAvailable: false, refreshCycle: 1, onAlertSound });
+    renderAlert({ requests: [existing], requestsAvailable: true, refreshCycle: 2, onAlertSound });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(onAlertSound).toHaveBeenCalledTimes(1);
+
+    const newcomer = request('newcomer', '2026-07-15T11:30:00.000Z');
+    renderAlert({ requests: [existing, newcomer], requestsAvailable: true, refreshCycle: 3, onAlertSound });
+    expect(container.textContent).toContain('1 request needs review.');
+    expect(onAlertSound).toHaveBeenCalledTimes(2);
+  });
+
+  test('SAM uses one shared 60-second snapshot coordinator', () => {
+    expect(appSource).toContain('const SAM_AUTO_REFRESH_INTERVAL_MS = 60000;');
+    expect(appSource).toContain('createSamSnapshotCoordinator');
+    expect(appSource).toContain('api.getSharedAdminSnapshot');
+    expect(appSource).not.toContain('SAM_PENDING_REQUESTS_CACHE_MS');
     expect(appSource).toContain('}, SAM_AUTO_REFRESH_INTERVAL_MS);');
   });
 });

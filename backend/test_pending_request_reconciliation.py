@@ -168,6 +168,49 @@ class PendingRequestReconciliationTests(unittest.TestCase):
         self.assertFalse(second_changed)
         self.assertEqual(second, first)
 
+    def test_sam_candidate_snapshot_uses_resolved_request_state(self):
+        candidate = local_record(session_id="session-1")
+        snapshot = {
+            "ok": True,
+            "candidates": [candidate],
+            "views": {"allActive": [candidate], "passedCertifications": [candidate]},
+        }
+        requests = {
+            "ok": True,
+            "requests": [{
+                "request_id": "request-1",
+                "session_id": "session-1",
+                "category": "newbie_reschedule",
+                "raw_status": "approved",
+                "admin_decision_at": "2026-07-14T16:00:00+00:00",
+                "admin_decision_by": "SAM Admin",
+            }],
+        }
+
+        reconciled = server._reconcile_candidate_tracking_with_requests(snapshot, requests)
+
+        self.assertEqual(reconciled["candidates"][0]["newbie_shift_request_status"], "approved")
+        self.assertEqual(reconciled["views"]["allActive"][0]["newbie_shift_request_status"], "approved")
+        self.assertEqual(reconciled["candidates"][0]["form_fill_status"], "filled")
+
+    def test_sam_candidate_snapshot_does_not_apply_remote_pending_over_resolution(self):
+        candidate = local_record(
+            session_id="session-1",
+            newbie_shift_request_status="denied",
+            newbie_shift_admin_decision_at="2026-07-14T16:00:00+00:00",
+            newbie_shift_denial_reason="No availability",
+        )
+        snapshot = {"ok": True, "candidates": [candidate], "views": {"allActive": [candidate]}}
+        requests = {
+            "ok": True,
+            "requests": [{"request_id": "request-1", "session_id": "session-1", "raw_status": "pending"}],
+        }
+
+        reconciled = server._reconcile_candidate_tracking_with_requests(snapshot, requests)
+
+        self.assertEqual(reconciled["candidates"][0]["newbie_shift_request_status"], "denied")
+        self.assertEqual(reconciled["candidates"][0]["newbie_shift_denial_reason"], "No availability")
+
     def test_matching_request_id_with_conflicting_source_session_is_ignored(self):
         reconciled, changed, reason = self.reconcile(
             local_record(),
@@ -198,6 +241,51 @@ class PendingRequestReconciliationTests(unittest.TestCase):
         status_index = server.SHARED_NEWBIE_SHIFT_REQUEST_HEADERS.index("request_status")
         self.assertEqual(result, "updated")
         self.assertEqual(values[status_index], "approved")
+
+    def test_request_only_sync_uses_apps_script_upsert_without_candidate_tracking_write(self):
+        client = mock.MagicMock()
+        client.post.return_value = {"action": "updated"}
+        context = {"ok": True, "appsScriptClient": client}
+        session = local_record(
+            session_id="session-1",
+            newbie_shift_request_type="reschedule",
+            newbie_shift_request_reason="Scheduling conflict",
+            newbie_shift_requested_by="tester",
+            newbie_shift_rescheduled_at="2026-07-20T10:00:00-05:00",
+        )
+
+        with mock.patch.object(server, "_shared_sheet_context", return_value=context):
+            result = server._sync_newbie_shift_request_only(session)
+
+        self.assertTrue(result["ok"])
+        client.post.assert_called_once()
+        action, payload = client.post.call_args.args
+        self.assertEqual(action, "upsertPendingRequest")
+        self.assertEqual(payload["request"]["request_type"], "newbie_shift_reschedule")
+        self.assertEqual(payload["request"]["requested_by"], "tester")
+
+    def test_request_only_sync_preserves_direct_sheets_path(self):
+        spreadsheets = mock.MagicMock()
+        context = {"ok": True, "service": mock.MagicMock(), "sheet_id": "test-sheet"}
+        context["service"].spreadsheets.return_value = spreadsheets
+        with mock.patch.object(server, "_shared_sheet_context", return_value=context), \
+             mock.patch.object(server, "_sync_newbie_shift_request", return_value="updated") as sync_request:
+            result = server._sync_newbie_shift_request_only(local_record())
+
+        self.assertEqual(result, {"ok": True, "action": "updated"})
+        sync_request.assert_called_once_with(local_record(), spreadsheets, "test-sheet")
+
+    def test_terminal_candidate_suppresses_only_obsolete_pending_newbie_work(self):
+        pending = server._public_newbie_request({
+            "request_id": "request-1", "session_id": "session-1", "request_status": "pending",
+            "request_type": "reschedule", "request_created_at": "2026-07-18T12:00:00Z",
+        })
+        resolved = dict(pending, request_id="request-2", raw_status="denied", status="Denied")
+        tracking = {"ok": True, "candidates": [{"session_id": "session-1", "latest_status": "Pass"}]}
+
+        filtered = server._filter_obsolete_pending_newbie_requests([pending, resolved], tracking)
+
+        self.assertEqual([item["request_id"] for item in filtered], ["request-2"])
 
     def test_reconciled_status_persists_after_sqlite_reopen(self):
         with tempfile.TemporaryDirectory() as temp_dir:

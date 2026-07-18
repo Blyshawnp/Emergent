@@ -29,10 +29,10 @@ class _Response:
 
 
 class AppsScriptApiTests(unittest.TestCase):
-    def _write_config(self, root, payload):
+    def _write_config(self, root, payload, filename="apps-script-api.json"):
         config_dir = Path(root) / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
-        (config_dir / "apps-script-api.json").write_text(json.dumps(payload), encoding="utf-8")
+        (config_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
 
     def test_deployable_server_uses_real_tabs_and_compatibility_actions(self):
         source = (Path(__file__).resolve().parents[1] / "docs" / "apps-script-api-web-app.gs").read_text(encoding="utf-8")
@@ -133,7 +133,8 @@ class AppsScriptApiTests(unittest.TestCase):
         self.assertIsNotNone(config)
         self.assertTrue(status["ok"])
         self.assertIn("enabled=True", combined)
-        self.assertIn("base_url_host_path=script.google.com/macros/s/test-deployment/exec", combined)
+        self.assertIn("base_url_host=script.google.com", combined)
+        self.assertNotIn("test-deployment", combined)
         self.assertIn("token_present=True", combined)
         self.assertNotIn(secret, combined)
 
@@ -163,6 +164,136 @@ class AppsScriptApiTests(unittest.TestCase):
             }, clear=False):
                 config, _status = load_apps_script_api_config(Path(root))
                 self.assertEqual(config.path, packaged)
+
+    def test_role_specific_development_configs_are_selected_by_app_mode(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_config(root, {
+                "enabled": True,
+                "role": "mts",
+                "base_url": "https://script.google.com/macros/s/test-deployment/exec",
+                "token": "mts-test-token",
+            }, "apps-script-api-mts.json")
+            self._write_config(root, {
+                "enabled": True,
+                "role": "sam",
+                "base_url": "https://script.google.com/macros/s/test-deployment/exec",
+                "token": "sam-test-token",
+            }, "apps-script-api-sam.json")
+
+            with mock.patch.dict(os.environ, {
+                "APPS_SCRIPT_API_CONFIG_FILE": "",
+                "APP_RESOURCES_PATH": "",
+                "APPS_SCRIPT_API_ROLE": "mts",
+                "MTS_NOTIFICATION_MANAGER": "",
+            }, clear=False):
+                mts_config, mts_status = load_apps_script_api_config(Path(root))
+            with mock.patch.dict(os.environ, {
+                "APPS_SCRIPT_API_CONFIG_FILE": "",
+                "APP_RESOURCES_PATH": "",
+                "APPS_SCRIPT_API_ROLE": "sam",
+                "MTS_NOTIFICATION_MANAGER": "1",
+            }, clear=False):
+                sam_config, sam_status = load_apps_script_api_config(Path(root))
+
+        self.assertEqual(mts_config.role, "mts")
+        self.assertEqual(mts_config.path.name, "apps-script-api-mts.json")
+        self.assertEqual(mts_status["role"], "mts")
+        self.assertEqual(sam_config.role, "sam")
+        self.assertEqual(sam_config.path.name, "apps-script-api-sam.json")
+        self.assertEqual(sam_status["role"], "sam")
+
+    def test_role_mismatch_and_unscoped_sam_config_fail_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            explicit = Path(root) / "wrong-role.json"
+            explicit.write_text(json.dumps({
+                "enabled": True,
+                "role": "sam",
+                "base_url": "https://script.google.com/macros/s/test-deployment/exec",
+                "token": "sam-test-token",
+            }), encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "APPS_SCRIPT_API_CONFIG_FILE": str(explicit),
+                "APPS_SCRIPT_API_ROLE": "mts",
+            }, clear=False):
+                config, status = load_apps_script_api_config(Path(root))
+            self.assertIsNone(config)
+            self.assertEqual(status["status"], "role_mismatch")
+
+        with tempfile.TemporaryDirectory() as root:
+            self._write_config(root, {
+                "enabled": True,
+                "base_url": "https://script.google.com/macros/s/test-deployment/exec",
+                "token": "legacy-test-token",
+            })
+            with mock.patch.dict(os.environ, {
+                "APPS_SCRIPT_API_CONFIG_FILE": "",
+                "APP_RESOURCES_PATH": "",
+                "APPS_SCRIPT_API_ROLE": "sam",
+                "MTS_NOTIFICATION_MANAGER": "1",
+            }, clear=False):
+                config, status = load_apps_script_api_config(Path(root))
+            self.assertIsNone(config)
+            self.assertEqual(status["status"], "role_mismatch")
+
+    def test_legacy_unscoped_config_remains_mts_only_during_migration(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_config(root, {
+                "enabled": True,
+                "base_url": "https://script.google.com/macros/s/test-deployment/exec",
+                "token": "legacy-test-token",
+            })
+            with mock.patch.dict(os.environ, {
+                "APPS_SCRIPT_API_CONFIG_FILE": "",
+                "APP_RESOURCES_PATH": "",
+                "APPS_SCRIPT_API_ROLE": "mts",
+                "MTS_NOTIFICATION_MANAGER": "",
+            }, clear=False):
+                config, status = load_apps_script_api_config(Path(root))
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.role, "mts")
+        self.assertEqual(status["role"], "mts")
+
+    def test_packaging_uses_separate_role_credentials_with_common_runtime_destination(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        mts_manifest = json.loads((repo_root / "desktop" / "package.json").read_text(encoding="utf-8"))
+        sam_manifest = json.loads((repo_root / "desktop" / "notification-manager-builder.json").read_text(encoding="utf-8"))
+
+        def apps_script_resource(resources):
+            return next(
+                item for item in resources
+                if str(item.get("to") or "").replace("\\", "/") == "backend/config/apps-script-api.json"
+            )
+
+        mts_resource = apps_script_resource(mts_manifest["build"]["extraResources"])
+        sam_resource = apps_script_resource(sam_manifest["extraResources"])
+        self.assertEqual(mts_resource["from"].replace("\\", "/"), "../backend/config/apps-script-api-mts.json")
+        self.assertEqual(sam_resource["from"].replace("\\", "/"), "../backend/config/apps-script-api-sam.json")
+        self.assertNotEqual(mts_resource["from"], sam_resource["from"])
+
+        main_source = (repo_root / "desktop" / "src" / "main.js").read_text(encoding="utf-8")
+        self.assertIn("APPS_SCRIPT_API_ROLE", main_source)
+        self.assertIn("isNotificationManagerMode ? 'sam' : 'mts'", main_source)
+
+    def test_direct_sheets_service_remains_preferred_regardless_of_apps_script_role(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        direct_service = object()
+        fake_credentials = object()
+        with mock.patch.dict(os.environ, {"APPS_SCRIPT_API_ROLE": "sam"}, clear=False), \
+                mock.patch.object(server, "_shared_tracking_sheet_id", return_value="test-sheet"), \
+                mock.patch.object(server, "_resolve_notification_service_account_file", return_value=Path("test-credential.json")), \
+                mock.patch.object(server, "_get_service_account_email", return_value="configured"), \
+                mock.patch.object(server, "_record_google_sheet_auth_status"), \
+                mock.patch("google.oauth2.service_account.Credentials.from_service_account_file", return_value=fake_credentials), \
+                mock.patch("googleapiclient.discovery.build", return_value=direct_service):
+            result = server._get_shared_tracking_sheet_service()
+
+        self.assertTrue(result["ok"])
+        self.assertIs(result["service"], direct_service)
+        self.assertNotIn("appsScriptClient", result)
 
     def test_adapter_returns_google_compatible_result(self):
         def opener(_request, timeout):
@@ -432,6 +563,59 @@ class AppsScriptApiTests(unittest.TestCase):
         self.assertEqual(action, "updateCandidateTracking")
         self.assertEqual(payload["operation"], "archive_candidate")
         self.assertNotIn("action", payload)
+
+    def test_mts_candidate_sync_uses_named_candidate_and_pending_rows(self):
+        mock_client = mock.MagicMock()
+        mock_client.post.return_value = {
+            "updated": True,
+            "candidateAction": "appended",
+            "pendingAction": "appended",
+        }
+
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        candidate_values = [f"candidate-{index}" for index in range(len(server.SHARED_CANDIDATE_SESSION_HEADERS))]
+        pending_values = [f"pending-{index}" for index in range(len(server.SHARED_PENDING_SUP_TRANSFER_HEADERS))]
+        with mock.patch.object(server, "_shared_sheet_context", return_value={
+            "ok": True,
+            "appsScriptClient": mock_client,
+            "sheet_id": "test-sheet-id",
+        }), mock.patch.object(server, "_remote_newbie_request_snapshot", return_value={"ok": False}), \
+                mock.patch.object(server, "_candidate_session_row", return_value=(candidate_values, "pending-1", True)), \
+                mock.patch.object(server, "_pending_sup_transfer_row", return_value=pending_values):
+            result = server._sync_shared_candidate_tracking({
+                "history_id": "session-1",
+                "candidate_name": "Candidate Example",
+                "tester_name": "Tester Example",
+            })
+
+        self.assertTrue(result["ok"])
+        action, payload = mock_client.post.call_args.args
+        self.assertEqual(action, "updateCandidateTracking")
+        self.assertEqual(
+            payload["candidateRow"],
+            dict(zip(server.SHARED_CANDIDATE_SESSION_HEADERS, candidate_values)),
+        )
+        self.assertEqual(
+            payload["pendingRow"],
+            dict(zip(server.SHARED_PENDING_SUP_TRANSFER_HEADERS, pending_values)),
+        )
+        self.assertNotIn("candidateName", payload)
+        self.assertNotIn("operation", payload)
+
+    def test_shared_admin_snapshot_reuses_one_sheet_context(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        context = {"ok": False, "error": "test-unavailable"}
+        with mock.patch.object(server, "_shared_sheet_context", return_value=context) as context_loader:
+            snapshot = server._shared_admin_snapshot()
+
+        self.assertFalse(snapshot["ok"])
+        context_loader.assert_called_once_with()
 
     def test_apps_script_ticker_rows_are_used_for_notification_groups(self):
         mock_client = mock.MagicMock()

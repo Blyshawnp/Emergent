@@ -1,6 +1,66 @@
 const { spawn, execFileSync } = require('child_process');
 
 const DEFAULT_GRACEFUL_TIMEOUT_MS = 3000;
+const DEFAULT_HEARTBEAT_STALE_AFTER_MS = 7000;
+
+function classifyBackendListenerOwnership({
+  mode,
+  listenerPids = [],
+  owner = null,
+  heartbeat = null,
+  ownerProcessRunning = false,
+  now = Date.now(),
+  heartbeatStaleAfterMs = DEFAULT_HEARTBEAT_STALE_AFTER_MS,
+} = {}) {
+  const normalizedMode = String(mode || '');
+  const listeners = Array.from(new Set(
+    (listenerPids || []).map((pid) => Number(pid || 0)).filter((pid) => pid > 0)
+  ));
+  const backendPid = Number(owner?.pid || 0);
+  const ownerPid = Number(owner?.ownerPid || 0);
+  const ownerMode = String(owner?.ownerMode || '');
+  const heartbeatPid = Number(heartbeat?.pid || 0);
+  const heartbeatMode = String(heartbeat?.mode || '');
+  const heartbeatUpdatedAt = Number(heartbeat?.updatedAt || 0);
+  const heartbeatFresh = Boolean(
+    heartbeatUpdatedAt > 0
+    && now - heartbeatUpdatedAt <= heartbeatStaleAfterMs
+    && heartbeatPid === ownerPid
+    && heartbeatMode === normalizedMode
+  );
+  const exactOwnedListener = Boolean(
+    listeners.length === 1
+    && backendPid > 0
+    && ownerPid > 0
+    && ownerMode === normalizedMode
+    && listeners[0] === backendPid
+  );
+
+  if (!exactOwnedListener) {
+    return {
+      classification: 'unmanaged',
+      backendPid: listeners.length === 1 ? listeners[0] : 0,
+      ownerPid,
+      heartbeatFresh,
+    };
+  }
+
+  if (ownerProcessRunning && heartbeatFresh) {
+    return {
+      classification: 'active-owned',
+      backendPid,
+      ownerPid,
+      heartbeatFresh: true,
+    };
+  }
+
+  return {
+    classification: 'stale-owned',
+    backendPid,
+    ownerPid,
+    heartbeatFresh,
+  };
+}
 
 function createOwnedProcessRegistry(options = {}) {
   const owner = options.owner || 'app';
@@ -259,5 +319,7 @@ function defaultTerminatePidTreeSync(pid) {
 
 module.exports = {
   DEFAULT_GRACEFUL_TIMEOUT_MS,
+  DEFAULT_HEARTBEAT_STALE_AFTER_MS,
+  classifyBackendListenerOwnership,
   createOwnedProcessRegistry,
 };

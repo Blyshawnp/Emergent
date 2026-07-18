@@ -2,7 +2,7 @@
 
 > This is the living technical and release handoff document for MTS and SAM. Update it whenever a major workflow, fallback, release rule, build command, security decision, or architecture detail changes. Repository code and validated runtime behavior remain the final source of truth.
 
-Last verified: 2026-07-15 by static repository inspection, focused and full automated tests, backend compile/workflow/reconciliation tests, Apps Script syntax checking, frontend production build, and sequential SAM/MTS package builds. Live pending-request approval/denial, high-DPI UI, simultaneous packaged operation, port cleanup, and packaged-app restart verification still require the controlled Apps Script deployment and hands-on configured runtime.
+Last verified: 2026-07-15 by final content synchronization, static repository inspection, all 20 frontend suites (166 tests), backend compile plus all release/feature suites, frontend production build, process-ownership checks, and sequential SAM/MTS 1.0.1 package builds. Current conclusion is blocked: the shared Apps Script token does not separate routine client actions from destructive admin actions, and fixed-port backend reuse does not prove listener identity. Service-account packaging and deployment-path logging were fixed locally. Live managed content, workflow round trips, Form dry runs, high-DPI UI, lifecycle, updater, and installed-app checks remain manual. See `docs/RELEASE_CHECKLIST_v1.0.1.md`.
 Active branch: `feature/newbie-shift-request-workflows`
 Release target: `v1.0.1`
 Release stage: Release Candidate stabilization. Some current RC fixes are uncommitted.
@@ -220,12 +220,13 @@ SAM pending-request administration is implemented in:
 
 Current feature-branch behavior:
 
-- The Pending Requests inbox combines initial Newbie Shift requests, Newbie Shift reschedule requests, candidate-list deletion requests, and a linkable headset-review queue.
-- Supported filters are All Pending, Newbie Shifts, Reschedules, Candidate Deletions, Headset Reviews, Approved, and Denied.
-- The SAM header bell and category counts include every unresolved actionable request even while its immediate alert is suppressed. One compact alert is shown at a time, with the oldest unresolved eligible request selected deterministically.
-- `Remind Me in 30 Minutes` and `Dismiss` both suppress only the immediate alert for exactly 30 minutes. They do not resolve the request, decrement counts, or remove its inbox row. `View` advances to the next eligible request for the current refresh cycle, and Escape closes the immediate alert without resolving it.
-- Reminder/dismiss state is local per SAM installation/browser profile under one versioned key. Stored entries contain only request ID, suppression type, and epoch expiry; corrupt, invalid, expired, resolved, missing, and excess entries are removed. One nearest-expiry timer is used rather than one timer per request.
-- Approved/Denied refresh results clear reminder/dismiss state and the active alert without a restart. Resolved rows remain under the Approved/Denied filters, and the successful decision path invalidates the short pending-request cache before refreshing so stale Pending data cannot retain the bell or banner.
+- The Pending Requests inbox counts workflow requests only: initial Newbie Shift requests, Newbie Shift reschedule requests, and candidate-list deletion requests. Headset Review remains a separate queue and badge; Pending Requests may link to it but must not double-count it as a workflow request.
+- Supported workflow filters are All Pending, Newbie Shifts, Reschedules, Candidate Deletions, Approved, and Denied. The Headset Reviews shortcut opens the separate review queue.
+- The SAM header bell includes every unresolved actionable item even while its immediate alert is suppressed, and its summary separates Workflow Requests from Headset Reviews. One compact workflow alert is shown at a time, with the oldest unresolved eligible workflow request selected deterministically.
+- Workflow `Remind Me in 30 Minutes` and `Dismiss` both suppress only the immediate workflow alert for exactly 30 minutes. They do not resolve the request, decrement counts, or remove its inbox row. `View` advances to the next eligible workflow request for the current refresh cycle, and Escape closes the immediate alert without resolving it.
+- Headset Review reminders are grouped, repeat after about 2 hours while SAM remains open, and are eligible once per new SAM login/session when unresolved. Opening Headset Review acknowledges the immediate headset reminder for that session while the badge and bell count remain.
+- Reminder/dismiss state is local per SAM installation/browser profile. Workflow entries contain only request ID, suppression type, and epoch expiry. Headset reminder state contains only a grouped signature and next eligible timestamp. Corrupt, invalid, expired, resolved, missing, and excess entries are removed. One nearest-expiry timer is used rather than one timer per request/headset.
+- Approved/Denied workflow refresh results clear reminder/dismiss state and the active alert without a restart. Headset approve/deny clears grouped headset reminder state. Resolved workflow rows remain under the Approved/Denied filters, and successful decision paths force a shared snapshot refresh so stale Pending data cannot retain the bell or banner.
 - Approve and Deny decisions are idempotent against the expected current request status. Denials require a readable reason. Decisions record admin identity when supplied by the SAM setup flow plus a UTC decision timestamp.
 - Initial and reschedule approvals/denials update the shared Candidate Sessions Newbie Shift request fields so MTS History/Home/Smart Resume/Candidate Tracking can display Pending, Approved, or Denied from the shared contract.
 - Candidate deletion requests target the single source session represented by Prompt 1's request contract. Approval is non-destructive and returns `deletion_action_required=true`; any authorized candidate-history deletion remains a separate explicit admin action. Denial leaves shared candidate history intact and records the reason.
@@ -254,6 +255,10 @@ Research Headset flow is implemented in MTS Basics and SAM headset review areas:
 - SAM review/admin UI: `frontend/src/NotificationManagerApp.jsx`.
 
 Trainers can record headset research data for unknown or unclear headsets. SAM surfaces headset review/admin actions. Findings are persisted through backend Google/shared data paths when available, with fallback behavior dependent on backend configuration.
+
+Unknown/unapproved headset review creation happens when the trainer confirms headset information and continues beyond Basics through the existing session-start workflow. The review identity is deterministic from source session plus normalized brand/model, so retries, resume, autosave, and repeated saves update or skip the same row instead of appending duplicates.
+
+`headset-review-log` uses the V2 review contract when created or migrated: `review_id`, `source_session_id`, `candidate_name`, `tester_name`, `Brand`, `Model`, `Status`, `Note`, `created_at`, `updated_at`, `decision_at`, `decision_by`, and `denial_reason`. Direct Sheets and Apps Script paths must both preserve `review_id`, reject incomplete requests safely, and never reset an already approved/denied review back to pending. SAM decisions act on `review_id` first.
 
 ### VPN / Manual Verification
 
@@ -414,7 +419,7 @@ Current release behavior:
 - The Newbie Shift reschedule modal uses radio-card grids for requester and reason selection. Reason cards should render as two columns at normal modal widths, one column at narrow/high-DPI widths, and may expand to three columns only when enough horizontal space exists. `Other` requires details before Continue.
 - The canonical certification support email used by blocked/final-attempt reschedule wording is `certification@acdsupport.com`; the previous `certification` + `@acddirect.com` address is obsolete and is normalized out of managed text at runtime.
 - The backend canonical value is `CERTIFICATION_SUPPORT_EMAIL` in `backend/server.py`; frontend deterministic reschedule text uses `CERTIFICATION_SUPPORT_EMAIL` in `frontend/src/utils/certificationWorkflow.js`. Packaged defaults and admin-content package CSVs have been updated. Live Google Sheet/admin-content rows must be checked manually when no safe admin-content writer is available; update the `discord-posts` row titled `VPN Fail` in place if the obsolete mailbox remains.
-- The editable reschedule Discord post is temporary session UI text only. Trainer edits are copied to clipboard but are not written back to default Discord templates. Its admin mention is internally managed by `newbieShiftRescheduleAdminMention`, with packaged fallback `@beckysowlesacdadmin`; the field is intentionally absent from normal MTS and SAM Settings and must not change unrelated Discord templates.
+- Temporary Newbie Shift Discord posts for initial scheduling and rescheduling are temporary session UI text only. They are shown by default, remain editable while hidden, copy the current edited text, and contain no automatic mentions. Trainers add any required tags manually.
 - Local History deletion offers History Only or History & Candidate List Request. The request path removes local history immediately and writes a pending SAM review request without deleting shared candidate records directly.
 - Remote Newbie Shift decisions are reconciled into local SQLite History and the active session with resolved remote states taking precedence over local Pending. Remote Pending never downgrades local Approved or Denied. If both sides are resolved with different states, a remote state replaces the local state only when both decision timestamps are valid and the remote timestamp is newer; missing timestamps are handled conservatively.
 - Reconciliation matches `newbie_shift_request_id` to `request_id` first, then uses exact `history_id`/`session_id`/`resume_source_history_id` to `source_session_id` only when the local request ID is absent. Conflicting request/session identifiers are skipped, and candidate names are never used as a reconciliation key.
@@ -594,7 +599,7 @@ Current behavior:
 - Displays shared candidate statuses, pending Supervisor Transfers, incomplete candidates, final failures, withdrawn candidates, passed certifications, archived candidates, and active candidates.
 - Supports search, filtering, sorting, View Details, Copy Selected, Print Report, Archive, Withdraw, Extra Attempt, Delete, and manual correction actions.
 - Pending Supervisor Transfer lists must exclude candidates whose latest state is terminal/completed.
-- Refresh behavior includes a safe automatic interval; `SAM_AUTO_REFRESH_INTERVAL_MS` is currently `45000`.
+- Refresh behavior uses the shared SAM snapshot coordinator with a safe automatic interval; `SAM_AUTO_REFRESH_INTERVAL_MS` is currently `60000`.
 - Candidate Tracking refreshes are deduplicated in `frontend/src/NotificationManagerApp.jsx` with a short successful-data cache and a `60000ms` backoff after Google Sheets quota/rate-limit failures.
 - Cold-start Candidate Tracking loads use a bounded startup retry before surfacing an unavailable warning, which avoids false first-launch errors while the backend/shared-data path is still settling.
 - During temporary Google Sheets failures, SAM preserves the last visible candidate data where possible and shows a trainer-safe message instead of raw Google API payloads, spreadsheet IDs, service-account email, schema/setup diagnostics, JSON, or `[object Object]`.
@@ -681,7 +686,7 @@ Do not claim full accessibility compliance without a dedicated audit. Current ac
 | Headset research | SAM/headset review Google-backed rows | SAM admin review action | Backend/local persistence where configured | Review queue may be unavailable; trainer flow should continue |
 | VPN verification | Automatic backend intelligence check plus manual provider lookup links | Settings `vpnProxyCheckMode` | Manual trainer decision and manual provider cards | Falls back to manual verification when provider coverage is limited |
 | Google Sheets | Authenticated Google service-account client | Apps Script/public CSV for selected content where configured | Packaged CSV/Markdown/default constants | Feature-specific fallback or warning |
-| Google Apps Script | Apps Script config/docs and backend adapter | `backend/config/apps-script-api.json` when configured | Direct Sheets/local defaults | Should degrade to direct/fallback paths |
+| Google Apps Script | Apps Script config/docs and backend adapter | Role-specific ignored `backend/config/apps-script-api-mts.json` or `apps-script-api-sam.json` when configured | Direct Sheets/local defaults | Should degrade to direct/fallback paths |
 | Help/FAQ | Trainer-focused Google Doc override via runtime config | `admin_help_doc_url`, `admin_faq_doc_url` | `backend/defaults/help.md`, `backend/defaults/faq.md`, backend fallback, `frontend/src/pages/HelpPage.jsx` topic cards | Falls back to local markdown; clearly internal remote sections/lines are filtered before rendering |
 | Call fail reasons | Google Sheet tab `call-fail-reasons` or aliases `fail reasons` / `call-fails` | Customized settings only when marked customized | `backend/defaults/call-fail-reasons.csv`, `docs/admin-content-package/csv-tabs/call-fails.csv`, backend constants | Uses local defaults; required system fail reasons are merged when missing |
 | Call coaching reasons | Google Sheet tab `call-coaching` | Customized settings only when marked customized | `backend/defaults/call-coaching.csv`, `docs/admin-content-package/csv-tabs/call-coaching.csv`, backend constants | Uses local defaults; workflow-required coaching rows may be merged where explicitly coded |
@@ -731,10 +736,10 @@ Rules:
 
 Verified security decision:
 
-- `docs/service-account-packaging-risk.md` states that packaging `google-service-account.json` is an accepted temporary `v1.0.x` security tradeoff for trusted internal early release testers.
-- That accepted risk is not the recommended long-term architecture.
-- The service account should remain least privilege, scoped to required sheets only, distributed only to trusted internal users, and rotated after release testing.
-- Future architecture should move toward admin-provided credentials, OAuth, or a secure backend proxy.
+- `docs/service-account-packaging-risk.md` prohibits packaging `google-service-account.json`; both package definitions and production-ready synchronization scripts exclude it.
+- Previously distributed or retained packages that contained the credential require owner-coordinated rotation/revocation and artifact cleanup.
+- Apps Script authorization is role/action scoped in repository source: ordinary MTS synchronization is separated from SAM decisions and administration. Live deployment/version and independently packaged role credentials remain acceptance gates.
+- Future architecture should use admin-provided OAuth or a secure backend proxy.
 
 ## 9. Git Safety Rules
 
@@ -935,7 +940,7 @@ Automated validation and production build validation are not the same as package
 
 Accepted limitations for `v1.0.x`:
 
-- `google-service-account.json` is temporarily packaged for trusted internal early release testers. This is documented in `docs/service-account-packaging-risk.md` and should not be treated as the long-term architecture.
+- No service-account credential may be packaged. Live Google access must use an approved service boundary and must fail safely when it is unavailable.
 - Automatic VPN/provider lookup is the default, but provider results remain decision support and must not be treated as automatic pass/fail decisions without explicit trainer workflow confirmation.
 - Automatic VPN/IP lookup depends on an available saved candidate IP. The visible manual IP entry field is intentionally removed; manual provider cards remain available for external lookup/recovery.
 - Gemini availability depends on configuration, network access, API availability, and prompt/model behavior. Fallback summaries are required.
@@ -1092,7 +1097,7 @@ Verification needed from current packaged-app smoke testing:
 
 ### 2026-07-14: Hidden internal reschedule mention and trainer Help separation
 
-- Removed the internally managed Newbie Shift reschedule admin mention from normal MTS Settings. Generated temporary reschedule posts still use the configured internal value or packaged `@beckysowlesacdadmin` fallback.
+- Removed the internally managed Newbie Shift reschedule admin mention from normal MTS Settings. The final temporary-post behavior now uses no automatic mention in either initial scheduling or reschedule mode; trainers add any required tags manually.
 - Reworked MTS trainer Help copy around Newbie Shift rescheduling, form-fill states, approval states, History actions, and Supervisor Transfer NC/NS so it explains trainer actions without exposing storage, route, schema, or transport implementation details.
 - Added a narrow trainer Help compatibility filter for configured remote Help/FAQ overrides. Clearly internal sections and lines containing routes, credentials, service-account setup, schema instructions, repository paths, deployment instructions, or hidden setting keys are omitted; safe remote trainer content continues to override fallback content.
 - Kept technical setup and source-priority guidance in repository-only admin/developer documentation. SAM Help/tutorial wording remains operational and no longer names internal notification tabs.
@@ -1103,7 +1108,7 @@ Verification needed from current packaged-app smoke testing:
 - Replaced the History page's rigid table presentation with a responsive grid-row layout so Date, Candidate, Tester, Session Status, Follow-Up, Form Status, and Actions remain inside the visible MTS viewport. Restored-width layouts collapse into compact card-like rows without requiring horizontal scrolling.
 - Removed visible textual status-icon prefixes from History and Home Recent Activity. Centralized status metadata now provides clean trainer-facing labels and accessible text, while CSS renders decorative dots/icons with `aria-hidden="true"`.
 - Follow-Up display now separates scheduled date/time, timezone, and approval chip so long combined values do not force History rows wider than the app shell.
-- Temporary Newbie Shift reschedule Discord posts now default to `@beckysowlesacdadmin` through the `newbieShiftRescheduleAdminMention` setting/fallback. Trainer edits remain temporary and Copy uses the current edited text.
+- Temporary Newbie Shift Discord posts for initial scheduling and rescheduling now show by default with no automatic mention. Trainer edits remain temporary, survive Hide/Show, Copy uses the current edited text, and Reset restores generated wording.
 - Validation for this change must include History at maximized/restored/practical narrow widths and 100%, 125%, 150%, and 200% display scaling; Recent Activity clean chip labels; and temporary Discord post edit/copy behavior.
 
 ### 2026-07-13: Current uncommitted History form-fill and reschedule UI regression fix
@@ -1224,5 +1229,5 @@ Verification needed from current packaged-app smoke testing:
 
 ### 2026-07: Service-account packaging risk documented
 
-- `docs/service-account-packaging-risk.md` documents the accepted temporary `v1.0.x` packaging risk and future migration options.
+- `docs/service-account-packaging-risk.md` records the prohibition on packaged service-account credentials, required rotation/artifact gates, and the supported service-boundary direction.
 - This matters because release agents must not mistake accepted internal-tester distribution risk for a long-term security recommendation.

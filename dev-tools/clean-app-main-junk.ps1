@@ -34,7 +34,7 @@ function Is-Protected {
   $name = [System.IO.Path]::GetFileName($full).ToLower()
   
   # 1. Exact forbidden filenames (anywhere)
-  if ($name -in @('apps-script-api.json', 'google-service-account.json', 'service-account.json', 'runtime_config.json', 'server.py', 'packaged_backend.py', 'package.json', 'package-lock.json', 'yarn.lock')) {
+  if ($name -in @('apps-script-api.json', 'apps-script-api-mts.json', 'apps-script-api-sam.json', 'google-service-account.json', 'service-account.json', 'runtime_config.json', 'server.py', 'packaged_backend.py', 'package.json', 'package-lock.json', 'yarn.lock')) {
     return $true
   }
   

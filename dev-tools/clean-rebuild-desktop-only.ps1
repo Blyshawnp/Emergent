@@ -208,18 +208,33 @@ function Copy-FileChecked {
 }
 
 function Copy-RuntimeConfig {
-  param([string]$DestinationDir, [string]$Label)
+  param(
+    [string]$DestinationDir,
+    [string]$Label,
+    [string]$ApiConfigName,
+    [string]$ExpectedRole
+  )
   New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
   $runtimeSource = Join-Path $backendDir 'config\runtime_config.json'
-  $apiSource = Join-Path $backendDir 'config\apps-script-api.json'
+  $apiSource = Join-Path $backendDir "config\$ApiConfigName"
   Copy-FileChecked $runtimeSource (Join-Path $DestinationDir 'runtime_config.json')
   Copy-FileChecked $apiSource (Join-Path $DestinationDir 'apps-script-api.json')
+  foreach ($legacyName in @('google-service-account.json', 'service-account.json')) {
+    $legacyPath = Join-Path $DestinationDir $legacyName
+    if (Test-Path -LiteralPath $legacyPath) {
+      Remove-Item -LiteralPath $legacyPath -Force
+      Write-Log "Removed packaged credential file from $Label."
+    }
+  }
   $apiConfig = Read-JsonFile $apiSource
   if ($apiConfig.enabled -ne $true -or -not $apiConfig.base_url -or -not $apiConfig.token) {
     Fail "Apps Script API config is missing enabled, base_url, or token for $Label."
   }
   if ([string]$apiConfig.base_url -notmatch '^https://script\.google\.com/macros/s/.+/exec$') {
     Fail "Apps Script API base_url is invalid for $Label."
+  }
+  if ([string]$apiConfig.role -ne $ExpectedRole) {
+    Fail "Apps Script API config role does not match $ExpectedRole for $Label."
   }
   Write-Log "Runtime and Apps Script API config verified for $Label without logging secret values."
 }
@@ -283,7 +298,7 @@ Verify-OptionalPath (Join-Path $mtsDist 'win-unpacked\resources\backend\drivers\
 Verify-Path (Join-Path $mtsDist $mtsInstaller) 'MTS installer'
 Verify-Path (Join-Path $mtsDist "$mtsInstaller.blockmap") 'MTS installer blockmap'
 Run-Command 'Validate MTS latest.yml' "powershell -ExecutionPolicy Bypass -File `"$rootDir\dev-tools\validate-latest-yml.ps1`" -DistDir `"$mtsDist`" -InstallerName `"$mtsInstaller`"" $rootDir
-Copy-RuntimeConfig (Join-Path $mtsDist 'win-unpacked\resources\backend\config') 'MTS desktop'
+Copy-RuntimeConfig (Join-Path $mtsDist 'win-unpacked\resources\backend\config') 'MTS desktop' 'apps-script-api-mts.json' 'mts'
 Remove-AccidentalBackendFiles (Join-Path $mtsDist 'win-unpacked\resources\backend')
 
 Section 'PACKAGING SAM SMART ALERT MANAGER'
@@ -294,7 +309,7 @@ Verify-OptionalPath (Join-Path $samDist 'win-unpacked\resources\backend\drivers\
 Verify-Path (Join-Path $samDist $samInstaller) 'SAM installer'
 Verify-Path (Join-Path $samDist "$samInstaller.blockmap") 'SAM installer blockmap'
 Run-Command 'Validate SAM latest.yml' "powershell -ExecutionPolicy Bypass -File `"$rootDir\dev-tools\validate-latest-yml.ps1`" -DistDir `"$samDist`" -InstallerName `"$samInstaller`"" $rootDir
-Copy-RuntimeConfig (Join-Path $samDist 'win-unpacked\resources\backend\config') 'SAM desktop'
+Copy-RuntimeConfig (Join-Path $samDist 'win-unpacked\resources\backend\config') 'SAM desktop' 'apps-script-api-sam.json' 'sam'
 Remove-AccidentalBackendFiles (Join-Path $samDist 'win-unpacked\resources\backend')
 
 Section 'VERIFYING DESKTOP OUTPUTS'

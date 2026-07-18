@@ -151,79 +151,9 @@
   ],
   "discord_templates": [
     {
-      "category": "Uncategorized",
-      "title": "Pass",
-      "message": "**:tada: Congratulations! You passed your test calls! :tada:**\n- 24-48hrs to go live. Watch your inbox.\n- Log out of Call Corp and Simple Script.\n- Complete TLMS courses.\n- Remove extra mock shifts from Gateway.\n**Welcome to ACDD!**"
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Fail",
-      "message": "Unfortunately I can't pass you today. Please reschedule in Gateway within 24 hours."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Fail Final",
-      "message": "Thank you for your time. Unfortunately you have exceeded the allowed Mock Call attempts. We wish you luck."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Incomplete",
-      "message": "Our time is up. We'll schedule another session for Supervisor Transfers.\nPlease give me a moment."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Ncns",
-      "message": "Candidate was a No Call / No Show for mock testing."
-    },
-    {
       "category": "Sup Transfer Intro",
       "title": "Sup Intro",
       "message": "Hello! I'll be helping you complete the Supervisor Transfer test call to complete your Certification. I'll provide the next instructions a step at a time, please acknowledge as we go so we can make sure all is ready for the Supervisor Transfer call. OK?"
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Instructions",
-      "message": "When you need to transfer:\n1) Ask in chat first\n2) Give CCM time to check\n3) When CCM says ok - let caller know you are transferring"
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Transfer",
-      "message": "1. Click Transfer in CC\n2. Select Queue > ACD Direct Supervisor\n3. Tell caller to hold, click Blind Transfer"
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Dte",
-      "message": "Change DTE to Ready (green)."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Status",
-      "message": "I show Ready. Calling now."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Transfer Now",
-      "message": "You may transfer the call now."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Stars",
-      "message": "WXYZ: Supervisor Test Call Being Queued"
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Disposition",
-      "message": "Click cancel (red phone), disposition as Test/Training.\nThen disposition in Call Corp."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Sup Retry",
-      "message": "Transfer was not successful. Review steps and let me know when ready."
-    },
-    {
-      "category": "Uncategorized",
-      "title": "Ran Out Of Time",
-      "message": "We have run out of time for today's session. I will need to schedule you for a Newbie Shift to complete the Supervisor Transfer portion."
     },
     {
       "category": "Introduction",
@@ -289,7 +219,7 @@
     {
       "category": "Sup Transfer Process",
       "title": "Sup Instructions #1",
-      "message": "We are now going to proceed with the Supervisor transfer. \n\nWhen a call is routed to you.... the script will load on it's own. As soon as the whisper completes  ̶  immediately greet your caller wearing a smile. Follow the script as written, and verify all data entered as you go. Any issues such as no script load or questions during the call please ask here in chat for assistance  ̶ ok? (Once you're taking live calls it will be in the Welcome Team chat)"
+      "message": "We are now going to proceed with the instructions for the Supervisor transfer.\n\nWhen a call is routed to you.... the script will load on it's own. As soon as the whisper completes  ̶  immediately greet your caller wearing a smile. Follow the script as written, and verify all data entered as you go. Any issues such as no script load or questions during the call please ask here in chat for assistance  ̶ ok? (Once you're taking live calls it will be in the Welcome Team chat)"
     },
     {
       "category": "Sup Transfer Process",
@@ -299,7 +229,7 @@
     {
       "category": "Sup Transfer Process",
       "title": "Sup Request Instructions",
-      "message": "When you need to transfer, you will….\n\n1) Ask in chat first before transferring - include the station, caller's name, and issue ex.: WXYZ, sup request, member's name, and member issue\n\n2) Give the CCM time to check to see if a Supervisor is available\n\nWe never put our caller on hold so try to minimize dead air. \n\n3) When the CCM says ok to transfer...\n\n—Let your caller know you are transferring"
+      "message": "When you need to transfer, you will….\n\n1) Ask in chat first before transferring - include the station, caller's name, and issue ex.: WXYZ, sup request, member's name, and member issue\n\n2) Give the CCM time to check to see if a Supervisor is available\n\nWe never put our caller on hold so try to minimize dead air.\n\n3) When the CCM says ok to transfer...\n\n— Let your caller know you are transferring"
     },
     {
       "category": "Sup Transfer Process",
@@ -347,7 +277,7 @@
     {
       "category": "Sup Transfer Process",
       "title": "Disposition",
-      "message": "Click the cancel button in the script (red phone) and disposition as Test / Training\n\n- let me know when you have that please\n\nNext, Please Disposition the call in Call Corp.\n\nYou will choose the option from the list that best matches what happened on the call. And then DTE will go back to “ Ready Status” automatically.",
+      "message": "After you click blind transfer, you will need to disposition the call in the script and in Call Corp DTE.\n\n*Script*\n- Click the cancel button in the script (red phone) and disposition as **Test / Training**.\n\nNext, Please Disposition the call in Call Corp *DTE*.\n\n- You will choose the option from the list that best matches what happened on the call.\n- This call should be dispositioned as **Test Call**.\n- DTE will go back to “Ready Status” automatically in 30 seconds or when you click Complete Wrap-Up.\n\nLet me know when you have done, please.",
       "suggested_screenshots": [
         "/script-disposition.png",
         "/DTE-disposition.png"
@@ -356,7 +286,7 @@
     {
       "category": "Success Outcome",
       "title": "Passed All",
-      "message": "**:tada: Congratulations! Great job! You have successfully completed your test calls. Watch your inbox for your step 4 final instructions - your Welcome Team TLMS information. Please log out of CallCorp and Simple Script with the Log Out links (never X out of these windows). Welcome to ACDD! Have a fabulous remainder of your day! • If you haven't already done so be sure to complete any additional courses assigned in your TLMS. Email certification@acdsupport.com for any questions on courses.• If you're signed up on any additional mock or testing shifts, please take a moment to go to Current Schedule under My Schedule in Gateway and remove them.\r\n**Welcome to ACDD! Have a fabulous remainder of your day!** \r\n",
+      "message": "**:tada: Congratulations! Great job! You have successfully completed your test calls.**\n\n- Watch your inbox for your step 4 final instructions - your Welcome Team TLMS information.\n\n- Please log out of Call Corp and Simple Script with the Log Out links (never \"X\" out of these windows).\n\n- If you haven't already done so be sure to complete any additional courses assigned in your TLMS. You may email certification@acdsupport.com for any questions on courses.\n\n- If you're signed up on any additional mock or testing shifts, please take a moment to go to Current Schedule under My Schedule in Gateway and remove them.\n\n**Welcome to ACDD! Have a fabulous remainder of your day!**\n\nhttps://gyazo.com/54533787846921462083e8029c028304",
       "suggested_screenshots": [
         "/welcome-new-agent.png"
       ]
@@ -374,7 +304,7 @@
     {
       "category": "Failure Outcomes",
       "title": "Failed Both Sup Transfers",
-      "message": "Unfortunately our call did not result in a successful transfer to a supervisor. Please review the steps in the presentation. Since both attempts at supervisor transfers this session were not successful, we will need to schedule a time to meet again to complete your Supervisor Transfers. \r\nYou will not need to schedule anything on your end. Please give me a moment to check availability."
+      "message": "Unfortunately our call did not result in a successful transfer to a supervisor. Please review the steps in the presentation. Since both attempts at supervisor transfers this session were not successful, we will need to schedule a time to meet again to complete your Supervisor Transfers.\n\nYou will not need to schedule anything on your end. Please give me a moment to check availability."
     },
     {
       "category": "Failure Outcomes",
@@ -399,7 +329,7 @@
     {
       "category": "Failure Outcomes",
       "title": "VPN Fail",
-      "message": "It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. Using a VPN is not accepted when contracting with ACD. Your VPN must be turned off or be able to be turned off for your mock session as well as when taking calls. \r\nAny further questions should be directed to certification@acdsupport.com. \r\nPlease reschedule for another Mock session in Gateway as soon as possible (within 24 hours). \r\n\r\nIf you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then."
+      "message": "It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. Using a VPN is not accepted when contracting with ACD. Your VPN must be turned off or be able to be turned off for your mock session as well as when taking calls.\n\nAny further questions should be directed to certification@acdsupport.com.\nPlease reschedule for another Mock session in Gateway as soon as possible (within 24 hours).\n\nIf you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then."
     }
   ],
   "discord_screenshots": [

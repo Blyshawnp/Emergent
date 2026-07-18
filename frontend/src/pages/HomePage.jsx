@@ -5,9 +5,9 @@ import { useModal } from '../components/ModalProvider';
 import { playSound } from '../utils/sound';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionDateOf, sessionIdOf } from '../utils/sessionBasics';
 import {
-  followUpStatusMeta,
   formFillStatusMeta,
   formatNewbieSchedule,
+  newbieShiftStatusMeta,
   sessionStatusMeta,
 } from '../utils/certificationWorkflow';
 
@@ -199,6 +199,7 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   const [settings, setSettings] = useState(initialSettings || {});
   const [stats, setStats] = useState(initialStats || {});
   const [history, setHistory] = useState(initialHistory || []);
+  const [showResumeModal, setShowResumeModal] = useState(false);
   const [resumeEntry, setResumeEntry] = useState(null);
   const [sharedPendingEntries, setSharedPendingEntries] = useState([]);
   const [sharedPendingEntry, setSharedPendingEntry] = useState(null);
@@ -410,7 +411,8 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
       return;
     }
 
-    setResumeEntry(resumableHistory[0]);
+    setResumeEntry(null);
+    setShowResumeModal(true);
   };
 
   const handleResumeConfirm = async () => {
@@ -425,6 +427,7 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
     await api.startSession(buildResumedSession(resumeEntry));
     setResumeEntry(null);
+    setShowResumeModal(false);
     onNavigate('suptransfer');
   };
 
@@ -560,9 +563,9 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
                     <StatusChip key={chip} meta={sessionStatusMeta(chip)} />
                   ))}
                   <StatusChip meta={formFillStatusMeta(s.form_fill_status, { legacy: !s.form_fill_status })} />
-                  {(s.newbie_shift_data || s.newbie_shift_request_id) && (
+                  {newbieShiftStatusMeta(s) && (
                     <StatusChip
-                      meta={followUpStatusMeta(s.newbie_shift_request_status || 'pending')}
+                      meta={newbieShiftStatusMeta(s)}
                       title={`Newbie Shift: ${formatNewbieSchedule(s.newbie_shift_data)}`}
                     />
                   )}
@@ -592,12 +595,12 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
         </section>
       </div>
 
-      {resumeEntry && (
+      {showResumeModal && (
         <ResumeSupTransferModal
           entries={resumableHistory}
           selectedEntry={resumeEntry}
           onSelect={setResumeEntry}
-          onClose={() => setResumeEntry(null)}
+          onClose={() => { setResumeEntry(null); setShowResumeModal(false); }}
           onConfirm={handleResumeConfirm}
         />
       )}
@@ -638,7 +641,7 @@ function StatusChip({ meta, title }) {
   );
 }
 
-function ResumeSupTransferModal({ entries, selectedEntry, onSelect, onClose, onConfirm }) {
+export function ResumeSupTransferModal({ entries, selectedEntry, onSelect, onClose, onConfirm }) {
   const [search, setSearch] = useState('');
   const filteredEntries = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -669,47 +672,36 @@ function ResumeSupTransferModal({ entries, selectedEntry, onSelect, onClose, onC
             style={{ marginBottom: 16, width: '100%' }}
             data-testid="resume-sup-search"
           />
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <table className="hist-table">
-              <thead>
-                <tr><th></th><th>Date</th><th>Candidate</th><th>Calls</th><th>Status</th></tr>
-              </thead>
-              <tbody>
-                {filteredEntries.length === 0 && (
-                  <tr>
-                    <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                      No prior sessions match that search.
-                    </td>
-                  </tr>
-                )}
+          <div className="resume-session-list" role="radiogroup" aria-label="Saved supervisor transfer sessions">
+                {filteredEntries.length === 0 && <div className="resume-session-empty">No prior sessions match that search.</div>}
                 {filteredEntries.map((entry, index) => {
                   const candidateName = entry.candidate || entry.candidate_name || 'Unknown';
                   const completedCalls = [entry.call_1, entry.call_2, entry.call_3].filter((call) => call && call.result).length;
+                  const selected = selectedEntry === entry;
                   return (
-                    <tr key={`${candidateName}-${entry.timestamp || index}`} className="hist-row">
-                      <td style={{ width: 44 }}>
+                    <label key={`${candidateName}-${entry.timestamp || index}`} className={`resume-session-card ${selected ? 'is-selected' : ''}`}>
+                      <span className="resume-session-select">
                         <input
                           type="radio"
                           name="resume-sup-transfer"
-                          checked={selectedEntry === entry}
+                          checked={selected}
                           onChange={() => onSelect(entry)}
                           data-testid={`resume-entry-${index}`}
                         />
-                      </td>
-                      <td className="hist-date">{entry.timestamp || 'Unknown'}</td>
-                      <td className="hist-name">{candidateName}</td>
-                      <td>{completedCalls}</td>
-                      <td><span className="badge badge-incomplete">{entry.status || 'Saved'}</span></td>
-                    </tr>
+                        <span>Select</span>
+                      </span>
+                      <span className="resume-session-field"><strong>Date</strong><span>{entry.timestamp || 'Unknown'}</span></span>
+                      <span className="resume-session-field"><strong>Candidate</strong><span>{candidateName}</span></span>
+                      <span className="resume-session-field"><strong>Calls completed</strong><span>{completedCalls}</span></span>
+                      <span className="resume-session-field"><strong>Status</strong><span className="badge badge-incomplete">{entry.status || 'Saved'}</span></span>
+                    </label>
                   );
                 })}
-              </tbody>
-            </table>
           </div>
         </div>
         <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
           <button className="btn btn-muted" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={onConfirm} data-testid="resume-sup-confirm">Continue</button>
+          <button className="btn btn-primary" onClick={onConfirm} disabled={!selectedEntry} data-testid="resume-sup-confirm">Continue</button>
         </div>
       </div>
     </div>

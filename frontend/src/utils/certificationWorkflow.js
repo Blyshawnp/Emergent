@@ -15,6 +15,7 @@ export const NEWBIE_REQUEST_STATUS = Object.freeze({
 export const NEWBIE_REQUESTED_BY = Object.freeze({
   TESTER: 'tester',
   CANDIDATE: 'candidate',
+  OTHER: 'other',
 });
 
 export const NEWBIE_REQUEST_TYPE = Object.freeze({
@@ -29,7 +30,6 @@ export const DELETION_REQUEST_STATUS = Object.freeze({
 });
 
 export const CERTIFICATION_SUPPORT_EMAIL = 'certification@acdsupport.com';
-export const DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION = '@beckysowlesacdadmin';
 
 export const RESCHEDULE_REASONS = [
   'Unexpected emergency',
@@ -131,6 +131,102 @@ export function followUpStatusMeta(value) {
     return { category: 'follow_up', label: 'Pending', title: 'Pending', ariaLabel: 'Follow-up status: Pending', className: 'status-chip-followup-pending', tone: 'pending' };
   }
   return { category: 'follow_up', label: 'No follow-up', title: 'No follow-up', ariaLabel: 'Follow-up status: No follow-up', className: 'status-chip-followup-none', tone: 'neutral' };
+}
+
+const TERMINAL_NEWBIE_STATUS_TOKENS = new Set([
+  'pass',
+  'resumed pass',
+  'fail final attempt',
+  'failed final attempt',
+  'withdrawn',
+  'withdrew from certification',
+  'removed',
+  'deleted',
+  'archived',
+]);
+
+function normalizedWorkflowStatus(record = {}) {
+  return String(record.final_status || record.latest_status || record.status || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[–—_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+export function isTerminalNewbieShiftRecord(record = {}) {
+  const status = normalizedWorkflowStatus(record);
+  if (TERMINAL_NEWBIE_STATUS_TOKENS.has(status)) return true;
+  return Boolean(record.final_attempt && (status === 'fail' || status === 'failed'));
+}
+
+export function hasCompletedSupervisorTransfer(record = {}) {
+  return [record.sup_transfer_1?.result, record.sup_transfer_2?.result, record.sup_transfer_1_result, record.sup_transfer_2_result]
+    .some((result) => String(result || '').trim().toLowerCase() === 'pass');
+}
+
+export function hasNewbieShiftSchedule(record = {}) {
+  const newbie = record.newbie_shift_data || {};
+  return Boolean(
+    String(record.newbie_shift_scheduled_at || '').trim()
+    || String(record.newbie_shift_rescheduled_at || '').trim()
+    || String(record.newbie_shift_original_scheduled_at || '').trim()
+    || (String(newbie.newbie_date || '').trim() && String(newbie.newbie_time || '').trim())
+  );
+}
+
+export function hasActualNewbieShiftRequest(record = {}) {
+  const requestId = String(record.newbie_shift_request_id || '').trim();
+  if (!requestId) return false;
+  return Boolean(
+    String(record.newbie_shift_request_created_at || '').trim()
+    && (
+      String(record.newbie_shift_requested_by || '').trim()
+      || String(record.newbie_shift_request_reason || '').trim()
+      || String(record.newbie_shift_request_details || '').trim()
+      || hasNewbieShiftSchedule(record)
+    )
+  );
+}
+
+export function getNewbieShiftEligibility(record = {}) {
+  const status = String(record.newbie_shift_request_status || '').trim().toLowerCase();
+  const requestType = String(record.newbie_shift_request_type || NEWBIE_REQUEST_TYPE.INITIAL).trim().toLowerCase();
+  const hasSchedule = hasNewbieShiftSchedule(record);
+  const hasRequest = hasActualNewbieShiftRequest(record);
+  const terminal = isTerminalNewbieShiftRecord(record);
+  const supervisorTransfersComplete = hasCompletedSupervisorTransfer(record);
+  const cancelled = status === 'cancelled' || status === 'canceled';
+  const active = !terminal && !supervisorTransfersComplete && !cancelled && (hasSchedule || hasRequest);
+  const pending = active && status === NEWBIE_REQUEST_STATUS.PENDING && hasRequest;
+  const approved = active && hasSchedule && (
+    status === NEWBIE_REQUEST_STATUS.APPROVED
+    || (!hasRequest && status !== NEWBIE_REQUEST_STATUS.DENIED)
+  );
+  const denied = !terminal && !supervisorTransfersComplete && status === NEWBIE_REQUEST_STATUS.DENIED && (hasSchedule || hasRequest);
+  const canReschedule = active && hasSchedule && status !== NEWBIE_REQUEST_STATUS.DENIED && status !== 'completed';
+  return { active, pending, approved, denied, canReschedule, hasSchedule, hasRequest, requestType };
+}
+
+export function newbieShiftStatusMeta(record = {}) {
+  const eligibility = getNewbieShiftEligibility(record);
+  if (eligibility.pending) {
+    const reschedule = eligibility.requestType === NEWBIE_REQUEST_TYPE.RESCHEDULE;
+    const label = reschedule ? 'Newbie Shift Reschedule Pending' : 'Newbie Shift Pending';
+    return { ...followUpStatusMeta(NEWBIE_REQUEST_STATUS.PENDING), label, title: label, ariaLabel: `Follow-up status: ${label}` };
+  }
+  if (eligibility.approved) {
+    const label = 'Newbie Shift Scheduled';
+    return { ...followUpStatusMeta(NEWBIE_REQUEST_STATUS.APPROVED), label, title: label, ariaLabel: `Follow-up status: ${label}` };
+  }
+  if (eligibility.denied) {
+    const label = 'Newbie Shift Denied';
+    return { ...followUpStatusMeta(NEWBIE_REQUEST_STATUS.DENIED), label, title: label, ariaLabel: `Follow-up status: ${label}` };
+  }
+  return null;
+}
+
+export function canRescheduleNewbieShift(record = {}) {
+  return getNewbieShiftEligibility(record).canReschedule;
 }
 
 export function splitCandidateFirstName(name) {
@@ -245,7 +341,13 @@ export function buildRescheduleFailSummary(session = {}) {
   return text;
 }
 
-export function buildRescheduleDiscordPost(session = {}, adminMention = DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION) {
+export function buildInitialNewbieShiftDiscordPost(session = {}) {
+  const candidateName = session.candidate_name || session.candidate || 'Candidate';
+  const schedule = formatNewbieSchedule(session.newbie_shift_data);
+  return `${candidateName} needs their supervisor transfer test calls (Newbie Shift) scheduled. Please add a Newbie Shift for me for ${schedule}.`;
+}
+
+export function buildRescheduleDiscordPost(session = {}) {
   const candidateName = session.candidate_name || session.candidate || 'Candidate';
   const reason = buildReasonSentence(session.newbie_shift_request_reason, session.newbie_shift_request_details);
   const schedule = formatNewbieSchedule(session.newbie_shift_data);
@@ -253,7 +355,7 @@ export function buildRescheduleDiscordPost(session = {}, adminMention = DEFAULT_
   const timing = session.newbie_shift_within_24_hours ? 'less than 24 hours' : '24 hours or more';
   const finalAttempt = Boolean(session.final_attempt && session.newbie_shift_within_24_hours && requestedBy === NEWBIE_REQUESTED_BY.CANDIDATE);
 
-  let post = `${adminMention || DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION} ${candidateName} `;
+  let post = `${candidateName} `;
   if (requestedBy === NEWBIE_REQUESTED_BY.TESTER) {
     post += `needs their supervisor transfer test calls (Newbie Shift) rescheduled because ${reason}. Please add a Newbie Shift for me for ${schedule}.`;
   } else {
@@ -263,4 +365,10 @@ export function buildRescheduleDiscordPost(session = {}, adminMention = DEFAULT_
     post += ` This was the candidate's final attempt. They were instructed to email ${CERTIFICATION_SUPPORT_EMAIL}; rescheduling approval is not guaranteed.`;
   }
   return post;
+}
+
+export function buildNewbieShiftDiscordPost(session = {}) {
+  return session.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE
+    ? buildRescheduleDiscordPost(session)
+    : buildInitialNewbieShiftDiscordPost(session);
 }

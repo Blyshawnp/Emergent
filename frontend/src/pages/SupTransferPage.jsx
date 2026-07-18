@@ -24,10 +24,32 @@ const DEFAULT_SUP_FAILS = [
   'Transferred to wrong queue', 'Did not inform caller of transfer', 'Other',
 ];
 
-const DEFAULT_SUP_REASONS = [
+export const DEFAULT_SUP_REASONS = [
   'Hung up on', 'Charged for a cancelled sustaining', 'Double Charged',
   'Damaged Gift', "Didn't Receive Gift", 'Cancel Sustaining', 'Use Own/Other',
 ];
+
+export function getSupervisorReasonScenarioText(reason, customReason = '') {
+  const label = cleanScenarioSentence(reason);
+  const normalized = label.toLowerCase().replace(/[’']/g, "'");
+
+  if (normalized.includes('use own/other')) {
+    const suppliedReason = cleanScenarioSentence(customReason);
+    return suppliedReason ? `${suppliedReason}.` : 'Tester’s chosen reason.';
+  }
+  if (normalized.includes('hung up')) return 'The caller was hung up on during a previous call.';
+  if (normalized.includes('charged') && normalized.includes('cancel')) {
+    return 'The caller was charged for a cancelled sustaining donation.';
+  }
+  if (normalized.includes('double') && normalized.includes('charged')) return 'The caller was double charged.';
+  if (normalized.includes('damaged') && normalized.includes('gift')) return 'The caller received a damaged gift.';
+  if (normalized.includes('receive') && normalized.includes('gift')) return 'The caller did not receive their gift.';
+  if (normalized.includes('cancel') && normalized.includes('sustaining')) {
+    return 'The caller wants to cancel their sustaining donation.';
+  }
+  if (!label) return 'Tester’s chosen reason.';
+  return `The caller would like to discuss the following issue: ${label}.`;
+}
 
 function getSupCoachingForDisplay(items = []) {
   const source = Array.isArray(items) && items.length ? items : DEFAULT_SUP_COACHING;
@@ -104,12 +126,12 @@ function fireAndForgetSessionUpdate(payload) {
   } catch (_error) {}
 }
 
-export default function SupTransferPage({ onNavigate, navigationState }) {
+export default function SupTransferPage({ onNavigate, navigationState, settings: initialSettings = {}, defaults: initialDefaults = {}, currentSession: initialCurrentSession = null }) {
   const modal = useModal();
   const [transferNum, setTransferNum] = useState(1);
   const [result, setResult] = useState(null);
-  const [defaults, setDefaults] = useState({});
-  const [settings, setSettings] = useState({});
+  const [defaults] = useState(() => initialDefaults || {});
+  const [settings] = useState(() => initialSettings || {});
   const [techOpen, setTechOpen] = useState(false);
   const [setup, setSetup] = useState({ caller: '', show: '', reason: '' });
   const [coaching, setCoaching] = useState({});
@@ -128,15 +150,20 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
   const latestDraftPayloadRef = useRef(null);
   const sessionRef = useRef(null);
   const transferDraftsRef = useRef({});
+  const initialCurrentSessionRef = useRef(initialCurrentSession);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [{ session }, d, s] = await Promise.all([api.getCurrentSession(), api.getDefaults(), api.getSettings()]);
+        const cachedSession = navigationState?.session
+          ? { session: navigationState.session }
+          : initialCurrentSessionRef.current;
+        const { session } = cachedSession && Object.prototype.hasOwnProperty.call(cachedSession, 'session')
+          ? cachedSession
+          : await api.getCurrentSession();
         if (cancelled) return;
-        setDefaults(d); setSettings(s);
-        const initialSupReasons = s.sup_reasons || d.sup_reasons || DEFAULT_SUP_REASONS;
+        const initialSupReasons = settings.sup_reasons || defaults.sup_reasons || DEFAULT_SUP_REASONS;
         sessionRef.current = session || null;
         transferDraftsRef.current = session?.sup_transfer_drafts || {};
         const requestedTransferNum = Math.max(1, Math.min(2, Number(navigationState?.transferNum) || 0));
@@ -190,7 +217,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
       if (!cancelled) hydratedRef.current = true;
     })();
     return () => { cancelled = true; };
-  }, [navigationState]);
+  }, [navigationState, settings, defaults]);
 
   useLayoutEffect(() => {
     const el = document.querySelector('[data-testid="page-content"]');
@@ -252,17 +279,6 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
     enews: ['Yes', 'No'][Math.floor(Math.random() * 2)],
     ship: ['Yes', 'No'][Math.floor(Math.random() * 2)],
   });
-
-  const buildReasonText = useCallback((reason) => {
-    const r = (reason || '').toLowerCase();
-    if (r.includes('hung up')) return 'was hung up on';
-    if (r.includes('charged') && r.includes('cancelled')) return 'was charged for a cancelled sustaining donation';
-    if (r.includes('double')) return 'was double charged';
-    if (r.includes('damaged')) return 'received a damaged gift';
-    if (r.includes('receive')) return "didn't receive their gift";
-    if (r.includes('cancel')) return 'wants to cancel their sustaining donation';
-    return reason || '';
-  }, []);
 
   useEffect(() => {
     if (!hydratedRef.current || !candidateName) {
@@ -576,7 +592,7 @@ export default function SupTransferPage({ onNavigate, navigationState }) {
           {currentCaller.length > 0 ? (
             <>
               <p style={{ lineHeight: 1.7, marginBottom: 16 }}>
-                <b>For this call you will portray {currentCaller[0]} {currentCaller[1]}.</b> {currentCaller[0]} would like to speak with a supervisor. The caller {buildReasonText(setup.reason)} during a previous call.{scenarioNotes ? ` ${scenarioNotes}` : ''}
+                <b>For this call you will portray {currentCaller[0]} {currentCaller[1]}.</b> {currentCaller[0]} would like to speak with a supervisor. {getSupervisorReasonScenarioText(setup.reason)}{scenarioNotes ? ` ${scenarioNotes}` : ''}
               </p>
               <div className="scenario-vars">
                 <div className="scenario-var"><span className="scenario-var-label">Phone Type:</span><span className={`scenario-var-value scenario-highlight ${supRandFlags.phone === 'Mobile' ? 'scenario-yes' : 'scenario-no'}`}>{supRandFlags.phone}</span></div>

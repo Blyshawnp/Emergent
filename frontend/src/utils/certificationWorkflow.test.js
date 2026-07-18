@@ -1,12 +1,17 @@
 import {
   CERTIFICATION_SUPPORT_EMAIL,
-  DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION,
   NEWBIE_REQUESTED_BY,
+  NEWBIE_REQUEST_TYPE,
+  buildInitialNewbieShiftDiscordPost,
+  buildNewbieShiftDiscordPost,
   buildRescheduleDiscordPost,
   buildRescheduleFailSummary,
   buildRescheduleSummary,
+  canRescheduleNewbieShift,
   followUpStatusMeta,
   formFillStatusMeta,
+  getNewbieShiftEligibility,
+  newbieShiftStatusMeta,
   sessionStatusMeta,
 } from './certificationWorkflow';
 
@@ -27,7 +32,7 @@ test('certification support email is canonical in generated reschedule text', ()
   const legacy = `certification@${'acddirect'}.com`;
   const summary = buildRescheduleSummary(finalAttemptReschedule);
   const failSummary = buildRescheduleFailSummary(finalAttemptReschedule);
-  const discordPost = buildRescheduleDiscordPost(finalAttemptReschedule, '@admins');
+  const discordPost = buildRescheduleDiscordPost(finalAttemptReschedule);
 
   expect(CERTIFICATION_SUPPORT_EMAIL).toBe('certification@acdsupport.com');
   expect(summary).toContain('certification@acdsupport.com');
@@ -95,9 +100,76 @@ test('session status labels are trainer-facing and do not expose raw enum text',
   expect(sessionStatusMeta('FAIL-Final Attempt').label).not.toContain('x');
 });
 
-test('default reschedule Discord mention targets certification admin account', () => {
+test('temporary Newbie Shift posts never add automatic mentions', () => {
   const post = buildRescheduleDiscordPost(finalAttemptReschedule);
+  const initial = buildInitialNewbieShiftDiscordPost({
+    candidate_name: 'Taylor Example',
+    newbie_shift_data: finalAttemptReschedule.newbie_shift_data,
+  });
 
-  expect(DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION).toBe('@beckysowlesacdadmin');
-  expect(post.startsWith('@beckysowlesacdadmin ')).toBe(true);
+  expect(post).toMatch(/^Taylor Example /);
+  expect(initial).toMatch(/^Taylor Example /);
+  expect(post).not.toMatch(/(^|\s)@[\w-]+/);
+  expect(initial).not.toMatch(/(^|\s)@[\w-]+/);
+  expect(buildNewbieShiftDiscordPost({
+    ...finalAttemptReschedule,
+    newbie_shift_request_type: NEWBIE_REQUEST_TYPE.RESCHEDULE,
+  })).toBe(post);
+});
+
+describe('Newbie Shift eligibility', () => {
+  const actualPending = {
+    status: 'Incomplete',
+    newbie_shift_request_id: 'request-1',
+    newbie_shift_request_type: 'initial',
+    newbie_shift_request_status: 'pending',
+    newbie_shift_request_created_at: '2026-07-18T12:00:00Z',
+    newbie_shift_requested_by: 'tester',
+    newbie_shift_request_reason: 'Initial Newbie Shift scheduling',
+  };
+  const scheduled = {
+    ...actualPending,
+    newbie_shift_data: { newbie_date: '07/20/2026', newbie_time: '10:00 AM', newbie_tz: 'EST (Eastern)' },
+  };
+
+  test.each([
+    ['Pass', {}],
+    ['RESUMED-PASS', {}],
+    ['FAIL-Final Attempt', {}],
+    ['Fail', { final_attempt: true }],
+    ['Withdrawn', {}],
+    ['Removed', {}],
+    ['Deleted', {}],
+    ['Archived', {}],
+  ])('%s suppresses obsolete pending state', (status, extra) => {
+    expect(getNewbieShiftEligibility({ ...scheduled, ...extra, status }).active).toBe(false);
+    expect(newbieShiftStatusMeta({ ...scheduled, ...extra, status })).toBeNull();
+  });
+
+  test('completed Supervisor Transfer suppresses obsolete pending state', () => {
+    expect(getNewbieShiftEligibility({ ...scheduled, sup_transfer_1: { result: 'Pass' } }).active).toBe(false);
+  });
+
+  test('stale pending flag or orphaned request id does not create a workflow', () => {
+    expect(newbieShiftStatusMeta({ status: 'Incomplete', newbie_shift_request_status: 'pending' })).toBeNull();
+    expect(newbieShiftStatusMeta({ status: 'Incomplete', newbie_shift_request_id: 'orphan', newbie_shift_request_status: 'pending' })).toBeNull();
+  });
+
+  test('actual initial and reschedule requests use distinct labels', () => {
+    expect(newbieShiftStatusMeta(actualPending).label).toBe('Newbie Shift Pending');
+    expect(newbieShiftStatusMeta({ ...actualPending, newbie_shift_request_type: 'reschedule' }).label).toBe('Newbie Shift Reschedule Pending');
+  });
+
+  test('reschedule requires an actual prior schedule and stays independent of form status', () => {
+    expect(canRescheduleNewbieShift(actualPending)).toBe(false);
+    for (const form_fill_status of ['filled', 'skipped', 'failed', 'not_attempted']) {
+      expect(canRescheduleNewbieShift({ ...scheduled, form_fill_status })).toBe(true);
+    }
+  });
+
+  test('approved is scheduled, denied is historical only, and neither is current pending work', () => {
+    expect(newbieShiftStatusMeta({ ...scheduled, newbie_shift_request_status: 'approved' }).label).toBe('Newbie Shift Scheduled');
+    expect(newbieShiftStatusMeta({ status: 'Incomplete', newbie_shift_data: scheduled.newbie_shift_data, newbie_shift_request_status: 'pending' }).label).toBe('Newbie Shift Scheduled');
+    expect(getNewbieShiftEligibility({ ...scheduled, newbie_shift_request_status: 'denied' })).toMatchObject({ denied: true, pending: false, canReschedule: false });
+  });
 });

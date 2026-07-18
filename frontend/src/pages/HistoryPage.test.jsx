@@ -1,4 +1,6 @@
 import React from 'react';
+import fs from 'fs';
+import path from 'path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import HistoryPage from './HistoryPage';
@@ -124,6 +126,7 @@ test('history renders responsive grid rows with required regions and reachable a
   const view = await renderPage(historyRows);
 
   expect(view.container.querySelector('.hist-grid')).not.toBeNull();
+  expect(view.container.querySelector('.history-list-card')).not.toBeNull();
   expect(view.container.querySelector('table.hist-table')).toBeNull();
   expect(view.container.querySelector('[role="columnheader"]').textContent).toBe('Date');
   const row = view.container.querySelector('[data-testid="history-row-1"]');
@@ -154,10 +157,26 @@ test('history status chips use clean labels without visible symbol prefixes', as
   expect(text).not.toContain('OK Form Filled');
   expect(text).not.toContain('x Fail');
   expect(text).not.toContain('- Not Yet Filled');
-  expect(view.container.querySelector('.status-chip-icon').getAttribute('aria-hidden')).toBe('true');
+  view.container.querySelectorAll('.status-chip').forEach((chip) => {
+    const markers = chip.querySelectorAll(':scope > .status-chip-icon');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].getAttribute('aria-hidden')).toBe('true');
+  });
   expect(view.container.querySelector('.status-chip').getAttribute('aria-label')).toContain('status:');
 
   await view.unmount();
+});
+
+test('history CSS switches from seven columns to container-based compact and card layouts', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'App.css'), 'utf8');
+  expect(css).toContain('container-name: history-list');
+  expect(css).toContain('max-width: 1180px');
+  expect(css).toContain('@container history-list (max-width: 1100px)');
+  expect(css).toContain('"date candidate tester status"');
+  expect(css).toContain('"followup followup form actions"');
+  expect(css).toContain('@container history-list (max-width: 680px)');
+  expect(css).toContain('overflow-x: clip');
+  expect(css).not.toContain('.status-chip::before');
 });
 
 test('history reschedule action only appears for eligible incomplete sessions', async () => {
@@ -190,8 +209,8 @@ test('history displays reconciled approved and denied statuses and keeps denial 
   ];
   const view = await renderPage(reconciledRows);
 
-  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Approved');
-  expect(view.container.querySelector('[data-testid="history-row-1"]').textContent).toContain('Denied');
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Newbie Shift Scheduled');
+  expect(view.container.querySelector('[data-testid="history-row-1"]').textContent).toContain('Newbie Shift Denied');
   expect(view.container.querySelector('[data-testid="history-row-1"]').textContent).toContain('Form Filled');
 
   await act(async () => {
@@ -201,6 +220,145 @@ test('history displays reconciled approved and denied statuses and keeps denial 
   });
 
   expect(view.container.textContent).toContain('Denial Reason: No supervisor availability');
-  expect(view.container.textContent).toContain('Approval Status: Denied');
+  expect(view.container.textContent).toContain('Approval Status: Newbie Shift Denied');
+  await view.unmount();
+});
+
+test('reschedule intake is completed before navigation and carries who and reason into the active draft', async () => {
+  const view = await renderPage([historyRows[1]]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-reschedule-0"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.querySelector('[data-testid="reschedule-intake-modal"]')).not.toBeNull();
+  expect(view.onNavigate).not.toHaveBeenCalled();
+  expect(api.startSession).not.toHaveBeenCalled();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="reschedule-intake-requester-candidate"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="reschedule-intake-reason-scheduling-conflict"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="reschedule-intake-continue"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.startSession).toHaveBeenCalledWith(expect.objectContaining({
+    newbie_shift_request_type: 'reschedule',
+    newbie_shift_requested_by: 'candidate',
+    newbie_shift_request_reason: 'Scheduling conflict',
+    newbie_shift_data: historyRows[1].newbie_shift_data,
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+  await view.unmount();
+});
+
+test('candidate deletion request requires a meaningful trimmed reason', async () => {
+  mockModal.showModal.mockResolvedValueOnce('request');
+  const view = await renderPage([historyRows[0]]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-delete-0"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  const reason = view.container.querySelector('[data-testid="candidate-deletion-reason"]');
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(reason, '   ');
+    reason.dispatchEvent(new Event('input', { bubbles: true }));
+    view.container.querySelector('[data-testid="candidate-deletion-submit"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.requestHistorySessionDeletion).not.toHaveBeenCalled();
+  expect(view.container.querySelector('[role="alert"]').textContent).toContain('at least 10 characters');
+  await view.unmount();
+});
+
+test('candidate deletion request sends and preserves the custom reason when submission fails', async () => {
+  mockModal.showModal.mockResolvedValueOnce('request');
+  api.requestHistorySessionDeletion.mockRejectedValueOnce(new Error('Request service unavailable'));
+  const view = await renderPage([historyRows[0]]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-delete-0"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  const textarea = view.container.querySelector('[data-testid="candidate-deletion-reason"]');
+  const customReason = 'Duplicate candidate record created during certification.';
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(textarea, customReason);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    view.container.querySelector('[data-testid="candidate-deletion-submit"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.requestHistorySessionDeletion).toHaveBeenCalledWith('pass-1', customReason);
+  expect(view.container.querySelector('[data-testid="candidate-deletion-reason"]').value).toBe(customReason);
+  expect(view.container.querySelector('[role="alert"]').textContent).toContain('Request service unavailable');
+  await view.unmount();
+});
+
+test('deletion submitted confirmation uses a pending-status icon and states local versus SAM effects', async () => {
+  mockModal.showModal.mockResolvedValueOnce('request');
+  api.requestHistorySessionDeletion.mockResolvedValueOnce({
+    ok: true,
+    message: 'This session was removed from MTS History. Its Candidate Tracking record will remain until a SAM administrator approves the deletion request.',
+  });
+  const view = await renderPage([historyRows[0]]);
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-delete-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  const textarea = view.container.querySelector('[data-testid="candidate-deletion-reason"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+  await act(async () => {
+    setter.call(textarea, 'Duplicate candidate record requires administrator review.');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="candidate-deletion-submit"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.alert).toHaveBeenCalledWith(
+    'Deletion Request Submitted',
+    expect.stringMatching(/removed from MTS History.*Candidate Tracking.*SAM administrator/s),
+    'clock',
+    'success'
+  );
+  await view.unmount();
+});
+
+test('History Only deletes locally without creating a candidate deletion request', async () => {
+  mockModal.showModal.mockResolvedValueOnce('history-only');
+  api.deleteHistorySession.mockResolvedValueOnce({ ok: true });
+  const view = await renderPage([historyRows[0]]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-delete-0"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.deleteHistorySession).toHaveBeenCalledWith('pass-1');
+  expect(api.requestHistorySessionDeletion).not.toHaveBeenCalled();
+  expect(mockModal.alert).toHaveBeenCalledWith('Deleted', expect.stringContaining('session was deleted'));
   await view.unmount();
 });

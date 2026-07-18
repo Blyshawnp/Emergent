@@ -146,9 +146,9 @@ const api = {
   getSettings: (timeout) => request('GET', '/settings', null, timeout),
   saveSettings: (data) => savedRequest('PUT', '/settings', data),
   getHealth: () => getHealth(),
-  getDefaults: async (timeout) => {
+  getDefaults: async (timeout, refresh = false) => {
     await ensureBackendHealth();
-    return request('GET', '/settings/defaults', null, timeout);
+    return request('GET', `/settings/defaults${refresh ? '?refresh=true' : ''}`, null, timeout);
   },
   restoreSettingsDefaults: () => savedRequest('POST', '/settings/restore-defaults'),
   resetSettingsSection: (section) => savedRequest('POST', '/settings/reset-section', { section }),
@@ -164,10 +164,11 @@ const api = {
   getHistoryStats: (timeout) => request('GET', '/history/stats', null, timeout),
   clearHistory: () => request('DELETE', '/history'),
   deleteHistorySession: (historyId) => request('DELETE', `/history/session/${encodeURIComponent(historyId)}`),
-  requestHistorySessionDeletion: (historyId) => request('POST', `/history/session/${encodeURIComponent(historyId)}/deletion-request`),
+  requestHistorySessionDeletion: (historyId, reason) => request('POST', `/history/session/${encodeURIComponent(historyId)}/deletion-request`, { reason }),
   lookupSharedCandidate: (name) => request('GET', `/shared/candidates/lookup?name=${encodeURIComponent(name || '')}`),
   getSharedPendingSupTransfers: () => request('GET', '/shared/pending-sup-transfers'),
   getSharedAdminCandidates: () => request('GET', '/shared/admin/candidates'),
+  getSharedAdminSnapshot: () => request('GET', '/shared/admin/snapshot'),
   updateSharedAdminCandidate: (payload) => request('POST', '/shared/admin/candidates/action', payload),
   getSharedAdminPendingRequests: () => request('GET', '/shared/admin/pending-requests'),
   updateSharedAdminPendingRequest: (payload) => request('POST', '/shared/admin/pending-requests/action', payload),
@@ -184,7 +185,7 @@ const api = {
   getManagedNotifications: () => request('GET', '/notifications/manage'),
   saveManagedNotification: (item) => request('POST', '/notifications/manage', { item }),
   deleteManagedNotification: (id) => request('DELETE', `/notifications/manage/${encodeURIComponent(id)}`),
-  getApprovedHeadsets: () => request('GET', '/headsets', null, 5000),
+  getApprovedHeadsets: (force = false) => request('GET', `/headsets${force ? '?force=true' : ''}`, null, 10000),
   logHeadsetReview: (payload) => request('POST', '/headsets/review-log', payload, 10000),
   getHeadsetReviews: () => request('GET', '/headsets/reviews', null, 15000),
   updateHeadsetReview: (payload) => request('POST', '/headsets/reviews/action', payload, 15000),

@@ -28,7 +28,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import urlopen
 
 import httpx
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi import FastAPI, APIRouter, BackgroundTasks, HTTPException, Request
 import asyncio
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -846,6 +846,26 @@ def _fetch_google_sheet_tab_csv(sheet_id, tab_name):
     authenticated_text = _fetch_google_sheet_tab_csv_authenticated(sheet_id, tab_name)
     if authenticated_text:
         return authenticated_text
+
+    action = APPS_SCRIPT_CONTENT_ACTIONS.get(str(tab_name or "").strip().lower())
+    if action:
+        try:
+            from services.apps_script_api import create_apps_script_sheet_service
+
+            service_result = create_apps_script_sheet_service(ROOT_DIR)
+            if service_result.get("ok"):
+                rows = _apps_script_rows(service_result["client"], action)
+                csv_text = _apps_script_rows_to_csv(rows)
+                if csv_text:
+                    logger.info("[CONTENT] Loaded managed content '%s' through Apps Script.", tab_name)
+                    return csv_text
+        except Exception as exc:
+            logger.info(
+                "[CONTENT] Apps Script managed-content read was unavailable for '%s'; trying legacy CSV export: %s",
+                tab_name,
+                exc,
+            )
+
     encoded_tab_name = quote(tab_name, safe="")
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={encoded_tab_name}"
     with urlopen(url, timeout=10) as response:
@@ -930,6 +950,8 @@ APPS_SCRIPT_CONTENT_ACTIONS = {
     "headsets": "getHeadsets",
     "screenshots": "getScreenshots",
     "discord-posts": "getDiscordPosts",
+    "mts-tutorial-videos": "getMtsTutorialVideos",
+    "sam-tutorial-videos": "getSamTutorialVideos",
     "settings": "getSettings",
     "notification-recipients": "getNotificationRecipients",
 }
@@ -1584,6 +1606,23 @@ REQUIRED_DISCORD_SUGGESTED_SCREENSHOTS = {
 }
 
 
+def _normalize_discord_message(value):
+    normalized = []
+    previous_was_blank = False
+    for raw_line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.rstrip(" \t")
+        is_blank = not line.strip()
+        if is_blank:
+            if normalized and not previous_was_blank:
+                normalized.append("")
+        else:
+            normalized.append(line)
+        previous_was_blank = is_blank
+    while normalized and normalized[-1] == "":
+        normalized.pop()
+    return "\n".join(normalized)
+
+
 def _normalize_discord_posts(rows):
     rows = rows or []
     if not rows:
@@ -1610,7 +1649,7 @@ def _normalize_discord_posts(rows):
         category = str(row.get(category_header) or "").strip() if category_header else ""
         category = category or DEFAULT_CONTENT_CATEGORY
         title = str(row.get(title_header) or "").strip()
-        message = str(row.get(message_header) or "")
+        message = _normalize_discord_message(row.get(message_header))
         if title:
             item = {"category": category, "title": title, "message": message}
             suggested_values = []
@@ -1731,43 +1770,57 @@ def _normalize_coaching(rows, include_ids, section_key="", source_label="coachin
     return _merge_required_coaching_defaults(section_key, items)
 
 
+def _natural_sort_key(value):
+    return tuple(
+        int(part) if part.isdigit() else part.casefold()
+        for part in re.split(r"(\d+)", " ".join(str(value or "").split()))
+    )
+
+
 def _normalize_approved_headsets(rows):
     grouped = {}
-    order = []
     ignored_brands = {"source note", "source url", "example"}
 
     for row in rows:
         row = row or {}
-        brand = str(row.get("Brand") or "").strip()
-        model = str(row.get("Model") or "").strip()
+        brand = " ".join(str(row.get("Brand") or "").split())
+        model = " ".join(str(row.get("Model") or "").split())
         status = str(row.get("Status") or "approved").strip().lower()
         if not brand or brand.lower() in ignored_brands or not model:
             continue
         if status not in {"approved", "active", "allowed"}:
             continue
-        if brand not in grouped:
-            grouped[brand] = []
-            order.append(brand)
-        if model not in grouped[brand]:
-            grouped[brand].append(model)
-    return [{"brand": brand, "models": grouped[brand]} for brand in order if grouped[brand]]
+        brand_key = brand.casefold()
+        model_key = model.casefold()
+        group = grouped.setdefault(brand_key, {"brand": brand, "models": {}})
+        group["models"].setdefault(model_key, model)
+
+    normalized = []
+    for group in sorted(grouped.values(), key=lambda item: _natural_sort_key(item["brand"])):
+        models = sorted(group["models"].values(), key=_natural_sort_key)
+        if models:
+            normalized.append({"brand": group["brand"], "models": models})
+    return normalized
 
 
 def _normalize_denied_headsets(rows):
     denied = []
+    seen = set()
     for row in rows or []:
         row = row or {}
-        brand = str(row.get("Brand") or "").strip()
-        model = str(row.get("Model") or "").strip()
+        brand = " ".join(str(row.get("Brand") or "").split())
+        model = " ".join(str(row.get("Model") or "").split())
         status = str(row.get("Status") or "").strip().lower()
-        if brand and model and status in {"denied", "rejected"}:
+        key = (brand.casefold(), model.casefold())
+        if brand and model and key not in seen and status in {"denied", "rejected"}:
+            seen.add(key)
             denied.append({
                 "brand": brand,
                 "model": model,
                 "status": "denied",
                 "note": str(row.get("Note") or "").strip(),
             })
-    return denied
+    return sorted(denied, key=lambda item: (_natural_sort_key(item["brand"]), _natural_sort_key(item["model"])))
 
 
 TUTORIAL_VIDEO_HEADERS = [
@@ -3100,9 +3153,6 @@ def _log_startup_runtime_diagnostics():
 
 
 DEFAULT_SUPPORT_FORM_URL = "https://forms.gle/h3L8BZcFqpZ8RZf39"
-DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION = "@beckysowlesacdadmin"
-
-
 DEFAULT_SETTINGS = {
     "setup_complete": False,
     "sam_setup_complete": False,
@@ -3115,7 +3165,6 @@ DEFAULT_SETTINGS = {
     "form_url": DEFAULT_FORM_URL,
     "cert_sheet_url": DEFAULT_CERT_SHEET_URL,
     "support_form_url": DEFAULT_SUPPORT_FORM_URL,
-    "newbieShiftRescheduleAdminMention": DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION,
     "vpnProxyCheckMode": "checker",
     "ticker_speed": "normal",
     "enable_sounds": True,
@@ -3434,6 +3483,11 @@ def empty_session():
         "tech_issue_summary_required": False,
         "headset_usb": None,
         "headset_brand": "",
+        "headset_review_requested": False,
+        "headset_review_id": "",
+        "headset_review_sync_status": "",
+        "headset_review_status": "",
+        "headset_review_last_synced_at": "",
         "noise_cancel": None,
         "vpn_on": None,
         "vpn_off": None,
@@ -3529,6 +3583,11 @@ def _session_with_workflow_defaults(session):
     doc.setdefault("deletion_request_id", "")
     doc.setdefault("deletion_request_status", "")
     doc.setdefault("deletion_request_created_at", "")
+    doc.setdefault("headset_review_requested", False)
+    doc.setdefault("headset_review_id", "")
+    doc.setdefault("headset_review_sync_status", "")
+    doc.setdefault("headset_review_status", "")
+    doc.setdefault("headset_review_last_synced_at", "")
     return doc
 
 
@@ -3555,12 +3614,22 @@ SAM_AUTHORIZED_USER_HEADERS = [
 ]
 
 HEADSET_REVIEW_LOG_HEADERS = [
+    "review_id",
+    "source_session_id",
+    "candidate_name",
+    "tester_name",
     "Brand",
     "Model",
     "Status",
     "Note",
+    "created_at",
+    "updated_at",
+    "decision_at",
+    "decision_by",
+    "denial_reason",
 ]
 
+BASIC_HEADSET_REVIEW_LOG_HEADERS = ["Brand", "Model", "Status", "Note"]
 LEGACY_HEADSET_REVIEW_LOG_HEADERS = [
     "headset_model", "candidate_name", "tester_name", "entered_at", "review_status", "notes",
 ]
@@ -4753,9 +4822,15 @@ def _approved_headset_review_keys():
             label = f"{brand} {model_text}".strip()
             if label:
                 keys.add(_normalize_headset_review_key(label))
-            if model_text:
-                keys.add(_normalize_headset_review_key(model_text))
     return keys
+
+
+def _denied_headset_review_keys():
+    return {
+        _normalize_headset_review_key(f"{item.get('brand', '')} {item.get('model', '')}")
+        for item in EXTERNAL_CONTENT.get("denied_headsets") or []
+        if str(item.get("brand") or "").strip() and str(item.get("model") or "").strip()
+    }
 
 
 def _ensure_headset_review_log_tab(sheets_api, sheet_id):
@@ -4765,21 +4840,23 @@ def _ensure_headset_review_log_tab(sheets_api, sheet_id):
         for sheet in metadata.get("sheets", [])
     }
     _ensure_sheet_tab(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, tabs)
-    current = _read_header_row(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, len(LEGACY_HEADSET_REVIEW_LOG_HEADERS))
+    current = _read_header_row(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, len(HEADSET_REVIEW_LOG_HEADERS))
     normalized = [str(value or "").strip() for value in current]
     if normalized[:len(HEADSET_REVIEW_LOG_HEADERS)] == HEADSET_REVIEW_LOG_HEADERS:
         return {"ok": True, "schema": "review", "headerStatus": "verified"}
+    if normalized[:len(BASIC_HEADSET_REVIEW_LOG_HEADERS)] == BASIC_HEADSET_REVIEW_LOG_HEADERS:
+        return {"ok": True, "schema": "basic", "headerStatus": "basic-compatible"}
     if normalized[:len(LEGACY_HEADSET_REVIEW_LOG_HEADERS)] == LEGACY_HEADSET_REVIEW_LOG_HEADERS:
         return {"ok": True, "schema": "legacy", "headerStatus": "legacy-compatible"}
     if not any(normalized):
         quoted = _quote_sheet_title_for_a1(HEADSET_REVIEW_LOG_TAB)
         sheets_api.values().update(
             spreadsheetId=sheet_id,
-            range=f"{quoted}!A1:F1",
+            range=f"{quoted}!A1:{_column_letter(len(HEADSET_REVIEW_LOG_HEADERS))}1",
             valueInputOption="USER_ENTERED",
-            body={"values": [LEGACY_HEADSET_REVIEW_LOG_HEADERS]},
+            body={"values": [HEADSET_REVIEW_LOG_HEADERS]},
         ).execute()
-        return {"ok": True, "schema": "legacy", "headerStatus": "written"}
+        return {"ok": True, "schema": "review", "headerStatus": "written"}
     return {"ok": False, "schema": "unknown", "error": "Headset review log headers do not match the supported review schema."}
 
 
@@ -4863,6 +4940,14 @@ def _headset_review_schema_from_context(context):
     return match.get("schema") or "review"
 
 
+def _headset_review_headers(schema):
+    if schema == "legacy":
+        return LEGACY_HEADSET_REVIEW_LOG_HEADERS
+    if schema == "basic":
+        return BASIC_HEADSET_REVIEW_LOG_HEADERS
+    return HEADSET_REVIEW_LOG_HEADERS
+
+
 def _append_headset_review_log(payload):
     headset_model = str((payload or {}).get("headset_model") or "").strip()
     brand, model = _split_headset_brand_model(
@@ -4876,44 +4961,95 @@ def _append_headset_review_log(payload):
         return {"ok": True, "skipped": True, "reason": "blank_headset"}
     if normalized_model in _approved_headset_review_keys():
         return {"ok": True, "skipped": True, "reason": "approved_headset"}
+    if normalized_model in _denied_headset_review_keys():
+        return {"ok": True, "skipped": True, "reason": "resolved_headset", "status": "denied"}
+
+    source_session_id = str((payload or {}).get("source_session_id") or (payload or {}).get("session_id") or "").strip()
+    candidate_name = str((payload or {}).get("candidate_name") or "").strip()
+    tester_name = str((payload or {}).get("tester_name") or "").strip()
+    if not source_session_id or not candidate_name or not tester_name or not brand or not model:
+        return {"ok": False, "reason": "invalid_request", "error": "Headset review request data is incomplete."}
+    review_id = str((payload or {}).get("review_id") or "").strip() or str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"mts-headset-review:{source_session_id}:{normalized_model}",
+    ))
+    note = str((payload or {}).get("note") or (payload or {}).get("trainer_note") or "").strip()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
         context = _shared_sheet_context()
         if not context.get("ok"):
-            logger.warning("[HEADSET-REVIEW] Unable to log headset review row: %s", context.get("error"))
-            return {"ok": False, "skipped": True, "reason": "sheet_unavailable", "error": context.get("error") or ""}
+            logger.warning("[HEADSET-REVIEW] Unable to log headset review row through the configured transport.")
+            return {"ok": False, "reason": "sheet_unavailable", "error": "Headset review request could not be submitted."}
 
-        sheets_api = context["service"].spreadsheets()
-        sheet_id = context["sheet_id"]
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
             result = apps_script_client.post("submitHeadsetReview", {
+                "review_id": review_id,
+                "source_session_id": source_session_id,
                 "brand": brand,
                 "model": model,
                 "headset_model": headset_model,
-                "candidate_name": str((payload or {}).get("candidate_name") or "").strip(),
-                "tester_name": str((payload or {}).get("tester_name") or "").strip(),
+                "candidate_name": candidate_name,
+                "tester_name": tester_name,
+                "note": note,
             })
-            return {"ok": True, "logged": True, **(result if isinstance(result, dict) else {})}
+            return {"ok": True, "logged": True, "review_id": review_id, "source_session_id": source_session_id, "status": "pending", **(result if isinstance(result, dict) else {})}
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
         schema = _headset_review_schema_from_context(context)
-        headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
+        headers = _headset_review_headers(schema)
         rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers)
         for row in rows:
             existing_label = row.get("headset_model") if schema == "legacy" else f"{row.get('Brand', '')} {row.get('Model', '')}".strip()
             existing_model = _normalize_headset_review_key(existing_label)
             existing_status = str(row.get("review_status") if schema == "legacy" else row.get("Status") or "").strip().lower()
-            if existing_model == normalized_model and existing_status in {"", "pending"}:
-                return {"ok": True, "skipped": True, "reason": "duplicate_pending"}
+            identity_matches = (
+                schema == "review"
+                and (
+                    str(row.get("review_id") or "").strip() == review_id
+                    or (
+                        str(row.get("source_session_id") or "").strip() == source_session_id
+                        and existing_model == normalized_model
+                    )
+                )
+            ) or (schema != "review" and existing_model == normalized_model)
+            if not identity_matches:
+                continue
+            if existing_status not in {"", "pending"}:
+                return {"ok": True, "skipped": True, "reason": "already_resolved", "review_id": review_id, "status": existing_status}
+            if schema == "review":
+                next_row = dict(row)
+                next_row.update({
+                    "review_id": review_id,
+                    "source_session_id": source_session_id,
+                    "candidate_name": candidate_name,
+                    "tester_name": tester_name,
+                    "Brand": brand,
+                    "Model": model,
+                    "Status": "pending",
+                    "Note": note or row.get("Note") or "",
+                    "created_at": row.get("created_at") or now_iso,
+                    "updated_at": now_iso,
+                })
+                _shared_update_existing_row(
+                    sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers,
+                    row.get("_row_number"), _shared_row_values(next_row, headers),
+                )
+            return {"ok": True, "skipped": True, "reason": "duplicate_pending", "review_id": review_id, "source_session_id": source_session_id, "status": "pending"}
 
         quoted = _quote_sheet_title_for_a1(HEADSET_REVIEW_LOG_TAB)
         row_values = ([
             headset_model,
-            str((payload or {}).get("candidate_name") or "").strip(),
-            str((payload or {}).get("tester_name") or "").strip(),
-            datetime.now(timezone.utc).isoformat(),
+            candidate_name,
+            tester_name,
+            now_iso,
             "pending",
-            "",
-        ] if schema == "legacy" else [brand, model, "pending", ""])
+            note,
+        ] if schema == "legacy" else ([brand, model, "pending", note] if schema == "basic" else [
+            review_id, source_session_id, candidate_name, tester_name, brand, model,
+            "pending", note, now_iso, now_iso, "", "", "",
+        ]))
         sheets_api.values().append(
             spreadsheetId=sheet_id,
             range=f"{quoted}!A2",
@@ -4921,11 +5057,11 @@ def _append_headset_review_log(payload):
             insertDataOption="INSERT_ROWS",
             body={"values": [row_values]},
         ).execute()
-        logger.info("[HEADSET-REVIEW] Logged unknown headset model for admin review: %s", headset_model)
-        return {"ok": True, "logged": True}
+        logger.info("[HEADSET-REVIEW] Logged one unknown headset review request.")
+        return {"ok": True, "logged": True, "review_id": review_id, "source_session_id": source_session_id, "status": "pending"}
     except Exception as exc:
-        logger.warning("[HEADSET-REVIEW] Failed to log unknown headset model; continuing workflow: %s", exc)
-        return {"ok": False, "skipped": True, "reason": "write_failed", "error": str(exc)}
+        logger.warning("[HEADSET-REVIEW] Failed to log unknown headset review request; continuing workflow.")
+        return {"ok": False, "reason": "write_failed", "error": "Headset review request could not be submitted."}
 
 
 def _normalize_headset_review_row(row, schema):
@@ -4933,18 +5069,32 @@ def _normalize_headset_review_row(row, schema):
         brand, model = _split_headset_brand_model(row.get("headset_model"))
         status = str(row.get("review_status") or "pending").strip().lower() or "pending"
         note = str(row.get("notes") or "").strip()
+        candidate = str(row.get("candidate_name") or "").strip()
+        tester = str(row.get("tester_name") or "").strip()
+        submitted_date = str(row.get("entered_at") or "").strip()
+        review_id = f"legacy-{row.get('_row_number') or ''}"
+        source_session_id = ""
     else:
         brand = str(row.get("Brand") or "").strip()
         model = str(row.get("Model") or "").strip()
         status = str(row.get("Status") or "pending").strip().lower() or "pending"
         note = str(row.get("Note") or "").strip()
+        candidate = str(row.get("candidate_name") or "").strip() if schema == "review" else ""
+        tester = str(row.get("tester_name") or "").strip() if schema == "review" else ""
+        submitted_date = str(row.get("created_at") or "").strip() if schema == "review" else ""
+        review_id = str(row.get("review_id") or "").strip() if schema == "review" else f"basic-{row.get('_row_number') or ''}"
+        source_session_id = str(row.get("source_session_id") or "").strip() if schema == "review" else ""
     return {
+        "review_id": review_id,
+        "source_session_id": source_session_id,
         "brand": brand,
         "model": model,
         "status": status,
         "note": note,
-        "submitted_date": str(row.get("entered_at") or "").strip() if schema == "legacy" else "",
-        "tester": str(row.get("tester_name") or "").strip() if schema == "legacy" else "",
+        "candidate": candidate,
+        "tester": tester,
+        "submitted_date": submitted_date,
+        "updated_at": str(row.get("updated_at") or "").strip() if schema == "review" else "",
         "_row_number": row.get("_row_number"),
         "_schema": schema,
         "_raw": row,
@@ -4979,10 +5129,10 @@ def _sync_headset_content_cache(rows):
     _headset_cache["last_fetch"] = time.time()
 
 
-def _headset_review_snapshot():
-    context = _shared_sheet_context()
+def _headset_review_snapshot(context=None):
+    context = context or _shared_sheet_context()
     if not context.get("ok"):
-        return {"ok": False, "pending": [], "approved": [], "denied": [], "error": context.get("error") or "Headset review sheet is unavailable."}
+        return {"ok": False, "pending": [], "approved": [], "denied": [], "error": _headset_review_temporary_unavailable_message()}
     try:
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
@@ -4996,12 +5146,16 @@ def _headset_review_snapshot():
                     row.get("Model") or row.get("model"),
                 )
                 review_rows.append({
+                    "review_id": str(row.get("review_id") or row.get("ReviewId") or "").strip(),
+                    "source_session_id": str(row.get("source_session_id") or row.get("SourceSessionId") or "").strip(),
                     "brand": brand,
                     "model": model,
                     "status": str(row.get("Status") or row.get("review_status") or "pending").strip().lower() or "pending",
                     "note": str(row.get("Note") or row.get("ReviewNotes") or row.get("Notes") or row.get("notes") or "").strip(),
-                    "submitted_date": str(row.get("Timestamp") or row.get("entered_at") or "").strip(),
-                    "tester": str(row.get("SubmittedBy") or row.get("tester_name") or "").strip(),
+                    "submitted_date": str(row.get("created_at") or row.get("Timestamp") or row.get("entered_at") or "").strip(),
+                    "updated_at": str(row.get("updated_at") or "").strip(),
+                    "candidate": str(row.get("candidate_name") or row.get("CandidateName") or "").strip(),
+                    "tester": str(row.get("tester_name") or row.get("SubmittedBy") or "").strip(),
                 })
             headset_rows = [
                 {
@@ -5016,11 +5170,15 @@ def _headset_review_snapshot():
             ]
             _sync_headset_content_cache(headset_rows)
             public_row = lambda row: {
+                "review_id": row.get("review_id") or "",
+                "source_session_id": row.get("source_session_id") or "",
                 "brand": row.get("brand") or "",
                 "model": row.get("model") or "",
                 "status": row.get("status") or "",
                 "note": row.get("note") or "",
                 "submitted_date": row.get("submitted_date") or "",
+                "updated_at": row.get("updated_at") or "",
+                "candidate": row.get("candidate") or "",
                 "tester": row.get("tester") or "",
             }
             return {
@@ -5033,7 +5191,7 @@ def _headset_review_snapshot():
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         schema = _headset_review_schema_from_context(context)
-        headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
+        headers = _headset_review_headers(schema)
         review_rows = [
             _normalize_headset_review_row(row, schema)
             for row in _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers)
@@ -5041,13 +5199,16 @@ def _headset_review_snapshot():
         headset_rows = _read_headsets_rows(sheets_api, sheet_id)
         _sync_headset_content_cache(headset_rows)
         public_row = lambda row: {
+            "review_id": row.get("review_id") or "",
+            "source_session_id": row.get("source_session_id") or "",
             "brand": row.get("brand") or "",
             "model": row.get("model") or "",
             "status": row.get("status") or "",
             "note": row.get("note") or "",
             "submitted_date": row.get("submitted_date") or "",
+            "updated_at": row.get("updated_at") or "",
+            "candidate": row.get("candidate") or "",
             "tester": row.get("tester") or "",
-            "review_id": row.get("review_id") or row.get("id") or "",
         }
         return {
             "ok": True,
@@ -5058,7 +5219,7 @@ def _headset_review_snapshot():
         }
     except Exception as exc:
         logger.exception("[HEADSET-REVIEW] Failed to load headset review data: %s", exc)
-        return {"ok": False, "pending": [], "approved": [], "denied": [], "error": "Unable to load headset review data."}
+        return {"ok": False, "pending": [], "approved": [], "denied": [], "error": _headset_review_temporary_unavailable_message()}
 
 
 def _headset_review_action(payload):
@@ -5070,6 +5231,7 @@ def _headset_review_action(payload):
 
     brand = str((payload or {}).get("brand") or "").strip()
     model = str((payload or {}).get("model") or "").strip()
+    review_id = str((payload or {}).get("review_id") or "").strip()
     if not brand or not model:
         return {"ok": False, "error": "Brand and Model are required."}
 
@@ -5090,7 +5252,7 @@ def _headset_review_action(payload):
     try:
         context = _shared_sheet_context()
         if not context.get("ok"):
-            return {"ok": False, "error": context.get("error") or "Headset review sheet is unavailable."}
+            return {"ok": False, "error": _headset_review_temporary_unavailable_message()}
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
             post_action = {
@@ -5107,6 +5269,7 @@ def _headset_review_action(payload):
                 "review_id": str((payload or {}).get("review_id") or "").strip(),
                 "submitted_date": str((payload or {}).get("submitted_date") or "").strip(),
                 "tester": str((payload or {}).get("tester") or "").strip(),
+                "actor": str((payload or {}).get("actor") or "SAM").strip() or "SAM",
             })
             refreshed = _apps_script_rows(apps_script_client, "getHeadsets")
             _sync_headset_content_cache([
@@ -5129,13 +5292,22 @@ def _headset_review_action(payload):
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         schema = _headset_review_schema_from_context(context)
-        review_headers = LEGACY_HEADSET_REVIEW_LOG_HEADERS if schema == "legacy" else HEADSET_REVIEW_LOG_HEADERS
+        review_headers = _headset_review_headers(schema)
         review_rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers)
         target_key = _normalize_headset_review_key(f"{brand} {model}")
+        matched_review = False
         for row in review_rows:
             normalized = _normalize_headset_review_row(row, schema)
-            if _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}") != target_key:
+            row_key = _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}")
+            if schema == "review" and review_id:
+                if normalized.get("review_id") != review_id:
+                    continue
+            elif row_key != target_key:
                 continue
+            matched_review = True
+            current_status = str(normalized.get("status") or "pending").lower()
+            if current_status not in {"", "pending", decision_status}:
+                return {"ok": False, "error": "This headset review was already resolved with a different decision."}
             if action == "delete":
                 _shared_delete_existing_row(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, row.get("_row_number"))
                 return {"ok": True, "action": action, "brand": brand, "model": model}
@@ -5144,13 +5316,27 @@ def _headset_review_action(payload):
                 next_row["review_status"] = decision_status
                 next_row["notes"] = decision_note
                 row_values = _shared_row_values(next_row, LEGACY_HEADSET_REVIEW_LOG_HEADERS)
-            else:
+            elif schema == "basic":
                 row_values = [brand, model, decision_status, decision_note]
+            else:
+                next_row = dict(row)
+                next_row.update({
+                    "Status": decision_status,
+                    "Note": decision_note,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "decision_at": datetime.now(timezone.utc).isoformat(),
+                    "decision_by": str((payload or {}).get("actor") or "SAM").strip() or "SAM",
+                    "denial_reason": reason if action == "deny" else "",
+                })
+                row_values = _shared_row_values(next_row, HEADSET_REVIEW_LOG_HEADERS)
             _shared_update_existing_row(
                 sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers,
                 row.get("_row_number"), row_values,
             )
             break
+
+        if not matched_review:
+            return {"ok": False, "error": "The selected headset review could not be found. Refresh Headset Review and try again."}
 
         if action == "archive":
             return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
@@ -5302,8 +5488,8 @@ def _shared_sheet_gid(sheets_api, sheet_id, tab_name):
     return None
 
 
-def _shared_admin_candidate_snapshot():
-    context = _shared_sheet_context()
+def _shared_admin_candidate_snapshot(context=None):
+    context = context or _shared_sheet_context()
     if not context.get("ok"):
         return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
 
@@ -5508,7 +5694,7 @@ def _public_newbie_request(row):
         "requested_schedule": row.get("scheduled_at") or row.get("rescheduled_at") or "",
         "original_schedule": row.get("original_scheduled_at") or "",
         "timezone": row.get("timezone") or "",
-        "requester": "Candidate" if requested_by == NEWBIE_REQUESTED_BY_CANDIDATE else "Tester" if requested_by == NEWBIE_REQUESTED_BY_TESTER else "",
+        "requester": "Candidate" if requested_by == NEWBIE_REQUESTED_BY_CANDIDATE else "Tester/Trainer" if requested_by == NEWBIE_REQUESTED_BY_TESTER else "Other" if requested_by == "other" else "",
         "reason": row.get("request_reason") or "",
         "details": row.get("request_details") or "",
         "within_24_hours": _shared_truthy(row.get("within_24_hours")),
@@ -5523,12 +5709,17 @@ def _public_newbie_request(row):
 
 
 def _public_deletion_request(row):
+    audit_fields = {}
+    for part in str(row.get("audit_summary") or "").split(";"):
+        key, separator, value = part.partition("=")
+        if separator:
+            audit_fields[key.strip()] = value.strip()
     return {
         "id": row.get("request_id") or "",
         "request_id": row.get("request_id") or "",
         "session_id": row.get("session_id") or "",
         "category": "candidate_deletion",
-        "categoryLabel": "Candidate Deletion",
+        "categoryLabel": "Candidate Deletion Request",
         "candidate": row.get("candidate_name") or "",
         "tester": row.get("tester_name") or "",
         "created_at": row.get("created_at") or "",
@@ -5537,10 +5728,10 @@ def _public_deletion_request(row):
         "timezone": "",
         "requester": "Tester",
         "reason": row.get("reason") or "Trainer requested candidate-list deletion review.",
-        "details": row.get("audit_summary") or "",
+        "details": "",
         "within_24_hours": False,
         "counts_as_attempt": False,
-        "final_attempt": False,
+        "final_attempt": _shared_truthy(audit_fields.get("final_attempt")),
         "status": _approval_label(row.get("status")),
         "raw_status": _request_status_value(row.get("status")),
         "admin_decision_at": row.get("admin_decision_at") or "",
@@ -5548,19 +5739,61 @@ def _public_deletion_request(row):
         "denial_reason": row.get("denial_reason") or "",
         "target_scope": "single_session",
         "session_status": row.get("session_status") or "",
+        "form_fill_status": audit_fields.get("form_fill_status") or FORM_FILL_NOT_ATTEMPTED,
         "completed_at": row.get("completed_at") or "",
+        "deletion_scope": "Session History and Candidate Tracking",
     }
 
 
 def _request_category_counts(requests, headset_pending_count=0):
     pending = [item for item in requests if item.get("raw_status") == "pending"]
+    workflow_count = len(pending)
     return {
         "newbieInitial": sum(1 for item in pending if item.get("category") == "newbie_initial"),
         "reschedules": sum(1 for item in pending if item.get("category") == "newbie_reschedule"),
         "candidateDeletions": sum(1 for item in pending if item.get("category") == "candidate_deletion"),
         "headsetReviews": headset_pending_count,
-        "unresolved": len(pending) + headset_pending_count,
+        "workflowRequests": workflow_count,
+        "actionableTotal": workflow_count + headset_pending_count,
+        "unresolved": workflow_count + headset_pending_count,
     }
+
+
+def _candidate_terminal_for_newbie_shift(row):
+    status = str(row.get("latest_status") or row.get("final_status") or row.get("status") or "").strip().lower()
+    status = re.sub(r"[\u2013\u2014_-]+", " ", status)
+    status = re.sub(r"\s+", " ", status).strip()
+    if status in {
+        "pass", "resumed pass", "fail final attempt", "failed final attempt",
+        "withdrawn", "withdrew from certification", "removed", "deleted", "archived",
+    }:
+        return True
+    if _shared_truthy(row.get("final_attempt")) and status in {"fail", "failed"}:
+        return True
+    return any(
+        str(row.get(key) or "").strip().lower() == "pass"
+        for key in ("sup_transfer_1_result", "sup_transfer_2_result")
+    )
+
+
+def _filter_obsolete_pending_newbie_requests(requests, candidate_tracking):
+    candidates = (candidate_tracking or {}).get("candidates") or []
+    by_session = {
+        str(row.get("session_id") or "").strip(): row
+        for row in candidates
+        if str(row.get("session_id") or "").strip()
+    }
+    filtered = []
+    for request in requests or []:
+        candidate = by_session.get(str(request.get("session_id") or "").strip())
+        is_pending_newbie = (
+            request.get("category") in {"newbie_initial", "newbie_reschedule"}
+            and request.get("raw_status") == "pending"
+        )
+        if is_pending_newbie and candidate and _candidate_terminal_for_newbie_shift(candidate):
+            continue
+        filtered.append(request)
+    return filtered
 
 
 REMOTE_NEWBIE_REQUEST_CACHE_TTL_SECONDS = 15
@@ -5834,6 +6067,49 @@ def _reconcile_record_with_remote_requests(record, requests):
     return reconciled, changed, match_reason
 
 
+def _reconcile_candidate_tracking_with_requests(candidate_tracking, pending_requests):
+    if not isinstance(candidate_tracking, dict) or not candidate_tracking.get("ok"):
+        return candidate_tracking
+    if not isinstance(pending_requests, dict) or not pending_requests.get("ok"):
+        return candidate_tracking
+
+    remote_requests = []
+    for request in pending_requests.get("requests") or []:
+        normalized = _canonical_remote_newbie_request(request)
+        if normalized and (normalized.get("request_id") or normalized.get("source_session_id")):
+            remote_requests.append(normalized)
+    if not remote_requests:
+        return candidate_tracking
+
+    seen = set()
+
+    def reconcile_rows(rows):
+        for index, row in enumerate(rows or []):
+            if not isinstance(row, dict) or id(row) in seen:
+                continue
+            seen.add(id(row))
+            reconciled, changed, _reason = _reconcile_record_with_remote_requests(row, remote_requests)
+            if changed:
+                row.clear()
+                row.update(reconciled)
+            for attempt in row.get("attempts") or []:
+                if not isinstance(attempt, dict) or id(attempt) in seen:
+                    continue
+                seen.add(id(attempt))
+                next_attempt, attempt_changed, _attempt_reason = _reconcile_record_with_remote_requests(
+                    attempt,
+                    remote_requests,
+                )
+                if attempt_changed:
+                    attempt.clear()
+                    attempt.update(next_attempt)
+
+    reconcile_rows(candidate_tracking.get("candidates"))
+    for rows in (candidate_tracking.get("views") or {}).values():
+        reconcile_rows(rows)
+    return candidate_tracking
+
+
 def _reconcile_remote_newbie_requests_into_local_state(force=False):
     snapshot = _remote_newbie_request_snapshot(force=force)
     if not snapshot.get("ok"):
@@ -5890,9 +6166,10 @@ def _reconcile_remote_newbie_requests_into_local_state(force=False):
     }
 
 
-def _shared_pending_request_snapshot():
-    context = _shared_sheet_context()
-    headset_snapshot = _headset_review_snapshot()
+def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candidate_tracking=None):
+    context = context or _shared_sheet_context()
+    headset_snapshot = headset_snapshot or _headset_review_snapshot(context)
+    candidate_tracking = candidate_tracking or _shared_admin_candidate_snapshot(context)
     headset_pending_count = len(headset_snapshot.get("pending") or []) if headset_snapshot.get("ok") else 0
     if context.get("appsScriptClient"):
         try:
@@ -5925,6 +6202,7 @@ def _shared_pending_request_snapshot():
                         "final_attempt": row.get("final_attempt"), "admin_decision_at": row.get("decision_at"),
                         "admin_decision_by": row.get("decision_by"), "denial_reason": row.get("denial_reason"),
                     }))
+            requests = _filter_obsolete_pending_newbie_requests(requests, candidate_tracking)
             return {
                 "ok": True, "requests": requests, "headsetReviews": headset_snapshot.get("pending") or [],
                 "counts": _request_category_counts(requests, headset_pending_count), "warning": "", "error_code": "", "message": "",
@@ -5934,13 +6212,13 @@ def _shared_pending_request_snapshot():
         except Exception as exc:
             logger.warning("[REQUESTS] Apps Script pending request listing failed: %s", exc)
             return {
-                "ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "error_code": "apps_script_pending_requests_unavailable", "message": "",
+                "ok": False, "error": _pending_requests_temporary_unavailable_message(), "error_code": "apps_script_pending_requests_unavailable", "message": "",
                 "requests": [], "headsetReviews": headset_snapshot.get("pending") or [], "counts": _request_category_counts([], headset_pending_count), "transport": "apps_script",
             }
     if not context.get("ok"):
         return {
             "ok": False,
-            "error": _candidate_tracking_temporary_unavailable_message(),
+            "error": _pending_requests_temporary_unavailable_message(),
             "requests": [],
             "headsetReviews": headset_snapshot.get("pending") or [],
             "counts": _request_category_counts([], headset_pending_count),
@@ -5955,6 +6233,7 @@ def _shared_pending_request_snapshot():
         newbie_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_NEWBIE_SHIFT_REQUESTS_TAB, SHARED_NEWBIE_SHIFT_REQUEST_HEADERS)
         deletion_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_DELETION_REQUESTS_TAB, SHARED_CANDIDATE_DELETION_REQUEST_HEADERS)
         requests = [_public_newbie_request(row) for row in newbie_rows] + [_public_deletion_request(row) for row in deletion_rows]
+        requests = _filter_obsolete_pending_newbie_requests(requests, candidate_tracking)
         requests.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return {
             "ok": True,
@@ -5970,7 +6249,7 @@ def _shared_pending_request_snapshot():
         logger.warning("[REQUESTS] Pending request snapshot unavailable: %s", exc)
         return {
             "ok": False,
-            "error": _candidate_tracking_temporary_unavailable_message(),
+            "error": _pending_requests_temporary_unavailable_message(),
             "requests": [],
             "headsetReviews": headset_snapshot.get("pending") or [],
             "counts": _request_category_counts([], headset_pending_count),
@@ -5979,6 +6258,21 @@ def _shared_pending_request_snapshot():
                 "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests.",
             },
         }
+
+
+def _shared_admin_snapshot():
+    context = _shared_sheet_context()
+    headset_reviews = _headset_review_snapshot(context)
+    candidate_tracking = _shared_admin_candidate_snapshot(context)
+    pending_requests = _shared_pending_request_snapshot(headset_reviews, context, candidate_tracking)
+    candidate_tracking = _reconcile_candidate_tracking_with_requests(candidate_tracking, pending_requests)
+    return {
+        "ok": all(section.get("ok") for section in (headset_reviews, pending_requests, candidate_tracking)),
+        "candidateTracking": candidate_tracking,
+        "pendingRequests": pending_requests,
+        "headsetReviews": headset_reviews,
+        "refreshedAt": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _set_row_value(row, key, value):
@@ -7042,7 +7336,7 @@ def _candidate_deletion_request_row(record, request_id):
         record.get("deletion_request_created_at") or datetime.now(timezone.utc).isoformat(),
         record.get("deletion_request_status") or DELETION_REQUEST_PENDING,
         _shared_bool(True),
-        "Trainer requested local history deletion plus SAM candidate-list review.",
+        record.get("deletion_request_reason") or "Trainer requested local history deletion plus SAM candidate-list review.",
         record.get("status") or record.get("final_status") or "",
         completed_at,
         "; ".join(audit_parts),
@@ -7078,6 +7372,35 @@ def _sync_newbie_shift_request(session, sheets_api, sheet_id, existing_rows=None
     )
 
 
+def _sync_newbie_shift_request_only(session):
+    """Upsert one Newbie Shift request without changing Candidate Tracking."""
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        return {"ok": False, "error": "The reschedule request service is unavailable."}
+    try:
+        if context.get("appsScriptClient"):
+            row_values, _request_id = _newbie_shift_request_row(session)
+            request_row = dict(zip(SHARED_NEWBIE_SHIFT_REQUEST_HEADERS, row_values))
+            request_row["source_session_id"] = request_row.pop("session_id", "")
+            request_row["request_type"] = (
+                "newbie_shift_reschedule"
+                if request_row.get("request_type") == NEWBIE_REQUEST_RESCHEDULE
+                else "initial_newbie_shift"
+            )
+            result = context["appsScriptClient"].post("upsertPendingRequest", {"request": request_row})
+            return {"ok": True, "action": result}
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        action = _sync_newbie_shift_request(session, sheets_api, sheet_id)
+        return {"ok": True, "action": action}
+    except Exception as exc:
+        logger.warning(
+            "[NEWBIE REQUEST] Request upsert failed error_type=%s",
+            type(exc).__name__,
+        )
+        return {"ok": False, "error": "The reschedule request could not be submitted. Retry Save/Submit."}
+
+
 def _sync_shared_candidate_tracking(session):
     context = _shared_sheet_context()
     if not context.get("ok"):
@@ -7094,14 +7417,23 @@ def _sync_shared_candidate_tracking(session):
             )
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
-            status = _shared_status(compute_final_status(session))
-            result = apps_script_client.post("updateCandidateTracking", {
-                "candidateName": str(session.get("candidate_name") or session.get("candidate") or "").strip(),
-                "status": status,
-                "notes": str(session.get("review_notes") or session.get("fail_summary") or session.get("coaching_summary") or "").strip(),
-                "updatedBy": str(session.get("tester_name") or "MTS").strip() or "MTS",
-                "timestamp": str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()),
-            })
+            candidate_values, pending_id, needs_sup = _candidate_session_row(session, [])
+            candidate_row = dict(zip(SHARED_CANDIDATE_SESSION_HEADERS, candidate_values))
+            candidate_payload = {"candidateRow": candidate_row}
+            if needs_sup or session.get("shared_pending_sup_transfer") or session.get("pending_sup_transfer_id"):
+                pending_id = pending_id or str(
+                    session.get("pending_sup_transfer_id")
+                    or f"pending-{candidate_row.get('session_id') or uuid.uuid4()}"
+                )
+                pending_values = _pending_sup_transfer_row(
+                    session,
+                    pending_id,
+                    completed=not needs_sup,
+                )
+                candidate_payload["pendingRow"] = dict(
+                    zip(SHARED_PENDING_SUP_TRANSFER_HEADERS, pending_values)
+                )
+            result = apps_script_client.post("updateCandidateTracking", candidate_payload)
             newbie_action = ""
             if session.get("newbie_shift_request_id"):
                 row_values, request_id = _newbie_shift_request_row(session)
@@ -7109,7 +7441,14 @@ def _sync_shared_candidate_tracking(session):
                 request["source_session_id"] = request.pop("session_id", "")
                 request["request_type"] = "newbie_shift_reschedule" if request.get("request_type") == NEWBIE_REQUEST_RESCHEDULE else "initial_newbie_shift"
                 newbie_action = apps_script_client.post("upsertPendingRequest", {"request": request})
-            return {"ok": True, "candidateAction": "updated", "pendingAction": "", "newbieRequestAction": newbie_action, **(result if isinstance(result, dict) else {})}
+            response = result if isinstance(result, dict) else {}
+            return {
+                "ok": True,
+                "candidateAction": response.get("candidateAction") or "updated",
+                "pendingAction": response.get("pendingAction") or "",
+                "newbieRequestAction": newbie_action,
+                **response,
+            }
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         current_operation = "read_candidate_rows"
@@ -9553,8 +9892,62 @@ async def reset_settings_section(payload: dict, request: Request):
     return {"ok": True, "section": section, "settings": sanitize_settings(doc)}
 
 
+_managed_content_refresh_lock = threading.Lock()
+_managed_content_refresh_last_success = 0.0
+
+
+def _refresh_managed_content_sections(section_keys):
+    global DISCORD_TEMPLATES
+    global EXTERNAL_CONTENT
+    global _managed_content_refresh_last_success
+
+    runtime_config = _load_backend_runtime_config()
+    sheet_id = _resolve_content_sheet_id(runtime_config or {})
+    if not sheet_id:
+        return False
+
+    refreshed = False
+    with _managed_content_refresh_lock:
+        for content_key in section_keys:
+            tab_name = CONTENT_SHEET_TAB_MAP.get(content_key)
+            parser = CONTENT_SHEET_PARSERS.get(content_key)
+            if not tab_name or not parser:
+                continue
+            try:
+                csv_text = _fetch_google_sheet_tab_csv(sheet_id, tab_name)
+                parsed = parser(csv_text)
+            except Exception as exc:
+                logger.info("[CONTENT] Managed refresh delayed for %s: %s", content_key, exc)
+                continue
+            primary_value = parsed.get(content_key)
+            if not primary_value:
+                continue
+            for key, value in parsed.items():
+                if value:
+                    EXTERNAL_CONTENT[key] = value
+                    _set_content_source(key, "google", value, ok=True, detail="manual_refresh")
+                    _content_source_status[key]["background_status"] = "completed"
+                    _content_source_status[key]["background_loading"] = False
+            if content_key == "discord_templates":
+                DISCORD_TEMPLATES = parsed["discord_templates"]
+                DEFAULT_SETTINGS["discord_templates"] = DISCORD_TEMPLATES
+            elif content_key == "approved_headsets":
+                _headset_cache["groups"] = parsed.get("approved_headsets") or []
+                _headset_cache["denied"] = parsed.get("denied_headsets") or []
+                _headset_cache["last_fetch"] = time.time()
+            refreshed = True
+        if refreshed:
+            _managed_content_refresh_last_success = time.time()
+    return refreshed
+
+
 @api_router.get("/settings/defaults")
-async def get_defaults():
+async def get_defaults(refresh: bool = False):
+    if refresh:
+        await asyncio.to_thread(
+            _refresh_managed_content_sections,
+            ("discord_templates", "approved_headsets"),
+        )
     discord_source = _content_source_status.get("discord_templates") or {}
     logger.info(
         "[DISCORD DEFAULTS] Serving templates source=%s count=%s",
@@ -10725,6 +11118,12 @@ async def get_shared_admin_candidates(request: Request):
     return await asyncio.to_thread(_shared_admin_candidate_snapshot)
 
 
+@api_router.get("/shared/admin/snapshot")
+async def get_shared_admin_snapshot(request: Request):
+    _require_admin_token(request)
+    return await asyncio.to_thread(_shared_admin_snapshot)
+
+
 @api_router.post("/shared/admin/candidates/action")
 async def post_shared_admin_candidate_action(payload: dict, request: Request):
     _require_admin_token(request)
@@ -10887,13 +11286,43 @@ async def google_sheet_permission_check(request: Request):
         }
 
 
+async def _sync_started_session_headset_review(session):
+    headset_review = await asyncio.to_thread(_append_headset_review_log, {
+        "review_id": session.get("headset_review_id"),
+        "source_session_id": session.get("session_id"),
+        "candidate_name": session.get("candidate_name"),
+        "tester_name": session.get("tester_name"),
+        "headset_model": session.get("headset_brand"),
+        "note": session.get("headset_review_note") or "",
+    })
+    current = await db.sessions.find_one({"_id": "active_session"})
+    if not current or current.get("session_id") != session.get("session_id"):
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if headset_review.get("ok"):
+        updates = {
+            "headset_review_id": headset_review.get("review_id") or session.get("headset_review_id") or "",
+            "headset_review_sync_status": "synced",
+            "headset_review_status": headset_review.get("status") or ("approved" if headset_review.get("reason") == "approved_headset" else ""),
+            "headset_review_last_synced_at": now_iso,
+        }
+    else:
+        updates = {"headset_review_sync_status": "failed", "headset_review_status": "pending_retry"}
+    await db.sessions.update_one({"_id": "active_session"}, {"$set": updates}, upsert=False)
+
+
 @api_router.post("/session/start")
-async def start_session(payload: dict, request: Request):
+async def start_session(payload: dict, request: Request, background_tasks: BackgroundTasks):
     session = empty_session()
     session.update(payload)
+    session["session_id"] = str(session.get("session_id") or uuid.uuid4())
     session["last_saved"] = datetime.now(timezone.utc).strftime("%I:%M %p")
     await db.sessions.replace_one({"_id": "active_session"}, {"_id": "active_session", **session}, upsert=True)
-    return {"ok": True, "session": session}
+    if _shared_truthy(session.get("headset_review_requested")):
+        session["headset_review_sync_status"] = "pending"
+        await db.sessions.update_one({"_id": "active_session"}, {"$set": {"headset_review_sync_status": "pending"}}, upsert=False)
+        background_tasks.add_task(_sync_started_session_headset_review, dict(session))
+    return {"ok": True, "session": session, "headsetReview": None, "warning": ""}
 
 
 @api_router.put("/session/update")
@@ -10912,6 +11341,23 @@ async def update_session(payload: dict, request: Request):
     payload["last_saved"] = datetime.now(timezone.utc).strftime("%I:%M %p")
     await db.sessions.update_one({"_id": "active_session"}, {"$set": payload}, upsert=False)
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
+    should_submit_reschedule = (
+        str(doc.get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE
+        and str(doc.get("newbie_shift_request_status") or "").strip().lower() == NEWBIE_REQUEST_PENDING
+        and bool(str(doc.get("newbie_shift_request_id") or "").strip())
+        and bool(str(doc.get("newbie_shift_rescheduled_at") or "").strip())
+        and any(key in payload for key in ("newbie_shift_rescheduled_at", "newbie_shift_scheduled_at", "newbie_shift_data"))
+    )
+    if should_submit_reschedule:
+        request_result = await asyncio.to_thread(_sync_newbie_shift_request_only, doc)
+        if not request_result.get("ok"):
+            return {
+                "ok": False,
+                "session": doc,
+                "requestSaved": False,
+                "error": request_result.get("error") or "The reschedule request could not be submitted. Retry Save/Submit.",
+            }
+        return {"ok": True, "session": doc, "requestSaved": True}
     return {"ok": True, "session": doc}
 
 
@@ -10919,7 +11365,8 @@ async def update_session(payload: dict, request: Request):
 async def save_call(payload: dict, request: Request):
     key = f"call_{payload.get('call_num', 1)}"
     await db.sessions.update_one({"_id": "active_session"}, {"$set": {key: payload, "current_call_draft": None, "current_call_num": None}})
-    return {"ok": True}
+    session = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
+    return {"ok": True, "session": session}
 
 
 @api_router.post("/session/sup")
@@ -11021,6 +11468,13 @@ async def delete_history_session(history_id: str, request: Request):
 
 @api_router.post("/history/session/{history_id:path}/deletion-request")
 async def request_history_session_deletion(history_id: str, request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    reason = str((payload or {}).get("reason") or "").strip()
+    if len(reason) < 10:
+        raise HTTPException(status_code=400, detail="Provide a deletion reason of at least 10 characters.")
     db.backup("before-delete-history-session-request")
     rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC")
     target = None
@@ -11039,6 +11493,7 @@ async def request_history_session_deletion(history_id: str, request: Request):
         "deletion_request_id": request_id,
         "deletion_request_status": DELETION_REQUEST_PENDING,
         "deletion_request_created_at": target.get("deletion_request_created_at") or datetime.now(timezone.utc).isoformat(),
+        "deletion_request_reason": reason,
     })
 
     shared_result = {"ok": False, "error": "Shared candidate deletion request sync unavailable."}
@@ -11887,12 +12342,18 @@ def _google_sheet_quota_or_temporary_error(exc):
 
 
 def _candidate_tracking_temporary_unavailable_message():
+    return "Candidate Tracking is temporarily unavailable. SAM will retry automatically."
+
+
+def _pending_requests_temporary_unavailable_message():
     return (
-        "Candidate Tracking is temporarily unavailable. "
-        "Google Sheets is currently receiving too many requests. "
-        "SAM will retry automatically. "
+        "Pending Requests are temporarily unavailable. SAM will retry automatically. "
         "Please wait a moment and select Refresh if needed."
     )
+
+
+def _headset_review_temporary_unavailable_message():
+    return "Headset Review is temporarily unavailable. SAM will retry automatically."
 
 
 def _google_sheet_error_type(exc):
@@ -13051,12 +13512,23 @@ async def delete_notification_manage(notification_id: str, request: Request):
     return await asyncio.to_thread(_delete_notification_from_google_sheet, notification_id)
 
 
-async def _fetch_approved_headsets():
+async def _fetch_approved_headsets(force=False):
     import time
 
     now = time.time()
-    if _headset_cache["groups"] and (now - _headset_cache["last_fetch"]) < 300:
+    if not force and _headset_cache["groups"] and (now - _headset_cache["last_fetch"]) < 300:
         return _headset_cache["groups"], _headset_cache.get("denied") or [], ""
+
+    if force:
+        refreshed = await asyncio.to_thread(_refresh_managed_content_sections, ("approved_headsets",))
+        if refreshed and _headset_cache.get("groups"):
+            return _headset_cache["groups"], _headset_cache.get("denied") or [], ""
+        if _headset_cache.get("groups"):
+            return (
+                _headset_cache["groups"],
+                _headset_cache.get("denied") or [],
+                "Approved headset refresh is temporarily delayed. Showing the last available list.",
+            )
 
     sheet_groups = EXTERNAL_CONTENT.get("approved_headsets")
     denied = EXTERNAL_CONTENT.get("denied_headsets") or []
@@ -13065,7 +13537,10 @@ async def _fetch_approved_headsets():
         _headset_cache["denied"] = denied
         _headset_cache["last_fetch"] = now
         return sheet_groups, denied, ""
-    return _headset_cache["groups"] or [], _headset_cache.get("denied") or [], "Unable to load the approved headset list right now."
+    cached_groups = _headset_cache["groups"] or []
+    if cached_groups:
+        return cached_groups, _headset_cache.get("denied") or [], "Approved headset refresh is temporarily delayed. Showing the last available list."
+    return [], _headset_cache.get("denied") or [], "Unable to load the approved headset list right now."
 
 
 def _resolve_screenshot_path(filename: str) -> Path:
@@ -13122,8 +13597,8 @@ async def get_screenshot_asset(filename: str):
 
 
 @api_router.get("/headsets")
-async def get_approved_headsets():
-    groups, denied, error = await _fetch_approved_headsets()
+async def get_approved_headsets(force: bool = False):
+    groups, denied, error = await _fetch_approved_headsets(force=force)
     return {"groups": groups, "denied": denied, "error": error}
 
 

@@ -1,20 +1,17 @@
-# Service Account Packaging Risk
+# Service Account Packaging Security Decision
 
-`google-service-account.json` is intentionally packaged into the application installer for the v1.0.x release cycle. 
+`google-service-account.json` must not be included in MTS or SAM installers, unpacked application resources, production-ready output, updater artifacts, Git, logs, screenshots, or support bundles.
 
-This is a **known, temporary security tradeoff** accepted by the engineering team to streamline the distribution and installation process for early release testers. 
+The earlier v1.0.x exception is closed. Both Electron Builder definitions and the production-ready synchronization scripts now exclude the credential without reading or modifying the local source file.
 
-### Security Guidelines & Mitigations
+## Release requirements
 
-To mitigate the risk of packaging service account credentials:
-1. **Least Privilege**: The service account must be strictly scoped to the absolute minimum permissions required.
-2. **Resource Scoping**: It should only have access to the specific Google Sheets required by the application. Do not grant project-level or broad API access.
-3. **Limited Distribution**: The application installer must be distributed only to trusted internal users. Do not host the installer on public URLs.
-4. **Credential Rotation**: The service account key must be rotated periodically and immediately after the initial release testing phase is complete.
+1. Rotate or revoke any credential that was present in a previously distributed or retained package.
+2. Rebuild MTS and SAM after the packaging change.
+3. Inspect artifact file-name inventories and run an approved secret scan without printing credential values.
+4. Confirm required live workflows through a service boundary that does not distribute a reusable privileged credential.
+5. Do not restore the credential to packaging as a fallback.
 
-### Future Architecture
+## Supported direction
 
-For future releases (v1.1.x+), the architecture should move away from packaging service accounts by implementing one of the following:
-* Admin-provided credentials configured during setup.
-* User-level OAuth2 authentication flow.
-* A secure backend proxy service that handles API access on behalf of the desktop clients.
+The repository Apps Script boundary now uses separate MTS and SAM credentials with role/action-scoped authorization. MTS cannot invoke SAM decisions, notification administration, generic sheet writes, or candidate-administration commands. Live acceptance still requires the controlled deployment and independently packaged role credentials to match that source. Admin-provided OAuth remains a possible future replacement.

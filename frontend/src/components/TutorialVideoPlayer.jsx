@@ -88,7 +88,7 @@ export function TutorialVideoPlayer({ video, onClose }) {
   );
 }
 
-export function TutorialVideoLibrary({ videos, title = 'Tutorial Videos', onSelectVideo, selectedVideo, sectionId = 'tutorial-videos' }) {
+export function TutorialVideoLibrary({ videos, title = 'Tutorial Videos', onSelectVideo, selectedVideo, sectionId = 'tutorial-videos', loadError = '', onRetry }) {
   const [internalSelected, setInternalSelected] = useState(null);
   const controlled = selectedVideo !== undefined;
   const selected = controlled ? selectedVideo : internalSelected;
@@ -106,7 +106,13 @@ export function TutorialVideoLibrary({ videos, title = 'Tutorial Videos', onSele
         <p>Videos are supplemental. Every workflow remains documented in written Help.</p>
       </div>
       {selectedBelongsHere ? <TutorialVideoPlayer video={selected} onClose={() => { if (!controlled) setInternalSelected(null); onSelectVideo?.(null); }} /> : null}
-      {Object.keys(groups).length ? Object.entries(groups).map(([category, items]) => (
+      {loadError && !Object.keys(groups).length ? (
+        <div className="tutorial-empty" role="status">
+          <strong>Tutorial videos are temporarily unavailable.</strong>
+          <span>Written Help remains available. You can try again when the connection recovers.</span>
+          {onRetry ? <button type="button" onClick={onRetry}>Try Again</button> : null}
+        </div>
+      ) : Object.keys(groups).length ? Object.entries(groups).map(([category, items]) => (
         <section key={category} className="tutorial-category" aria-labelledby={`tutorial-category-${category.replace(/\W+/g, '-').toLowerCase()}`}>
           <h3 id={`tutorial-category-${category.replace(/\W+/g, '-').toLowerCase()}`}>{category}</h3>
           <div className="tutorial-card-grid">
@@ -131,7 +137,7 @@ export function TutorialVideoLibrary({ videos, title = 'Tutorial Videos', onSele
           </div>
         </section>
       )) : (
-        <div className="tutorial-empty">No active tutorial videos are published yet. Use the written guide or replay the guided walkthrough.</div>
+        <div className="tutorial-empty" role="status"><strong>No tutorial videos have been added yet.</strong><span>Written Help remains available.</span></div>
       )}
     </section>
   );

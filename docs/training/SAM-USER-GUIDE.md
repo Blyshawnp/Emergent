@@ -107,15 +107,16 @@ This view lists candidates whose mock calls are saved but Supervisor Transfer st
 
 ## Pending Requests and bell
 
-The header bell count includes every unresolved actionable request, even when its immediate alert is temporarily suppressed. The bell popover separates Newbie Shift Requests, Reschedule Requests, Candidate Deletion Requests, and Headset Reviews.
+The header bell count includes every unresolved actionable item, even when its immediate alert is temporarily suppressed. The bell popover separates Workflow Requests from Headset Reviews so counts are understandable.
 
-The Pending Requests filters are **All Pending**, **Newbie Shifts**, **Reschedules**, **Candidate Deletions**, **Headset Reviews**, **Approved**, and **Denied**.
+The Pending Requests card and badge count workflow requests only: initial Newbie Shift requests, reschedules, and candidate deletions. The Pending Headsets card and Headset Review badge count headset reviews only. A Headset Review shortcut may appear in Pending Requests, but a headset review is not counted as a workflow request.
 
 ### Alert actions
 
 - **View** opens the request category and advances the immediate alert to the next eligible request for the current refresh cycle.
-- **Remind Me in 30 Minutes** suppresses only that immediate alert for 30 minutes.
-- **Dismiss** also suppresses only that immediate alert for 30 minutes.
+- **Remind Me in 30 Minutes** suppresses only that immediate workflow alert for 30 minutes.
+- **Dismiss** also suppresses only that immediate workflow alert for 30 minutes.
+- **Headset Review reminders** are grouped and repeat after about 2 hours while SAM remains open. Opening Headset Review acknowledges the immediate headset reminder for that SAM session.
 - Escape closes the immediate alert for the current cycle.
 
 None of these actions approves, denies, removes, or decrements the unresolved request.
@@ -143,7 +144,7 @@ Use **Pending Review**, **Approved Headsets**, and **Denied Headsets**.
 4. A denial requires a listed reason; **Other** requires a denial note.
 5. **Archive** keeps the completed review record. **Delete** is only for mistakes.
 
-Research results are supporting evidence, not an automatic decision. MTS behavior changes only after the approved/denied decision is saved and refreshed.
+Research results are supporting evidence, not an automatic decision. MTS behavior changes only after the approved/denied decision is saved and refreshed. Multiple pending headset reviews produce one grouped reminder, not one popup per headset.
 
 ## Reports and operational handoff
 
@@ -167,7 +168,7 @@ Help contains searchable SAM topics, Tutorial Videos, **Quick Start Choices**, *
 
 - Stale counts or rows: wait briefly and select **Refresh**.
 - Shared data temporarily unavailable: keep the current view, wait about 60 seconds, and retry once.
-- Pending alert disappeared: check the bell/inbox; Remind Me and Dismiss hide only the immediate alert for 30 minutes.
+- Pending alert disappeared: check the bell/inbox; workflow Remind Me and Dismiss hide only the immediate alert for 30 minutes, while Headset Review reminders are grouped and repeat after about 2 hours.
 - Approval does not appear in MTS: refresh SAM, then refresh MTS History/Home or candidate lookup. Do not issue a duplicate decision.
 - Candidate appears in the wrong view: open View Details, verify the latest status, then use the authorized Update Status action.
 - Notification not visible: verify Enable/Disable, schedule, delivery type, and Live Preview.
@@ -193,4 +194,5 @@ Help contains searchable SAM topics, Tutorial Videos, **Quick Start Choices**, *
 | Not Yet Filled | Form Fill has not completed. |
 | Fill Failed | Form automation did not complete. |
 | Not Recorded | Legacy record lacks a form state. |
-| Remind Me / Dismiss | Temporary 30-minute immediate-alert suppression, not a decision. |
+| Remind Me / Dismiss | Temporary 30-minute workflow-alert suppression, not a decision. |
+| Headset Review reminder | Grouped headset reminder that repeats after about 2 hours while unresolved. |

@@ -1628,10 +1628,19 @@ body.notification-manager-body.nm-dialog-open {
   margin: 0 0 18px;
 }
 
+.nm-help-toc .nm-field {
+  flex: 1 0 100%;
+  margin: 0 0 4px;
+}
+
 .nm-help-toc-button {
-  min-height: 34px;
-  padding: 7px 10px;
-  border-radius: 999px;
+  min-height: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 14px;
+  border-radius: 8px;
   border: 1px solid rgba(125, 211, 252, 0.2);
   background: rgba(15, 23, 42, 0.76);
   color: #dbeafe;
@@ -1639,6 +1648,21 @@ body.notification-manager-body.nm-dialog-open {
   font: inherit;
   font-size: 12px;
   font-weight: 800;
+}
+
+.nm-deletion-reason {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--nm-warning);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.nm-deletion-reason strong {
+  color: #fbbf24;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .nm-help-toc-button:hover,

@@ -280,8 +280,8 @@ async function evaluateCallRouting(session, modal, onNavigate, apiRef, workflowC
       },
     });
     if (hasTime) {
-      await apiRef.updateSession({ time_for_sup: true });
-      onNavigate('suptransfer');
+      fireAndForgetSessionUpdate({ time_for_sup: true });
+      onNavigate('suptransfer', { session: { ...(session || {}), time_for_sup: true }, navigationStartedAt: Date.now() });
     } else {
       const promptSignature = 'not_enough_time_sup_transfer';
       const existingPrompt = session.newbie_shift_prompt || {};
@@ -347,12 +347,12 @@ function fireAndForgetSessionUpdate(payload) {
   } catch (_error) {}
 }
 
-export default function CallsPage({ onNavigate, navigationState }) {
+export default function CallsPage({ onNavigate, navigationState, settings: initialSettings = {}, defaults: initialDefaults = {}, currentSession: initialCurrentSession = null }) {
   const modal = useModal();
   const [callNum, setCallNum] = useState(1);
   const [result, setResult] = useState(null);
-  const [defaults, setDefaults] = useState({});
-  const [settings, setSettings] = useState({});
+  const [defaults] = useState(() => initialDefaults || {});
+  const [settings] = useState(() => initialSettings || {});
   const [techOpen, setTechOpen] = useState(false);
   const [callSetup, setCallSetup] = useState({ type: '', show: '', caller: '', donation: '' });
   const [coaching, setCoaching] = useState({});
@@ -369,6 +369,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
   const latestDraftPayloadRef = useRef(null);
   const sessionRef = useRef(null);
   const callDraftsRef = useRef({});
+  const initialCurrentSessionRef = useRef(initialCurrentSession);
 
   const rollRandom = useCallback(() => {
     setRandFlags(generateRandomFlags());
@@ -383,12 +384,15 @@ export default function CallsPage({ onNavigate, navigationState }) {
     let cancelled = false;
     (async () => {
       try {
-        const [{ session }, d, s] = await Promise.all([api.getCurrentSession(), api.getDefaults(), api.getSettings()]);
+        const cachedSession = navigationState?.session
+          ? { session: navigationState.session }
+          : initialCurrentSessionRef.current;
+        const { session } = cachedSession && Object.prototype.hasOwnProperty.call(cachedSession, 'session')
+          ? cachedSession
+          : await api.getCurrentSession();
         if (cancelled) return;
-        setDefaults(d);
-        setSettings(s);
-        const types = s.call_types || d.call_types || [];
-        const shows = s.shows || d.shows || [];
+        const types = settings.call_types || defaults.call_types || [];
+        const shows = settings.shows || defaults.shows || [];
         const requestedCallNum = Math.max(1, Math.min(3, Number(navigationState?.callNum) || 0));
         const savedDraft = session?.current_call_draft || null;
         callDraftsRef.current = session?.call_drafts || {};
@@ -443,7 +447,7 @@ export default function CallsPage({ onNavigate, navigationState }) {
       if (!cancelled) hydratedRef.current = true;
     })();
     return () => { cancelled = true; };
-  }, [rollRandom, navigationState]);
+  }, [rollRandom, navigationState, settings, defaults]);
 
   const callTypes = settings.call_types || defaults.call_types || [];
   const shows = settings.shows || defaults.shows || [];
@@ -572,13 +576,19 @@ export default function CallsPage({ onNavigate, navigationState }) {
       payment_selection: paymentSelection,
     };
     latestDraftPayloadRef.current = null;
-    await api.saveCall(callData);
+    const savedCallResult = await api.saveCall(callData);
     const nextDrafts = { ...callDraftsRef.current };
     delete nextDrafts[callNum];
     callDraftsRef.current = nextDrafts;
-    await api.updateSession({ current_call_draft: null, current_call_num: null, call_drafts: nextDrafts });
-
-    const { session } = await api.getCurrentSession();
+    const session = {
+      ...(savedCallResult?.session || sessionRef.current || {}),
+      [`call_${callNum}`]: callData,
+      current_call_draft: null,
+      current_call_num: null,
+      call_drafts: nextDrafts,
+    };
+    sessionRef.current = session;
+    fireAndForgetSessionUpdate({ current_call_draft: null, current_call_num: null, call_drafts: nextDrafts });
     const routeResult = await evaluateCallRouting(session, modal, onNavigate, api, { settings, defaults });
     if (routeResult === 'next') {
       const nextCallNum = callNum + 1;

@@ -130,8 +130,9 @@ When MTS determines there is not enough time or both Supervisor Transfers need l
 1. Choose **Schedule Newbie Shift**.
 2. Enter the date, **START TIME**, AM/PM, and timezone.
 3. Select **Add to Google Calendar** and review the prefilled event before saving it.
-4. Use the out-of-time Discord copy when prompted.
-5. Select **Continue to Review**.
+4. Review the **Temporary Discord Post**. It starts open, stays editable, and does not add @mentions automatically.
+5. Add any required tags manually, copy the edited text if needed, or hide the post while keeping your edits.
+6. Select **Continue to Review**.
 
 The initial request normally displays **Pending** until an admin approves or denies it.
 
@@ -141,8 +142,8 @@ The initial request normally displays **Pending** until an admin approves or den
 2. Answer **Did you or [candidate] need the Newbie Shift rescheduled?** Choose **Myself** or the candidate.
 3. Choose one reason: Unexpected emergency, Internet outage, Power outage, Technical issue, Login issue, Scheduling conflict, Illness, or Other.
 4. **Other** requires **Additional details**.
-5. Select **Continue**, enter the new date/time/timezone, and review **Temporary Discord Reschedule Post**.
-6. Edit the temporary post if needed, then select **Copy**.
+5. Select **Continue**, enter the new date/time/timezone, and review **Temporary Discord Post**.
+6. Edit the temporary post if needed, add any required tags manually, then select **Copy**. Hide/Show keeps edits, and **Reset to Generated Text** restores the generated wording.
 7. Select **Continue to Review**.
 
 ### Exact 24-hour rule

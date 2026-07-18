@@ -398,6 +398,24 @@ test('schedule newbie action launches existing scheduler and existing appointmen
   await scheduledView.unmount();
 });
 
+test('terminal certification state suppresses stale Newbie Shift details in Review', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    status: 'Pass',
+    final_status: 'Pass',
+    newbie_shift_request_id: 'stale-request',
+    newbie_shift_request_status: 'pending',
+    newbie_shift_request_created_at: '2026-07-17T12:00:00Z',
+    newbie_shift_requested_by: 'tester',
+    newbie_shift_request_reason: 'Old follow-up',
+    newbie_shift_data: { newbie_date: '07/20/2026', newbie_time: '10:00 AM', newbie_tz: 'ET' },
+  });
+
+  expect(view.container.textContent).not.toContain('- NEWBIE SHIFT -');
+  expect(view.container.textContent).not.toContain('Newbie Shift Pending');
+  await view.unmount();
+});
+
 test('failed final attempt does not show Newbie Shift backup action', async () => {
   const view = await renderReview({
     ...passingSession,

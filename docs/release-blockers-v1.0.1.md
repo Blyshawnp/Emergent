@@ -1,5 +1,7 @@
 # Release Blockers for v1.0.1
 
+> Status update, 2026-07-16: this earlier blocker record is retained for audit history. Current `HEAD` tracks no `production-ready` paths, runtime database, or service-account credential path. Service-account packaging was removed, repository Apps Script authorization is role/action scoped, and stale loopback backend ownership is classified by mode/PID/heartbeat. Controlled role-config provisioning, live deployment update, credential rotation/revocation, artifact scanning, and live unknown-headset/request round trips remain tracked in `docs/RELEASE_CHECKLIST_v1.0.1.md`.
+
 Release status: **Blocked — Not ready**
 
 ## FRR-001: Client-distributed service-account credential

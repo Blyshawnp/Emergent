@@ -6,6 +6,7 @@
   "directories": {
     "output": "dist-notification-manager"
   },
+  "beforePack": "scripts/validate-apps-script-package.js",
   "publish": [
     {
       "provider": "github",
@@ -38,13 +39,12 @@
       "to": "backend/backend.exe"
     },
     {
-      "from": "../backend/config",
-      "to": "backend/config",
-      "filter": [
-        "**/runtime_config.json",
-        "**/apps-script-api.json",
-        "**/google-service-account.json"
-      ]
+      "from": "../backend/config/runtime_config.json",
+      "to": "backend/config/runtime_config.json"
+    },
+    {
+      "from": "../backend/config/apps-script-api-sam.json",
+      "to": "backend/config/apps-script-api.json"
     },
     {
       "from": "../backend/defaults",

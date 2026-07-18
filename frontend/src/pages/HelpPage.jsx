@@ -14,7 +14,7 @@ const HELP_HOME_GROUPS = [
   ['Status Glossary', '#status-glossary'],
   ['Troubleshooting', '#tech-issues'],
   ['Keyboard Shortcuts', '#discord-productivity'],
-  ['Tutorial Videos', '#tutorial-videos'],
+  ['Tutorial Videos', '#mts-tutorial-videos'],
 ];
 
 const HELP_CATEGORIES = [
@@ -317,6 +317,7 @@ const HELP_TOPICS = [
       'Select the new date, time, and timezone after providing the reason.',
       'A candidate-requested change may count as an attempt based on when it was requested. Approval may remain Pending until an admin reviews it.',
       'Use the editable temporary Discord post when the reschedule needs to be shared with the admin team.',
+      'The Temporary Discord Post is shown by default for initial scheduling and rescheduling. It never adds @mentions automatically; add any required tags manually.',
       'Continue to Review to save the Newbie Shift details on the session.',
     ],
   },
@@ -531,6 +532,36 @@ const HELP_TOPICS = [
 
 const REQUIRED_GUIDE_TOPICS = [
   {
+    id: 'candidate-lookup',
+    title: 'Candidate Lookup',
+    summary: 'Candidate Lookup checks shared history before a trainer begins or resumes certification work.',
+    bullets: [
+      'Enter enough of the candidate name to identify the correct person, then select the matching record.',
+      'Review attempt and final-attempt information before starting a new session.',
+      'If shared lookup is temporarily unavailable, keep the candidate name and retry before relying on local-only history.',
+    ],
+  },
+  {
+    id: 'browser-checklist',
+    title: 'Browser Checklist',
+    summary: 'Browser Checklist confirms that required browser preparation is complete before calls begin.',
+    bullets: [
+      'Complete every visible checklist item with the candidate on Basics.',
+      'Do not mark a check complete based on a similar-looking browser screen or an earlier session.',
+      'If a required check cannot be completed, use Technical Issues and preserve the session for follow-up.',
+    ],
+  },
+  {
+    id: 'rescheduling-24-hour-rule',
+    title: 'Rescheduling and 24-hour rule',
+    summary: 'Rescheduling records who requested a Newbie Shift change and whether current timing rules affect the attempt.',
+    bullets: [
+      'Open Reschedule from an eligible incomplete record in History and choose who requested the change.',
+      'Select the reason, enter the new schedule, and review any less-than-24-hour or final-attempt guidance.',
+      'The Temporary Discord Post starts open for initial scheduling and rescheduling. Edit it before copying, add @mentions manually, and use Reset to Generated Text if needed.',
+    ],
+  },
+  {
     id: 'sam-workflows',
     title: 'SAM Workflows',
     summary: 'Smart Alert Manager is the administrator workspace for notifications, candidate follow-up, reviews, reports, and updates.',
@@ -617,7 +648,6 @@ const FAQ_FALLBACK = [
 
 const TRAINER_HELP_INTERNAL_SECTION = /(?:admin setup|developer|implementation|deployment|backend|API (?:routes?|endpoints?)|SQLite|database (?:setup|schema)|schema migration|Google Sheet setup|service[- ]account|Apps Script)/i;
 const TRAINER_HELP_INTERNAL_LINE_PATTERNS = [
-  /newbieShiftRescheduleAdminMention/i,
   /google-service-account|service[- ]account/i,
   /\bGoogle Sheet\b/i,
   /\bbackend\b/i,
@@ -938,7 +968,7 @@ function HelpArticle({ topic, videos, onWatch }) {
       <h3 className="help-doc-subheading">Common mistakes</h3>
       <p className="help-card-body">Do not skip required review prompts, assume a pending request is approved, or treat Form Filled as Form Submitted.</p>
       <h3 className="help-doc-subheading">Related topics</h3>
-      <p className="help-card-body"><a href="#getting-started">Getting Started</a> · <a href="#status-glossary">Status Glossary</a> · <a href="#tutorial-videos">Tutorial Videos</a></p>
+      <p className="help-card-body"><a href="#getting-started">Getting Started</a> · <a href="#status-glossary">Status Glossary</a> · <a href="#mts-tutorial-videos">Tutorial Videos</a></p>
       {attachedVideos.length ? (
         <div className="tutorial-actions">
           {attachedVideos.map((video) => <button key={video.videoKey} type="button" onClick={() => onWatch(video)}>Watch Tutorial: {video.title}</button>)}
@@ -948,7 +978,7 @@ function HelpArticle({ topic, videos, onWatch }) {
   );
 }
 
-export default function HelpPage({ appVersion, onNavigate, settings, onReplayTutorial, onReplayQuickStart }) {
+export default function HelpPage({ appVersion, onNavigate, settings, defaults, onReplayTutorial, onReplayQuickStart }) {
   const modal = useModal();
   const version = appVersion || APP_VERSION_FALLBACK;
   const geminiActive = Boolean(settings?.enable_gemini && (settings?.gemini_api_key_configured || String(settings?.gemini_api_key || '').trim()));
@@ -969,6 +999,24 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
   const [helpLoadError, setHelpLoadError] = useState('');
   const [query, setQuery] = useState('');
   const [selectedTutorial, setSelectedTutorial] = useState(null);
+  const [managedDefaults, setManagedDefaults] = useState(defaults || {});
+  const [liveContentRefreshing, setLiveContentRefreshing] = useState(false);
+
+  useEffect(() => {
+    setManagedDefaults(defaults || {});
+  }, [defaults]);
+
+  const refreshLiveContent = async () => {
+    setLiveContentRefreshing(true);
+    try {
+      const nextDefaults = await api.getDefaults(10000, true);
+      setManagedDefaults(nextDefaults || {});
+    } catch (_error) {
+      modal.warning('Live Content', 'Live content is taking longer than usual. Packaged guidance remains available.');
+    } finally {
+      setLiveContentRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -988,6 +1036,16 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
     };
   }, []);
 
+  const retryHelpContent = async () => {
+    try {
+      const payload = await api.getHelpContent();
+      setHelpContent(payload || {});
+      setHelpLoadError('');
+    } catch (_error) {
+      setHelpLoadError('Unable to refresh the configured Help or FAQ source right now. Showing built-in guidance.');
+    }
+  };
+
   const faqEntries = useMemo(() => {
     if (helpContent === null) return [];
     const entries = buildFaqEntries(sanitizeTrainerHelpMarkdown(helpContent?.faq_markdown || ''));
@@ -1001,10 +1059,9 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
   );
   const helpTopics = useMemo(() => [...mergeHelpTopics(liveSections), ...REQUIRED_GUIDE_TOPICS], [liveSections]);
   const mtsTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.mts, 'mts'), [helpContent]);
-  const samTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.sam, 'sam'), [helpContent]);
   const selectTutorial = (video) => {
     setSelectedTutorial(video);
-    window.setTimeout(() => document.getElementById('tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }), 0);
+    window.setTimeout(() => document.getElementById('mts-tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }), 0);
   };
   const visibleTopics = useMemo(() => {
     return helpTopics.filter((topic) => (
@@ -1014,6 +1071,17 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
     ));
   }, [helpTopics, normalizedQuery]);
   const support = helpContent?.support || {};
+  const contentSources = managedDefaults?._content_sources || {};
+  const relevantSources = ['discord_templates', 'approved_headsets', 'mts_tutorial_videos']
+    .map((key) => contentSources[key])
+    .filter(Boolean);
+  const liveContentLoading = relevantSources.some((source) => source.background_loading);
+  const liveContentConnected = relevantSources.some((source) => source.ok && source.source === 'google');
+  const liveContentMessage = liveContentLoading
+    ? 'Live content is connecting. Packaged guidance remains available while it finishes.'
+    : liveContentConnected
+      ? 'Live content is connected. Select Retry live content if an approved update has not appeared yet.'
+      : 'Packaged content is available. Select Retry live content to check for approved updates.';
 
   return (
     <div data-testid="help-page" className="help-center-page">
@@ -1049,8 +1117,8 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
           </div>
           <div className="help-common-tasks" aria-label="Common help tasks">
             <a href="#tutorial" className="help-common-task">Guided Walkthrough</a>
-            <a href="#fill-form" className="help-common-task">Fill Form</a>
-            <a href="#tutorial-videos" className="help-common-task">Tutorial Videos</a>
+            <button type="button" className="help-common-task" onClick={handleRequestSupport}>Request App Support</button>
+            <a href="#mts-tutorial-videos" className="help-common-task">Tutorial Videos</a>
           </div>
           <div className="help-hero-tips" aria-label="Quick tips">
             <div className="help-hero-tip">
@@ -1178,7 +1246,10 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
             <div className="help-troubleshooting-section">
               <div className="help-support-tip help-support-tip-info">
                 <strong>Live Content Connection</strong>
-                <span>Unable to connect to the live content source. Please refresh and contact support if this continues.</span>
+                <span>{liveContentMessage}</span>
+                <button type="button" className="btn btn-ghost btn-sm" disabled={liveContentRefreshing} onClick={refreshLiveContent}>
+                  {liveContentRefreshing ? 'Checking...' : 'Retry live content'}
+                </button>
               </div>
               <div className="help-support-tip help-support-tip-warn">
                 <strong>Live Ticker</strong>
@@ -1255,8 +1326,7 @@ export default function HelpPage({ appVersion, onNavigate, settings, onReplayTut
         </aside>
       </section>
       <section className="card help-card">
-        <TutorialVideoLibrary videos={mtsTutorials} title="MTS Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="mts-tutorial-videos" />
-        <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" />
+        <TutorialVideoLibrary videos={mtsTutorials} title="MTS Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="mts-tutorial-videos" loadError={helpLoadError} onRetry={retryHelpContent} />
       </section>
     </div>
   );

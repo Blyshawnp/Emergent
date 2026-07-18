@@ -13,6 +13,7 @@ import {
   resolveDiscordSuggestedScreenshots,
 } from './utils/discordScreenshotSuggestions';
 import { findDiscordTemplateMessage, getActiveDiscordTemplates } from './api';
+import { normalizeDiscordMessageWhitespace } from './utils/discordContent';
 
 test('discord post modal uses search-first two-pane template workflow', () => {
   const css = fs.readFileSync(path.join(__dirname, 'App.css'), 'utf8');
@@ -52,6 +53,13 @@ test('discord post modal uses search-first two-pane template workflow', () => {
   expect(app).toContain('Copy Post');
   expect(app).toContain('Screenshot {index + 1}');
   expect(app).toContain('Copy the post and screenshot separately');
+});
+
+test('discord post rendering preserves modest line breaks without paragraph margins', () => {
+  const css = fs.readFileSync(path.join(__dirname, 'App.css'), 'utf8');
+  expect(css).toMatch(/\.discord-preview-message\s*\{[^}]*line-height:\s*1\.55;[^}]*white-space:\s*pre-wrap;/s);
+  expect(css).toMatch(/\.discord-msg\s*\{[^}]*white-space:\s*pre-wrap;[^}]*line-height:\s*1\.5;/s);
+  expect(normalizeDiscordMessageWhitespace('One\n\n\nTwo')).toBe('One\n\nTwo');
 });
 
 test('discord templates use remote/default rows unless explicit settings override is enabled', () => {

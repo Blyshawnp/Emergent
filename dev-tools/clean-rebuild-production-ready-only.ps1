@@ -75,31 +75,31 @@ function Copy-FileChecked {
 }
 
 function Copy-RuntimeConfig {
-  param([string]$DestinationDir, [string]$Label)
+  param(
+    [string]$DestinationDir,
+    [string]$Label,
+    [string]$ApiConfigName,
+    [string]$ExpectedRole
+  )
   New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
   $runtimeSource = Join-Path $backendDir 'config\runtime_config.json'
-  $apiSource = Join-Path $backendDir 'config\apps-script-api.json'
-  $serviceAccountSource = Join-Path $backendDir 'config\google-service-account.json'
+  $apiSource = Join-Path $backendDir "config\$ApiConfigName"
   Copy-FileChecked $runtimeSource (Join-Path $DestinationDir 'runtime_config.json')
   Copy-FileChecked $apiSource (Join-Path $DestinationDir 'apps-script-api.json')
-  
-  if (Test-Path -LiteralPath $serviceAccountSource) {
-    Copy-FileChecked $serviceAccountSource (Join-Path $DestinationDir 'google-service-account.json')
-    Write-Log "Copied packaged service account to $Label."
-  } else {
-    Write-Log "Warning: Packaged service account not found at $serviceAccountSource."
-  }
 
-  foreach ($legacyName in @('service-account.json')) {
+  foreach ($legacyName in @('google-service-account.json', 'service-account.json')) {
     $legacyPath = Join-Path $DestinationDir $legacyName
     if (Test-Path -LiteralPath $legacyPath) {
       Remove-Item -LiteralPath $legacyPath -Force
-      Write-Log "Removed obsolete packaged credential file from $Label."
+      Write-Log "Removed packaged credential file from $Label."
     }
   }
   $apiConfig = Read-JsonFile $apiSource
   if ($apiConfig.enabled -ne $true -or -not $apiConfig.base_url -or -not $apiConfig.token) {
     Fail "Apps Script API config is missing enabled, base_url, or token for $Label."
+  }
+  if ([string]$apiConfig.role -ne $ExpectedRole) {
+    Fail "Apps Script API config role does not match $ExpectedRole for $Label."
   }
   if ([string]$apiConfig.base_url -notmatch '^https://script\.google\.com/macros/s/.+/exec$') {
     Fail "Apps Script API base_url is invalid for $Label."
@@ -224,7 +224,7 @@ Write-Log 'All required desktop build outputs found.'
 
 Section 'SYNCING MTS TO PRODUCTION-READY'
 Sync-Dir (Join-Path $mtsDist 'win-unpacked') (Join-Path $mtsProdDir 'win-unpacked')
-Copy-RuntimeConfig (Join-Path $mtsProdDir 'win-unpacked\\resources\\backend\\config') 'MTS production-ready'
+Copy-RuntimeConfig (Join-Path $mtsProdDir 'win-unpacked\\resources\\backend\\config') 'MTS production-ready' 'apps-script-api-mts.json' 'mts'
 Remove-AccidentalBackendFiles (Join-Path $mtsProdDir 'win-unpacked\\resources\\backend')
 Verify-OptionalPath (Join-Path $mtsProdDir 'win-unpacked\\resources\\backend\\drivers\\chromedriver.exe') 'MTS production-ready backend chromedriver.exe'
 Verify-OptionalPath (Join-Path $mtsProdDir 'win-unpacked\\resources\\backend\\drivers\\msedgedriver.exe') 'MTS production-ready backend msedgedriver.exe'
@@ -234,7 +234,7 @@ Write-HashFile (Join-Path $mtsProdDir $mtsInstaller) (Join-Path $mtsProdDir 'MAI
 
 Section 'SYNCING SAM TO PRODUCTION-READY'
 Sync-Dir (Join-Path $samDist 'win-unpacked') (Join-Path $samProdDir 'notification-manager-win-unpacked')
-Copy-RuntimeConfig (Join-Path $samProdDir 'notification-manager-win-unpacked\\resources\\backend\\config') 'SAM production-ready'
+Copy-RuntimeConfig (Join-Path $samProdDir 'notification-manager-win-unpacked\\resources\\backend\\config') 'SAM production-ready' 'apps-script-api-sam.json' 'sam'
 Remove-AccidentalBackendFiles (Join-Path $samProdDir 'notification-manager-win-unpacked\\resources\\backend')
 Verify-OptionalPath (Join-Path $samProdDir 'notification-manager-win-unpacked\\resources\\backend\\drivers\\chromedriver.exe') 'SAM production-ready backend chromedriver.exe'
 Verify-OptionalPath (Join-Path $samProdDir 'notification-manager-win-unpacked\\resources\\backend\\drivers\\msedgedriver.exe') 'SAM production-ready backend msedgedriver.exe'

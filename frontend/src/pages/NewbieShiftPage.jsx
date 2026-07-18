@@ -4,11 +4,10 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import {
-  buildRescheduleDiscordPost,
+  buildNewbieShiftDiscordPost,
   buildRescheduleFailSummary,
   buildRescheduleSummary,
   computeWithin24Hours,
-  DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION,
   NEWBIE_REQUESTED_BY,
   NEWBIE_REQUEST_STATUS,
   NEWBIE_REQUEST_TYPE,
@@ -20,8 +19,6 @@ import {
 export default function NewbieShiftPage({ onNavigate }) {
   const modal = useModal();
   const [techOpen, setTechOpen] = useState(false);
-  const [settings, setSettings] = useState({});
-  const [defaults, setDefaults] = useState({});
   const [isFinal, setIsFinal] = useState(false);
   const [candidateName, setCandidateName] = useState('');
   const [session, setSession] = useState(null);
@@ -31,7 +28,9 @@ export default function NewbieShiftPage({ onNavigate }) {
   const [rescheduleDetails, setRescheduleDetails] = useState('');
   const [rescheduleError, setRescheduleError] = useState('');
   const [editableDiscordPost, setEditableDiscordPost] = useState('');
-  const [copiedReschedulePost, setCopiedReschedulePost] = useState(false);
+  const [discordPostCustomized, setDiscordPostCustomized] = useState(false);
+  const [discordPostVisible, setDiscordPostVisible] = useState(true);
+  const [copiedDiscordPost, setCopiedDiscordPost] = useState(false);
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const [date, setDate] = useState(tomorrow.toISOString().split('T')[0]);
@@ -41,14 +40,8 @@ export default function NewbieShiftPage({ onNavigate }) {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      api.getCurrentSession(),
-      api.getSettings().catch(() => ({})),
-      api.getDefaults(8000).catch(() => ({})),
-    ]).then(([{ session }, currentSettings, currentDefaults]) => {
+    api.getCurrentSession().then(({ session }) => {
       if (cancelled) return;
-      setSettings(currentSettings || {});
-      setDefaults(currentDefaults || {});
       if (session) {
         setSession(session);
         setIsFinal(session.final_attempt || false);
@@ -119,17 +112,12 @@ export default function NewbieShiftPage({ onNavigate }) {
 
   const candidateFirstName = splitCandidateFirstName(candidateName);
   const isReschedule = session?.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE;
-  const adminMention = settings?.newbieShiftRescheduleAdminMention
-    || settings?.newbie_shift_reschedule_admin_mention
-    || settings?.newbie_shift_admin_mention
-    || settings?.discord_admin_mention
-    || DEFAULT_NEWBIE_SHIFT_RESCHEDULE_ADMIN_MENTION;
 
-  const reschedulePreviewSession = useMemo(() => ({
+  const discordPreviewSession = useMemo(() => ({
     ...(session || {}),
     candidate_name: candidateName,
     final_attempt: isFinal,
-    newbie_shift_request_type: NEWBIE_REQUEST_TYPE.RESCHEDULE,
+    newbie_shift_request_type: isReschedule ? NEWBIE_REQUEST_TYPE.RESCHEDULE : NEWBIE_REQUEST_TYPE.INITIAL,
     newbie_shift_requested_by: rescheduleRequester,
     newbie_shift_request_reason: rescheduleReason,
     newbie_shift_request_details: rescheduleDetails,
@@ -139,12 +127,17 @@ export default function NewbieShiftPage({ onNavigate }) {
       newbie_time: getFormattedTime() || '',
       newbie_tz: tz,
     },
-  }), [candidateName, getFormattedDate, getFormattedTime, isFinal, rescheduleDetails, rescheduleReason, rescheduleRequester, session, tz]);
+  }), [candidateName, getFormattedDate, getFormattedTime, isFinal, isReschedule, rescheduleDetails, rescheduleReason, rescheduleRequester, session, tz]);
+
+  const generatedDiscordPost = useMemo(
+    () => buildNewbieShiftDiscordPost(discordPreviewSession),
+    [discordPreviewSession]
+  );
 
   useEffect(() => {
-    if (!isReschedule || showRescheduleDialog) return;
-    setEditableDiscordPost(buildRescheduleDiscordPost(reschedulePreviewSession, adminMention));
-  }, [adminMention, isReschedule, reschedulePreviewSession, showRescheduleDialog]);
+    if (showRescheduleDialog || discordPostCustomized) return;
+    setEditableDiscordPost(generatedDiscordPost);
+  }, [discordPostCustomized, generatedDiscordPost, showRescheduleDialog]);
 
   const handleRescheduleDialogContinue = useCallback(async () => {
     if (!rescheduleRequester) {
@@ -185,10 +178,15 @@ export default function NewbieShiftPage({ onNavigate }) {
     await api.updateSession(patch);
     const nextSession = { ...(session || {}), ...patch };
     setSession(nextSession);
-    setEditableDiscordPost(buildRescheduleDiscordPost(nextSession, adminMention));
+    setDiscordPostCustomized(false);
+    setDiscordPostVisible(true);
+    setEditableDiscordPost(buildNewbieShiftDiscordPost({
+      ...nextSession,
+      newbie_shift_data: discordPreviewSession.newbie_shift_data,
+    }));
     setShowRescheduleDialog(false);
     setRescheduleError('');
-  }, [adminMention, rescheduleDetails, rescheduleReason, rescheduleRequester, session]);
+  }, [discordPreviewSession.newbie_shift_data, rescheduleDetails, rescheduleReason, rescheduleRequester, session]);
 
   const selectRescheduleRequester = useCallback((value) => {
     setRescheduleRequester(value);
@@ -224,7 +222,11 @@ export default function NewbieShiftPage({ onNavigate }) {
       patch.newbie_shift_request_reason = session?.newbie_shift_request_reason || 'Initial Newbie Shift scheduling';
       patch.newbie_shift_request_created_at = session?.newbie_shift_request_created_at || new Date().toISOString();
     }
-    await api.updateSession(patch);
+    const response = await api.updateSession(patch);
+    if (isReschedule && response?.requestSaved !== true) {
+      await modal.error('Request Not Submitted', response?.error || 'The reschedule request could not be submitted. Your date, time, requester, and reason were preserved. Retry Continue to Review.');
+      return;
+    }
     onNavigate('review');
   }, [getFormattedTime, getFormattedDate, tz, session, isReschedule, modal, onNavigate]);
 
@@ -241,7 +243,7 @@ export default function NewbieShiftPage({ onNavigate }) {
   }, [candidateName, modal, onNavigate]);
 
   return (
-    <div data-testid="newbieshift-page">
+    <div className="page-with-sticky-actions" data-testid="newbieshift-page">
       <WorkflowProgress {...getWorkflowProgress({ page: 'newbieshift' })} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
         <h1 style={{ marginBottom: 0 }}>{isReschedule ? 'Reschedule Newbie Shift' : 'Schedule Newbie Shift'}</h1>
@@ -288,32 +290,66 @@ export default function NewbieShiftPage({ onNavigate }) {
         <button className="btn btn-primary" onClick={handleGcal} data-testid="newbie-gcal" title="Opens Google Calendar with a pre-filled event">Add to Google Calendar</button>
       </div>
 
-      {isReschedule && !showRescheduleDialog && (
-        <div className="card" style={{ marginTop: 16 }} data-testid="newbie-reschedule-discord-card">
-          <h3 style={{ marginBottom: 8 }}>Temporary Discord Reschedule Post</h3>
-          <textarea
-            rows={5}
-            value={editableDiscordPost}
-            onChange={(event) => setEditableDiscordPost(event.target.value)}
-            data-testid="newbie-reschedule-discord-text"
-          />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+      {!showRescheduleDialog && (
+        <div className="card" style={{ marginTop: 16 }} data-testid="newbie-discord-card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <h3 style={{ marginBottom: 0 }}>Temporary Discord Post</h3>
             <button
-              className={`btn btn-primary btn-sm ${copiedReschedulePost ? 'copied' : ''}`}
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(editableDiscordPost);
-                  setCopiedReschedulePost(true);
-                  window.setTimeout(() => setCopiedReschedulePost(false), 3000);
-                } catch (_error) {
-                  await modal.warning('Copy Failed', 'Unable to copy this Discord post automatically.');
-                }
-              }}
-              data-testid="newbie-reschedule-discord-copy"
+              type="button"
+              className="btn btn-muted btn-sm"
+              onClick={() => setDiscordPostVisible((current) => !current)}
+              data-testid="newbie-discord-toggle"
             >
-              {copiedReschedulePost ? 'Copied' : 'Copy'}
+              {discordPostVisible ? 'Hide' : 'Show'}
             </button>
           </div>
+          <p className="text-sm text-muted" style={{ margin: '8px 0 10px' }}>
+            Review and edit this temporary Discord post before copying. Add any required @mentions manually.
+          </p>
+          {discordPostVisible && (
+            <>
+              <textarea
+                rows={5}
+                value={editableDiscordPost}
+                onChange={(event) => {
+                  setEditableDiscordPost(event.target.value);
+                  setDiscordPostCustomized(true);
+                }}
+                data-testid="newbie-discord-text"
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                {discordPostCustomized && (
+                  <button
+                    type="button"
+                    className="btn btn-muted btn-sm"
+                    onClick={() => {
+                      setEditableDiscordPost(generatedDiscordPost);
+                      setDiscordPostCustomized(false);
+                    }}
+                    data-testid="newbie-discord-reset"
+                  >
+                    Reset to Generated Text
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={`btn btn-primary btn-sm ${copiedDiscordPost ? 'copied' : ''}`}
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(editableDiscordPost);
+                      setCopiedDiscordPost(true);
+                      window.setTimeout(() => setCopiedDiscordPost(false), 3000);
+                    } catch (_error) {
+                      await modal.warning('Copy Failed', 'Unable to copy this Discord post automatically.');
+                    }
+                  }}
+                  data-testid="newbie-discord-copy"
+                >
+                  {copiedDiscordPost ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -410,7 +446,7 @@ export default function NewbieShiftPage({ onNavigate }) {
 
       <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
 
-      <div className="footer-bar" data-testid="newbie-footer">
+      <div className="footer-bar sticky-action-footer" data-testid="newbie-footer">
         <button className="btn btn-muted btn-sm" onClick={async () => {
           if (await modal.confirm('Confirm', 'Discard session and lose all progress?')) { await api.discardSession(); onNavigate('home'); }
         }} data-testid="newbie-discard" title="Discard this session completely">Discard</button>

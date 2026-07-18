@@ -8,6 +8,7 @@ jest.mock('../api', () => ({
   __esModule: true,
   default: {
     getHelpContent: jest.fn(),
+    getDefaults: jest.fn(),
   },
 }));
 
@@ -43,6 +44,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  api.getDefaults.mockResolvedValue({});
   global.fetch = jest.fn().mockResolvedValue({ ok: false });
 });
 
@@ -148,6 +150,67 @@ test('help page renders current help topics and configured faq entries', async (
   expect(view.container.textContent).toContain('In the local app database.');
   expect(view.container.textContent).toContain('support@example.com');
 
+  [
+    'Candidate Lookup',
+    'Browser Checklist',
+    'Calls',
+    'NC/NS',
+    'Technical Issues',
+    'Supervisor Transfer',
+    'Smart Resume',
+    'Supervisor Transfer Only',
+    'Newbie Shift',
+    'Rescheduling and 24-hour rule',
+    'Review',
+    'Form Fill',
+    'History',
+    'Discord Posts',
+    'Settings',
+    'Troubleshooting',
+  ].forEach((topic) => expect(view.container.textContent).toContain(topic));
+  expect(view.container.textContent).toContain('What this is');
+  expect(view.container.textContent).toContain('When to use it');
+  expect(view.container.textContent).toContain('What happens next');
+  expect(view.container.textContent).toContain('Common mistakes');
+  expect(view.container.textContent).toContain('Related topics');
+
+  await view.unmount();
+});
+
+test('help page shows source-based live content state and retries only the managed content refresh', async () => {
+  api.getHelpContent.mockResolvedValue({ help_markdown: '# Help\n', faq_markdown: '', support: {} });
+  api.getDefaults.mockResolvedValue({
+    _content_sources: {
+      approved_headsets: { ok: true, source: 'google', background_loading: false },
+    },
+  });
+  const view = await renderComponent(
+    <HelpPage
+      appVersion="1.0.1"
+      settings={{ enable_gemini: false, gemini_api_key: '' }}
+      defaults={{
+        _content_sources: {
+          approved_headsets: { ok: false, source: 'packaged', background_loading: true },
+        },
+      }}
+      onNavigate={jest.fn()}
+      onReplayTutorial={jest.fn()}
+    />
+  );
+
+  expect(view.container.textContent).toContain('Live content is connecting.');
+  expect(view.container.textContent).toContain('Request App Support');
+
+  await act(async () => {
+    const retry = Array.from(view.container.querySelectorAll('button'))
+      .find((button) => button.textContent.trim() === 'Retry live content');
+    retry.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.getDefaults).toHaveBeenCalledWith(10000, true);
+  expect(view.container.textContent).toContain('Live content is connected.');
+
   await view.unmount();
 });
 
@@ -215,7 +278,7 @@ test('trainer help filters internal remote documentation while preserving safe o
       '## Session Flow',
       'Use Reschedule from History for an eligible incomplete session.',
       'GET /api/help/content returns the source payload.',
-      'The newbieShiftRescheduleAdminMention key controls the mention.',
+      'Run POST /api/internal/configure before schema migration.',
       '',
       '## Admin Setup',
       'Run PowerShell and edit SQLite schema migrations.',
@@ -247,7 +310,7 @@ test('trainer help filters internal remote documentation while preserving safe o
   expect(view.container.textContent).toContain('Use Reschedule from History for an eligible incomplete session.');
   expect(view.container.textContent).toContain('Form Filled means MTS completed filling the form.');
   expect(view.container.textContent).toContain('Pending means an administrator has not decided yet.');
-  expect(view.container.textContent).not.toMatch(/\/api\/|SQLite|schema migration|service-account|PowerShell|newbieShiftRescheduleAdminMention|Admin Setup/i);
+  expect(view.container.textContent).not.toMatch(/\/api\/|SQLite|schema migration|service-account|PowerShell|Admin Setup/i);
 
   await view.unmount();
 });

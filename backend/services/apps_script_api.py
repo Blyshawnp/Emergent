@@ -18,6 +18,11 @@ from urllib.request import Request, urlopen
 
 
 CONFIG_FILENAME = "apps-script-api.json"
+ROLE_CONFIG_FILENAMES = {
+    "mts": "apps-script-api-mts.json",
+    "sam": "apps-script-api-sam.json",
+}
+VALID_ROLES = frozenset(ROLE_CONFIG_FILENAMES)
 PLACEHOLDER_TOKENS = {"TOKEN", "REPLACE_ME", "CHANGE_ME"}
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,7 @@ class AppsScriptApiError(RuntimeError):
 @dataclass(frozen=True)
 class AppsScriptApiConfig:
     enabled: bool
+    role: str
     base_url: str = field(repr=False)
     token: str = field(repr=False)
     path: Path = field(repr=False)
@@ -37,13 +43,34 @@ class AppsScriptApiConfig:
         return {
             "ok": status == "ready",
             "enabled": self.enabled,
+            "role": self.role,
             "status": status,
             "path": str(self.path),
             "message": message,
         }
 
 
-def apps_script_config_candidates(root_dir: Path):
+def _normalize_role(value: str):
+    normalized = str(value or "").strip().lower()
+    if normalized in {"sam", "notification", "notification-manager"}:
+        return "sam"
+    if normalized in {"mts", "main"}:
+        return "mts"
+    return ""
+
+
+def apps_script_api_role(expected_role: Optional[str] = None):
+    explicit = _normalize_role(expected_role)
+    if explicit:
+        return explicit
+    configured = _normalize_role(os.getenv("APPS_SCRIPT_API_ROLE"))
+    if configured:
+        return configured
+    return "sam" if (os.getenv("MTS_NOTIFICATION_MANAGER") or "").strip() == "1" else "mts"
+
+
+def apps_script_config_candidates(root_dir: Path, expected_role: Optional[str] = None):
+    role = apps_script_api_role(expected_role)
     resources_root = (os.getenv("APP_RESOURCES_PATH") or "").strip()
     configured = (os.getenv("APPS_SCRIPT_API_CONFIG_FILE") or "").strip()
     candidates = []
@@ -53,6 +80,7 @@ def apps_script_config_candidates(root_dir: Path):
         candidates.append(Path(resources_root) / "backend" / "config" / CONFIG_FILENAME)
     if getattr(sys, "frozen", False):
         candidates.append(Path(sys.executable).resolve().parent / "config" / CONFIG_FILENAME)
+    candidates.append(Path(root_dir) / "config" / ROLE_CONFIG_FILENAMES[role])
     candidates.append(Path(root_dir) / "config" / CONFIG_FILENAME)
 
     seen = set()
@@ -73,33 +101,36 @@ def _valid_endpoint(value: str):
     )
 
 
-def _endpoint_host_path(value: str):
+def _endpoint_host(value: str):
     parsed = urlparse(value or "")
-    return f"{parsed.netloc}{parsed.path}" if parsed.netloc else ""
+    return parsed.netloc if parsed.netloc else ""
 
 
-def _log_config_status(path, *, enabled, endpoint="", token_present=False, status=""):
+def _log_config_status(path, *, enabled, role="", endpoint="", token_present=False, status=""):
     logger.info(
-        "[APPS-SCRIPT] config_path=%s enabled=%s base_url_host_path=%s token_present=%s status=%s",
+        "[APPS-SCRIPT] config_path=%s enabled=%s role=%s base_url_host=%s token_present=%s status=%s",
         str(path or ""),
         bool(enabled),
-        _endpoint_host_path(endpoint),
+        str(role or ""),
+        _endpoint_host(endpoint),
         bool(token_present),
         str(status or ""),
     )
 
 
-def load_apps_script_api_config(root_dir: Path):
+def load_apps_script_api_config(root_dir: Path, *, expected_role: Optional[str] = None):
     """Return (config, public status) without exposing endpoint or token."""
+    role = apps_script_api_role(expected_role)
     existing_path = next(
-        (candidate for candidate in apps_script_config_candidates(root_dir) if candidate.is_file()),
+        (candidate for candidate in apps_script_config_candidates(root_dir, role) if candidate.is_file()),
         None,
     )
     if not existing_path:
-        _log_config_status("", enabled=False, status="missing")
+        _log_config_status("", enabled=False, role=role, status="missing")
         return None, {
             "ok": False,
             "enabled": False,
+            "role": role,
             "status": "missing",
             "path": "",
             "message": "Apps Script API config is missing; using packaged local defaults.",
@@ -108,10 +139,11 @@ def load_apps_script_api_config(root_dir: Path):
     try:
         payload = json.loads(existing_path.read_text(encoding="utf-8"))
     except Exception:
-        _log_config_status(existing_path, enabled=False, status="invalid")
+        _log_config_status(existing_path, enabled=False, role=role, status="invalid")
         return None, {
             "ok": False,
             "enabled": False,
+            "role": role,
             "status": "invalid",
             "path": str(existing_path),
             "message": "Apps Script API config is unreadable or invalid; using packaged local defaults.",
@@ -122,27 +154,49 @@ def load_apps_script_api_config(root_dir: Path):
     enabled = payload.get("enabled") is True
     endpoint = str(payload.get("base_url") or "").strip()
     token = str(payload.get("token") or "").strip()
+    declared_role = _normalize_role(payload.get("role"))
+    if not declared_role and role == "mts":
+        declared_role = "mts"
+    if declared_role != role:
+        _log_config_status(
+            existing_path,
+            enabled=enabled,
+            role=role,
+            endpoint=endpoint,
+            token_present=bool(token),
+            status="role_mismatch",
+        )
+        return None, {
+            "ok": False,
+            "enabled": enabled,
+            "role": role,
+            "status": "role_mismatch",
+            "path": str(existing_path),
+            "message": "Apps Script API config role does not match this application; using packaged local defaults.",
+        }
     if not enabled:
-        _log_config_status(existing_path, enabled=False, endpoint=endpoint, token_present=bool(token), status="disabled")
+        _log_config_status(existing_path, enabled=False, role=role, endpoint=endpoint, token_present=bool(token), status="disabled")
         return None, {
             "ok": False,
             "enabled": False,
+            "role": role,
             "status": "disabled",
             "path": str(existing_path),
             "message": "Apps Script API is disabled; using packaged local defaults.",
         }
     if not _valid_endpoint(endpoint) or not token or token.upper() in PLACEHOLDER_TOKENS:
-        _log_config_status(existing_path, enabled=True, endpoint=endpoint, token_present=bool(token), status="invalid")
+        _log_config_status(existing_path, enabled=True, role=role, endpoint=endpoint, token_present=bool(token), status="invalid")
         return None, {
             "ok": False,
             "enabled": True,
+            "role": role,
             "status": "invalid",
             "path": str(existing_path),
             "message": "Apps Script API config is incomplete or invalid; using packaged local defaults.",
         }
 
-    config = AppsScriptApiConfig(True, endpoint, token, existing_path)
-    _log_config_status(existing_path, enabled=True, endpoint=endpoint, token_present=True, status="ready")
+    config = AppsScriptApiConfig(True, role, endpoint, token, existing_path)
+    _log_config_status(existing_path, enabled=True, role=role, endpoint=endpoint, token_present=True, status="ready")
     return config, config.public_status()
 
 
@@ -364,8 +418,13 @@ class AppsScriptSheetsService:
         return _SpreadsheetsResource(self._client)
 
 
-def create_apps_script_sheet_service(root_dir: Path, *, opener: Callable = urlopen):
-    config, status = load_apps_script_api_config(root_dir)
+def create_apps_script_sheet_service(
+    root_dir: Path,
+    *,
+    opener: Callable = urlopen,
+    expected_role: Optional[str] = None,
+):
+    config, status = load_apps_script_api_config(root_dir, expected_role=expected_role)
     if not config:
         return {"ok": False, "status": status}
     client = AppsScriptApiClient(config, opener=opener)

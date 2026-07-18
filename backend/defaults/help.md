@@ -163,7 +163,9 @@ Newbie Shift schedules follow-up work when a candidate cannot complete the flow 
 - Choose who needed the change and select one reason. Other requires additional details before you can continue.
 - Select the new date, time, and timezone after providing the reason.
 - A candidate-requested change may count as an attempt based on when it was requested. Approval may remain Pending until an admin reviews it.
-- Use the editable temporary Discord post when the reschedule needs to be shared with the admin team.
+- The Temporary Discord Post is shown by default for initial scheduling and rescheduling.
+- Edit it before copying, add any required @mentions manually, and use Hide/Show without losing edits.
+- Use Reset to Generated Text if you need to restore the generated wording after manual changes.
 - Continue to Review to save the Newbie Shift details on the session.
 
 ## 17. Review Screen

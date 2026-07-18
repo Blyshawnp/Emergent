@@ -60,7 +60,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-async function renderPage(callNum, sessionOverrides = {}) {
+async function renderPage(callNum, sessionOverrides = {}, pageDefaults = defaults, pageSettings = {}) {
   const session = {
     candidate_name: 'Taylor Example',
     final_attempt: false,
@@ -72,7 +72,15 @@ async function renderPage(callNum, sessionOverrides = {}) {
   const root = createRoot(container);
   const onNavigate = jest.fn();
   await act(async () => {
-    root.render(<CallsPage onNavigate={onNavigate} navigationState={{ callNum }} />);
+    root.render(
+      <CallsPage
+        onNavigate={onNavigate}
+        navigationState={{ callNum }}
+        settings={pageSettings}
+        defaults={pageDefaults}
+        currentSession={{ session }}
+      />
+    );
     await flushPromises();
   });
   return {
@@ -93,16 +101,26 @@ test('shows Caller Demographics before Payment Simulation', async () => {
   await view.unmount();
 });
 
+test('uses App-cached entry data without duplicate defaults, settings, or session requests', async () => {
+  const view = await renderPage(1);
+
+  expect(api.getDefaults).not.toHaveBeenCalled();
+  expect(api.getSettings).not.toHaveBeenCalled();
+  expect(api.getCurrentSession).not.toHaveBeenCalled();
+
+  await view.unmount();
+});
+
 test('formats donation dropdown labels as currency without changing option values', async () => {
-  api.getDefaults.mockResolvedValue({
+  const pageDefaults = {
     ...defaults,
     shows: [
       ['Whole Dollar Show', '16', '25', '', ''],
       ['Cents Show', '12.50', '100', '', ''],
     ],
-  });
+  };
 
-  const view = await renderPage(1);
+  const view = await renderPage(1, {}, pageDefaults);
   const donationSelect = view.container.querySelector('[data-testid="call-donation"]');
   const optionLabels = Array.from(donationSelect.options).map((option) => option.textContent);
   const optionValues = Array.from(donationSelect.options).map((option) => option.value);
@@ -236,15 +254,15 @@ test('Did not search for member appears only for failed calls and persists in sa
 
 test('required fail reason remains available when remote content is stale', async () => {
   mockModal.showModal.mockResolvedValue(true);
-  api.getDefaults.mockResolvedValue({
+  const pageDefaults = {
     ...defaults,
     call_fails: ['Skipped parts of script', 'Other'],
-  });
-  api.getSettings.mockResolvedValue({
+  };
+  const pageSettings = {
     call_fails: ['Skipped parts of script', 'Other'],
-  });
+  };
 
-  const view = await renderPage(1);
+  const view = await renderPage(1, {}, pageDefaults, pageSettings);
 
   await act(async () => {
     view.container.querySelector('[data-testid="call-fail"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -278,15 +296,16 @@ test('Fail Reasons remain hidden until Fail is selected', async () => {
 
 
 test('not enough time after passed calls prompts for Newbie Shift scheduling', async () => {
-  api.getDefaults.mockResolvedValue({
+  const pageDefaults = {
     ...defaults,
     call_types: ['Existing Member - One Time'],
     donors_existing: [['Morgan', 'Member', '2 Main St', '', 'Town', 'NC', '555-0101', 'morgan@example.test']],
-  });
+  };
   const view = await renderPage(2, {
     call_1: { result: 'Pass', type: 'New Donor - One Time' },
-  });
-  api.getCurrentSession.mockResolvedValue({
+  }, pageDefaults);
+  api.saveCall.mockResolvedValueOnce({
+    ok: true,
     session: {
       candidate_name: 'Taylor Example',
       final_attempt: false,
@@ -326,21 +345,23 @@ test('not enough time after passed calls prompts for Newbie Shift scheduling', a
 });
 
 test('dismissed not-enough-time prompt routes to Review without nagging again', async () => {
-  api.getDefaults.mockResolvedValue({
+  const pageDefaults = {
     ...defaults,
     call_types: ['Existing Member - One Time'],
     donors_existing: [['Morgan', 'Member', '2 Main St', '', 'Town', 'NC', '555-0101', 'morgan@example.test']],
-  });
-  const view = await renderPage(2, {
+  };
+  const existingSession = {
+    candidate_name: 'Taylor Example',
+    final_attempt: false,
     call_1: { result: 'Pass', type: 'New Donor - One Time' },
-  });
-  api.getCurrentSession.mockResolvedValue({
+    newbie_shift_prompt: { trigger: 'not_enough_time_sup_transfer', status: 'dismissed' },
+  };
+  const view = await renderPage(2, existingSession, pageDefaults);
+  api.saveCall.mockResolvedValueOnce({
+    ok: true,
     session: {
-      candidate_name: 'Taylor Example',
-      final_attempt: false,
-      call_1: { result: 'Pass', type: 'New Donor - One Time' },
+      ...existingSession,
       call_2: { result: 'Pass', type: 'Existing Member - One Time' },
-      newbie_shift_prompt: { trigger: 'not_enough_time_sup_transfer', status: 'dismissed' },
     },
   });
   mockModal.showModal
@@ -365,6 +386,7 @@ test('dismissed not-enough-time prompt routes to Review without nagging again', 
     fail_summary: 'N/A',
   }));
   expect(view.onNavigate).toHaveBeenCalledWith('review');
+  expect(api.getCurrentSession).not.toHaveBeenCalled();
 
   await view.unmount();
 });

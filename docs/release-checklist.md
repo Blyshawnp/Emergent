@@ -30,7 +30,9 @@ Use this checklist before shipping a new MTS / SAM desktop app build.
 - [ ] Installer maps `frontend/build` (not source) for Electron loadURL
 - [ ] Auto-update metadata parses multiline notes
 - [ ] Uninstallers remove per-user data only (unless admin-confirmed wipe is selected)
-- [ ] `google-service-account.json` is intentionally packaged for v1.0.x (accepted security tradeoff, see `docs/service-account-packaging-risk.md`)
+- [ ] Neither installer nor production-ready output contains `google-service-account.json` or another reusable service-account credential (see `docs/service-account-packaging-risk.md`)
+- [ ] Controlled `apps-script-api-mts.json` and `apps-script-api-sam.json` files exist only on the release machine, declare the correct role, use separate credentials, and pass the fail-closed pre-pack check
+- [ ] MTS authorization tests prove SAM-only actions are forbidden; SAM authorization tests prove intended admin decisions are allowed
 
 ## Communication
 - [ ] Release notes mention: new VPN/manual-check behavior, headset approvals, and shared-sheet resilience

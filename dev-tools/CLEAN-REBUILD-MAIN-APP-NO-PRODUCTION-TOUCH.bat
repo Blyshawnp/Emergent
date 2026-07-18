@@ -126,11 +126,11 @@ set "MTS_RUNTIME_CONFIG_DIR=%ROOT%\desktop\dist\win-unpacked\resources\backend\c
 if not exist "%MTS_RUNTIME_CONFIG_DIR%" mkdir "%MTS_RUNTIME_CONFIG_DIR%"
 copy /y "%ROOT%\backend\config\runtime_config.json" "%MTS_RUNTIME_CONFIG_DIR%\runtime_config.json" >nul
 if errorlevel 1 goto :fail
-copy /y "%ROOT%\backend\config\apps-script-api.json" "%MTS_RUNTIME_CONFIG_DIR%\apps-script-api.json" >nul
+copy /y "%ROOT%\backend\config\apps-script-api-mts.json" "%MTS_RUNTIME_CONFIG_DIR%\apps-script-api.json" >nul
 if errorlevel 1 goto :fail
 if exist "%MTS_RUNTIME_CONFIG_DIR%\google-service-account.json" del /q "%MTS_RUNTIME_CONFIG_DIR%\google-service-account.json"
 if exist "%MTS_RUNTIME_CONFIG_DIR%\service-account.json" del /q "%MTS_RUNTIME_CONFIG_DIR%\service-account.json"
-%PY% -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); u=str(d.get('base_url') or ''); t=str(d.get('token') or ''); sys.exit(0 if d.get('enabled') is True and u.startswith('https://script.google.com/macros/s/') and u.endswith('/exec') and t else 2)" "%MTS_RUNTIME_CONFIG_DIR%\apps-script-api.json"
+%PY% -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); u=str(d.get('base_url') or ''); t=str(d.get('token') or ''); r=str(d.get('role') or ''); sys.exit(0 if d.get('enabled') is True and r == 'mts' and u.startswith('https://script.google.com/macros/s/') and u.endswith('/exec') and t else 2)" "%MTS_RUNTIME_CONFIG_DIR%\apps-script-api.json"
 if errorlevel 1 (
   echo Runtime Apps Script API config verification failed.
   goto :fail

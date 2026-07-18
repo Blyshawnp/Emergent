@@ -123,15 +123,6 @@ function headsetOptionMatchesQuery(option, query) {
   return tokens.length > 0 && tokens.every((token) => normalizedOption.includes(token) || compactOption.includes(token));
 }
 
-function headsetModelTokenMatches(modelText, query) {
-  const normalizedQuery = normalizeHeadsetSearchValue(query);
-  if (!normalizedQuery) return false;
-  const compactQuery = compactHeadsetSearchValue(query);
-  return headsetSearchTokens(modelText)
-    .filter((token) => /\d/.test(token))
-    .some((token) => token === normalizedQuery || token === compactQuery);
-}
-
 function isMissingHeadsetValue(value) {
   const normalized = normalizeLookupValue(value);
   return !normalized || normalized === 'n/a' || normalized === 'na' || normalized === 'none' || normalized === 'unknown';
@@ -185,10 +176,7 @@ function headsetIsApproved(value, approvedHeadsets) {
     return (group?.models || []).some((model) => {
       const modelText = String(model || '').trim();
       return normalizeHeadsetSearchValue(`${brand} ${modelText}`) === normalized
-        || normalizeHeadsetSearchValue(modelText) === normalized
-        || compactHeadsetSearchValue(`${brand} ${modelText}`) === compact
-        || compactHeadsetSearchValue(modelText) === compact
-        || headsetModelTokenMatches(modelText, value);
+        || compactHeadsetSearchValue(`${brand} ${modelText}`) === compact;
     });
   });
 }
@@ -317,15 +305,31 @@ export default function BasicsPage({ onNavigate }) {
   });
   const hydratedRef = useRef(false);
 
+  const loadApprovedHeadsets = useCallback(async ({ force = false, silent = false } = {}) => {
+    if (!silent) setHeadsetLookupLoading(true);
+    try {
+      const response = await api.getApprovedHeadsets(force);
+      setApprovedHeadsets(Array.isArray(response?.groups) ? response.groups : []);
+      setDeniedHeadsets(Array.isArray(response?.denied) ? response.denied : []);
+      setHeadsetLookupError(response?.error || '');
+      return response;
+    } catch (error) {
+      setHeadsetLookupError('Approved headset refresh is taking longer than usual. The last available list remains usable.');
+      return { groups: [], denied: [], error: error?.message || '' };
+    } finally {
+      if (!silent) setHeadsetLookupLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const [currentSettings, sessionResponse, headsetResponse, defaultsResponse] = await Promise.all([
+        const [currentSettings, sessionResponse, , defaultsResponse] = await Promise.all([
           api.getSettings(),
           api.getCurrentSession(),
-          api.getApprovedHeadsets().catch((error) => ({ groups: [], error: error.message || 'Unable to load the approved headset list right now.' })),
+          loadApprovedHeadsets(),
           api.getDefaults(8000).catch(() => ({})),
         ]);
         if (cancelled) return;
@@ -355,9 +359,6 @@ export default function BasicsPage({ onNavigate }) {
           } : {}),
         }));
 
-        setApprovedHeadsets(headsetResponse.groups || []);
-        setDeniedHeadsets(headsetResponse.denied || []);
-        setHeadsetLookupError(headsetResponse.error || '');
       } catch (_error) {
         if (cancelled) return;
         setHeadsetLookupError('Unable to load the approved headset list right now. You can still type the headset manually.');
@@ -372,7 +373,7 @@ export default function BasicsPage({ onNavigate }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadApprovedHeadsets]);
 
   useEffect(() => {
     return () => {
@@ -381,6 +382,13 @@ export default function BasicsPage({ onNavigate }) {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadApprovedHeadsets({ force: true, silent: true });
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [loadApprovedHeadsets]);
 
   useEffect(() => {
     if (!hydratedRef.current || headsetLookupLoading || headsetLookupError) return;
@@ -780,18 +788,17 @@ export default function BasicsPage({ onNavigate }) {
     return { allowed: true, override: false };
   };
 
-  const logUnknownHeadsetIfNeeded = async (sessionData) => {
+  const startSessionWithHeadsetReview = async (sessionData) => {
     const headsetModel = String(sessionData?.headset_brand || '').trim();
-    if (!headsetModel || headsetIsApproved(headsetModel, approvedHeadsets)) return;
-    try {
-      await api.logHeadsetReview({
-        headset_model: headsetModel,
-        candidate_name: sessionData?.candidate_name || '',
-        tester_name: sessionData?.tester_name || '',
-      });
-    } catch (_error) {
-      // Headset review logging is non-blocking; certification workflow continues.
+    const shouldRequestReview = Boolean(headsetModel) && !headsetIsApproved(headsetModel, approvedHeadsets);
+    const result = await api.startSession({
+      ...sessionData,
+      headset_review_requested: shouldRequestReview,
+    });
+    if (result?.warning) {
+      await modal.warning('Headset Review Not Submitted', result.warning);
     }
+    return result;
   };
 
   const researchUnknownHeadset = async () => {
@@ -952,8 +959,7 @@ export default function BasicsPage({ onNavigate }) {
       );
     }
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    await logUnknownHeadsetIfNeeded(nextForm);
-    await api.startSession({ ...nextForm, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, time_for_sup: supervisorOnlyMode ? true : null });
+    await startSessionWithHeadsetReview({ ...nextForm, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, time_for_sup: supervisorOnlyMode ? true : null });
     onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
   };
 
@@ -1014,8 +1020,7 @@ export default function BasicsPage({ onNavigate }) {
     if (!confirmed) return;
     const data = { ...form, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: resolvedReason, final_status: 'Fail' };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    await logUnknownHeadsetIfNeeded(data);
-    await api.startSession(data);
+    await startSessionWithHeadsetReview(data);
     onNavigate('review');
   };
 
@@ -1029,8 +1034,7 @@ export default function BasicsPage({ onNavigate }) {
     if (!yes) return false;
     const failData = { ...sessionData, auto_fail_reason: 'Unable to turn off VPN', final_status: 'Fail' };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    await logUnknownHeadsetIfNeeded(failData);
-    await api.startSession(failData);
+    await startSessionWithHeadsetReview(failData);
     onNavigate('review');
     return true;
   };
@@ -1125,7 +1129,7 @@ export default function BasicsPage({ onNavigate }) {
         final_status: 'Fail',
       };
       window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-      await api.startSession(failData);
+      await startSessionWithHeadsetReview(failData);
       onNavigate('review');
       return;
     }
@@ -1151,8 +1155,7 @@ export default function BasicsPage({ onNavigate }) {
       if (yes) {
         const failData = { ...workflowData, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await logUnknownHeadsetIfNeeded(failData);
-        await api.startSession(failData);
+        await startSessionWithHeadsetReview(failData);
         onNavigate('review');
       }
       return;
@@ -1169,8 +1172,7 @@ export default function BasicsPage({ onNavigate }) {
       if (!fixed) {
         const failData = { ...workflowData, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await logUnknownHeadsetIfNeeded(failData);
-        await api.startSession(failData);
+        await startSessionWithHeadsetReview(failData);
         onNavigate('review');
         return;
       }
@@ -1180,8 +1182,7 @@ export default function BasicsPage({ onNavigate }) {
       if (!fixed) {
         const failData = { ...workflowData, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await logUnknownHeadsetIfNeeded(failData);
-        await api.startSession(failData);
+        await startSessionWithHeadsetReview(failData);
         onNavigate('review');
         return;
       }
@@ -1191,8 +1192,7 @@ export default function BasicsPage({ onNavigate }) {
       if (!fixed) {
         const failData = { ...workflowData, auto_fail_reason: 'Not ready for session (incorrect settings)', final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-        await logUnknownHeadsetIfNeeded(failData);
-        await api.startSession(failData);
+        await startSessionWithHeadsetReview(failData);
         onNavigate('review');
         return;
       }
@@ -1204,9 +1204,11 @@ export default function BasicsPage({ onNavigate }) {
       time_for_sup: supervisorOnlyMode ? true : null,
     };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    await logUnknownHeadsetIfNeeded(startData);
-    await api.startSession(startData);
-    onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
+    const started = await startSessionWithHeadsetReview(startData);
+    onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls', {
+      session: started?.session || startData,
+      navigationStartedAt: Date.now(),
+    });
   };
 
   const saveBasicsForTechIssue = useCallback(async () => {
@@ -1525,6 +1527,15 @@ export default function BasicsPage({ onNavigate }) {
               <div className="text-xs text-muted headset-lookup-update-note">
                 This list is updated every 1-2 weeks.
               </div>
+              <button
+                type="button"
+                className="btn btn-muted btn-sm"
+                onClick={() => loadApprovedHeadsets({ force: true })}
+                disabled={headsetLookupLoading}
+                data-testid="headset-lookup-refresh"
+              >
+                {headsetLookupLoading ? 'Refreshing...' : 'Refresh approved list'}
+              </button>
               <div className="headset-lookup-results-scroll">
                 {headsetLookupError && approvedHeadsets.length === 0 ? (
                   <div className="headset-lookup-empty">

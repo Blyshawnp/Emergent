@@ -1,5 +1,7 @@
 # Final Release Readiness Report
 
+> Historical audit record from 2026-06-23. For the current branch and evidence, use `docs/RELEASE_CHECKLIST_v1.0.1.md`; do not treat the package-content or tracked-file counts below as current.
+
 ## Audit identity
 
 - Product: Mock Testing Suite (MTS) and Sam (SAM)

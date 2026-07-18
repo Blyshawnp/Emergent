@@ -11,7 +11,12 @@ const { spawn, spawnSync, execFileSync } = require('child_process');
 const http = require('http');
 const { pathToFileURL } = require('url');
 const Store = require('electron-store');
-const { DEFAULT_GRACEFUL_TIMEOUT_MS, createOwnedProcessRegistry } = require('./processOwnership');
+const {
+  DEFAULT_GRACEFUL_TIMEOUT_MS,
+  DEFAULT_HEARTBEAT_STALE_AFTER_MS,
+  classifyBackendListenerOwnership,
+  createOwnedProcessRegistry,
+} = require('./processOwnership');
 let desktopPackage = {};
 let electronAutoUpdater = null;
 
@@ -200,7 +205,11 @@ function getHeartbeatPath(mode = getAppModeName()) {
   return getSharedAppDataPath(`${mode}.heartbeat.json`);
 }
 
-function getBackendOwnerPath() {
+function getBackendOwnerPath(mode = getAppModeName()) {
+  return getSharedAppDataPath(`${mode}.backend-owner.json`);
+}
+
+function getLegacyBackendOwnerPath() {
   return getSharedAppDataPath('backend-owner.json');
 }
 
@@ -259,14 +268,34 @@ function writeBackendOwner(pid) {
   }
 }
 
+function readBackendOwner() {
+  const current = readJsonFile(getBackendOwnerPath());
+  if (current) return current;
+  const legacy = readJsonFile(getLegacyBackendOwnerPath());
+  return legacy && String(legacy.ownerMode || '') === getAppModeName() ? legacy : null;
+}
+
 function clearBackendOwnerForPid(pid) {
-  const owner = readJsonFile(getBackendOwnerPath());
-  if (!owner || String(owner.pid) !== String(pid)) {
-    return;
+  for (const ownerPath of [getBackendOwnerPath(), getLegacyBackendOwnerPath()]) {
+    const owner = readJsonFile(ownerPath);
+    if (!owner || String(owner.pid) !== String(pid)) {
+      continue;
+    }
+    try {
+      fs.rmSync(ownerPath, { force: true });
+    } catch (_err) {}
   }
+}
+
+function isProcessRunning(pid) {
+  const exactPid = Number(pid || 0);
+  if (!exactPid) return false;
   try {
-    fs.rmSync(getBackendOwnerPath(), { force: true });
-  } catch (_err) {}
+    process.kill(exactPid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
 }
 
 function getFrontendPath(subpath = '') {
@@ -564,6 +593,7 @@ function startBackend() {
           APP_VERSION,
           APP_RESOURCES_PATH: process.resourcesPath,
           APPS_SCRIPT_API_CONFIG_FILE: appsScriptApiConfigPath,
+          APPS_SCRIPT_API_ROLE: isNotificationManagerMode ? 'sam' : 'mts',
           MTS_ADMIN_TOKEN: getSharedAdminToken(),
           MTS_DEV_MODE: isDev ? '1' : '0',
         },
@@ -902,13 +932,20 @@ function probeBackend() {
   });
 }
 
-function killStaleOwnedBackend() {
-  const owner = readJsonFile(getBackendOwnerPath()) || {};
-  const ownerPid = Number(owner.pid || 0);
-  const ownerMode = String(owner.ownerMode || '');
-  const ownerProcessPid = Number(owner.ownerPid || 0);
-  const listeningPids = getTcpPortListeningPids(BACKEND_PORT);
+function inspectBackendListenerOwnership(listeningPids = getTcpPortListeningPids(BACKEND_PORT)) {
+  const owner = readBackendOwner();
+  const ownerProcessPid = Number(owner?.ownerPid || 0);
+  return classifyBackendListenerOwnership({
+    mode: getAppModeName(),
+    listenerPids: listeningPids,
+    owner,
+    heartbeat: readJsonFile(getHeartbeatPath()),
+    ownerProcessRunning: isProcessRunning(ownerProcessPid),
+    heartbeatStaleAfterMs: DEFAULT_HEARTBEAT_STALE_AFTER_MS,
+  });
+}
 
+function killStaleOwnedBackend(ownership = inspectBackendListenerOwnership()) {
   const killPid = (pid) => {
     try {
       execFileSync('taskkill.exe', ['/pid', String(pid), '/t', '/f'], {
@@ -925,17 +962,11 @@ function killStaleOwnedBackend() {
     }
   };
 
-  if (
-    ownerPid > 0
-    && ownerProcessPid > 0
-    && ownerMode === getAppModeName()
-    && listeningPids.includes(ownerPid)
-    && killPid(ownerPid)
-  ) {
+  if (ownership.classification === 'stale-owned' && killPid(ownership.backendPid)) {
     return true;
   }
 
-  console.warn('[BACKEND] No current-app backend owner metadata found; refusing to kill processes by executable name.');
+  console.warn('[BACKEND] No stale current-app backend owner was proven; refusing to kill an unmanaged or active process.');
   return false;
 }
 
@@ -997,20 +1028,36 @@ function ensureBackendAvailable() {
     if (isTcpPortListening(BACKEND_PORT)) {
       console.log(`[BACKEND] Port ${BACKEND_PORT} is already listening`);
       if (await probeBackend()) {
-        usingExternalBackend = true;
-        backendStartedByThisApp = false;
-        backendReadyRetryCount = 0;
-        backendRetryAttemptCount = 0;
-        setBackendConnectionStatus('connected');
-        console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
-        return;
+        const ownership = inspectBackendListenerOwnership();
+        if (ownership.classification === 'stale-owned') {
+          console.warn(`[BACKEND] Healthy listener PID ${ownership.backendPid} belongs to a stale ${getAppModeName()} owner; restarting it.`);
+          if (!killStaleOwnedBackend(ownership)) {
+            throw new Error(`Port ${BACKEND_PORT} is held by a stale backend that could not be stopped. Please retry.`);
+          }
+          await sleep(1000);
+          if (isTcpPortListening(BACKEND_PORT)) {
+            throw new Error(`Port ${BACKEND_PORT} is still in use after stopping the stale backend. Please retry.`);
+          }
+        } else if (ownership.classification === 'unmanaged' && !isDev) {
+          throw new Error(`Port ${BACKEND_PORT} is already in use by an unverified local process. Close the conflicting process and retry.`);
+        } else {
+          usingExternalBackend = true;
+          backendStartedByThisApp = false;
+          backendReadyRetryCount = 0;
+          backendRetryAttemptCount = 0;
+          setBackendConnectionStatus('connected');
+          console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
+          return;
+        }
       }
 
-      console.warn(`[BACKEND] Port ${BACKEND_PORT} is listening but /api/health failed. Killing stale owned backend if present.`);
-      killStaleOwnedBackend();
-      await sleep(1000);
       if (isTcpPortListening(BACKEND_PORT)) {
-        throw new Error(`Port ${BACKEND_PORT} is still in use after stopping stale backend. Please stop the conflicting process and retry.`);
+        console.warn(`[BACKEND] Port ${BACKEND_PORT} is listening but /api/health failed. Killing a proven stale owned backend if present.`);
+        killStaleOwnedBackend();
+        await sleep(1000);
+        if (isTcpPortListening(BACKEND_PORT)) {
+          throw new Error(`Port ${BACKEND_PORT} is still in use after checking the stale backend owner. Please stop the conflicting process and retry.`);
+        }
       }
     }
 

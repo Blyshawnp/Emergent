@@ -32,7 +32,7 @@ The files in `backend/defaults/` are the packaged master defaults used when a us
 - In `discord-posts.csv`, keep up to three suggested screenshot paths in `SuggestedScreenshots` separated by `|`.
 - In `callers.csv`, keep the `Category` column populated so records route to the correct caller group.
 - Certification support instructions must use `certification@acdsupport.com`. If a live admin-content sheet still has the older certification mailbox in a Discord/help row, update that row in place without duplicating the template.
-- Temporary Newbie Shift reschedule Discord posts use the internally managed `newbieShiftRescheduleAdminMention` value when configured. The packaged fallback is `@beckysowlesacdadmin`; the field is intentionally hidden from normal MTS and SAM Settings, and changing it does not change unrelated Discord post templates.
+- Temporary Newbie Shift Discord posts for initial scheduling and rescheduling are generated as editable trainer text with no automatic mentions. Add any required tag manually before copying.
 
 ## Help Content Separation
 - `help.md` and `faq.md` are trainer-facing runtime content. Keep them focused on app workflows, status meanings, safe troubleshooting, and support contacts.
@@ -43,6 +43,8 @@ The files in `backend/defaults/` are the packaged master defaults used when a us
 - The Google Sheet tab names must match the local file base names exactly.
 - Use tabs named `callers`, `shows`, `call-types`, `sup-reasons`, `call-coaching`, `sup-coaching`, `call-fail-reasons`, `sup-fail-reasons`, `discord-posts`, `screenshots`, and `headsets`.
 - Shared workflow storage also requires the SAM/MTS tracking tabs defined in backend code, including `Candidate Sessions`, `Pending Sup Transfers`, `newbie-shift-requests`, and `candidate-deletion-requests`. The app verifies and adds missing headers through its safe shared tracking setup path when direct Google Sheets access is available.
+- Tutorial-video storage uses `mts-tutorial-videos` and `sam-tutorial-videos`. After the current Apps Script version is deployed, invoke the SAM-only `ensureTutorialVideoTabs` action documented in `docs/apps-script-api-packaged-config.md`; it creates missing tabs only and rejects incompatible existing headers without overwriting rows.
+- Headset review storage uses `headset-review-log` with stable review rows: `review_id`, `source_session_id`, `candidate_name`, `tester_name`, `Brand`, `Model`, `Status`, `Note`, `created_at`, `updated_at`, `decision_at`, `decision_by`, and `denial_reason`. Repeated MTS retries should update or skip the same pending row and must not reset approved or denied rows to pending.
 - Help and FAQ can be overridden by Google Docs.
 - Gemini prompt instructions use the bundled markdown files as the primary source.
 - Gemini prompt instructions can be overridden only by Google Sheet tabs named `gemini-coaching-prompt` and `gemini-fail-prompt`. Each tab must use A1 `prompt` and A2 containing the full prompt text. The override activates only when the normalized A2 text differs from the bundled markdown file.

@@ -6,7 +6,7 @@ import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowPro
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 import { displaySummaryLabel } from '../utils/summaryDisplayLabels';
-import { buildRescheduleFailSummary, buildRescheduleSummary, followUpStatusMeta, NEWBIE_REQUEST_STATUS, NEWBIE_REQUEST_TYPE } from '../utils/certificationWorkflow';
+import { buildRescheduleFailSummary, buildRescheduleSummary, getNewbieShiftEligibility, newbieShiftStatusMeta, NEWBIE_REQUEST_STATUS, NEWBIE_REQUEST_TYPE } from '../utils/certificationWorkflow';
 
 const READINESS_NEEDS_RETEST = 'Needs Retest / Additional Coaching';
 const READINESS_OVERRIDE_REASONS = [
@@ -560,7 +560,8 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const c3r = (s.call_3 || {}).result;
   const s1r = (s.sup_transfer_1 || {}).result;
   const s2r = (s.sup_transfer_2 || {}).result;
-  const newbie = s.newbie_shift_data;
+  const newbieEligibility = getNewbieShiftEligibility(s);
+  const newbie = (newbieEligibility.active || newbieEligibility.denied) ? s.newbie_shift_data : null;
 
   const calculatedStatus = computeCalculatedStatus(s);
   const finalReadinessJudgment = normalizeFinalReadinessJudgment(s.finalReadinessJudgment, calculatedStatus);
@@ -1233,7 +1234,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             <br /><strong>- NEWBIE SHIFT -</strong><br />
             <strong>{s.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE ? 'Rescheduled Newbie Shift' : 'Date/Time'}:</strong> {newbie.newbie_date || ''} at {newbie.newbie_time || ''} {newbie.newbie_tz || ''}<br />
             {s.newbie_shift_original_scheduled_at && <><strong>Original Scheduled At:</strong> {s.newbie_shift_original_scheduled_at}<br /></>}
-            {s.newbie_shift_request_status && <><strong>Reschedule Status:</strong> {followUpStatusMeta(s.newbie_shift_request_status).label}<br /></>}
+            {newbieShiftStatusMeta(s) && <><strong>Reschedule Status:</strong> {newbieShiftStatusMeta(s).label}<br /></>}
             {s.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && s.newbie_shift_denial_reason && <><strong>Denial Reason:</strong> {s.newbie_shift_denial_reason}<br /></>}
           </>)}
         </div>

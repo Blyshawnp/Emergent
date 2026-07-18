@@ -1,6 +1,9 @@
 import asyncio
+import csv
+import json
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -59,11 +62,8 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertEqual(response["error_code"], "form_automation_failed")
 
     def test_default_reschedule_admin_mention_is_configured(self):
-        self.assertEqual(server.DEFAULT_SETTINGS["newbieShiftRescheduleAdminMention"], "@beckysowlesacdadmin")
-        self.assertEqual(
-            server.sanitize_settings({}).get("newbieShiftRescheduleAdminMention"),
-            "@beckysowlesacdadmin",
-        )
+        self.assertNotIn("newbieShiftRescheduleAdminMention", server.DEFAULT_SETTINGS)
+        self.assertNotIn("newbieShiftRescheduleAdminMention", server.sanitize_settings({}))
 
     def test_trainer_help_response_excludes_admin_setup_document(self):
         with mock.patch.object(
@@ -242,6 +242,93 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
 
         self.assertEqual(offenders, [])
 
+    def test_release_discord_templates_are_exact_and_synchronized(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        expected = {
+            "Sup Request Instructions": (
+                "When you need to transfer, you will….\n\n"
+                "1) Ask in chat first before transferring - include the station, caller's name, and issue ex.: "
+                "WXYZ, sup request, member's name, and member issue\n\n"
+                "2) Give the CCM time to check to see if a Supervisor is available\n\n"
+                "We never put our caller on hold so try to minimize dead air.\n\n"
+                "3) When the CCM says ok to transfer...\n\n"
+                "— Let your caller know you are transferring"
+            ),
+            "Disposition": (
+                "After you click blind transfer, you will need to disposition the call in the script and in Call Corp DTE.\n\n"
+                "*Script*\n"
+                "- Click the cancel button in the script (red phone) and disposition as **Test / Training**.\n\n"
+                "Next, Please Disposition the call in Call Corp *DTE*.\n\n"
+                "- You will choose the option from the list that best matches what happened on the call.\n"
+                "- This call should be dispositioned as **Test Call**.\n"
+                "- DTE will go back to “Ready Status” automatically in 30 seconds or when you click Complete Wrap-Up.\n\n"
+                "Let me know when you have done, please."
+            ),
+            "Passed All": (
+                "**:tada: Congratulations! Great job! You have successfully completed your test calls.**\n\n"
+                "- Watch your inbox for your step 4 final instructions - your Welcome Team TLMS information.\n\n"
+                "- Please log out of Call Corp and Simple Script with the Log Out links (never \"X\" out of these windows).\n\n"
+                "- If you haven't already done so be sure to complete any additional courses assigned in your TLMS. "
+                "You may email certification@acdsupport.com for any questions on courses.\n\n"
+                "- If you're signed up on any additional mock or testing shifts, please take a moment to go to Current "
+                "Schedule under My Schedule in Gateway and remove them.\n\n"
+                "**Welcome to ACDD! Have a fabulous remainder of your day!**\n\n"
+                "https://gyazo.com/54533787846921462083e8029c028304"
+            ),
+        }
+        first_line = "We are now going to proceed with the instructions for the Supervisor transfer."
+
+        app_content = json.loads((repo_root / "backend" / "content" / "app_content.json").read_text(encoding="utf-8"))
+        app_rows = {row["title"]: row["message"] for row in app_content["discord_templates"]}
+
+        def csv_rows(path):
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                return {row["Title"]: row["Message"] for row in csv.DictReader(handle)}
+
+        csv_sources = [
+            csv_rows(repo_root / "backend" / "defaults" / "discord-posts.csv"),
+            csv_rows(repo_root / "docs" / "admin-content-package" / "csv-tabs" / "discord-posts.csv"),
+        ]
+
+        xml_root = ET.parse(repo_root / "docs" / "admin-content-package" / "mock-testing-suite-admin-content.xml").getroot()
+        namespace = {"ss": "urn:schemas-microsoft-com:office:spreadsheet"}
+        xml_rows = {}
+        for row in xml_root.findall(".//ss:Worksheet[@ss:Name='Discord Posts']/ss:Table/ss:Row", namespace)[1:]:
+            values = [str(data.text or "") for data in row.findall("ss:Cell/ss:Data", namespace)]
+            if len(values) >= 2:
+                xml_rows[values[0]] = values[1]
+
+        for rows in [app_rows, *csv_sources, xml_rows]:
+            self.assertEqual(rows["Sup Instructions #1"].splitlines()[0], first_line)
+            for title, message in expected.items():
+                self.assertEqual(rows[title].replace("\r\n", "\n"), message)
+
+        canonical_rows = {
+            title: server._normalize_discord_message(message)
+            for title, message in csv_sources[0].items()
+        }
+        for rows in [app_rows, csv_sources[1], xml_rows]:
+            normalized_rows = {
+                title: server._normalize_discord_message(message)
+                for title, message in rows.items()
+            }
+            self.assertEqual(set(normalized_rows), set(canonical_rows))
+            self.assertEqual(normalized_rows, canonical_rows)
+
+    def test_discord_whitespace_normalization_preserves_markdown_and_one_blank_line(self):
+        rows = [{
+            "Category": "Sup Transfer Process",
+            "Title": "Whitespace Fixture",
+            "Message": "Heading\r\n\r\n\r\n- **Bullet**\r\n\r\n\r\nhttps://example.test/path\r\n",
+        }]
+
+        normalized = server._normalize_discord_posts(rows)
+
+        self.assertEqual(
+            normalized[0]["message"],
+            "Heading\n\n- **Bullet**\n\nhttps://example.test/path",
+        )
+
     def test_pending_request_public_mapping_and_counts(self):
         newbie = server._public_newbie_request({
             "request_id": "req-1",
@@ -258,11 +345,20 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             "request_id": "del-1",
             "status": "pending",
             "candidate_name": "Taylor Example",
+            "reason": "Duplicate candidate record",
+            "audit_summary": "final_attempt=TRUE; form_fill_status=failed; internal_note=do-not-display",
         })
         counts = server._request_category_counts([newbie, deletion], headset_pending_count=2)
         self.assertEqual(newbie["category"], "newbie_reschedule")
         self.assertTrue(newbie["within_24_hours"])
         self.assertEqual(deletion["target_scope"], "single_session")
+        self.assertEqual(deletion["categoryLabel"], "Candidate Deletion Request")
+        self.assertEqual(deletion["reason"], "Duplicate candidate record")
+        self.assertEqual(deletion["details"], "")
+        self.assertTrue(deletion["final_attempt"])
+        self.assertEqual(deletion["form_fill_status"], "failed")
+        self.assertEqual(deletion["deletion_scope"], "Session History and Candidate Tracking")
+        self.assertNotIn("internal_note", str(deletion))
         self.assertEqual(counts["reschedules"], 1)
         self.assertEqual(counts["candidateDeletions"], 1)
         self.assertEqual(counts["headsetReviews"], 2)
@@ -403,6 +499,30 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
                 "discord_templates": [{"category": "Local", "title": "Local Trigger", "message": "Local message"}],
             })
         self.assertEqual(loaded, {})
+
+    def test_managed_content_read_keeps_direct_sheets_as_first_choice(self):
+        with mock.patch.object(server, "_fetch_google_sheet_tab_csv_authenticated", return_value="Brand,Model,Status\nDirect,USB 1,approved\n"), \
+             mock.patch("services.apps_script_api.create_apps_script_sheet_service") as create_service, \
+             mock.patch.object(server, "urlopen") as public_fetch:
+            result = server._fetch_google_sheet_tab_csv("sheet", "headsets")
+
+        self.assertIn("Direct,USB 1", result)
+        create_service.assert_not_called()
+        public_fetch.assert_not_called()
+
+    def test_packaged_managed_content_uses_named_apps_script_read(self):
+        client = mock.Mock()
+        client.get.return_value = {
+            "rows": [{"Brand": "Poly", "Model": "Blackwire 5210", "Status": "approved"}],
+        }
+        with mock.patch.object(server, "_fetch_google_sheet_tab_csv_authenticated", return_value=""), \
+             mock.patch("services.apps_script_api.create_apps_script_sheet_service", return_value={"ok": True, "client": client}), \
+             mock.patch.object(server, "urlopen") as public_fetch:
+            result = server._fetch_google_sheet_tab_csv("sheet", "headsets")
+
+        client.get.assert_called_once_with("getHeadsets", {})
+        public_fetch.assert_not_called()
+        self.assertIn("Blackwire 5210", result)
 
     def test_legacy_saved_call_fail_list_without_override_marker_follows_defaults(self):
         original = list(server.DEFAULT_SETTINGS["call_fails"])
@@ -545,6 +665,40 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         ]
         self.assertEqual(server._normalize_approved_headsets(rows), [{"brand": "Allowed", "models": ["USB 1"]}])
         self.assertEqual(server._normalize_denied_headsets(rows)[0]["model"], "USB 2")
+
+    def test_approved_headsets_are_case_deduped_and_naturally_sorted(self):
+        rows = [
+            {"Brand": " Poly ", "Model": " Blackwire   5210 ", "Status": "approved"},
+            {"Brand": "poly", "Model": "blackwire 5210", "Status": "active"},
+            {"Brand": "Poly", "Model": "Blackwire 3325", "Status": "approved"},
+            {"Brand": "Poly", "Model": "Blackwire 3220", "Status": "approved"},
+            {"Brand": "Test", "Model": "Test Headset", "Status": "denied"},
+            {"Brand": "Test", "Model": "Test Hearing", "Status": "approved"},
+        ]
+
+        self.assertEqual(server._normalize_approved_headsets(rows), [
+            {"brand": "Poly", "models": ["Blackwire 3220", "Blackwire 3325", "Blackwire 5210"]},
+            {"brand": "Test", "models": ["Test Hearing"]},
+        ])
+        self.assertEqual(server._normalize_denied_headsets(rows)[0]["model"], "Test Headset")
+
+    def test_forced_headset_refresh_preserves_last_success_on_failure(self):
+        previous_cache = dict(server._headset_cache)
+        server._headset_cache.update({
+            "groups": [{"brand": "Plantronics", "models": ["Blackwire 5210"]}],
+            "denied": [{"brand": "Test", "model": "Test Headset", "status": "denied", "note": ""}],
+            "last_fetch": 1,
+        })
+        try:
+            with mock.patch.object(server, "_refresh_managed_content_sections", return_value=False):
+                groups, denied, error = asyncio.run(server._fetch_approved_headsets(force=True))
+        finally:
+            server._headset_cache.clear()
+            server._headset_cache.update(previous_cache)
+
+        self.assertEqual(groups[0]["models"], ["Blackwire 5210"])
+        self.assertEqual(denied[0]["model"], "Test Headset")
+        self.assertIn("last available list", error)
 
     def test_other_headset_denial_requires_note_before_sheet_access(self):
         result = server._headset_review_action({

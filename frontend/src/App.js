@@ -20,6 +20,7 @@ import {
   resolveTickerDurationSeconds,
 } from './utils/notifications';
 import { normalizeDiscordKeyList, nextDiscordFavoriteKeys } from './utils/discordFavorites';
+import { normalizeDiscordMessageWhitespace } from './utils/discordContent';
 import {
   DISCORD_CATEGORY_SHORTCUTS,
   DISCORD_GLOBAL_SHORTCUTS,
@@ -1523,13 +1524,13 @@ function normalizeDiscordTemplates(source, defaultCategory = 'Uncategorized') {
   return (Array.isArray(source) ? source : []).map(t => {
     if (!t) return null;
     if (Array.isArray(t)) {
-      return { category: String(t[2] || defaultCategory), title: String(t[0] || ''), message: String(t[1] || '') };
+      return { category: String(t[2] || defaultCategory), title: String(t[0] || ''), message: normalizeDiscordMessageWhitespace(t[1]) };
     }
     if (typeof t === 'object') {
       const category = t.category || t.Category || t.group || t.Group || '';
       const title = t.title || t.Title || t.name || t.Name || t.label || t.Label || '';
       const message = t.message || t.Message || t.text || t.Text || t.content || t.Content || t.body || t.Body || '';
-      const normalized = { category: String(category || defaultCategory), title: String(title), message: String(message) };
+      const normalized = { category: String(category || defaultCategory), title: String(title), message: normalizeDiscordMessageWhitespace(message) };
       const explicitSuggestedScreenshots = getDiscordPostSuggestedScreenshotPaths(t);
       if (explicitSuggestedScreenshots.length || Object.prototype.hasOwnProperty.call(t, 'suggestedScreenshots') || Object.prototype.hasOwnProperty.call(t, 'suggested_screenshots') || Object.prototype.hasOwnProperty.call(t, 'SuggestedScreenshots')) {
         normalized.suggestedScreenshots = explicitSuggestedScreenshots;
