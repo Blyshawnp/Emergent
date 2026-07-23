@@ -595,6 +595,26 @@ test('basics headset search matches brand and model portions while preserving un
   await view.unmount();
 });
 
+test('Basics shows one persistent authoritative Final Attempt banner', async () => {
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      final_attempt: true,
+      attempt_state: { current_attempt: 3, max_attempts: 3 },
+    },
+  });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [], denied: [] });
+
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  const banners = view.container.querySelectorAll('[data-testid="final-attempt-banner"]');
+  expect(banners).toHaveLength(1);
+  expect(banners[0].textContent).toContain('FINAL ATTEMPT');
+
+  await view.unmount();
+});
+
 test('shared candidate lookup retries after a temporary failure and recovers without restart', async () => {
   api.getCurrentSession.mockResolvedValue({ session: null });
   api.getSettings.mockResolvedValue({});
@@ -854,6 +874,65 @@ test('unknown headset research no asks for another headset and returns to entry 
     body: expect.stringContaining('Does the candidate have another headset to try?'),
   }));
   expect(view.container.querySelector('[data-testid="basics-brand"]').value).toBe('');
+  expect(api.updateSession).toHaveBeenCalledWith({ auto_fail_reason: null, final_status: null });
+  expect(document.activeElement).toBe(view.container.querySelector('[data-testid="basics-brand"]'));
+  await view.unmount();
+});
+
+test('Another Headset No reaches ordered Headset Issue confirmation and exact dual-reason fail', async () => {
+  mockModal.showModal
+    .mockResolvedValueOnce('no')
+    .mockResolvedValueOnce('no')
+    .mockResolvedValueOnce(true);
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      tester_name: 'Tester',
+      final_attempt: true,
+      headset_brand: 'Acme Invalid 100',
+      headset_usb: null,
+      noise_cancel: null,
+      vpn_on: false,
+      chrome_default: true,
+      extensions_disabled: true,
+      popups_allowed: true,
+    },
+  });
+  api.getSettings.mockResolvedValue({
+    tester_name: 'Tester',
+    discord_templates: [{ category: 'Failure Outcomes', title: 'Wrong Headset', message: 'Wrong headset post' }],
+  });
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [{ brand: 'Logitech', models: ['H390'] }] });
+  const onNavigate = jest.fn();
+  const view = await renderComponent(<BasicsPage onNavigate={onNavigate} />);
+
+  await act(async () => {
+    await flushPromises();
+    view.container.querySelector('[data-testid="headset-research-btn"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="basics-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const headsetIssue = mockModal.showModal.mock.calls.find(([config]) => config.title === 'Headset Issue')?.[0];
+  expect(headsetIssue).toBeDefined();
+  expect(headsetIssue.body).toContain('Wrong headset (not USB) and Wrong headset (not noise cancelling)');
+  expect(headsetIssue.buttons.map((button) => button.label)).toEqual([
+    'Discord Post: Wrong Headset',
+    'No',
+    'Yes',
+  ]);
+  expect(api.startSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_attempt: true,
+    headset_usb: false,
+    noise_cancel: false,
+    auto_fail_reason: 'Wrong headset (not USB) and Wrong headset (not noise cancelling)',
+    final_status: 'Fail',
+  }));
+  expect(onNavigate).toHaveBeenCalledWith('review');
   await view.unmount();
 });
 

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import RescheduleIntakeModal from '../components/RescheduleIntakeModal';
+import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import {
   canRescheduleNewbieShift,
   formFillStatusMeta,
@@ -85,6 +86,8 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   const [rescheduleDraft, setRescheduleDraft] = useState(null);
   const [rescheduleSubmitting, setRescheduleSubmitting] = useState(false);
   const [showAdminHistoryControls] = useState(() => adminHistoryControlsEnabled());
+  const rescheduleTriggerRef = useRef(null);
+  const restoreRescheduleFocusRef = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -107,6 +110,13 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       setDetail(applyFormRecoveryMarker(navigationState.selectedHistoryRecord));
     }
   }, [navigationState]);
+
+  useEffect(() => {
+    if (!rescheduleDraft && detail && restoreRescheduleFocusRef.current) {
+      restoreRescheduleFocusRef.current = false;
+      rescheduleTriggerRef.current?.focus();
+    }
+  }, [detail, rescheduleDraft]);
 
   const filtered = history.filter(s => ((s.candidate || s.candidate_name || '')).toLowerCase().includes(search.toLowerCase()));
 
@@ -143,7 +153,10 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
     if (!rescheduleDraft) return;
     setRescheduleSubmitting(true);
     try {
-      await api.startSession(buildNewbieShiftRescheduleSession(rescheduleDraft, intake));
+      const response = await api.startSession(buildNewbieShiftRescheduleSession(rescheduleDraft, intake));
+      if (response?.ok !== true || !response?.session) {
+        throw new Error(response?.error || 'Unable to save the reschedule draft.');
+      }
       setRescheduleDraft(null);
       setDetail(null);
       onNavigate('newbieshift');
@@ -441,20 +454,39 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       {rescheduleDraft && (
         <RescheduleIntakeModal
           record={rescheduleDraft}
-          onCancel={() => setRescheduleDraft(null)}
+          onCancel={() => {
+            restoreRescheduleFocusRef.current = true;
+            setRescheduleDraft(null);
+          }}
           onContinue={continueReschedule}
           submitting={rescheduleSubmitting}
         />
       )}
 
-      {detail && (
-        <div className="modal-overlay open">
+      {detail && !rescheduleDraft && (
+        <div className="modal-overlay open" data-testid="history-detail-modal">
           <div className="modal" style={{ width: 700, maxHeight: '85vh' }}>
             <div className="modal-header">
               <h2>{detail.candidate || detail.candidate_name || 'Unknown'} - <StatusChip meta={sessionStatusMeta(detail.status || detail.final_status)} /></h2>
               <button className="modal-close" onClick={() => setDetail(null)}>&times;</button>
             </div>
             <div className="modal-body" style={{ lineHeight: 1.7 }}>
+              <FinalAttemptBanner visible={detail.final_attempt} attemptState={detail.attempt_state} />
+              {Array.isArray(detail.attempt_history) && detail.attempt_history.length > 0 && (
+                <div className="card" style={{ padding: 16, marginBottom: 16 }} data-testid="history-attempt-history">
+                  <h3 style={{ marginBottom: 10 }}>Attempt History</h3>
+                  {detail.attempt_history.map((attempt, index) => (
+                    <div key={`${attempt.attempt_number || index}-${attempt.timestamp_iso || attempt.timestamp || index}`} className="text-sm" style={{ marginBottom: 8 }}>
+                      <strong>Attempt {attempt.attempt_number || index + 1}:</strong> {attempt.status || 'Incomplete'}
+                      {attempt.final_attempt ? ' — Final Attempt' : ''}
+                      <br />
+                      <span className="text-muted">
+                        Calls: {[attempt.call_1?.result, attempt.call_2?.result, attempt.call_3?.result].filter(Boolean).join(', ') || 'None'}; Supervisor Transfers: {[attempt.sup_transfer_1?.result, attempt.sup_transfer_2?.result].filter(Boolean).join(', ') || 'None'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="text-muted text-sm" style={{ marginBottom: 16 }}>{detailDate(detail)}</div>
               <div className="card" style={{ padding: 14, marginBottom: 14 }}>
                 <div className="text-sm"><strong>Candidate:</strong> {detail.candidate || detail.candidate_name || 'Unknown'}</div>
@@ -540,7 +572,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
               <button className="btn btn-muted" onClick={() => setDetail(null)}>Close</button>
               <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
               <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">{detail.form_fill_status === 'filled' ? 'Refill Cert Form' : 'Fill Cert Form'}</button>
-              {canRescheduleNewbieShift(detail) && <button className="btn btn-warning" onClick={() => handleRescheduleSession(detail)} data-testid="history-detail-reschedule">Reschedule</button>}
+              {canRescheduleNewbieShift(detail) && <button ref={rescheduleTriggerRef} className="btn btn-warning" onClick={() => handleRescheduleSession(detail)} data-testid="history-detail-reschedule">Reschedule</button>}
               <button
                 className="btn btn-primary"
                 onClick={() => onNavigate('review', { historyRecord: detail })}

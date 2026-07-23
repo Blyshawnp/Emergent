@@ -135,6 +135,20 @@ test('defaults final readiness judgment to calculated result', async () => {
   await view.unmount();
 });
 
+test('shows one persistent Final Attempt banner on Review without duplicating the status surface', async () => {
+  const view = await renderReview({
+    ...passingSession,
+    final_attempt: true,
+    attempt_state: { current_attempt: 3, max_attempts: 3 },
+  });
+
+  const banners = view.container.querySelectorAll('[data-testid="final-attempt-banner"]');
+  expect(banners).toHaveLength(1);
+  expect(banners[0].textContent).toContain('FINAL ATTEMPT');
+
+  await view.unmount();
+});
+
 test('review auto-populates missing coaching summary when only fail summary exists', async () => {
   const view = await renderReview({
     ...passingSession,

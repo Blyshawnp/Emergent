@@ -39,6 +39,7 @@ class AppsScriptApiTests(unittest.TestCase):
         for tab in ("sam-authorized-users", "sam-notifications", "Candidate Sessions", "Pending Sup Transfers", "headsets", "settings", "notification-recipients"):
             self.assertIn(f"'{tab}'", source)
         for action in (
+            "getSamSetupStatus",
             "getSamAdmins",
             "getTickerMessages",
             "getCandidateTracking",
@@ -60,6 +61,7 @@ class AppsScriptApiTests(unittest.TestCase):
             "updateNotification",
             "disableNotification",
             "deleteNotification",
+            "completeSamSetup",
         ):
             self.assertIn(f"case '{action}'", source)
         self.assertNotIn("BEGIN PRIVATE KEY", source)

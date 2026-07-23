@@ -96,7 +96,15 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  api.updateSession.mockResolvedValue({ ok: true });
+  api.updateSession.mockImplementation(async (patch) => ({
+    ok: true,
+    session: {
+      candidate_name: 'Taylor Example',
+      newbie_shift_request_type: 'reschedule',
+      newbie_shift_request_status: 'pending',
+      ...patch,
+    },
+  }));
   api.discardSession.mockResolvedValue({ ok: true });
   mockModal.warning.mockResolvedValue(true);
   mockModal.error.mockResolvedValue(true);
@@ -107,6 +115,19 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.innerHTML = '';
+});
+
+test('shows one persistent Final Attempt banner during Newbie Shift', async () => {
+  const view = await renderPage({
+    final_attempt: true,
+    attempt_state: { current_attempt: 3, max_attempts: 3 },
+  });
+
+  const banners = view.container.querySelectorAll('[data-testid="final-attempt-banner"]');
+  expect(banners).toHaveLength(1);
+  expect(banners[0].textContent).toContain('FINAL ATTEMPT');
+
+  await view.unmount();
 });
 
 test('reschedule modal renders reason cards with single-selection radio semantics', async () => {
@@ -324,5 +345,66 @@ test('reschedule Save/Submit must confirm one SAM request before navigation and 
   });
   expect(api.updateSession).toHaveBeenCalledTimes(2);
   expect(view.onNavigate).toHaveBeenCalledWith('review');
+  await view.unmount();
+});
+
+test('duplicate Continue clicks produce one in-flight reschedule submission', async () => {
+  const view = await renderPage({
+    newbie_shift_request_id: 'pending-reschedule-1',
+    newbie_shift_requested_by: 'candidate',
+    newbie_shift_request_reason: 'Illness',
+  });
+  const time = view.container.querySelector('[data-testid="newbie-time"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  await act(async () => {
+    setter.call(time, '1030');
+    time.dispatchEvent(new Event('input', { bubbles: true }));
+    time.dispatchEvent(new Event('change', { bubbles: true }));
+    await flushPromises();
+  });
+  let resolveRequest;
+  api.updateSession.mockReturnValueOnce(new Promise((resolve) => { resolveRequest = resolve; }));
+
+  await act(async () => {
+    const button = view.container.querySelector('[data-testid="newbie-continue"]');
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(api.updateSession).toHaveBeenCalledTimes(1);
+  expect(view.container.querySelector('[data-testid="newbie-continue"]').disabled).toBe(true);
+
+  await act(async () => {
+    resolveRequest({ ok: true, requestSaved: true, session: {} });
+    await flushPromises();
+  });
+  expect(view.onNavigate).toHaveBeenCalledWith('review');
+  await view.unmount();
+});
+
+test('submission failure category shows a safe actionable message and does not navigate', async () => {
+  const view = await renderPage({
+    newbie_shift_request_id: 'pending-reschedule-1',
+    newbie_shift_requested_by: 'tester',
+    newbie_shift_request_reason: 'Scheduling conflict',
+  });
+  const time = view.container.querySelector('[data-testid="newbie-time"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  await act(async () => {
+    setter.call(time, '1030');
+    time.dispatchEvent(new Event('input', { bubbles: true }));
+    time.dispatchEvent(new Event('change', { bubbles: true }));
+    await flushPromises();
+  });
+  api.updateSession.mockResolvedValueOnce({ ok: false, requestSaved: false, errorCode: 'unsupported_action' });
+  await act(async () => {
+    view.container.querySelector('[data-testid="newbie-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(mockModal.error).toHaveBeenCalledWith(
+    'Request Not Submitted',
+    'The reschedule service needs an administrator update before requests can be submitted.'
+  );
+  expect(view.onNavigate).not.toHaveBeenCalledWith('review');
   await view.unmount();
 });

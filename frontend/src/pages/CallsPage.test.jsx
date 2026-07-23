@@ -111,6 +111,19 @@ test('uses App-cached entry data without duplicate defaults, settings, or sessio
   await view.unmount();
 });
 
+test('shows the persistent Final Attempt banner during Calls', async () => {
+  const view = await renderPage(1, {
+    final_attempt: true,
+    attempt_state: { current_attempt: 3, max_attempts: 3 },
+  });
+
+  const banners = view.container.querySelectorAll('[data-testid="final-attempt-banner"]');
+  expect(banners).toHaveLength(1);
+  expect(banners[0].textContent).toContain('FINAL ATTEMPT');
+
+  await view.unmount();
+});
+
 test('formats donation dropdown labels as currency without changing option values', async () => {
   const pageDefaults = {
     ...defaults,

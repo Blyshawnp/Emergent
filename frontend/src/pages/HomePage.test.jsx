@@ -31,6 +31,27 @@ jest.mock('../api', () => ({
   },
 }));
 
+test('Smart Resume preserves Newbie Shift audit state until Supervisor Transfer PASS cleanup', () => {
+  const resumed = buildResumedSession({
+    history_id: 'history-2',
+    candidate_name: 'Taylor Example',
+    final_attempt: true,
+    next_attempt_number: 3,
+    attempt_state: { current_attempt: 3, max_attempts: 3, counted_attempts: 2, final_attempt: true },
+    newbie_shift_data: { newbie_date: '07/30/2026', newbie_time: '10:00 AM', newbie_tz: 'ET' },
+    newbie_shift_request_id: 'stale-request',
+    newbie_shift_request_status: 'approved',
+  });
+
+  expect(resumed.final_attempt).toBe(true);
+  expect(resumed.attempt_number).toBe(3);
+  expect(resumed.prior_counted_attempts).toBe(2);
+  expect(resumed.newbie_shift_data).toEqual({ newbie_date: '07/30/2026', newbie_time: '10:00 AM', newbie_tz: 'ET' });
+  expect(resumed.newbie_shift_request_id).toBe('stale-request');
+  expect(resumed.newbie_shift_request_status).toBe('approved');
+  expect(resumed.supervisor_retry_required).toBe(false);
+});
+
 function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -187,6 +208,36 @@ test('recent activity displays reconciled request status without changing Form F
   expect(view.container.textContent).toContain('Newbie Shift Scheduled');
   expect(view.container.textContent).toContain('Newbie Shift Denied');
   expect(view.container.textContent.match(/Form Filled/g)).toHaveLength(2);
+  await view.unmount();
+});
+
+test('Home recent-session details hand the selected record to the shared History modal flow', async () => {
+  const selected = {
+    history_id: 'history-reschedule-1',
+    timestamp: '07/18/2026 4:00 PM',
+    candidate: 'Taylor Example',
+    status: 'Incomplete',
+    newbie_shift_request_status: 'approved',
+    newbie_shift_scheduled_at: '2026-07-25T11:00:00-04:00',
+  };
+  const onNavigate = jest.fn();
+  const view = await renderComponent(
+    <HomePage
+      onNavigate={onNavigate}
+      settings={{ tester_name: 'Tester One' }}
+      history={[selected]}
+      historyStats={{}}
+      startupStatuses={{}}
+      onHistoryRefresh={jest.fn().mockResolvedValue({ history: [selected], stats: {} })}
+    />
+  );
+
+  await act(async () => {
+    view.container.querySelector('.recent-row').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(onNavigate).toHaveBeenCalledWith('history', { selectedHistoryRecord: selected });
   await view.unmount();
 });
 

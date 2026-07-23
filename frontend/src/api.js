@@ -154,6 +154,7 @@ const api = {
   resetSettingsSection: (section) => savedRequest('POST', '/settings/reset-section', { section }),
   completeSetup: (data) => savedRequest('POST', '/settings/complete-setup', data),
   getCurrentSession: (timeout) => request('GET', '/session/current', null, timeout),
+  getAttemptState: () => request('GET', '/session/attempt-state'),
   startSession: (data) => savedRequest('POST', '/session/start', data),
   updateSession: (data) => savedRequest('PUT', '/session/update', data),
   saveCall: (data) => savedRequest('POST', '/session/call', data),

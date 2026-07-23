@@ -4,7 +4,7 @@ const React = require('react');
 const { act } = React;
 const { createRoot } = require('react-dom/client');
 const PendingRequestAlert = require('./components/PendingRequestAlert').default;
-const { getHeadsetReviewDisplayTitle } = require('./NotificationManagerApp');
+const { getHeadsetReviewDisplayTitle, getPendingRequestSchedules } = require('./NotificationManagerApp');
 const {
   MAX_PENDING_REQUEST_SUPPRESSIONS,
   PENDING_REQUEST_SUPPRESSION_MS,
@@ -96,6 +96,12 @@ test('SAM pending request inbox, bell, and denial safeguards are wired', () => {
   expect(appSource).toContain("{ key: 'reschedules', label: 'Reschedules' }");
   expect(appSource).toContain("{ key: 'deletions', label: 'Candidate Deletions' }");
   expect(appSource).toContain('Headset Reviews');
+  expect(appSource).toContain('<strong>Request Submitted</strong>');
+  expect(appSource).toContain('<strong>Lead Time Category</strong>');
+  expect(appSource).toContain('<strong>Counts as Candidate Attempt</strong>');
+  expect(appSource).toContain('<strong>Current Attempt</strong>');
+  expect(appSource).toContain('<strong>Resulting Attempt</strong>');
+  expect(appSource).toContain('<strong>Final Attempt</strong>');
   expect(appSource).toContain('A denial reason is required.');
   expect(pendingRequestAlertSource).toContain('Remind Me in 30 Minutes');
   expect(appSource).toContain('PendingRequestAlert');
@@ -160,6 +166,17 @@ test('SAM headset review cards use headset labels and stable review IDs', () => 
   expect(appSource).toContain('api.updateHeadsetReview({');
   expect(appSource).toContain('...payload,');
   expect(appSource).toContain("actor: samSetupStatus.userName || samSetupStatus.userRole || 'SAM'");
+});
+
+test('SAM reschedule cards keep the previous schedule separate from the requested schedule', () => {
+  expect(getPendingRequestSchedules({
+    original_scheduled_at: '2026-07-20T10:00:00-05:00',
+    requested_scheduled_at: '2026-07-22T11:30:00-05:00',
+  })).toEqual({
+    original: '2026-07-20T10:00:00-05:00',
+    requested: '2026-07-22T11:30:00-05:00',
+  });
+  expect(appSource).toContain('<strong>Previous Schedule</strong>');
 });
 
 describe('SAM pending request reminder lifecycle', () => {

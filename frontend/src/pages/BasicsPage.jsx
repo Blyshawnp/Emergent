@@ -4,8 +4,9 @@ import { useModal } from '../components/ModalProvider';
 import CandidateIpIntelligencePanel, { loadStoredCandidateIpIntelligence, normalizeVpnProxyCheckMode, vpnProxyNeedsTesterDecision } from '../components/CandidateIpIntelligence';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
-import { CERTIFICATION_SUPPORT_EMAIL, followUpStatusMeta } from '../utils/certificationWorkflow';
+import { buildHeadsetAutoFailReason, CERTIFICATION_SUPPORT_EMAIL, followUpStatusMeta } from '../utils/certificationWorkflow';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 const HEADSET_LIST_VERSION_KEY = 'mts_approved_headset_list_seen_hash';
 const HEADSET_SYNC_ACK_KEY = 'mts_headset_sync_ack_signature';
@@ -290,6 +291,7 @@ export default function BasicsPage({ onNavigate }) {
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const dropdownRef = useRef(null);
   const containerRef = useRef(null);
+  const headsetInputRef = useRef(null);
   const itemRefs = useRef([]);
   const candidateLookupRetryTimerRef = useRef(null);
   const candidateLookupAttemptRef = useRef(0);
@@ -523,6 +525,7 @@ export default function BasicsPage({ onNavigate }) {
           error: '',
           finalAttempt: Boolean(response?.finalAttempt),
           finalAttemptUsed: Boolean(response?.finalAttemptUsed),
+          attemptState: response?.attemptState || null,
           withdrawn: Boolean(response?.withdrawn),
           extraAttemptGranted: Boolean(response?.extraAttemptGranted),
           passedCertification: Boolean(response?.passedCertification),
@@ -635,6 +638,7 @@ export default function BasicsPage({ onNavigate }) {
       noise_cancel: true,
     }));
     setDropdownOpen(false);
+    api.updateSession({ auto_fail_reason: null, final_status: null }).catch(() => {});
   };
 
   const copyDiscordTemplate = useCallback(async (templateTitle, label) => {
@@ -662,8 +666,8 @@ export default function BasicsPage({ onNavigate }) {
         graphic: 'warning',
         buttons: [
           { label: copied ? `${helperText} - Copied` : helperText, cls: 'discord-copy', value: 'copy-discord' },
-          { label: 'Yes', cls: 'btn-primary', value: true },
           { label: 'No', cls: 'btn-muted', value: false },
+          { label: 'Yes', cls: 'btn-primary', value: true },
         ],
       });
       if (choice !== 'copy-discord') return choice;
@@ -807,6 +811,8 @@ export default function BasicsPage({ onNavigate }) {
       await modal.warning('Missing Headset', 'Enter the headset brand/model before researching it.');
       return;
     }
+    setDropdownOpen(false);
+    setHeadsetLookupOpen(false);
     await openExternalUrl(buildHeadsetResearchUrl(headsetModel));
     const researchChoice = await modal.showModal({
       type: 'confirm',
@@ -831,6 +837,7 @@ export default function BasicsPage({ onNavigate }) {
         noise_cancel: true,
       }));
       setDropdownOpen(false);
+      await api.updateSession({ auto_fail_reason: null, final_status: null }).catch(() => {});
       return;
     }
     if (researchChoice !== 'no') return;
@@ -854,6 +861,8 @@ export default function BasicsPage({ onNavigate }) {
         noise_cancel: null,
       }));
       setDropdownOpen(true);
+      await api.updateSession({ auto_fail_reason: null, final_status: null }).catch(() => {});
+      headsetInputRef.current?.focus();
       return;
     }
     if (hasAnotherHeadset === 'no') {
@@ -893,6 +902,9 @@ export default function BasicsPage({ onNavigate }) {
       : buildBasicsFromRecord(source).headset_brand,
     candidate_override_used: Boolean(blockResult.override),
     candidate_override_reason: blockResult.override ? 'Tester override after shared final-attempt block.' : '',
+    attempt_state: candidateLookup.attemptState || null,
+    prior_counted_attempts: candidateLookup.attemptState?.counted_attempts || 0,
+    attempt_number: candidateLookup.attemptState?.current_attempt || source?.attempt_number || 1,
   });
 
   const startConfirmedCandidate = async (match) => {
@@ -930,6 +942,9 @@ export default function BasicsPage({ onNavigate }) {
           candidate_name: candidateName || form.candidate_name,
           tester_name: form.tester_name || settings.tester_name || match.tester_name || '',
           final_attempt: finalAttempt,
+          attempt_state: candidateLookup.attemptState || null,
+          prior_counted_attempts: candidateLookup.attemptState?.counted_attempts || 0,
+          attempt_number: candidateLookup.attemptState?.current_attempt || match.attempt_number || 1,
           candidate_override_used: Boolean(blockResult.override),
           candidate_override_reason: blockResult.override ? 'Tester override after shared final-attempt block.' : '',
         };
@@ -1143,17 +1158,15 @@ export default function BasicsPage({ onNavigate }) {
     const workflowData = vpnDecision.sessionData;
 
     if (!workflowData.headset_usb || !workflowData.noise_cancel) {
-      const reasons = [];
-      if (!workflowData.headset_usb) reasons.push('Wrong headset (not USB)');
-      if (!workflowData.noise_cancel) reasons.push('Wrong headset (not noise cancelling)');
+      const reason = buildHeadsetAutoFailReason(workflowData.headset_usb, workflowData.noise_cancel);
       const yes = await showFailDiscordModal({
         title: 'Headset Issue',
-        body: `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reasons.join(' and ')}</b>?`,
+        body: `To contract with ACD, a USB headset with a noise cancelling microphone must be used.<br><br>Fail session for: <b>${reason}</b>?`,
         templateTitle: 'Wrong Headset',
         helperText: 'Discord Post: Wrong Headset',
       });
       if (yes) {
-        const failData = { ...workflowData, auto_fail_reason: reasons.join(' and '), final_status: 'Fail' };
+        const failData = { ...workflowData, auto_fail_reason: reason, final_status: 'Fail' };
         window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
         await startSessionWithHeadsetReview(failData);
         onNavigate('review');
@@ -1233,6 +1246,7 @@ export default function BasicsPage({ onNavigate }) {
     <div className="page-with-sticky-actions" data-testid="basics-page">
       <WorkflowProgress {...getWorkflowProgress({ page: 'basics', supervisorOnly: supervisorOnlyMode })} />
       <h1 style={{ marginBottom: 16 }}>The Basics</h1>
+      <FinalAttemptBanner visible={form.final_attempt} attemptState={form.attempt_state} />
       {supervisorOnlyMode && (
         <div className="banner banner-incomplete" style={{ fontSize: 'var(--font-size-sm)', marginBottom: 12 }} data-testid="basics-sup-only-mode">
           Supervisor Transfer Only mode
@@ -1331,11 +1345,6 @@ export default function BasicsPage({ onNavigate }) {
         {candidateLookup.error && (
           <div className="text-xs" style={{ marginTop: 10, color: 'var(--color-warning)' }}>{candidateLookup.error}</div>
         )}
-        {confirmedCandidateMatch && candidateLookup.finalAttempt && (
-          <div className="banner banner-fail" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
-            Shared records indicate this is the candidate&apos;s final attempt.
-          </div>
-        )}
         {confirmedCandidateMatch && candidateLookup.extraAttemptGranted && !candidateLookup.finalAttempt && (
           <div className="banner banner-incomplete" style={{ marginTop: 12, fontSize: 'var(--font-size-sm)', padding: 12 }}>
             Shared records show an additional attempt was granted.
@@ -1355,6 +1364,7 @@ export default function BasicsPage({ onNavigate }) {
               <label className="text-sm font-bold" style={{ minWidth: 160 }}>Brand / Model</label>
               <div ref={containerRef} className="headset-autocomplete-container" style={{ position: 'relative', width: '100%', maxWidth: '280px' }}>
                 <input
+                  ref={headsetInputRef}
                   type="text"
                   value={form.headset_brand}
                   onChange={handleInputChange}

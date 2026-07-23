@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CalendarClock } from 'lucide-react';
 import {
   NEWBIE_REQUESTED_BY,
@@ -17,7 +17,39 @@ export default function RescheduleIntakeModal({ record, onCancel, onContinue, su
   const [reason, setReason] = useState('');
   const [details, setDetails] = useState('');
   const [error, setError] = useState('');
+  const dialogRef = useRef(null);
+  const firstChoiceRef = useRef(null);
   const candidate = splitCandidateFirstName(record?.candidate_name || record?.candidate);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    firstChoiceRef.current?.focus();
+    return () => {
+      if (previousFocus instanceof HTMLElement && document.contains(previousFocus)) previousFocus.focus();
+    };
+  }, []);
+
+  const handleDialogKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (!submitting) onCancel();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll(
+      'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    ) || []);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   const submit = async () => {
     if (!requestedBy) {
@@ -36,8 +68,22 @@ export default function RescheduleIntakeModal({ record, onCancel, onContinue, su
   };
 
   return (
-    <div className="modal-overlay open" data-testid="reschedule-intake-modal">
-      <section className="modal reschedule-intake-modal" role="dialog" aria-modal="true" aria-labelledby="reschedule-intake-title">
+    <div
+      className="modal-overlay open"
+      data-testid="reschedule-intake-modal"
+      data-modal-layer="workflow-child"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !submitting) onCancel();
+      }}
+    >
+      <section
+        ref={dialogRef}
+        className="modal reschedule-intake-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reschedule-intake-title"
+        onKeyDown={handleDialogKeyDown}
+      >
         <div className="modal-header">
           <h2 id="reschedule-intake-title"><CalendarClock size={24} aria-hidden="true" /> Reschedule Newbie Shift</h2>
           <button type="button" className="modal-close" onClick={onCancel} aria-label="Cancel reschedule">×</button>
@@ -46,9 +92,10 @@ export default function RescheduleIntakeModal({ record, onCancel, onContinue, su
           <fieldset className="reschedule-intake-fieldset">
             <legend>Who needs to reschedule?</legend>
             <div className="reschedule-requester-grid" role="radiogroup" aria-label="Who needs to reschedule?">
-              {REQUESTER_CHOICES.map((choice) => (
+              {REQUESTER_CHOICES.map((choice, index) => (
                 <button
                   key={choice.value}
+                  ref={index === 0 ? firstChoiceRef : undefined}
                   type="button"
                   role="radio"
                   aria-checked={requestedBy === choice.value}

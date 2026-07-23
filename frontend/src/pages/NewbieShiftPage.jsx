@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import {
   buildNewbieShiftDiscordPost,
   buildRescheduleFailSummary,
   buildRescheduleSummary,
-  computeWithin24Hours,
   NEWBIE_REQUESTED_BY,
   NEWBIE_REQUEST_STATUS,
   NEWBIE_REQUEST_TYPE,
@@ -15,6 +15,21 @@ import {
   RESCHEDULE_REASONS,
   splitCandidateFirstName,
 } from '../utils/certificationWorkflow';
+
+const RESCHEDULE_SUBMISSION_MESSAGES = Object.freeze({
+  validation_failed: 'We couldn’t submit the reschedule because required scheduling information is missing. Review the date, time, requester, and reason.',
+  missing_session_identity: 'We couldn’t submit the reschedule because the source session could not be identified. Return to History and start the reschedule again.',
+  invalid_schedule: 'We couldn’t submit the reschedule because the original or requested schedule is invalid. Review the date, time, and timezone.',
+  duplicate_request: 'This reschedule request has already been submitted and is waiting for review.',
+  already_resolved: 'This reschedule request has already been reviewed. Refresh to see the latest status.',
+  authorization_failed: 'The reschedule service could not verify this app. Contact an administrator.',
+  forbidden_action: 'This app is not allowed to submit reschedule requests. Contact an administrator.',
+  unsupported_action: 'The reschedule service needs an administrator update before requests can be submitted.',
+  response_shape_error: 'The reschedule service returned an unexpected response. Your information was saved. Try again or contact an administrator.',
+  persistence_failed: 'The reschedule information could not be saved locally. Try again.',
+  transport_timeout: 'The reschedule could not be submitted right now. Your information was saved. Try again.',
+  remote_unavailable: 'The reschedule could not be submitted right now. Your information was saved. Try again.',
+});
 
 export default function NewbieShiftPage({ onNavigate }) {
   const modal = useModal();
@@ -31,6 +46,8 @@ export default function NewbieShiftPage({ onNavigate }) {
   const [discordPostCustomized, setDiscordPostCustomized] = useState(false);
   const [discordPostVisible, setDiscordPostVisible] = useState(true);
   const [copiedDiscordPost, setCopiedDiscordPost] = useState(false);
+  const [submittingReschedule, setSubmittingReschedule] = useState(false);
+  const rescheduleSubmitInFlightRef = useRef(false);
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const [date, setDate] = useState(tomorrow.toISOString().split('T')[0]);
@@ -157,9 +174,6 @@ export default function NewbieShiftPage({ onNavigate }) {
       || session?.newbie_shift_scheduled_at
       || parseScheduledDateTime(session?.newbie_shift_data?.newbie_date, session?.newbie_shift_data?.newbie_time, session?.newbie_shift_data?.newbie_tz)
       || '';
-    const within24 = rescheduleRequester === NEWBIE_REQUESTED_BY.CANDIDATE
-      ? computeWithin24Hours(originalScheduledAt, createdAt)
-      : false;
     const requestId = session?.newbie_shift_request_id || `newbie-${session?.history_id || session?.resume_source_history_id || Date.now()}`;
     const patch = {
       newbie_shift_request_id: requestId,
@@ -170,13 +184,13 @@ export default function NewbieShiftPage({ onNavigate }) {
       newbie_shift_request_details: rescheduleDetails.trim(),
       newbie_shift_request_created_at: session?.newbie_shift_request_created_at || createdAt,
       newbie_shift_original_scheduled_at: originalScheduledAt,
-      newbie_shift_within_24_hours: within24,
-      newbie_shift_counts_as_attempt: within24,
-      auto_fail_reason: within24 ? 'NC/NS' : session?.auto_fail_reason || null,
-      final_status: within24 ? 'NC/NS' : 'Incomplete',
     };
-    await api.updateSession(patch);
-    const nextSession = { ...(session || {}), ...patch };
+    const response = await api.updateSession(patch);
+    if (response?.ok !== true || !response?.session) {
+      setRescheduleError(response?.error || 'Unable to save the reschedule details.');
+      return;
+    }
+    const nextSession = response.session;
     setSession(nextSession);
     setDiscordPostCustomized(false);
     setDiscordPostVisible(true);
@@ -199,6 +213,7 @@ export default function NewbieShiftPage({ onNavigate }) {
   }, []);
 
   const handleContinue = useCallback(async () => {
+    if (isReschedule && rescheduleSubmitInFlightRef.current) return;
     const ft = getFormattedTime();
     if (!ft) { await modal.warning('Notice', 'Enter a valid time (e.g. 10:30 or 9:45).'); return; }
     const fd = getFormattedDate();
@@ -222,12 +237,31 @@ export default function NewbieShiftPage({ onNavigate }) {
       patch.newbie_shift_request_reason = session?.newbie_shift_request_reason || 'Initial Newbie Shift scheduling';
       patch.newbie_shift_request_created_at = session?.newbie_shift_request_created_at || new Date().toISOString();
     }
-    const response = await api.updateSession(patch);
-    if (isReschedule && response?.requestSaved !== true) {
-      await modal.error('Request Not Submitted', response?.error || 'The reschedule request could not be submitted. Your date, time, requester, and reason were preserved. Retry Continue to Review.');
-      return;
+    if (isReschedule) {
+      rescheduleSubmitInFlightRef.current = true;
+      setSubmittingReschedule(true);
     }
-    onNavigate('review');
+    try {
+      const response = await api.updateSession(patch);
+      if (isReschedule && response?.requestSaved !== true) {
+        const message = response?.error || RESCHEDULE_SUBMISSION_MESSAGES[response?.errorCode] || RESCHEDULE_SUBMISSION_MESSAGES.remote_unavailable;
+        await modal.error('Request Not Submitted', message);
+        return;
+      }
+      if (response?.session) setSession(response.session);
+      onNavigate('review');
+    } catch (_error) {
+      if (isReschedule) {
+        await modal.error('Request Not Submitted', 'The reschedule could not be submitted right now. Your information remains on this screen. Try again.');
+        return;
+      }
+      await modal.error('Save Failed', 'The Newbie Shift information could not be saved. Try again.');
+    } finally {
+      if (isReschedule) {
+        rescheduleSubmitInFlightRef.current = false;
+        setSubmittingReschedule(false);
+      }
+    }
   }, [getFormattedTime, getFormattedDate, tz, session, isReschedule, modal, onNavigate]);
 
   const handleStoppedResponding = useCallback(async () => {
@@ -239,8 +273,9 @@ export default function NewbieShiftPage({ onNavigate }) {
     );
     if (!confirmed) return;
     await api.updateSession({ auto_fail_reason: 'Stopped Responding in Chat', final_status: 'Fail' });
-    onNavigate('review');
-  }, [candidateName, modal, onNavigate]);
+    if (isReschedule) await handleContinue();
+    else onNavigate('review');
+  }, [candidateName, handleContinue, isReschedule, modal, onNavigate]);
 
   return (
     <div className="page-with-sticky-actions" data-testid="newbieshift-page">
@@ -253,6 +288,7 @@ export default function NewbieShiftPage({ onNavigate }) {
           </div>
         )}
       </div>
+      <FinalAttemptBanner visible={isFinal} attemptState={session?.attempt_state} />
       {isReschedule && (
         <div className="banner banner-incomplete" style={{ fontSize: 'var(--font-size-sm)', marginBottom: 16 }} data-testid="newbie-reschedule-banner">
           Newbie Shift reschedule. Original scheduled time is preserved in history details.
@@ -444,7 +480,15 @@ export default function NewbieShiftPage({ onNavigate }) {
         </div>
       )}
 
-      <TechIssueDialog open={techOpen} onClose={() => setTechOpen(false)} isFinalAttempt={isFinal} onNavigate={onNavigate} />
+      <TechIssueDialog
+        open={techOpen}
+        onClose={() => setTechOpen(false)}
+        isFinalAttempt={isFinal}
+        onNavigate={(target, ...args) => {
+          if (target === 'review' && isReschedule) return handleContinue();
+          return onNavigate(target, ...args);
+        }}
+      />
 
       <div className="footer-bar sticky-action-footer" data-testid="newbie-footer">
         <button className="btn btn-muted btn-sm" onClick={async () => {
@@ -453,7 +497,7 @@ export default function NewbieShiftPage({ onNavigate }) {
         <button className="btn btn-danger btn-sm" onClick={handleStoppedResponding} data-testid="newbie-stopped" title="Candidate stopped responding in Discord">Stopped Responding</button>
         <button className="btn btn-muted btn-sm" onClick={() => setTechOpen(true)} data-testid="newbie-tech" title="Log a technical issue">Tech Issue</button>
         <span className="spacer" />
-        <button className="btn btn-primary" onClick={handleContinue} data-testid="newbie-continue" title="Save newbie shift and go to review">Continue to Review</button>
+        <button className="btn btn-primary" onClick={handleContinue} disabled={submittingReschedule} data-testid="newbie-continue" title="Save newbie shift and go to review">{submittingReschedule ? 'Submitting…' : 'Continue to Review'}</button>
       </div>
     </div>
   );

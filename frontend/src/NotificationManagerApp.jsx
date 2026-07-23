@@ -226,6 +226,24 @@ const SAM_SHARED_DATA_OFFLINE_MESSAGE = 'SAM is offline and showing the last suc
 const SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE = 'Candidate Tracking is temporarily unavailable. SAM will retry automatically.';
 const SAM_PENDING_REQUESTS_TEMPORARY_MESSAGE = 'Pending Requests are temporarily unavailable. SAM will retry automatically. Please wait a moment and select Refresh if needed.';
 const SAM_HEADSET_REVIEW_TEMPORARY_MESSAGE = 'Headset Review is temporarily unavailable. SAM will retry automatically.';
+const SAM_SETUP_DEFAULT_MESSAGE = 'SAM could not verify your assigned access. Please try again or contact support.';
+const SAM_SETUP_ERROR_MESSAGES = Object.freeze({
+  setup_configuration_unavailable: 'SAM setup is temporarily unavailable because its administrator configuration could not be loaded.',
+  setup_authorization_failed: 'SAM could not verify setup authorization. Contact support if this continues.',
+  setup_admin_not_found: 'The administrator name or PIN was not recognized.',
+  setup_invalid_admin: 'The administrator name or PIN was not recognized.',
+  setup_invalid_pin: 'The administrator name or PIN was not recognized.',
+  setup_transport_unavailable: 'SAM could not verify setup right now. Check the connection and try again.',
+  setup_response_invalid: 'SAM received an invalid setup response. Please try again.',
+  setup_persistence_failed: 'SAM verified the administrator, but could not save setup on this device. Please try again.',
+});
+
+export function getSamSetupErrorMessage(value, fallback = SAM_SETUP_DEFAULT_MESSAGE) {
+  const errorCode = typeof value === 'string'
+    ? value
+    : value?.errorCode || value?.response?.data?.errorCode || '';
+  return SAM_SETUP_ERROR_MESSAGES[errorCode] || fallback;
+}
 
 function getErrorMessage(error, fallback) {
   if (!error) return fallback;
@@ -834,17 +852,24 @@ function getSamDeviceName() {
   }
 }
 
-function SamSetupWizard({ status, onComplete }) {
+export function SamSetupWizard({ status, onComplete }) {
   const [form, setForm] = useState({ name: '', pin: '' });
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState(status?.error || '');
+  const submitInFlightRef = useRef(false);
+  const statusErrorCode = status?.errorCode || '';
+  const statusHasError = Boolean(statusErrorCode || status?.error);
+  const [error, setError] = useState(
+    statusHasError ? getSamSetupErrorMessage(statusErrorCode) : '',
+  );
 
   useEffect(() => {
-    setError(status?.error || '');
-  }, [status?.error]);
+    setError(statusHasError ? getSamSetupErrorMessage(statusErrorCode) : '');
+  }, [statusErrorCode, statusHasError]);
 
   const submitSetup = async (event) => {
     event.preventDefault();
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setSubmitting(true);
     setError('');
     try {
@@ -854,13 +879,14 @@ function SamSetupWizard({ status, onComplete }) {
         device_name: getSamDeviceName(),
       });
       if (!result?.ok) {
-        setError(result?.error || 'Name or PIN was not recognized or access has been disabled.');
+        setError(getSamSetupErrorMessage(result));
         return;
       }
       onComplete?.(result);
     } catch (setupError) {
-      setError(getSharedDataErrorMessage(setupError, 'SAM could not verify your assigned access. Please try again or contact support.'));
+      setError(getSamSetupErrorMessage(setupError));
     } finally {
+      submitInFlightRef.current = false;
       setSubmitting(false);
     }
   };
@@ -1015,6 +1041,13 @@ function StatusChip({ meta, className = '', title }) {
 
 function formatRequestTime(value) {
   return formatSamTimestamp(value) || value || 'N/A';
+}
+
+export function getPendingRequestSchedules(request = {}) {
+  return {
+    requested: request.requested_schedule || request.requested_scheduled_at || request.rescheduled_at || request.scheduled_at || '',
+    original: request.original_schedule || request.original_scheduled_at || request.newbie_shift_original_scheduled_at || '',
+  };
 }
 
 function isTimestampLikeHeadsetLabel(value) {
@@ -1185,14 +1218,17 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
                     <div><strong>Requested</strong><span>{formatRequestTime(request.created_at)}</span></div>
                   </> : <>
                     <div><strong>Tester/Requester</strong><span>{request.tester || 'N/A'}</span></div>
-                    <div><strong>Request Created</strong><span>{formatRequestTime(request.created_at)}</span></div>
-                    <div><strong>Requested Schedule</strong><span>{formatRequestTime(request.requested_schedule)} {request.timezone || ''}</span></div>
-                    <div><strong>Original Schedule</strong><span>{formatRequestTime(request.original_schedule)}</span></div>
+                    <div><strong>Request Submitted</strong><span>{formatRequestTime(request.created_at)}</span></div>
+                    <div><strong>Requested Schedule</strong><span>{formatRequestTime(getPendingRequestSchedules(request).requested)} {request.timezone || ''}</span></div>
+                    {request.category === 'newbie_reschedule' ? <div><strong>Previous Schedule</strong><span>{formatRequestTime(getPendingRequestSchedules(request).original)}</span></div> : null}
                     <div><strong>{request.category === 'newbie_reschedule' ? 'Who Needs the Reschedule' : 'Requested By'}</strong><span>{request.requester || 'N/A'}</span></div>
                     <div className="nm-request-grid-wide"><strong>Reason</strong><span>{request.reason || 'No reason provided.'}{request.details ? ` — ${request.details}` : ''}</span></div>
-                    <div><strong>24-Hour Rule</strong><span>{request.within_24_hours ? 'Less than 24 hours' : '24 hours or more / not candidate penalty'}</span></div>
-                    <div><strong>Counts as Attempt</strong><span>{request.counts_as_attempt ? 'Yes' : 'No'}</span></div>
+                    <div><strong>Lead Time Category</strong><span>{request.lead_time_category === 'less_than_24_hours' || request.within_24_hours ? 'Less than 24 hours' : '24 hours or more'}</span></div>
+                    <div><strong>Counts as Candidate Attempt</strong><span>{request.counts_as_attempt ? 'Yes' : 'No'}</span></div>
+                    <div><strong>Current Attempt</strong><span>{request.current_attempt || 1}</span></div>
+                    <div><strong>Resulting Attempt</strong><span>{request.resulting_attempt || request.current_attempt || 1}</span></div>
                     <div><strong>Final Attempt</strong><span>{request.final_attempt ? 'Yes' : 'No'}</span></div>
+                    {request.terminal_outcome ? <div className="nm-request-grid-wide"><strong>Result if Applied</strong><span>{request.terminal_outcome === 'FAIL-Final Attempt' ? 'Fail – Final Attempt' : request.terminal_outcome}</span></div> : null}
                   </>}
                   {request.denial_reason ? <div className="nm-request-grid-wide"><strong>Denial Reason</strong><span>{request.denial_reason}</span></div> : null}
                 </div>
@@ -3225,13 +3261,14 @@ export default function NotificationManagerApp() {
         userName: status?.userName || '',
         userRole: status?.userRole || status?.role || '',
         ok: status?.ok !== false,
-        error: status?.error || '',
+        errorCode: status?.errorCode || '',
+        error: status?.errorCode || status?.error ? getSamSetupErrorMessage(status) : '',
       };
       setSamSetupStatus(nextStatus);
       return nextStatus;
     } catch (error) {
-      const message = getSharedDataErrorMessage(error, 'SAM could not verify assigned access. Please try again or contact support.');
-      const nextStatus = { loading: false, setupComplete: false, userName: '', userRole: '', ok: false, error: message };
+      const message = getSamSetupErrorMessage(error);
+      const nextStatus = { loading: false, setupComplete: false, userName: '', userRole: '', ok: false, errorCode: error?.response?.data?.errorCode || '', error: message };
       setSamSetupStatus(nextStatus);
       return nextStatus;
     }

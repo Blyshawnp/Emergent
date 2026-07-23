@@ -13,6 +13,7 @@ import csv
 import io
 import re
 import hmac
+import hashlib
 import time
 import uuid
 import secrets
@@ -3518,6 +3519,15 @@ def empty_session():
         "newbie_shift_rescheduled_at": "",
         "newbie_shift_within_24_hours": False,
         "newbie_shift_counts_as_attempt": False,
+        "newbie_shift_lead_time_seconds": None,
+        "newbie_shift_lead_time_category": "",
+        "newbie_shift_current_attempt": 1,
+        "newbie_shift_resulting_attempt": 1,
+        "newbie_shift_becomes_final_attempt": False,
+        "newbie_shift_attempt_rule": "",
+        "newbie_shift_terminal_outcome": "",
+        "newbie_shift_request_confirmed_at": "",
+        "newbie_shift_request_submission_fingerprint": "",
         "newbie_shift_admin_decision_at": "",
         "newbie_shift_admin_decision_by": "",
         "newbie_shift_denial_reason": "",
@@ -3545,6 +3555,26 @@ NEWBIE_REQUEST_STATUSES = {"pending", "approved", "denied"}
 NEWBIE_REQUEST_PENDING = "pending"
 NEWBIE_REQUESTED_BY_TESTER = "tester"
 NEWBIE_REQUESTED_BY_CANDIDATE = "candidate"
+NEWBIE_REQUESTED_BY_OTHER = "other"
+NEWBIE_RESCHEDULE_MAX_ATTEMPTS = 2
+CERTIFICATION_BASE_MAX_ATTEMPTS = 3
+NEWBIE_RESCHEDULE_ATTEMPT_FIELDS = (
+    "newbie_shift_requested_by",
+    "newbie_shift_request_created_at",
+    "newbie_shift_original_scheduled_at",
+    "newbie_shift_lead_time_seconds",
+    "newbie_shift_lead_time_category",
+    "newbie_shift_within_24_hours",
+    "newbie_shift_counts_as_attempt",
+    "newbie_shift_current_attempt",
+    "newbie_shift_resulting_attempt",
+    "newbie_shift_becomes_final_attempt",
+    "newbie_shift_attempt_rule",
+    "newbie_shift_terminal_outcome",
+    "final_attempt",
+    "final_status",
+    "auto_fail_reason",
+)
 DELETION_REQUEST_PENDING = "pending"
 
 
@@ -3556,6 +3586,157 @@ def _normalize_form_fill_status(value):
 def _normalize_newbie_request_status(value):
     status = str(value or "").strip().lower()
     return status if status in NEWBIE_REQUEST_STATUSES else NEWBIE_REQUEST_PENDING
+
+
+def _normalize_newbie_requested_by(value):
+    requested_by = str(value or "").strip().lower()
+    aliases = {
+        "candidate": NEWBIE_REQUESTED_BY_CANDIDATE,
+        "tester": NEWBIE_REQUESTED_BY_TESTER,
+        "trainer": NEWBIE_REQUESTED_BY_TESTER,
+        "tester/trainer": NEWBIE_REQUESTED_BY_TESTER,
+        "admin": NEWBIE_REQUESTED_BY_TESTER,
+        "other": NEWBIE_REQUESTED_BY_OTHER,
+    }
+    return aliases.get(requested_by, "")
+
+
+def _positive_attempt_number(value, default=1):
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def _aware_iso_datetime(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def calculate_newbie_reschedule_attempt(session, now_iso=None):
+    """Calculate immutable attempt impact for one Newbie Shift reschedule request."""
+    source = dict(session or {})
+    requested_by = _normalize_newbie_requested_by(source.get("newbie_shift_requested_by"))
+    created_at = str(source.get("newbie_shift_request_created_at") or now_iso or datetime.now(timezone.utc).isoformat()).strip()
+    original_scheduled_at = str(source.get("newbie_shift_original_scheduled_at") or "").strip()
+    created_dt = _aware_iso_datetime(created_at)
+    original_dt = _aware_iso_datetime(original_scheduled_at)
+
+    current_attempt = _positive_attempt_number(
+        source.get("newbie_shift_current_attempt")
+        or source.get("attempt_number")
+        or source.get("attempt_count"),
+        1,
+    )
+    if _shared_truthy(source.get("final_attempt")) and not str(source.get("newbie_shift_attempt_rule") or "").strip():
+        current_attempt = max(current_attempt, NEWBIE_RESCHEDULE_MAX_ATTEMPTS)
+
+    validation_error = ""
+    if not requested_by:
+        validation_error = "invalid_requester"
+    elif not original_dt or not created_dt:
+        validation_error = "invalid_schedule"
+
+    lead_time_seconds = None
+    within_24_hours = False
+    lead_time_category = ""
+    if original_dt and created_dt:
+        lead_time_seconds = int((original_dt.astimezone(timezone.utc) - created_dt.astimezone(timezone.utc)).total_seconds())
+        within_24_hours = lead_time_seconds < 24 * 60 * 60
+        lead_time_category = "less_than_24_hours" if within_24_hours else "24_hours_or_more"
+
+    counts_as_attempt = bool(
+        not validation_error
+        and requested_by == NEWBIE_REQUESTED_BY_CANDIDATE
+        and within_24_hours
+    )
+    resulting_attempt = min(
+        NEWBIE_RESCHEDULE_MAX_ATTEMPTS,
+        current_attempt + (1 if counts_as_attempt else 0),
+    )
+    terminal_outcome = (
+        "FAIL-Final Attempt"
+        if counts_as_attempt and current_attempt >= NEWBIE_RESCHEDULE_MAX_ATTEMPTS
+        else ""
+    )
+    final_attempt = bool(
+        _shared_truthy(source.get("final_attempt"))
+        or resulting_attempt >= NEWBIE_RESCHEDULE_MAX_ATTEMPTS
+    )
+    becomes_final_attempt = bool(
+        counts_as_attempt
+        and current_attempt < NEWBIE_RESCHEDULE_MAX_ATTEMPTS
+        and resulting_attempt == NEWBIE_RESCHEDULE_MAX_ATTEMPTS
+    )
+
+    if validation_error:
+        rule_code = validation_error
+    elif requested_by == NEWBIE_REQUESTED_BY_CANDIDATE and within_24_hours:
+        rule_code = "candidate_late_terminal" if terminal_outcome else "candidate_late_counts"
+    elif requested_by == NEWBIE_REQUESTED_BY_CANDIDATE:
+        rule_code = "candidate_timely_no_count"
+    elif requested_by == NEWBIE_REQUESTED_BY_TESTER:
+        rule_code = "tester_no_count"
+    else:
+        rule_code = "other_no_count_owner_confirmation"
+
+    return {
+        "requested_by": requested_by,
+        "request_created_at": created_at,
+        "original_scheduled_at": original_scheduled_at,
+        "lead_time_seconds": lead_time_seconds,
+        "lead_time_category": lead_time_category,
+        "within_24_hours": within_24_hours,
+        "counts_as_attempt": counts_as_attempt,
+        "current_attempt": current_attempt,
+        "resulting_attempt": resulting_attempt,
+        "final_attempt": final_attempt,
+        "becomes_final_attempt": becomes_final_attempt,
+        "terminal_outcome": terminal_outcome,
+        "rule_code": rule_code,
+        "validation_error": validation_error,
+    }
+
+
+def _apply_newbie_reschedule_attempt(session, now_iso=None):
+    normalized = dict(session or {})
+    if str(normalized.get("newbie_shift_request_type") or "").strip().lower() != NEWBIE_REQUEST_RESCHEDULE:
+        return normalized
+    outcome = calculate_newbie_reschedule_attempt(normalized, now_iso=now_iso)
+    normalized.update({
+        "newbie_shift_requested_by": outcome["requested_by"],
+        "newbie_shift_request_created_at": outcome["request_created_at"],
+        "newbie_shift_original_scheduled_at": outcome["original_scheduled_at"],
+        "newbie_shift_lead_time_seconds": outcome["lead_time_seconds"],
+        "newbie_shift_lead_time_category": outcome["lead_time_category"],
+        "newbie_shift_within_24_hours": outcome["within_24_hours"],
+        "newbie_shift_counts_as_attempt": outcome["counts_as_attempt"],
+        "newbie_shift_current_attempt": outcome["current_attempt"],
+        "newbie_shift_resulting_attempt": outcome["resulting_attempt"],
+        "newbie_shift_becomes_final_attempt": outcome["becomes_final_attempt"],
+        "newbie_shift_attempt_rule": outcome["rule_code"],
+        "newbie_shift_terminal_outcome": outcome["terminal_outcome"],
+        "final_attempt": outcome["final_attempt"],
+    })
+    if outcome["terminal_outcome"]:
+        normalized["final_status"] = outcome["terminal_outcome"]
+        normalized["auto_fail_reason"] = "NC/NS"
+    elif outcome["counts_as_attempt"]:
+        normalized["final_status"] = "NC/NS"
+        normalized["auto_fail_reason"] = "NC/NS"
+    else:
+        if "newbie_shift_prior_final_status" in normalized:
+            normalized["final_status"] = normalized.get("newbie_shift_prior_final_status")
+        if "newbie_shift_prior_auto_fail_reason" in normalized:
+            normalized["auto_fail_reason"] = normalized.get("newbie_shift_prior_auto_fail_reason")
+    return normalized
 
 
 def _session_with_workflow_defaults(session):
@@ -3577,6 +3758,15 @@ def _session_with_workflow_defaults(session):
     doc.setdefault("newbie_shift_rescheduled_at", "")
     doc.setdefault("newbie_shift_within_24_hours", False)
     doc.setdefault("newbie_shift_counts_as_attempt", False)
+    doc.setdefault("newbie_shift_lead_time_seconds", None)
+    doc.setdefault("newbie_shift_lead_time_category", "")
+    doc.setdefault("newbie_shift_current_attempt", 1)
+    doc.setdefault("newbie_shift_resulting_attempt", doc.get("newbie_shift_current_attempt") or 1)
+    doc.setdefault("newbie_shift_becomes_final_attempt", False)
+    doc.setdefault("newbie_shift_attempt_rule", "")
+    doc.setdefault("newbie_shift_terminal_outcome", "")
+    doc.setdefault("newbie_shift_request_confirmed_at", "")
+    doc.setdefault("newbie_shift_request_submission_fingerprint", "")
     doc.setdefault("newbie_shift_admin_decision_at", "")
     doc.setdefault("newbie_shift_admin_decision_by", "")
     doc.setdefault("newbie_shift_denial_reason", "")
@@ -3788,6 +3978,13 @@ SHARED_NEWBIE_SHIFT_REQUEST_HEADERS = [
     "admin_decision_by",
     "denial_reason",
     "updated_at",
+    "lead_time_seconds",
+    "lead_time_category",
+    "current_attempt",
+    "resulting_attempt",
+    "becomes_final_attempt",
+    "attempt_rule",
+    "terminal_outcome",
 ]
 
 SHARED_CANDIDATE_DELETION_REQUEST_HEADERS = [
@@ -5458,24 +5655,154 @@ def _candidate_row_extra_attempt(row):
     return _shared_truthy((row or {}).get("extra_attempt_granted"))
 
 
-def _candidate_qualifying_failure(row):
-    status = str(row.get("status") or "").strip().upper()
+def _candidate_attempt_identity(row, fallback_index=0):
+    source = row or {}
+    for key in ("session_id", "history_id", "resume_source_history_id", "newbie_shift_request_id"):
+        value = str(source.get(key) or "").strip()
+        if value:
+            return f"{key}:{value}"
+    completed_at = str(source.get("completed_at") or source.get("timestamp_iso") or source.get("timestamp") or "").strip()
+    candidate = " ".join(str(source.get("candidate_name") or source.get("candidate") or "").lower().split())
+    return f"fallback:{candidate}:{completed_at}:{fallback_index}"
+
+
+def _candidate_attempt_disposition(row):
+    """Return whether one persisted workflow record consumes an attempt."""
+    source = row or {}
+    if _shared_truthy(source.get("archived")):
+        return False, "archived"
+    if source.get("attempt_counts") is not None and not _shared_truthy(source.get("attempt_counts")):
+        return False, "explicit_non_counting"
+
+    request_type = str(source.get("newbie_shift_request_type") or source.get("request_type") or "").strip().lower()
+    if request_type in {NEWBIE_REQUEST_RESCHEDULE, "newbie_shift_reschedule"}:
+        if _shared_truthy(source.get("newbie_shift_counts_as_attempt") or source.get("counts_as_attempt")):
+            return True, "candidate_late_newbie_reschedule"
+        return False, "non_counting_newbie_reschedule"
+
+    status = _shared_status_upper(source)
     if status in {"FAIL", "FAIL-FINAL ATTEMPT", "NC/NS"}:
-        return True
-    sup_results = [str(row.get(f"sup_transfer_{i}_result") or "").strip().lower() for i in range(1, 3)]
-    call_results = [str(row.get(f"call_{i}_result") or "").strip().lower() for i in range(1, 4)]
-    return call_results.count("pass") >= 2 and sup_results.count("fail") >= 2
+        return True, "terminal_failure"
+    if source.get("auto_fail_reason"):
+        return True, "auto_fail"
+
+    sup_results = [
+        str((source.get(f"sup_transfer_{i}") or {}).get("result") or source.get(f"sup_transfer_{i}_result") or "").strip().lower()
+        for i in range(1, 3)
+    ]
+    call_results = [
+        str((source.get(f"call_{i}") or {}).get("result") or source.get(f"call_{i}_result") or "").strip().lower()
+        for i in range(1, 4)
+    ]
+    if call_results.count("fail") >= 2:
+        return True, "failed_mock_calls"
+    if sup_results.count("fail") >= 2 and (source.get("supervisor_only") or call_results.count("pass") >= 2):
+        return True, "failed_supervisor_transfer"
+    return False, "non_counting_incomplete"
+
+
+def _candidate_qualifying_failure(row):
+    return _candidate_attempt_disposition(row)[0]
+
+
+def calculate_candidate_attempt_state(rows, active_session=None):
+    """Authoritative attempt state for candidate lookup, retry routing, and history."""
+    records = [dict(row or {}) for row in (rows or []) if isinstance(row, dict)]
+    active = dict(active_session or {}) if isinstance(active_session, dict) else None
+    seen = set()
+    counted_events = []
+    non_counting_events = []
+
+    for index, row in enumerate(records):
+        identity = _candidate_attempt_identity(row, index)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        counts, reason = _candidate_attempt_disposition(row)
+        event = {"id": identity, "reason": reason}
+        (counted_events if counts else non_counting_events).append(event)
+
+    counted_attempts = len(counted_events)
+    if active:
+        try:
+            stored_prior = max(0, int(active.get("prior_counted_attempts") or 0))
+        except (TypeError, ValueError):
+            stored_prior = 0
+        counted_attempts = max(counted_attempts, stored_prior)
+        active_identity = _candidate_attempt_identity(active, len(records))
+        active_counts, active_reason = _candidate_attempt_disposition(active)
+        if active_counts and active_identity not in seen:
+            counted_events.append({"id": active_identity, "reason": active_reason})
+            counted_attempts += 1
+            seen.add(active_identity)
+
+    extra_attempt_granted = any(_candidate_row_extra_attempt(row) for row in records)
+    if active and _shared_truthy(active.get("extra_attempt_granted")):
+        extra_attempt_granted = True
+    stored_max = 0
+    if active and isinstance(active.get("attempt_state"), dict):
+        try:
+            stored_max = int(active["attempt_state"].get("max_attempts") or 0)
+        except (TypeError, ValueError):
+            stored_max = 0
+    max_attempts = max(CERTIFICATION_BASE_MAX_ATTEMPTS + (1 if extra_attempt_granted else 0), stored_max)
+
+    all_records = records + ([active] if active else [])
+    withdrawn = any(_candidate_row_withdrawn(row) for row in all_records)
+    passed = any(_shared_status_upper(row) in {"PASS", "PASSED", "RESUMED-PASS"} for row in all_records)
+    final_attempt_failed = any(
+        _shared_status_upper(row) == "FAIL-FINAL ATTEMPT"
+        or (
+            _shared_truthy(row.get("final_attempt"))
+            and _candidate_qualifying_failure(row)
+            and not _shared_truthy(row.get("supervisor_retry_required"))
+            and not row.get("newbie_shift_data")
+        )
+        for row in all_records
+    )
+    exhausted = counted_attempts >= max_attempts
+    terminal = bool(withdrawn or passed or final_attempt_failed or exhausted)
+    if withdrawn:
+        reason = "candidate_withdrawn"
+    elif passed:
+        reason = "candidate_already_passed"
+    elif final_attempt_failed or exhausted:
+        reason = "final_attempt_exhausted"
+    elif counted_attempts == max_attempts - 1:
+        reason = "next_attempt_is_final"
+    elif counted_attempts:
+        reason = "prior_counted_failure"
+    else:
+        reason = "first_attempt"
+
+    current_attempt = min(max_attempts, max(1, counted_attempts if terminal else counted_attempts + 1))
+    remaining_attempts = max(0, max_attempts - current_attempt)
+    final_attempt = bool(current_attempt >= max_attempts)
+    return {
+        "current_attempt": current_attempt,
+        "max_attempts": max_attempts,
+        "remaining_attempts": remaining_attempts,
+        "final_attempt": final_attempt,
+        "reason": reason,
+        "terminal": terminal,
+        "retry_allowed": not terminal and counted_attempts < max_attempts,
+        "counted_attempts": counted_attempts,
+        "counted_events": counted_events,
+        "non_counting_events": non_counting_events,
+        "extra_attempt_granted": extra_attempt_granted,
+        "withdrawn": withdrawn,
+        "passed": passed,
+    }
 
 
 def _candidate_attempt_summary(rows):
-    qualifying_failures = sum(1 for row in rows if _candidate_qualifying_failure(row))
-    extra_attempt = any(_shared_truthy(row.get("extra_attempt_granted")) for row in rows)
-    withdrawn = any(_candidate_row_withdrawn(row) for row in rows)
+    state = calculate_candidate_attempt_state(rows)
     return {
-        "attempt_count": qualifying_failures,
-        "final_attempt_risk": qualifying_failures >= 2 and not extra_attempt,
-        "extra_attempt_granted": extra_attempt,
-        "withdrawn": withdrawn,
+        "attempt_count": state["counted_attempts"],
+        "final_attempt_risk": state["final_attempt"] and not state["terminal"],
+        "extra_attempt_granted": state["extra_attempt_granted"],
+        "withdrawn": state["withdrawn"],
+        "attempt_state": state,
     }
 
 
@@ -5691,8 +6018,8 @@ def _public_newbie_request(row):
         "candidate": row.get("candidate_name") or "",
         "tester": row.get("tester_name") or "",
         "created_at": row.get("request_created_at") or "",
-        "requested_schedule": row.get("scheduled_at") or row.get("rescheduled_at") or "",
-        "original_schedule": row.get("original_scheduled_at") or "",
+        "requested_schedule": row.get("scheduled_at") or row.get("rescheduled_at") or row.get("requested_scheduled_at") or "",
+        "original_schedule": row.get("original_scheduled_at") or row.get("original_schedule") or row.get("newbie_shift_original_scheduled_at") or "",
         "timezone": row.get("timezone") or "",
         "requester": "Candidate" if requested_by == NEWBIE_REQUESTED_BY_CANDIDATE else "Tester/Trainer" if requested_by == NEWBIE_REQUESTED_BY_TESTER else "Other" if requested_by == "other" else "",
         "reason": row.get("request_reason") or "",
@@ -5700,6 +6027,13 @@ def _public_newbie_request(row):
         "within_24_hours": _shared_truthy(row.get("within_24_hours")),
         "counts_as_attempt": _shared_truthy(row.get("counts_as_attempt")),
         "final_attempt": _shared_truthy(row.get("final_attempt")),
+        "lead_time_seconds": row.get("lead_time_seconds"),
+        "lead_time_category": row.get("lead_time_category") or "",
+        "current_attempt": _positive_attempt_number(row.get("current_attempt"), 1),
+        "resulting_attempt": _positive_attempt_number(row.get("resulting_attempt"), 1),
+        "becomes_final_attempt": _shared_truthy(row.get("becomes_final_attempt")),
+        "attempt_rule": row.get("attempt_rule") or "",
+        "terminal_outcome": row.get("terminal_outcome") or "",
         "status": _approval_label(row.get("request_status")),
         "raw_status": _request_status_value(row.get("request_status")),
         "admin_decision_at": row.get("admin_decision_at") or "",
@@ -5832,7 +6166,12 @@ def _canonical_remote_newbie_request(row):
         "request_reason": str(row.get("request_reason") or row.get("reason") or "").strip(),
         "request_details": str(row.get("request_details") or row.get("details") or "").strip(),
         "request_created_at": str(row.get("request_created_at") or row.get("created_at") or "").strip(),
-        "original_scheduled_at": str(row.get("original_scheduled_at") or "").strip(),
+        "original_scheduled_at": str(
+            row.get("original_scheduled_at")
+            or row.get("original_schedule")
+            or row.get("newbie_shift_original_scheduled_at")
+            or ""
+        ).strip(),
         "requested_scheduled_at": str(
             row.get("requested_scheduled_at") or row.get("scheduled_at") or row.get("rescheduled_at") or ""
         ).strip(),
@@ -5840,6 +6179,14 @@ def _canonical_remote_newbie_request(row):
         "timezone": str(row.get("timezone") or "").strip(),
         "within_24_hours": row.get("within_24_hours"),
         "counts_as_attempt": row.get("counts_as_attempt"),
+        "final_attempt": row.get("final_attempt"),
+        "lead_time_seconds": row.get("lead_time_seconds"),
+        "lead_time_category": str(row.get("lead_time_category") or "").strip(),
+        "current_attempt": row.get("current_attempt"),
+        "resulting_attempt": row.get("resulting_attempt"),
+        "becomes_final_attempt": row.get("becomes_final_attempt"),
+        "attempt_rule": str(row.get("attempt_rule") or "").strip(),
+        "terminal_outcome": str(row.get("terminal_outcome") or "").strip(),
         "decision_at": str(
             row.get("decision_at") or row.get("admin_decision_at") or row.get("newbie_shift_admin_decision_at") or ""
         ).strip(),
@@ -5868,6 +6215,14 @@ def _candidate_row_remote_newbie_request(row):
         "timezone": row.get("newbie_shift_timezone"),
         "within_24_hours": row.get("newbie_shift_within_24_hours"),
         "counts_as_attempt": row.get("newbie_shift_counts_as_attempt"),
+        "final_attempt": row.get("final_attempt"),
+        "lead_time_seconds": row.get("newbie_shift_lead_time_seconds"),
+        "lead_time_category": row.get("newbie_shift_lead_time_category"),
+        "current_attempt": row.get("newbie_shift_current_attempt"),
+        "resulting_attempt": row.get("newbie_shift_resulting_attempt"),
+        "becomes_final_attempt": row.get("newbie_shift_becomes_final_attempt"),
+        "attempt_rule": row.get("newbie_shift_attempt_rule"),
+        "terminal_outcome": row.get("newbie_shift_terminal_outcome"),
         "decision_at": row.get("newbie_shift_admin_decision_at"),
         "decision_by": row.get("newbie_shift_admin_decision_by"),
         "denial_reason": row.get("newbie_shift_denial_reason"),
@@ -6032,10 +6387,35 @@ def _reconcile_local_newbie_request_record(record, remote):
     for local_key, remote_key in (
         ("newbie_shift_within_24_hours", "within_24_hours"),
         ("newbie_shift_counts_as_attempt", "counts_as_attempt"),
+        ("newbie_shift_becomes_final_attempt", "becomes_final_attempt"),
     ):
         remote_value = remote.get(remote_key)
         if remote_value not in (None, "") and (overwrite_metadata or local_key not in local):
             updates[local_key] = _shared_truthy(remote_value)
+    if remote.get("final_attempt") not in (None, "") and overwrite_metadata:
+        updates["final_attempt"] = _shared_truthy(remote.get("final_attempt"))
+    for local_key, remote_key in (
+        ("newbie_shift_lead_time_seconds", "lead_time_seconds"),
+        ("newbie_shift_current_attempt", "current_attempt"),
+        ("newbie_shift_resulting_attempt", "resulting_attempt"),
+    ):
+        remote_value = remote.get(remote_key)
+        if remote_value in (None, ""):
+            continue
+        try:
+            normalized_value = int(float(remote_value))
+        except (TypeError, ValueError):
+            continue
+        if overwrite_metadata or local_key not in local:
+            updates[local_key] = normalized_value
+    for local_key, remote_key in (
+        ("newbie_shift_lead_time_category", "lead_time_category"),
+        ("newbie_shift_attempt_rule", "attempt_rule"),
+        ("newbie_shift_terminal_outcome", "terminal_outcome"),
+    ):
+        remote_value = str(remote.get(remote_key) or "").strip()
+        if remote_value and (overwrite_metadata or not str(local.get(local_key) or "").strip()):
+            updates[local_key] = remote_value
 
     if remote_status == "denied":
         remote_reason = str(remote.get("denial_reason") or "").strip()
@@ -6200,6 +6580,10 @@ def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candid
                         "scheduled_at": row.get("requested_scheduled_at"), "timezone": row.get("timezone"),
                         "within_24_hours": row.get("within_24_hours"), "counts_as_attempt": row.get("counts_as_attempt"),
                         "final_attempt": row.get("final_attempt"), "admin_decision_at": row.get("decision_at"),
+                        "lead_time_seconds": row.get("lead_time_seconds"), "lead_time_category": row.get("lead_time_category"),
+                        "current_attempt": row.get("current_attempt"), "resulting_attempt": row.get("resulting_attempt"),
+                        "becomes_final_attempt": row.get("becomes_final_attempt"), "attempt_rule": row.get("attempt_rule"),
+                        "terminal_outcome": row.get("terminal_outcome"),
                         "admin_decision_by": row.get("decision_by"), "denial_reason": row.get("denial_reason"),
                     }))
             requests = _filter_obsolete_pending_newbie_requests(requests, candidate_tracking)
@@ -6284,7 +6668,7 @@ def _find_request_row(rows, request_id):
     return next((row for row in rows if str(row.get("request_id") or "").strip() == str(request_id or "").strip()), None)
 
 
-def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_id, status, actor, decided_at, denial_reason=""):
+def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_id, status, actor, decided_at, denial_reason="", attempt_outcome=None):
     if not session_id:
         return 0
     candidate_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
@@ -6297,6 +6681,16 @@ def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_i
         row["newbie_shift_admin_decision_at"] = decided_at
         row["newbie_shift_admin_decision_by"] = actor
         row["newbie_shift_denial_reason"] = denial_reason
+        outcome = dict(attempt_outcome or {})
+        resulting_attempt = _positive_attempt_number(outcome.get("resulting_attempt"), 0)
+        if resulting_attempt > 0:
+            row["attempt_number"] = resulting_attempt
+        if outcome.get("final_attempt") not in (None, ""):
+            row["final_attempt"] = _shared_truthy(outcome.get("final_attempt"))
+        terminal_outcome = str(outcome.get("terminal_outcome") or "").strip()
+        if terminal_outcome:
+            row["status"] = terminal_outcome
+            row["final_result"] = terminal_outcome
         _shared_update_existing_row(
             sheets_api,
             sheet_id,
@@ -6439,6 +6833,7 @@ def _shared_pending_request_action(payload):
                 actor,
                 decided_at,
                 denial_reason if decision == "denied" else "",
+                attempt_outcome=row,
             )
             return {"ok": True, "request_id": request_id, "category": category, "status": decision, "candidateUpdates": candidate_updates}
 
@@ -6827,16 +7222,81 @@ def _shared_admin_candidate_action(payload):
 
 
 def _sam_master_sheet_context():
-    service_result = _get_shared_tracking_sheet_service()
-    if not service_result.get("ok"):
-        return service_result
+    try:
+        from services.apps_script_api import create_apps_script_sheet_service
+        apps_script_result = create_apps_script_sheet_service(ROOT_DIR, expected_role="sam")
+        if apps_script_result.get("ok") and apps_script_result.get("client"):
+            return {
+                "ok": True,
+                "service": None,
+                "appsScriptClient": apps_script_result["client"],
+                "sheet_id": "",
+                "transport": "apps_script",
+            }
+    except Exception as exc:
+        logger.warning("[SAM-SETUP] transport=apps_script status=unavailable error_type=%s", type(exc).__name__)
+
+    if _is_development_mode():
+        service_result = _get_shared_tracking_sheet_service()
+        if service_result.get("ok") and service_result.get("service"):
+            return {
+                "ok": True,
+                "service": service_result["service"],
+                "appsScriptClient": None,
+                "sheet_id": service_result["sheet_id"],
+                "transport": "direct_sheets_development",
+            }
+
     return {
-        "ok": True,
-        "service": service_result.get("service"),
-        "appsScriptClient": service_result.get("appsScriptClient"),
-        "sheet_id": service_result["sheet_id"],
-        "serviceAccountEmail": service_result.get("serviceAccountEmail") or _get_service_account_email(),
+        "ok": False,
+        "errorCode": "setup_configuration_unavailable",
     }
+
+
+SAM_SETUP_ERROR_MESSAGES = {
+    "setup_configuration_unavailable": "SAM setup is temporarily unavailable because its administrator configuration could not be loaded.",
+    "setup_authorization_failed": "SAM could not verify setup authorization. Contact support if this continues.",
+    "setup_admin_not_found": "The administrator name or PIN was not recognized.",
+    "setup_invalid_admin": "The administrator name or PIN was not recognized.",
+    "setup_invalid_pin": "The administrator name or PIN was not recognized.",
+    "setup_transport_unavailable": "SAM could not verify setup right now. Check the connection and try again.",
+    "setup_response_invalid": "SAM received an invalid setup response. Please try again.",
+    "setup_persistence_failed": "SAM verified the administrator, but could not save setup on this device. Please try again.",
+}
+
+
+def _sam_setup_error(error_code):
+    code = error_code if error_code in SAM_SETUP_ERROR_MESSAGES else "setup_transport_unavailable"
+    return {
+        "ok": False,
+        "errorCode": code,
+        "error": SAM_SETUP_ERROR_MESSAGES[code],
+    }
+
+
+def _sam_setup_transport_error_code(exc):
+    text = str(exc or "").lower()
+    if any(marker in text for marker in ("unauthorized", "forbidden", "401", "403")):
+        return "setup_authorization_failed"
+    if any(marker in text for marker in ("invalid response", "json", "decode")):
+        return "setup_response_invalid"
+    if any(marker in text for marker in ("unknown action", "missing sheet", "missing headers", "not configured")):
+        return "setup_configuration_unavailable"
+    return "setup_transport_unavailable"
+
+
+def _normalize_sam_setup_remote_result(result):
+    if not isinstance(result, dict):
+        return _sam_setup_error("setup_response_invalid")
+    if result.get("ok") is False:
+        return _sam_setup_error(result.get("errorCode"))
+    if result.get("ok") is not True:
+        return _sam_setup_error("setup_response_invalid")
+    name = " ".join(str(result.get("name") or "").split())
+    role = str(result.get("role") or "").strip()
+    if not name or not role:
+        return _sam_setup_error("setup_response_invalid")
+    return {"ok": True, "name": name, "role": role}
 
 
 def _ensure_sam_authorized_users(sheets_api, sheet_id):
@@ -6866,53 +7326,59 @@ def _read_sam_authorized_users(sheets_api, sheet_id):
 def _sam_setup_status():
     context = _sam_master_sheet_context()
     if not context.get("ok"):
-        return {"ok": False, "configured": False, "error": "SAM setup requires access to the admin configuration sheet."}
+        return {**_sam_setup_error(context.get("errorCode")), "configured": False}
     try:
+        client = context.get("appsScriptClient")
+        if client:
+            result = client.get("getSamSetupStatus")
+            if not isinstance(result, dict) or result.get("ok") is not True or not isinstance(result.get("configured"), bool):
+                return {**_sam_setup_error("setup_response_invalid"), "configured": False}
+            return {"ok": True, "configured": result["configured"], "errorCode": "", "error": ""}
         status, _rows = _read_sam_authorized_users(context["service"].spreadsheets(), context["sheet_id"])
         return {
             "ok": bool(status.get("ok")),
             "configured": bool(status.get("ok")),
             "defaultOwnerCreated": bool(status.get("defaultOwnerCreated")),
-            "error": status.get("error") or "",
+            "errorCode": "" if status.get("ok") else "setup_configuration_unavailable",
+            "error": "" if status.get("ok") else SAM_SETUP_ERROR_MESSAGES["setup_configuration_unavailable"],
         }
     except Exception as exc:
-        logger.warning("[SAM-SETUP] Unable to verify authorized users tab: %s", exc)
-        return {"ok": False, "configured": False, "error": "SAM setup requires access to the admin configuration sheet."}
+        code = _sam_setup_transport_error_code(exc)
+        logger.warning("[SAM-SETUP] status=failed error_code=%s error_type=%s", code, type(exc).__name__)
+        return {**_sam_setup_error(code), "configured": False}
 
 
 def _complete_sam_setup(payload):
     entered_name = " ".join(str((payload or {}).get("name") or "").split())
     entered_pin = str((payload or {}).get("pin") or "").strip()
     device_name = str((payload or {}).get("device_name") or "").strip()[:120]
-    logger.info("[SAM-SETUP] Starting setup validation name=%s pin=%s device_present=%s", entered_name or "<blank>", _masked_pin_for_log(entered_pin), bool(device_name))
     if not entered_name or not entered_pin:
-        reason = "Name is required." if not entered_name else "PIN is required."
-        logger.warning("[SAM-SETUP] Validation failed: %s", reason)
-        return {"ok": False, "error": reason}
+        return _sam_setup_error("setup_invalid_admin" if not entered_name else "setup_invalid_pin")
 
     context = _sam_master_sheet_context()
     if not context.get("ok"):
-        message = context.get("error") or "SAM setup requires access to the admin configuration sheet."
-        logger.warning("[SAM-SETUP] Master sheet context unavailable: %s", message)
-        return {"ok": False, "error": message}
+        return _sam_setup_error(context.get("errorCode"))
 
     try:
+        client = context.get("appsScriptClient")
+        if client:
+            result = client.post("completeSamSetup", {
+                "name": entered_name,
+                "pin": entered_pin,
+                "device_name": device_name,
+            })
+            normalized = _normalize_sam_setup_remote_result(result)
+            logger.info(
+                "[SAM-SETUP] transport=apps_script status=%s error_code=%s",
+                "complete" if normalized.get("ok") else "rejected",
+                normalized.get("errorCode") or "",
+            )
+            return normalized
+
         sheets_api = context["service"].spreadsheets()
         status, rows = _read_sam_authorized_users(sheets_api, context["sheet_id"])
         if not status.get("ok"):
-            message = status.get("error") or "Missing headers on sam-authorized-users."
-            logger.warning(
-                "[SAM-SETUP] Authorized-users tab unusable tab=%s headerStatus=%s error=%s",
-                SAM_AUTHORIZED_USERS_TAB,
-                status.get("headerStatus") or "",
-                message,
-            )
-            return {"ok": False, "error": message}
-        logger.info(
-            "[SAM-SETUP] Headers found for %s: %s",
-            SAM_AUTHORIZED_USERS_TAB,
-            ", ".join(SAM_AUTHORIZED_USER_HEADERS),
-        )
+            return _sam_setup_error("setup_configuration_unavailable")
         matched_name_row = None
         name_key = entered_name.casefold()
         for row in rows:
@@ -6921,35 +7387,22 @@ def _complete_sam_setup(payload):
             matched_name_row = row
             pin_ok = hmac.compare_digest(str(row.get("pin") or "").strip(), entered_pin)
             enabled_ok = _shared_truthy(row.get("enabled"))
-            logger.info(
-                "[SAM-SETUP] Matched user row=%s name=%s pinMatch=%s enabledRaw=%r enabledParsed=%s storedPin=%s",
-                row.get("_row_number"),
-                row.get("name") or entered_name,
-                pin_ok,
-                row.get("enabled"),
-                enabled_ok,
-                _masked_pin_for_log(row.get("pin")),
-            )
             if not pin_ok:
-                logger.warning("[SAM-SETUP] Validation failed for name=%s: PIN mismatch", entered_name)
-                return {"ok": False, "error": "PIN mismatch."}
+                return _sam_setup_error("setup_invalid_pin")
             if not enabled_ok:
-                logger.warning("[SAM-SETUP] Validation failed for name=%s: user disabled enabledRaw=%r", entered_name, row.get("enabled"))
-                return {"ok": False, "error": "User disabled."}
+                return _sam_setup_error("setup_authorization_failed")
             if pin_ok and enabled_ok:
                 target = row
                 break
         else:
             target = None
         if not matched_name_row:
-            logger.warning("[SAM-SETUP] Validation failed: user not found name=%s rows=%d", entered_name, len(rows))
-            return {"ok": False, "error": "User not found."}
+            return _sam_setup_error("setup_admin_not_found")
         if not target:
-            logger.warning("[SAM-SETUP] Validation failed for name=%s: access not enabled", entered_name)
-            return {"ok": False, "error": "User disabled."}
+            return _sam_setup_error("setup_authorization_failed")
 
         target["installed"] = "TRUE"
-        target["install_date"] = datetime.now(timezone.utc).isoformat()
+        target["install_date"] = target.get("install_date") or datetime.now(timezone.utc).isoformat()
         if device_name:
             target["device_name"] = device_name
         _shared_update_existing_row(
@@ -6960,17 +7413,12 @@ def _complete_sam_setup(payload):
             target["_row_number"],
             _shared_row_values(target, SAM_AUTHORIZED_USER_HEADERS),
         )
-        logger.info(
-            "[SAM-SETUP] Setup completed for row=%s name=%s role=%s installed=TRUE device_written=%s",
-            target.get("_row_number"),
-            target.get("name") or entered_name,
-            target.get("role") or "user",
-            bool(device_name),
-        )
+        logger.info("[SAM-SETUP] transport=direct_sheets_development status=complete")
         return {"ok": True, "name": target.get("name") or entered_name, "role": target.get("role") or "user"}
     except Exception as exc:
-        logger.exception("[SAM-SETUP] Setup validation failed because sheet access failed: %s", exc)
-        return {"ok": False, "error": f"SAM setup validation failed: {exc}"}
+        code = _sam_setup_transport_error_code(exc)
+        logger.warning("[SAM-SETUP] status=failed error_code=%s error_type=%s", code, type(exc).__name__)
+        return _sam_setup_error(code)
 
 
 def _ensure_update_tabs(service, sheet_id):
@@ -7166,7 +7614,11 @@ def _candidate_session_row(session, existing_rows=None):
         pending_id = f"pending-{session_id}"
     created_at = str(session.get("timestamp_iso") or session.get("created_at") or datetime.now(timezone.utc).isoformat())
     completed_at = str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat())
-    attempt_number = session.get("attempt_number") or _session_attempt_number(existing_rows, candidate_name)
+    attempt_number = (
+        session.get("newbie_shift_resulting_attempt")
+        if str(session.get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE
+        else None
+    ) or session.get("attempt_number") or _session_attempt_number(existing_rows, candidate_name)
     review_notes = session.get("review_notes") or ""
     if session.get("candidate_override_used"):
         override_note = "Final-attempt override used for this candidate."
@@ -7324,7 +7776,7 @@ def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=
 
 
 def _newbie_shift_request_row(session):
-    session = _session_with_workflow_defaults(session)
+    session = _apply_newbie_reschedule_attempt(_session_with_workflow_defaults(session))
     session_id = str(session.get("history_id") or session.get("resume_source_history_id") or session.get("session_id") or "").strip()
     if not session_id:
         session_id = str(uuid.uuid4())
@@ -7355,7 +7807,93 @@ def _newbie_shift_request_row(session):
         session.get("newbie_shift_admin_decision_by") or "",
         session.get("newbie_shift_denial_reason") or "",
         session.get("newbie_shift_request_updated_at") or "",
+        session.get("newbie_shift_lead_time_seconds") if session.get("newbie_shift_lead_time_seconds") is not None else "",
+        session.get("newbie_shift_lead_time_category") or "",
+        session.get("newbie_shift_current_attempt") or 1,
+        session.get("newbie_shift_resulting_attempt") or 1,
+        _shared_bool(session.get("newbie_shift_becomes_final_attempt")),
+        session.get("newbie_shift_attempt_rule") or "",
+        session.get("newbie_shift_terminal_outcome") or "",
     ], request_id
+
+
+def _newbie_request_submission_fingerprint(session):
+    keys = (
+        "newbie_shift_request_id",
+        "history_id",
+        "resume_source_history_id",
+        "session_id",
+        "newbie_shift_request_type",
+        "newbie_shift_requested_by",
+        "newbie_shift_request_reason",
+        "newbie_shift_request_details",
+        "newbie_shift_request_created_at",
+        "newbie_shift_original_scheduled_at",
+        "newbie_shift_rescheduled_at",
+        "newbie_shift_scheduled_at",
+        "newbie_shift_timezone",
+        "newbie_shift_lead_time_seconds",
+        "newbie_shift_current_attempt",
+        "newbie_shift_resulting_attempt",
+        "newbie_shift_counts_as_attempt",
+        "final_attempt",
+        "newbie_shift_terminal_outcome",
+    )
+    encoded = json.dumps({
+        key: "" if (session or {}).get(key) is None else (session or {}).get(key)
+        for key in keys
+    }, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_newbie_reschedule_submission(session):
+    source = _apply_newbie_reschedule_attempt(session)
+    if not str(source.get("newbie_shift_request_id") or "").strip():
+        return "missing_session_identity"
+    if not any(str(source.get(key) or "").strip() for key in ("history_id", "resume_source_history_id", "session_id")):
+        return "missing_session_identity"
+    if not str(source.get("newbie_shift_request_reason") or "").strip():
+        return "validation_failed"
+    if calculate_newbie_reschedule_attempt(source).get("validation_error"):
+        return "invalid_schedule"
+    if not _aware_iso_datetime(source.get("newbie_shift_rescheduled_at") or source.get("newbie_shift_scheduled_at")):
+        return "invalid_schedule"
+    return ""
+
+
+def _newbie_request_error_message(error_code):
+    messages = {
+        "authorization_failed": "The reschedule service could not verify this app. Contact an administrator.",
+        "forbidden_action": "This app is not allowed to submit reschedule requests. Contact an administrator.",
+        "unsupported_action": "The reschedule service needs an administrator update before requests can be submitted.",
+        "validation_failed": "We couldn’t submit the reschedule because required scheduling information is missing. Review the date, time, requester, and reason.",
+        "missing_session_identity": "We couldn’t submit the reschedule because the source session could not be identified. Return to History and start the reschedule again.",
+        "invalid_schedule": "We couldn’t submit the reschedule because the original or requested schedule is invalid. Review the date, time, and timezone.",
+        "duplicate_request": "This reschedule request has already been submitted and is waiting for review.",
+        "already_resolved": "This reschedule request has already been reviewed. Refresh to see the latest status.",
+        "transport_timeout": "The reschedule could not be submitted right now. Your information was saved. Try again.",
+        "remote_unavailable": "The reschedule could not be submitted right now. Your information was saved. Try again.",
+        "response_shape_error": "The reschedule service returned an unexpected response. Your information was saved. Try again or contact an administrator.",
+        "persistence_failed": "The reschedule information could not be saved locally. Try again.",
+    }
+    return messages.get(error_code, messages["remote_unavailable"])
+
+
+def _classify_newbie_request_exception(exc):
+    text = str(exc or "").strip().lower()
+    if "unauthorized" in text or "authorization" in text or "401" in text:
+        return "authorization_failed"
+    if "forbidden" in text or "403" in text:
+        return "forbidden_action"
+    if "unknown action" in text or "unsupported" in text:
+        return "unsupported_action"
+    if "already" in text and any(token in text for token in ("resolved", "approved", "denied")):
+        return "already_resolved"
+    if "timeout" in text or "timed out" in text or "lock" in text or "busy" in text:
+        return "transport_timeout"
+    if "incomplete" in text or "required" in text or "invalid" in text:
+        return "validation_failed"
+    return "remote_unavailable"
 
 
 def _candidate_deletion_request_row(record, request_id):
@@ -7402,6 +7940,9 @@ def _sync_newbie_shift_request(session, sheets_api, sheet_id, existing_rows=None
         )
     existing = _find_request_row(existing_rows, session.get("newbie_shift_request_id"))
     if existing:
+        existing_status = _normalize_newbie_request_status(existing.get("request_status") or existing.get("status"))
+        if existing_status in {"approved", "denied"}:
+            return "already_resolved"
         session, _changed, _reason = _reconcile_local_newbie_request_record(session, existing)
     row_values, request_id = _newbie_shift_request_row(session)
     return _shared_update_or_append_row(
@@ -7417,9 +7958,25 @@ def _sync_newbie_shift_request(session, sheets_api, sheet_id, existing_rows=None
 
 def _sync_newbie_shift_request_only(session):
     """Upsert one Newbie Shift request without changing Candidate Tracking."""
+    session = _apply_newbie_reschedule_attempt(_session_with_workflow_defaults(session))
+    validation_error = _validate_newbie_reschedule_submission(session)
+    if validation_error:
+        logger.warning("[NEWBIE REQUEST] Request rejected category=%s", validation_error)
+        return {"ok": False, "errorCode": validation_error, "error": _newbie_request_error_message(validation_error)}
+    fingerprint = _newbie_request_submission_fingerprint(session)
+    if (
+        str(session.get("newbie_shift_request_confirmed_at") or "").strip()
+        and hmac.compare_digest(
+            str(session.get("newbie_shift_request_submission_fingerprint") or ""),
+            fingerprint,
+        )
+    ):
+        return {"ok": True, "action": "already_confirmed", "requestId": session.get("newbie_shift_request_id"), "fingerprint": fingerprint}
     context = _shared_sheet_context()
     if not context.get("ok"):
-        return {"ok": False, "error": "The reschedule request service is unavailable."}
+        error_code = "remote_unavailable"
+        logger.warning("[NEWBIE REQUEST] Request upsert unavailable category=%s", error_code)
+        return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
     try:
         if context.get("appsScriptClient"):
             row_values, _request_id = _newbie_shift_request_row(session)
@@ -7431,17 +7988,52 @@ def _sync_newbie_shift_request_only(session):
                 else "initial_newbie_shift"
             )
             result = context["appsScriptClient"].post("upsertPendingRequest", {"request": request_row})
-            return {"ok": True, "action": result}
+            if not isinstance(result, dict):
+                error_code = "response_shape_error"
+                return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
+            returned_id = str(result.get("request_id") or "").strip()
+            if returned_id and returned_id != str(session.get("newbie_shift_request_id") or "").strip():
+                error_code = "response_shape_error"
+                return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
+            returned_status = str(result.get("status") or result.get("request_status") or "pending").strip().lower()
+            if returned_status in {"approved", "denied"}:
+                error_code = "already_resolved"
+                return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
+            action = str(result.get("action") or "").strip().lower()
+            if action not in {"created", "updated"}:
+                error_code = "response_shape_error"
+                return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
+            return {
+                "ok": True,
+                "action": action,
+                "alreadyPending": action == "updated",
+                "requestId": session.get("newbie_shift_request_id"),
+                "fingerprint": fingerprint,
+            }
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         action = _sync_newbie_shift_request(session, sheets_api, sheet_id)
-        return {"ok": True, "action": action}
+        if action == "already_resolved":
+            error_code = "already_resolved"
+            return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
+        if action not in {"appended", "updated", "created"}:
+            error_code = "response_shape_error"
+            return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
+        return {
+            "ok": True,
+            "action": action,
+            "alreadyPending": action == "updated",
+            "requestId": session.get("newbie_shift_request_id"),
+            "fingerprint": fingerprint,
+        }
     except Exception as exc:
+        error_code = _classify_newbie_request_exception(exc)
         logger.warning(
-            "[NEWBIE REQUEST] Request upsert failed error_type=%s",
+            "[NEWBIE REQUEST] Request upsert failed category=%s error_type=%s",
+            error_code,
             type(exc).__name__,
         )
-        return {"ok": False, "error": "The reschedule request could not be submitted. Retry Save/Submit."}
+        return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
 
 
 def _sync_shared_candidate_tracking(session):
@@ -7743,7 +8335,17 @@ def _filter_current_pending_sup_transfers(pending_rows, candidate_rows):
 def _lookup_shared_candidate_sessions(candidate_name):
     query = " ".join(str(candidate_name or "").lower().split())
     if len(query) < 2:
-        return {"ok": True, "matches": [], "finalAttempt": False, "finalAttemptUsed": False, "withdrawn": False, "extraAttemptGranted": False, "passedCertification": False}
+        return {
+            "ok": True,
+            "matches": [],
+            "finalAttempt": False,
+            "finalAttemptUsed": False,
+            "withdrawn": False,
+            "extraAttemptGranted": False,
+            "passedCertification": False,
+            "qualifyingFailureCount": 0,
+            "attemptState": calculate_candidate_attempt_state([]),
+        }
     lookup_started = time.monotonic()
     logger.info("[SHARED] Candidate lookup started query_len=%d", len(query))
     try:
@@ -7805,11 +8407,9 @@ def _lookup_shared_candidate_sessions(candidate_name):
     matches.sort(key=lambda row: (int(row.get("matchConfidence") or 0), str(row.get("completed_at") or row.get("created_at") or "")), reverse=True)
     active_matches = [row for row in matches if not _shared_truthy(row.get("archived"))]
     confirmed_matches = [row for row in active_matches if row.get("matchConfirmed")]
-    qualifying_failures = [
-        row for row in confirmed_matches
-        if _shared_status_upper(row) in {"FAIL", "FAIL-FINAL ATTEMPT"}
-    ]
-    final_attempt_used = any(_shared_status_upper(row) == "FAIL-FINAL ATTEMPT" for row in confirmed_matches)
+    attempt_state = calculate_candidate_attempt_state(confirmed_matches)
+    qualifying_failures = attempt_state["counted_attempts"]
+    final_attempt_used = attempt_state["terminal"] and attempt_state["reason"] == "final_attempt_exhausted"
     withdrawn = any(_candidate_row_withdrawn(row) or _shared_status_upper(row) == "WITHDREW FROM CERTIFICATION" for row in confirmed_matches)
     extra_attempt = any(_candidate_row_extra_attempt(row) for row in confirmed_matches)
     passed_certification = any(_shared_status_upper(row) in {"PASS", "PASSED", "RESUMED-PASS"} for row in confirmed_matches)
@@ -7821,7 +8421,7 @@ def _lookup_shared_candidate_sessions(candidate_name):
         int((time.monotonic() - lookup_started) * 1000),
         len(matches),
         len(visible_matches),
-        len(qualifying_failures) >= 2 and not extra_attempt and not final_attempt_used,
+        attempt_state["final_attempt"] and not attempt_state["terminal"],
         final_attempt_used and not extra_attempt,
         withdrawn,
         extra_attempt,
@@ -7829,9 +8429,10 @@ def _lookup_shared_candidate_sessions(candidate_name):
     return {
         "ok": True,
         "matches": visible_matches[:20],
-        "finalAttempt": len(qualifying_failures) >= 2 and not extra_attempt and not final_attempt_used,
+        "finalAttempt": attempt_state["final_attempt"] and not attempt_state["terminal"],
         "finalAttemptUsed": final_attempt_used and not extra_attempt,
-        "qualifyingFailureCount": len(qualifying_failures),
+        "qualifyingFailureCount": qualifying_failures,
+        "attemptState": attempt_state,
         "withdrawn": withdrawn,
         "extraAttemptGranted": extra_attempt,
         "passedCertification": passed_certification and not extra_attempt,
@@ -8338,6 +8939,9 @@ def compute_calculated_status(session):
     final_attempt = bool(session.get("final_attempt"))
     resumed_sup = _is_resumed_sup_transfer_session(session)
 
+    if _is_newbie_reschedule(session) and session.get("newbie_shift_terminal_outcome"):
+        return str(session.get("newbie_shift_terminal_outcome"))
+
     if _is_newbie_reschedule(session) and session.get("newbie_shift_counts_as_attempt"):
         return "NC/NS"
 
@@ -8351,6 +8955,8 @@ def compute_calculated_status(session):
         if sups_passed >= 1:
             return "RESUMED-PASS" if resumed_sup else "Pass"
         if sups_failed >= 2:
+            if session.get("supervisor_retry_required") and newbie is not None:
+                return "Incomplete"
             return "FAIL-Final Attempt" if final_attempt else "Incomplete"
         if newbie is not None:
             return "Incomplete"
@@ -8360,6 +8966,8 @@ def compute_calculated_status(session):
         if sups_passed >= 1:
             return "Pass"
         if sups_failed >= 2:
+            if session.get("supervisor_retry_required") and newbie is not None:
+                return "Incomplete"
             return "FAIL-Final Attempt" if final_attempt else "Incomplete"
         if newbie is not None:
             return "Incomplete"
@@ -8627,6 +9235,47 @@ async def _delete_history_record_by_identifier(identifier):
     return None, {"history_records_unlinked": 0, "active_session_unlinked": False}
 
 
+def _attempt_history_snapshot(record):
+    source = record or {}
+    return {
+        "attempt_number": source.get("attempt_number") or source.get("newbie_shift_current_attempt") or 1,
+        "status": source.get("status") or source.get("final_status") or compute_final_status(source),
+        "final_attempt": bool(source.get("final_attempt")),
+        "timestamp": source.get("timestamp") or "",
+        "timestamp_iso": source.get("timestamp_iso") or source.get("completed_at") or "",
+        "call_1": source.get("call_1"),
+        "call_2": source.get("call_2"),
+        "call_3": source.get("call_3"),
+        "sup_transfer_1": source.get("sup_transfer_1"),
+        "sup_transfer_2": source.get("sup_transfer_2"),
+        "newbie_shift_data": source.get("newbie_shift_data"),
+        "newbie_shift_request_id": source.get("newbie_shift_request_id") or "",
+        "coaching_summary": source.get("coaching_summary") or "",
+        "fail_summary": source.get("fail_summary") or "",
+    }
+
+
+def _append_attempt_history(existing):
+    history = [dict(item) for item in (existing.get("attempt_history") or []) if isinstance(item, dict)]
+    snapshot = _attempt_history_snapshot(existing)
+    identity = (
+        str(snapshot.get("attempt_number") or ""),
+        str(snapshot.get("timestamp_iso") or snapshot.get("timestamp") or ""),
+        str(snapshot.get("status") or ""),
+    )
+    known = {
+        (
+            str(item.get("attempt_number") or ""),
+            str(item.get("timestamp_iso") or item.get("timestamp") or ""),
+            str(item.get("status") or ""),
+        )
+        for item in history
+    }
+    if identity not in known:
+        history.append(snapshot)
+    return history
+
+
 async def _upsert_history_record(record, source_session=None):
     document = SQLiteCollection.clone(record)
     document["history_id"] = str(document.get("history_id") or uuid.uuid4())
@@ -8646,6 +9295,7 @@ async def _upsert_history_record(record, source_session=None):
             merged = {
                 **existing,
                 **document,
+                "attempt_history": _append_attempt_history(existing),
                 "history_id": existing.get("history_id") or document["history_id"],
                 "resumed_from_history": True,
                 "resumed_sup_transfer_only": True,
@@ -8791,12 +9441,24 @@ def build_clean_fail(session):
         
         fallback_notes_str = "Additional Notes: " + " ".join(fallback_parts)
         if not base_fail:
-            return _append_readiness_override_note(fallback_notes_str, session)
-        return _append_readiness_override_note(base_fail + "\n\n" + fallback_notes_str, session)
+            return _ensure_final_attempt_fail_summary(_append_readiness_override_note(fallback_notes_str, session), session)
+        return _ensure_final_attempt_fail_summary(_append_readiness_override_note(base_fail + "\n\n" + fallback_notes_str, session), session)
     else:
         if not base_fail:
-            return _append_readiness_override_note("No structured fail reason was selected. See evaluator notes and call results for context.", session)
-        return _append_readiness_override_note(base_fail, session)
+            return _ensure_final_attempt_fail_summary(_append_readiness_override_note("No structured fail reason was selected. See evaluator notes and call results for context.", session), session)
+        return _ensure_final_attempt_fail_summary(_append_readiness_override_note(base_fail, session), session)
+
+
+def _ensure_final_attempt_fail_summary(text, session):
+    value = str(text or "").strip()
+    if not _shared_truthy((session or {}).get("final_attempt")):
+        return value
+    if compute_final_status(session) not in {"Fail", "FAIL-Final Attempt", "NC/NS", FINAL_READINESS_NEEDS_RETEST}:
+        return value
+    if re.search(r"\bfinal attempt\b", value, flags=re.IGNORECASE):
+        return value
+    statement = "This session was the candidate's final attempt."
+    return f"{value} {statement}".strip()
 
 
 DEFAULT_GEMINI_COACHING_PROMPT = (
@@ -9204,7 +9866,11 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
             len(session),
             len(str(session)),
         )
-        return {**auto_fail_summaries, **diagnostics}
+        return {
+            **auto_fail_summaries,
+            "fail": _ensure_final_attempt_fail_summary(auto_fail_summaries.get("fail"), session),
+            **diagnostics,
+        }
 
     coaching = build_clean_coaching(session)
     fail = "N/A" if _is_fail_na(session) else build_clean_fail(session)
@@ -9346,7 +10012,7 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
     if res_coaching is not None:
         ret["coaching"] = res_coaching
     if res_fail is not None:
-        ret["fail"] = res_fail
+        ret["fail"] = _ensure_final_attempt_fail_summary(res_fail, session)
     if gemini_error:
         ret["gemini_error"] = gemini_error
         ret["error"] = gemini_error
@@ -9369,11 +10035,23 @@ def _count_results(session, prefix, total, target):
 
 
 def _format_newbie_shift_for_form(session):
+    if any((session.get(f"sup_transfer_{i}") or {}).get("result") == "Pass" for i in range(1, 3)):
+        return "N/A"
     newbie = session.get("newbie_shift_data")
     if not newbie:
         return "N/A"
     parts = [newbie.get("newbie_date", "").strip(), "at", newbie.get("newbie_time", "").strip(), newbie.get("newbie_tz", "").strip()]
     return " ".join(part for part in parts if part).strip() or "N/A"
+
+
+def _format_headset_for_form(session):
+    model = str(session.get("headset_brand") or "N/A").strip() or "N/A"
+    if _classify_auto_fail_reason(session.get("auto_fail_reason")) != "headset":
+        return model
+    usb = "Yes" if session.get("headset_usb") is True else "No" if session.get("headset_usb") is False else "N/A"
+    noise = "Yes" if session.get("noise_cancel") is True else "No" if session.get("noise_cancel") is False else "N/A"
+    reasons = str(session.get("auto_fail_reason") or "").strip()
+    return f"{model} | USB: {usb} | Noise Cancelling Mic: {noise} | Reasons: {reasons}"
 
 
 def _candidate_first_name(session):
@@ -9611,6 +10289,7 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
 
     if not _is_fail_na(session):
         fail_reason = (fail_summary or "").strip() or summaries["fail"]
+        fail_reason = _ensure_final_attempt_fail_summary(fail_reason, session)
 
     return {
         "tester_name": (session.get("tester_name") or settings.get("tester_name") or settings.get("display_name") or "").strip(),
@@ -9621,7 +10300,7 @@ def build_form_fill_payload(session, settings, coaching_summary="", fail_summary
         "all_complete": completion_flags["all_complete"],
         "newbie_shift": _format_newbie_shift_for_form(session),
         "auto_fail": "NC/NS" if _is_newbie_reschedule(session) and session.get("newbie_shift_counts_as_attempt") else _map_auto_fail_for_form(session.get("auto_fail_reason")),
-        "headset": (session.get("headset_brand") or "N/A").strip() or "N/A",
+        "headset": _format_headset_for_form(session),
         "tech_issue_choice": tech_issue["choice"],
         "tech_issue_other": tech_issue["other_text"],
         "coaching": (coaching_summary or "").strip() or summaries["coaching"],
@@ -10119,6 +10798,46 @@ async def get_current_session():
     if doc:
         return {"session": doc, "has_active": bool(doc.get("candidate_name"))}
     return {"session": None, "has_active": False}
+
+
+@api_router.get("/session/attempt-state")
+async def get_session_attempt_state():
+    doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
+    if not doc:
+        return {"ok": False, "error": "No active session", "attemptState": None}
+
+    candidate_name = " ".join(str(doc.get("candidate_name") or "").lower().split())
+    history = await db.history.find({}, {"_id": 0}).to_list(5000)
+    candidate_history = [
+        row for row in history
+        if " ".join(str(row.get("candidate_name") or row.get("candidate") or "").lower().split()) == candidate_name
+    ]
+    attempt_state = calculate_candidate_attempt_state(candidate_history, active_session=doc)
+    active_counts, _ = _candidate_attempt_disposition(doc)
+    patch = {"attempt_state": attempt_state}
+    if active_counts:
+        if attempt_state["terminal"]:
+            patch.update({
+                "final_attempt": True,
+                "supervisor_retry_required": False,
+                "final_status": "FAIL-Final Attempt",
+            })
+        elif attempt_state["retry_allowed"]:
+            patch.update({
+                "supervisor_retry_required": True,
+                "next_attempt_number": attempt_state["current_attempt"],
+                "final_attempt": attempt_state["final_attempt"],
+                "final_status": "Incomplete",
+            })
+    await db.sessions.update_one({"_id": "active_session"}, {"$set": patch}, upsert=False)
+    return {
+        "ok": True,
+        "attemptState": attempt_state,
+        "retryAllowed": bool(attempt_state["retry_allowed"] and not attempt_state["terminal"]),
+        "retryIsFinalAttempt": bool(attempt_state["final_attempt"] and not attempt_state["terminal"]),
+        "terminal": attempt_state["terminal"],
+        "sessionPatch": patch,
+    }
 
 
 @api_router.get("/shared/candidates/lookup")
@@ -11202,15 +11921,19 @@ async def post_sam_setup_complete(payload: dict):
     result = await asyncio.to_thread(_complete_sam_setup, payload or {})
     if not result.get("ok"):
         return result
-    await db.settings.update_one(
-        {"_id": "app_settings"},
-        {"$set": {
-            "sam_setup_complete": True,
-            "sam_user_name": result.get("name") or "",
-            "sam_user_role": result.get("role") or "",
-        }},
-        upsert=True,
-    )
+    try:
+        await db.settings.update_one(
+            {"_id": "app_settings"},
+            {"$set": {
+                "sam_setup_complete": True,
+                "sam_user_name": result.get("name") or "",
+                "sam_user_role": result.get("role") or "",
+            }},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning("[SAM-SETUP] status=persistence_failed error_type=%s", type(exc).__name__)
+        return _sam_setup_error("setup_persistence_failed")
     return result
 
 
@@ -11359,6 +12082,10 @@ async def start_session(payload: dict, request: Request, background_tasks: Backg
     session = empty_session()
     session.update(payload)
     session["session_id"] = str(session.get("session_id") or uuid.uuid4())
+    if str(session.get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE:
+        if not str(session.get("newbie_shift_request_id") or "").strip():
+            session["newbie_shift_request_id"] = f"newbie-{session['session_id']}-{uuid.uuid4().hex}"
+        session = _apply_newbie_reschedule_attempt(session)
     session["last_saved"] = datetime.now(timezone.utc).strftime("%I:%M %p")
     await db.sessions.replace_one({"_id": "active_session"}, {"_id": "active_session", **session}, upsert=True)
     if _shared_truthy(session.get("headset_review_requested")):
@@ -11381,6 +12108,12 @@ async def update_session(payload: dict, request: Request):
             len(str(payload)),
         )
         
+    combined = {**existing, **payload}
+    if str(combined.get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE:
+        combined = _apply_newbie_reschedule_attempt(combined)
+        for field in NEWBIE_RESCHEDULE_ATTEMPT_FIELDS:
+            if field in combined:
+                payload[field] = combined.get(field)
     payload["last_saved"] = datetime.now(timezone.utc).strftime("%I:%M %p")
     await db.sessions.update_one({"_id": "active_session"}, {"$set": payload}, upsert=False)
     doc = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
@@ -11398,9 +12131,22 @@ async def update_session(payload: dict, request: Request):
                 "ok": False,
                 "session": doc,
                 "requestSaved": False,
+                "errorCode": request_result.get("errorCode") or "remote_unavailable",
                 "error": request_result.get("error") or "The reschedule request could not be submitted. Retry Save/Submit.",
             }
-        return {"ok": True, "session": doc, "requestSaved": True}
+        confirmed_at = datetime.now(timezone.utc).isoformat()
+        confirmation = {
+            "newbie_shift_request_confirmed_at": confirmed_at,
+            "newbie_shift_request_submission_fingerprint": request_result.get("fingerprint") or _newbie_request_submission_fingerprint(doc),
+        }
+        await db.sessions.update_one({"_id": "active_session"}, {"$set": confirmation}, upsert=False)
+        doc.update(confirmation)
+        return {
+            "ok": True,
+            "session": doc,
+            "requestSaved": True,
+            "requestState": "already_pending" if request_result.get("alreadyPending") else "submitted",
+        }
     return {"ok": True, "session": doc}
 
 
@@ -11415,8 +12161,30 @@ async def save_call(payload: dict, request: Request):
 @api_router.post("/session/sup")
 async def save_sup(payload: dict, request: Request):
     key = f"sup_transfer_{payload.get('transfer_num', 1)}"
-    await db.sessions.update_one({"_id": "active_session"}, {"$set": {key: payload, "current_sup_transfer_draft": None, "current_sup_transfer_num": None}})
-    return {"ok": True}
+    update = {key: payload, "current_sup_transfer_draft": None, "current_sup_transfer_num": None}
+    if str(payload.get("result") or "").strip().lower() == "pass":
+        update.update({
+            "newbie_shift_data": None,
+            "newbie_shift_scheduled_at": "",
+            "newbie_shift_timezone": "",
+            "newbie_shift_calendar_created": False,
+            "newbie_shift_request_id": "",
+            "newbie_shift_request_type": NEWBIE_REQUEST_INITIAL,
+            "newbie_shift_request_status": "",
+            "newbie_shift_requested_by": "",
+            "newbie_shift_request_reason": "",
+            "newbie_shift_request_details": "",
+            "newbie_shift_request_created_at": "",
+            "newbie_shift_original_scheduled_at": "",
+            "newbie_shift_rescheduled_at": "",
+            "newbie_shift_prompt": None,
+            "supervisor_retry_required": False,
+            "next_attempt_number": None,
+            "fail_summary": "N/A",
+        })
+    await db.sessions.update_one({"_id": "active_session"}, {"$set": update})
+    session = await db.sessions.find_one({"_id": "active_session"}, {"_id": 0})
+    return {"ok": True, "session": session}
 
 
 @api_router.post("/session/finish")

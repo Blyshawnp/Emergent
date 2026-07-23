@@ -31,6 +31,17 @@ export const DELETION_REQUEST_STATUS = Object.freeze({
 
 export const CERTIFICATION_SUPPORT_EMAIL = 'certification@acdsupport.com';
 
+export function getHeadsetAutoFailReasons(headsetUsb, noiseCancel) {
+  const reasons = [];
+  if (headsetUsb === false) reasons.push('Wrong headset (not USB)');
+  if (noiseCancel === false) reasons.push('Wrong headset (not noise cancelling)');
+  return reasons;
+}
+
+export function buildHeadsetAutoFailReason(headsetUsb, noiseCancel) {
+  return getHeadsetAutoFailReasons(headsetUsb, noiseCancel).join(' and ');
+}
+
 export const RESCHEDULE_REASONS = [
   'Unexpected emergency',
   'Internet outage',
@@ -259,18 +270,66 @@ export function parseScheduledDateTime(dateValue, timeValue, timezoneValue = '')
   let hour = Number(timeMatch[1]);
   const minute = Number(timeMatch[2]);
   const ampm = timeMatch[3].toUpperCase();
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
   if (ampm === 'PM' && hour < 12) hour += 12;
   if (ampm === 'AM' && hour === 12) hour = 0;
-  const offset = timezoneOffsetForLabel(timezoneValue);
+  const offset = timezoneOffsetForLabel(timezoneValue, isoDate, hour, minute);
   return `${isoDate}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00${offset}`;
 }
 
-export function timezoneOffsetForLabel(label = '') {
+const TIMEZONE_IANA_BY_LABEL = Object.freeze({
+  PACIFIC: 'America/Los_Angeles',
+  MOUNTAIN: 'America/Denver',
+  CENTRAL: 'America/Chicago',
+  EASTERN: 'America/New_York',
+});
+
+function offsetForWallTime(timeZone, isoDate, hour, minute) {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  const desiredUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let instant = desiredUtc;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+  for (let pass = 0; pass < 3; pass += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(instant))
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, Number(part.value)])
+    );
+    const observedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    const observedOffset = observedAsUtc - instant;
+    const nextInstant = desiredUtc - observedOffset;
+    if (nextInstant === instant) break;
+    instant = nextInstant;
+  }
+  const offsetMinutes = Math.round((desiredUtc - instant) / 60000);
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absolute = Math.abs(offsetMinutes);
+  return `${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`;
+}
+
+export function timezoneOffsetForLabel(label = '', isoDate = '', hour = 12, minute = 0) {
   const text = String(label || '').toUpperCase();
-  if (text.includes('PST') || text.includes('PACIFIC')) return '-08:00';
-  if (text.includes('MST') || text.includes('MOUNTAIN')) return '-07:00';
-  if (text.includes('CST') || text.includes('CENTRAL')) return '-06:00';
-  return '-05:00';
+  const region = text.includes('PST') || text.includes('PACIFIC') ? 'PACIFIC'
+    : text.includes('MST') || text.includes('MOUNTAIN') ? 'MOUNTAIN'
+      : text.includes('CST') || text.includes('CENTRAL') ? 'CENTRAL'
+        : 'EASTERN';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    try {
+      return offsetForWallTime(TIMEZONE_IANA_BY_LABEL[region], isoDate, hour, minute);
+    } catch (_error) {
+      // Fall through to the standard offset when Intl timezone data is unavailable.
+    }
+  }
+  return { PACIFIC: '-08:00', MOUNTAIN: '-07:00', CENTRAL: '-06:00', EASTERN: '-05:00' }[region];
 }
 
 export function computeWithin24Hours(originalIso, requestedAtIso) {

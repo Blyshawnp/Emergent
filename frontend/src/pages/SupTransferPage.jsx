@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
+import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 import { mergeAndOrderFailReasons } from '../utils/failReasons';
 const DEFAULT_SUP_COACHING = [
@@ -400,7 +401,10 @@ export default function SupTransferPage({ onNavigate, navigationState, settings:
     } else {
       if (result === 'Fail') {
         const { session } = await api.getCurrentSession();
-        if (session && session.final_attempt) { await api.updateSession({ final_status: 'FAIL-Final Attempt' }); onNavigate('review'); }
+        const attemptResult = await api.getAttemptState().catch(() => null);
+        const terminal = attemptResult?.terminal ?? Boolean(session?.final_attempt && !session?.supervisor_retry_required);
+        const retryAllowed = attemptResult?.retryAllowed ?? !terminal;
+        if (terminal || !retryAllowed) { await api.updateSession({ final_status: 'FAIL-Final Attempt', supervisor_retry_required: false }); onNavigate('review'); }
         else {
           const promptSignature = 'both_sup_transfers_failed';
           const existingPrompt = session?.newbie_shift_prompt || {};
@@ -428,6 +432,9 @@ export default function SupTransferPage({ onNavigate, navigationState, settings:
           await api.updateSession({
             final_status: 'Incomplete',
             fail_summary: 'N/A',
+            supervisor_retry_required: true,
+            final_attempt: Boolean(attemptResult?.retryIsFinalAttempt || session?.final_attempt),
+            attempt_state: attemptResult?.attemptState || session?.attempt_state || null,
             newbie_shift_prompt: {
               trigger: promptSignature,
               status: schedule ? 'accepted' : 'dismissed',
@@ -554,6 +561,7 @@ export default function SupTransferPage({ onNavigate, navigationState, settings:
           Supervisor Transfer Only mode
         </div>
       )}
+      <FinalAttemptBanner visible={isFinal} attemptState={sessionRef.current?.attempt_state} />
       <div className="card" style={{ textAlign: 'center', marginBottom: 16, padding: 16, background: 'var(--color-primary)', border: 'none' }} data-tour="sup-discord-banner">
         <div style={{ color: 'white', fontWeight: 700, fontSize: '1.125rem' }}>Call Corp WXYZ Test Transfer #: 1-828-630-7006</div>
       </div>

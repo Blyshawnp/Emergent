@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
+import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import { formatDonationAmountLabel, getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 import { mergeAndOrderFailReasons } from '../utils/failReasons';
 const DEFAULT_CALL_COACHING = [
@@ -660,6 +661,7 @@ export default function CallsPage({ onNavigate, navigationState, settings: initi
           </div>
         )}
       </div>
+      <FinalAttemptBanner visible={isFinal} />
       <div className="split-layout">
         <div className="card setup-card" data-tour="calls-setup">
           <h3 style={{ marginBottom: 16 }}>Call Setup</h3>

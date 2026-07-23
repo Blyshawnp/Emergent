@@ -220,7 +220,7 @@ class PendingRequestReconciliationTests(unittest.TestCase):
         self.assertEqual(reason, "source_session_conflict")
         self.assertEqual(reconciled["newbie_shift_request_status"], "pending")
 
-    def test_direct_request_sync_preserves_remote_resolution(self):
+    def test_direct_request_sync_refuses_to_reuse_remote_resolution(self):
         existing = {
             "request_id": "request-1",
             "session_id": "session-1",
@@ -237,10 +237,8 @@ class PendingRequestReconciliationTests(unittest.TestCase):
                 existing_rows=[existing],
             )
 
-        values = update_row.call_args.args[-1]
-        status_index = server.SHARED_NEWBIE_SHIFT_REQUEST_HEADERS.index("request_status")
-        self.assertEqual(result, "updated")
-        self.assertEqual(values[status_index], "approved")
+        self.assertEqual(result, "already_resolved")
+        update_row.assert_not_called()
 
     def test_request_only_sync_uses_apps_script_upsert_without_candidate_tracking_write(self):
         client = mock.MagicMock()
@@ -249,6 +247,8 @@ class PendingRequestReconciliationTests(unittest.TestCase):
         session = local_record(
             session_id="session-1",
             newbie_shift_request_type="reschedule",
+            newbie_shift_request_created_at="2026-07-18T12:00:00Z",
+            newbie_shift_original_scheduled_at="2026-07-20T10:00:00-05:00",
             newbie_shift_request_reason="Scheduling conflict",
             newbie_shift_requested_by="tester",
             newbie_shift_rescheduled_at="2026-07-20T10:00:00-05:00",
@@ -263,6 +263,19 @@ class PendingRequestReconciliationTests(unittest.TestCase):
         self.assertEqual(action, "upsertPendingRequest")
         self.assertEqual(payload["request"]["request_type"], "newbie_shift_reschedule")
         self.assertEqual(payload["request"]["requested_by"], "tester")
+        self.assertEqual(payload["request"]["original_scheduled_at"], "2026-07-20T10:00:00-05:00")
+        self.assertEqual(payload["request"]["rescheduled_at"], "2026-07-20T10:00:00-05:00")
+
+    def test_public_sam_request_accepts_canonical_previous_and_requested_schedule_names(self):
+        request = server._public_newbie_request({
+            "request_id": "request-1",
+            "request_type": "reschedule",
+            "original_schedule": "2026-07-20T10:00:00-05:00",
+            "requested_scheduled_at": "2026-07-22T11:30:00-05:00",
+        })
+
+        self.assertEqual(request["original_schedule"], "2026-07-20T10:00:00-05:00")
+        self.assertEqual(request["requested_schedule"], "2026-07-22T11:30:00-05:00")
 
     def test_request_only_sync_preserves_direct_sheets_path(self):
         spreadsheets = mock.MagicMock()
@@ -270,10 +283,21 @@ class PendingRequestReconciliationTests(unittest.TestCase):
         context["service"].spreadsheets.return_value = spreadsheets
         with mock.patch.object(server, "_shared_sheet_context", return_value=context), \
              mock.patch.object(server, "_sync_newbie_shift_request", return_value="updated") as sync_request:
-            result = server._sync_newbie_shift_request_only(local_record())
+            source = local_record(
+                session_id="session-1",
+                newbie_shift_request_type="reschedule",
+                newbie_shift_request_created_at="2026-07-18T12:00:00Z",
+                newbie_shift_original_scheduled_at="2026-07-20T10:00:00-05:00",
+                newbie_shift_rescheduled_at="2026-07-21T10:00:00-05:00",
+                newbie_shift_scheduled_at="2026-07-21T10:00:00-05:00",
+                newbie_shift_requested_by="tester",
+                newbie_shift_request_reason="Scheduling conflict",
+            )
+            result = server._sync_newbie_shift_request_only(source)
 
-        self.assertEqual(result, {"ok": True, "action": "updated"})
-        sync_request.assert_called_once_with(local_record(), spreadsheets, "test-sheet")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "updated")
+        sync_request.assert_called_once()
 
     def test_terminal_candidate_suppresses_only_obsolete_pending_newbie_work(self):
         pending = server._public_newbie_request({

@@ -20,6 +20,7 @@ jest.mock('../api', () => ({
   __esModule: true,
   default: {
     getCurrentSession: jest.fn(),
+    getAttemptState: jest.fn(),
     getDefaults: jest.fn(),
     getSettings: jest.fn(),
     updateSession: jest.fn(),
@@ -120,6 +121,7 @@ beforeEach(() => {
   mockModal.showModal.mockResolvedValue(true);
   api.updateSession.mockResolvedValue({ ok: true });
   api.saveSupTransfer.mockResolvedValue({ ok: true });
+  api.getAttemptState.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -403,9 +405,67 @@ test('final-attempt second failed supervisor transfer fails with no Newbie Shift
   expect(mockModal.showModal).not.toHaveBeenCalledWith(expect.objectContaining({
     title: 'Schedule Newbie Shift',
   }));
-  expect(api.updateSession).toHaveBeenCalledWith({ final_status: 'FAIL-Final Attempt' });
+  expect(api.updateSession).toHaveBeenCalledWith({ final_status: 'FAIL-Final Attempt', supervisor_retry_required: false });
   expect(view.onNavigate).toHaveBeenCalledWith('review');
 
+  await view.unmount();
+});
+
+test('counted supervisor failure promotes the scheduled retry to Final Attempt', async () => {
+  const view = await renderPage({
+    final_attempt: false,
+    call_1: { result: 'Pass' },
+    call_2: { result: 'Pass' },
+    sup_transfer_1: { result: 'Fail' },
+    sup_transfer_drafts: {
+      2: {
+        transfer_num: 2,
+        result: 'Fail',
+        fails: { 'Transferred to wrong queue': true },
+        coaching: { 'Minimize dead air': true },
+      },
+    },
+  }, { transferNum: 2 });
+  api.getCurrentSession.mockResolvedValue({
+    session: {
+      candidate_name: 'Taylor Example',
+      sup_transfer_1: { result: 'Fail' },
+      sup_transfer_2: { result: 'Fail' },
+    },
+  });
+  api.getAttemptState.mockResolvedValue({
+    retryAllowed: true,
+    retryIsFinalAttempt: true,
+    terminal: false,
+    attemptState: {
+      current_attempt: 3,
+      max_attempts: 3,
+      remaining_attempts: 0,
+      final_attempt: true,
+      reason: 'next_attempt_is_final',
+      terminal: false,
+    },
+  });
+  mockModal.showModal.mockResolvedValueOnce(true);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="sup-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    final_attempt: true,
+    supervisor_retry_required: true,
+    attempt_state: expect.objectContaining({ current_attempt: 3, final_attempt: true }),
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+  await view.unmount();
+});
+
+test('shows one persistent Final Attempt banner on Supervisor Transfer', async () => {
+  const view = await renderPage({ final_attempt: true });
+  expect(view.container.querySelectorAll('[data-testid="final-attempt-banner"]')).toHaveLength(1);
+  expect(view.container.textContent).toContain('FINAL ATTEMPT');
   await view.unmount();
 });
 

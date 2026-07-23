@@ -3,6 +3,7 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import { CandidateIpReviewBlock, storeCandidateIpIntelligence } from '../components/CandidateIpIntelligence';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
+import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 import { displaySummaryLabel } from '../utils/summaryDisplayLabels';
@@ -82,6 +83,10 @@ function computeCalculatedStatus(session) {
   ].filter((result) => result === 'Fail').length;
   const newbie = session.newbie_shift_data;
 
+  if (session.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE && session.newbie_shift_terminal_outcome) {
+    return session.newbie_shift_terminal_outcome;
+  }
+
   if (session.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE && session.newbie_shift_counts_as_attempt) {
     return 'NC/NS';
   }
@@ -94,13 +99,19 @@ function computeCalculatedStatus(session) {
 
   if (supOnly) {
     if (supsPassed >= 1) return resumedSup ? 'RESUMED-PASS' : 'Pass';
-    if (supsFailed >= 2) return finalAttempt ? 'FAIL-Final Attempt' : 'Incomplete';
+    if (supsFailed >= 2) {
+      if (session.supervisor_retry_required && newbie) return 'Incomplete';
+      return finalAttempt ? 'FAIL-Final Attempt' : 'Incomplete';
+    }
     return newbie ? 'Incomplete' : 'Incomplete';
   }
 
   if (callsPassed >= 2) {
     if (supsPassed >= 1) return 'Pass';
-    if (supsFailed >= 2) return finalAttempt ? 'FAIL-Final Attempt' : 'Incomplete';
+    if (supsFailed >= 2) {
+      if (session.supervisor_retry_required && newbie) return 'Incomplete';
+      return finalAttempt ? 'FAIL-Final Attempt' : 'Incomplete';
+    }
     return newbie ? 'Incomplete' : 'Incomplete';
   }
 
@@ -251,9 +262,16 @@ function getFallbackFailSummary(session) {
   if (session?.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE) {
     return buildRescheduleFailSummary(session);
   }
-  if (saved) return saved;
+  if (saved) return ensureFinalAttemptSummary(saved, session);
   const generated = buildLocalFallbackFailSummary(session);
-  return generated || 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.';
+  return ensureFinalAttemptSummary(generated || 'No fail summary was generated before Review loaded. You can continue reviewing the session or retry summary generation.', session);
+}
+
+function ensureFinalAttemptSummary(text, session) {
+  const value = String(text || '').trim();
+  if (!session?.final_attempt || !shouldPopulateFailSummary(session.final_status || computeFinalStatus(session))) return value;
+  if (/\bfinal attempt\b/i.test(value)) return value;
+  return `${value} This session was the candidate's final attempt.`.trim();
 }
 
 function summarizeFailSectionForFallback(section, label) {
@@ -567,7 +585,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const finalReadinessJudgment = normalizeFinalReadinessJudgment(s.finalReadinessJudgment, calculatedStatus);
   const finalStatus = computeFinalStatus({ ...s, finalReadinessJudgment });
   const coachingForDisplay = appendReadinessOverrideSummary(coaching, finalReadinessJudgment);
-  const failForDisplay = getStatusSafeFailSummary(fail, finalStatus, finalReadinessJudgment);
+  const failForDisplay = ensureFinalAttemptSummary(getStatusSafeFailSummary(fail, finalStatus, finalReadinessJudgment), s);
   const incompleteReason = finalStatus === 'Incomplete' ? getIncompleteReason(s) : '';
   const currentTechIssue = getCurrentSessionTechIssue(s);
   const historicalTechIssue = getHistoricalSessionTechIssue(s);
@@ -1083,6 +1101,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         />
       )}
       <h1 style={{ marginBottom: 24 }}>{isHistoricalReview ? 'Historical Review & Summary' : 'Session Review & Summary'}</h1>
+      <FinalAttemptBanner visible={s.final_attempt && finalStatus !== 'FAIL-Final Attempt'} attemptState={s.attempt_state} />
       {isHistoricalReview && (
         <div className="card" style={{ marginBottom: 16, background: 'var(--bg-card-hover)' }}>
           <div className="text-muted text-sm">

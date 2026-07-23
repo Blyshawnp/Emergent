@@ -12,8 +12,34 @@ import {
   formFillStatusMeta,
   getNewbieShiftEligibility,
   newbieShiftStatusMeta,
+  parseScheduledDateTime,
+  computeWithin24Hours,
+  buildHeadsetAutoFailReason,
+  getHeadsetAutoFailReasons,
   sessionStatusMeta,
 } from './certificationWorkflow';
+
+test('scheduled timestamps use the selected region DST offset and exact 24-hour boundary', () => {
+  expect(parseScheduledDateTime('03/07/2026', '10:00 AM', 'EST (Eastern)')).toBe('2026-03-07T10:00:00-05:00');
+  expect(parseScheduledDateTime('03/09/2026', '10:00 AM', 'EST (Eastern)')).toBe('2026-03-09T10:00:00-04:00');
+  expect(computeWithin24Hours('2026-03-09T10:00:00-04:00', '2026-03-08T10:00:00-04:00')).toBe(false);
+  expect(computeWithin24Hours('2026-03-09T09:59:59-04:00', '2026-03-08T10:00:00-04:00')).toBe(true);
+});
+
+test('invalid wall-clock values are rejected', () => {
+  expect(parseScheduledDateTime('07/21/2026', '13:00 PM', 'EST (Eastern)')).toBeNull();
+  expect(parseScheduledDateTime('07/21/2026', '10:99 AM', 'EST (Eastern)')).toBeNull();
+});
+
+test.each([
+  [false, false, ['Wrong headset (not USB)', 'Wrong headset (not noise cancelling)']],
+  [true, false, ['Wrong headset (not noise cancelling)']],
+  [false, true, ['Wrong headset (not USB)']],
+  [true, true, []],
+])('headset requirements map USB=%s noise=%s to exact auto-fail reasons', (usb, noise, expected) => {
+  expect(getHeadsetAutoFailReasons(usb, noise)).toEqual(expected);
+  expect(buildHeadsetAutoFailReason(usb, noise)).toBe(expected.join(' and '));
+});
 
 const finalAttemptReschedule = {
   candidate_name: 'Taylor Example',

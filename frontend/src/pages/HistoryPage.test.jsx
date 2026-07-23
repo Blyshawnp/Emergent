@@ -115,7 +115,7 @@ beforeEach(() => {
   mockModal.confirm.mockResolvedValue(false);
   mockModal.confirmDanger.mockResolvedValue(false);
   mockModal.showModal.mockResolvedValue('cancel');
-  api.startSession.mockResolvedValue({ ok: true });
+  api.startSession.mockResolvedValue({ ok: true, session: { session_id: 'active-reschedule' } });
 });
 
 afterEach(() => {
@@ -163,6 +163,32 @@ test('history status chips use clean labels without visible symbol prefixes', as
     expect(markers[0].getAttribute('aria-hidden')).toBe('true');
   });
   expect(view.container.querySelector('.status-chip').getAttribute('aria-label')).toContain('status:');
+
+  await view.unmount();
+});
+
+test('session details show one persistent Final Attempt banner and saved attempt history', async () => {
+  const finalRow = {
+    ...historyRows[2],
+    final_attempt: true,
+    attempt_state: { current_attempt: 3, max_attempts: 3 },
+    attempt_history: [
+      { attempt_number: 2, final_status: 'Incomplete', sup_transfer_1: { result: 'Fail' } },
+    ],
+  };
+  const view = await renderPage([finalRow]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  const detail = view.container.querySelector('[data-testid="history-detail-modal"]');
+  expect(detail.querySelectorAll('[data-testid="final-attempt-banner"]')).toHaveLength(1);
+  expect(detail.textContent).toContain('FINAL ATTEMPT');
+  expect(detail.textContent).toContain('Attempt History');
+  expect(detail.textContent).toContain('Attempt 2');
 
   await view.unmount();
 });
@@ -260,6 +286,55 @@ test('reschedule intake is completed before navigation and carries who and reaso
     newbie_shift_data: historyRows[1].newbie_shift_data,
   }));
   expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+  await view.unmount();
+});
+
+test('details to reschedule suspends the parent modal, traps focus, and cancel restores it', async () => {
+  const view = await renderPage([historyRows[1]]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.querySelector('[data-testid="history-detail-modal"]')).not.toBeNull();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-detail-reschedule"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.querySelector('[data-testid="history-detail-modal"]')).toBeNull();
+  expect(view.container.querySelector('[data-testid="reschedule-intake-modal"]')).not.toBeNull();
+  expect(view.container.querySelectorAll('.modal-overlay.open')).toHaveLength(1);
+  expect(document.activeElement).toBe(view.container.querySelector('[data-testid="reschedule-intake-requester-candidate"]'));
+
+  await act(async () => {
+    view.container.querySelector('.reschedule-intake-actions .btn-muted').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.querySelector('[data-testid="reschedule-intake-modal"]')).toBeNull();
+  expect(view.container.querySelector('[data-testid="history-detail-modal"]')).not.toBeNull();
+  expect(view.container.querySelectorAll('.modal-overlay.open')).toHaveLength(1);
+  expect(document.activeElement).toBe(view.container.querySelector('[data-testid="history-detail-reschedule"]'));
+
+  await view.unmount();
+});
+
+test('details reschedule Continue leaves no hidden details modal or duplicate backdrop', async () => {
+  const view = await renderPage([historyRows[1]]);
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+    view.container.querySelector('[data-testid="history-detail-reschedule"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+    view.container.querySelector('[data-testid="reschedule-intake-requester-tester"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    view.container.querySelector('[data-testid="reschedule-intake-reason-scheduling-conflict"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+    view.container.querySelector('[data-testid="reschedule-intake-continue"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.onNavigate).toHaveBeenCalledWith('newbieshift');
+  expect(view.container.querySelectorAll('.modal-overlay.open')).toHaveLength(0);
+  expect(view.container.querySelector('[data-testid="history-detail-modal"]')).toBeNull();
   await view.unmount();
 });
 

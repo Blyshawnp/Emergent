@@ -47,17 +47,31 @@ function getModalGraphic(modal) {
 export function ModalProvider({ children }) {
   const [modal, setModal] = useState(null);
   const resolveRef = useRef(null);
+  const dialogRef = useRef(null);
+  const restoreFocusRef = useRef(null);
+  const modalGenerationRef = useRef(0);
 
   const closeModal = useCallback((value) => {
+    const closingGeneration = modalGenerationRef.current;
     setModal(null);
     if (resolveRef.current) {
       resolveRef.current(value);
       resolveRef.current = null;
     }
+    window.setTimeout(() => {
+      if (modalGenerationRef.current !== closingGeneration) return;
+      const target = restoreFocusRef.current;
+      restoreFocusRef.current = null;
+      if (target && typeof target.focus === 'function' && document.contains(target)) target.focus();
+    }, 0);
   }, []);
 
   const showModal = useCallback((config) => {
     return new Promise((resolve) => {
+      modalGenerationRef.current += 1;
+      if (!restoreFocusRef.current && document.activeElement instanceof HTMLElement) {
+        restoreFocusRef.current = document.activeElement;
+      }
       resolveRef.current = resolve;
       setModal(config);
     });
@@ -125,6 +139,28 @@ export function ModalProvider({ children }) {
     return typeof cleanup === 'function' ? cleanup : undefined;
   }, [modal]);
 
+  useEffect(() => {
+    if (!modal || !dialogRef.current) return;
+    const safeButton = dialogRef.current.querySelector('[data-modal-safe="true"]');
+    const firstButton = dialogRef.current.querySelector('button:not([disabled])');
+    (safeButton || firstButton)?.focus();
+  }, [modal]);
+
+  const trapDialogFocus = useCallback((event) => {
+    if (event.key !== 'Tab' || !dialogRef.current) return;
+    const focusable = Array.from(dialogRef.current.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, []);
+
   const modalGraphic = getModalGraphic(modal);
 
   return (
@@ -132,7 +168,14 @@ export function ModalProvider({ children }) {
       {children}
       {modal && (
         <div className="cmodal-overlay open">
-          <div className="cmodal">
+          <div
+            className="cmodal"
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={modal.title || 'Dialog'}
+            onKeyDown={trapDialogFocus}
+          >
             {modalGraphic ? (
               <img
                 className={`cmodal-graphic ${modal.graphic === 'logo' ? 'cmodal-graphic-logo' : ''}`}
@@ -153,7 +196,13 @@ export function ModalProvider({ children }) {
             <div className="cmodal-body" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(modal.body) }} />
             <div className="cmodal-btns">
               {modal.buttons.map((btn, i) => (
-                <button key={i} className={`btn ${btn.cls}`} onClick={() => closeModal(btn.value)} data-testid={`modal-btn-${i}`}>
+                <button
+                  key={i}
+                  className={`btn ${btn.cls}`}
+                  onClick={() => closeModal(btn.value)}
+                  data-testid={`modal-btn-${i}`}
+                  data-modal-safe={btn.value === false || btn.value === 'cancel' || /cancel|back|no/i.test(btn.label || '') ? 'true' : 'false'}
+                >
                   {btn.label}
                 </button>
               ))}

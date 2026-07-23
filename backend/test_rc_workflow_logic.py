@@ -1192,6 +1192,173 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         mock_update.assert_called_once()
         mock_candidate_action.assert_not_called()
 
+    def test_authoritative_attempt_state_promotes_supervisor_retry_to_final_attempt(self):
+        prior = [{
+            "session_id": "attempt-1",
+            "candidate_name": "Taylor Example",
+            "status": "Fail",
+            "call_1_result": "Fail",
+            "call_2_result": "Fail",
+        }]
+        active = {
+            "session_id": "attempt-2",
+            "candidate_name": "Taylor Example",
+            "attempt_number": 2,
+            "prior_counted_attempts": 1,
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+            "sup_transfer_1": {"result": "Fail"},
+            "sup_transfer_2": {"result": "Fail"},
+        }
+
+        state = server.calculate_candidate_attempt_state(prior, active_session=active)
+
+        self.assertEqual(state["current_attempt"], 3)
+        self.assertEqual(state["max_attempts"], 3)
+        self.assertEqual(state["remaining_attempts"], 0)
+        self.assertTrue(state["final_attempt"])
+        self.assertTrue(state["retry_allowed"])
+        self.assertFalse(state["terminal"])
+        self.assertEqual(state["reason"], "next_attempt_is_final")
+
+    def test_authoritative_attempt_state_deduplicates_and_ignores_noncounting_reschedule(self):
+        rows = [
+            {"session_id": "attempt-1", "status": "Fail"},
+            {"session_id": "attempt-1", "status": "Fail"},
+            {
+                "session_id": "reschedule-1",
+                "status": "NC/NS",
+                "newbie_shift_request_type": "reschedule",
+                "newbie_shift_counts_as_attempt": False,
+            },
+        ]
+
+        state = server.calculate_candidate_attempt_state(rows)
+
+        self.assertEqual(state["counted_attempts"], 1)
+        self.assertEqual(state["current_attempt"], 2)
+        self.assertEqual(len(state["counted_events"]), 1)
+        self.assertEqual(len(state["non_counting_events"]), 1)
+
+    def test_final_supervisor_retry_failure_is_terminal(self):
+        active = {
+            "session_id": "attempt-3",
+            "candidate_name": "Taylor Example",
+            "prior_counted_attempts": 2,
+            "final_attempt": True,
+            "supervisor_only": True,
+            "sup_transfer_1": {"result": "Fail"},
+            "sup_transfer_2": {"result": "Fail"},
+        }
+
+        state = server.calculate_candidate_attempt_state([], active_session=active)
+
+        self.assertTrue(state["terminal"])
+        self.assertFalse(state["retry_allowed"])
+        self.assertEqual(state["reason"], "final_attempt_exhausted")
+
+    def test_supervisor_pass_forces_newbie_shift_form_value_to_na(self):
+        for workflow_flags in (
+            {"supervisor_only": True},
+            {"smart_resume": True, "resume_source_history_id": "history-2"},
+        ):
+            with self.subTest(workflow_flags=workflow_flags):
+                session = {
+                    "candidate_name": "Taylor Example",
+                    **workflow_flags,
+                    "sup_transfer_1": {"result": "Pass"},
+                    "newbie_shift_data": {"newbie_date": "07/30/2026", "newbie_time": "10:00 AM", "newbie_tz": "ET"},
+                    "newbie_shift_request_id": "stale-request",
+                    "newbie_shift_request_status": "approved",
+                }
+
+                payload = server.build_form_fill_payload(session, {})
+
+                self.assertEqual(payload["newbie_shift"], "N/A")
+
+    def test_reschedule_form_fill_uses_new_schedule_not_previous_schedule(self):
+        session = {
+            "candidate_name": "Taylor Example",
+            "newbie_shift_request_type": "reschedule",
+            "newbie_shift_original_scheduled_at": "2026-07-20T10:00:00-05:00",
+            "newbie_shift_data": {
+                "newbie_date": "07/22/2026",
+                "newbie_time": "11:30 AM",
+                "newbie_tz": "EST (Eastern)",
+            },
+        }
+
+        payload = server.build_form_fill_payload(session, {})
+
+        self.assertIn("07/22/2026", payload["newbie_shift"])
+        self.assertIn("11:30 AM", payload["newbie_shift"])
+        self.assertNotIn("07/20/2026", payload["newbie_shift"])
+
+    def test_supervisor_pass_clears_stale_newbie_request_state(self):
+        saved_session = {
+            "candidate_name": "Taylor Example",
+            "sup_transfer_1": {"result": "Pass"},
+            "newbie_shift_data": None,
+            "newbie_shift_request_id": "",
+            "newbie_shift_request_status": "",
+            "supervisor_retry_required": False,
+            "fail_summary": "N/A",
+        }
+        update_one = mock.AsyncMock(return_value=None)
+        find_one = mock.AsyncMock(return_value=saved_session)
+
+        with mock.patch.object(server.db.sessions, "update_one", update_one), \
+             mock.patch.object(server.db.sessions, "find_one", find_one):
+            response = asyncio.run(server.save_sup({"transfer_num": 1, "result": "Pass"}, None))
+
+        saved_patch = update_one.await_args.args[1]["$set"]
+        self.assertIsNone(saved_patch["newbie_shift_data"])
+        self.assertEqual(saved_patch["newbie_shift_request_id"], "")
+        self.assertEqual(saved_patch["newbie_shift_request_status"], "")
+        self.assertFalse(saved_patch["supervisor_retry_required"])
+        self.assertEqual(saved_patch["fail_summary"], "N/A")
+        self.assertEqual(response["session"], saved_session)
+
+    def test_final_attempt_headset_fail_summary_and_form_preserve_both_reasons(self):
+        session = {
+            "candidate_name": "Taylor Example",
+            "final_attempt": True,
+            "headset_brand": "Acme 100",
+            "headset_usb": False,
+            "noise_cancel": False,
+            "auto_fail_reason": "Wrong headset (not USB) and Wrong headset (not noise cancelling)",
+        }
+
+        summaries = server.generate_summaries(session)
+        payload = server.build_form_fill_payload(session, {}, summaries["coaching"], summaries["fail"])
+
+        self.assertIn("final attempt", summaries["fail"].lower())
+        self.assertIn("Wrong headset (not USB)", payload["headset"])
+        self.assertIn("Wrong headset (not noise cancelling)", payload["headset"])
+        self.assertIn("USB: No", payload["headset"])
+        self.assertIn("Noise Cancelling Mic: No", payload["headset"])
+
+    def test_smart_resume_attempt_history_keeps_prior_supervisor_failure(self):
+        existing = {
+            "history_id": "history-2",
+            "attempt_number": 2,
+            "status": "Incomplete",
+            "timestamp_iso": "2026-07-23T10:00:00+00:00",
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Pass"},
+            "sup_transfer_1": {"result": "Fail"},
+            "sup_transfer_2": {"result": "Fail"},
+            "newbie_shift_data": {"newbie_date": "07/30/2026"},
+        }
+
+        history = server._append_attempt_history(existing)
+
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["attempt_number"], 2)
+        self.assertEqual(history[0]["sup_transfer_1"]["result"], "Fail")
+        self.assertEqual(history[0]["sup_transfer_2"]["result"], "Fail")
+        self.assertEqual(history[0]["newbie_shift_data"]["newbie_date"], "07/30/2026")
+
 
 if __name__ == "__main__":
     unittest.main()

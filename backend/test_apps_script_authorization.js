@@ -233,10 +233,10 @@ test('update metadata reads are bound to the authenticated MTS or SAM role', () 
   assert.equal(sam.result.row['Release Title'], 'SAM release');
 });
 
-test('MTS credentials cannot invoke SAM-only decisions or generic sheet administration', () => {
+test('MTS credentials cannot invoke SAM-only setup, decisions, or generic sheet administration', () => {
   const { api } = createRuntime();
 
-  for (const action of ['approveHeadset', 'decidePendingRequest', 'deleteNotification', 'batchUpdateSpreadsheet', 'ensureTutorialVideoTabs']) {
+  for (const action of ['completeSamSetup', 'approveHeadset', 'decidePendingRequest', 'deleteNotification', 'batchUpdateSpreadsheet', 'ensureTutorialVideoTabs']) {
     const result = responsePayload(api.doPost(postEvent(action, 'mts-current', {
       requests: [],
       request_id: 'request-test',
@@ -258,6 +258,66 @@ test('MTS credentials cannot invoke SAM-only decisions or generic sheet administ
     }))),
     { ok: false, error: 'Forbidden' },
   );
+});
+
+test('SAM setup status exposes readiness without returning administrator rows', () => {
+  const headers = ['name', 'pin', 'role', 'enabled', 'installed', 'install_date', 'device_name', 'notes'];
+  const sheet = createFakeSheet('sam-authorized-users', headers, [[
+    'Admin Example', '1234', 'owner', 'TRUE', '', '', '', '',
+  ]]);
+  const { api } = createRuntime({ __workbook: createFakeWorkbook([sheet]) });
+
+  assert.deepEqual(responsePayload(api.doGet(getEvent('getSamSetupStatus', 'sam-current'))), {
+    ok: true,
+    result: { ok: true, configured: true },
+  });
+  assert.deepEqual(responsePayload(api.doGet(getEvent('getSamSetupStatus', 'mts-current'))), {
+    ok: false,
+    error: 'Forbidden',
+  });
+});
+
+test('SAM setup validates, registers, and preserves the original install timestamp on retry', () => {
+  const headers = ['name', 'pin', 'role', 'enabled', 'installed', 'install_date', 'device_name', 'notes'];
+  const sheet = createFakeSheet('sam-authorized-users', headers, [[
+    'Admin Example', '1234', 'owner', 'TRUE', '', '', '', 'keep',
+  ]]);
+  const { api } = createRuntime({ __workbook: createFakeWorkbook([sheet]) });
+
+  const first = responsePayload(api.doPost(postEvent('completeSamSetup', 'sam-current', {
+    name: 'Admin Example', pin: '1234', device_name: 'Desk PC',
+  })));
+  assert.equal(first.ok, true);
+  assert.equal(first.result.ok, true);
+  assert.equal(first.result.name, 'Admin Example');
+  assert.equal(first.result.role, 'owner');
+  assert.equal(first.result.alreadyInstalled, false);
+  assert.equal(sheet.values[1][4], 'TRUE');
+  assert.equal(sheet.values[1][6], 'Desk PC');
+  assert.equal(sheet.values[1][7], 'keep');
+  const installDate = sheet.values[1][5];
+  assert.ok(installDate);
+
+  const repeated = responsePayload(api.doPost(postEvent('completeSamSetup', 'sam-current', {
+    name: 'Admin Example', pin: '1234', device_name: 'Desk PC',
+  })));
+  assert.equal(repeated.result.ok, true);
+  assert.equal(repeated.result.alreadyInstalled, true);
+  assert.equal(sheet.values[1][5], installDate);
+});
+
+test('SAM setup returns stable errors for unknown, invalid, and disabled administrators', () => {
+  const headers = ['name', 'pin', 'role', 'enabled', 'installed', 'install_date', 'device_name', 'notes'];
+  const sheet = createFakeSheet('sam-authorized-users', headers, [
+    ['Admin Example', '1234', 'owner', 'TRUE', '', '', '', ''],
+    ['Disabled Admin', '9999', 'admin', 'FALSE', '', '', '', ''],
+  ]);
+  const { api } = createRuntime({ __workbook: createFakeWorkbook([sheet]) });
+  const setup = (name, pin) => responsePayload(api.doPost(postEvent('completeSamSetup', 'sam-current', { name, pin })));
+
+  assert.equal(setup('Missing Admin', '1234').result.errorCode, 'setup_admin_not_found');
+  assert.equal(setup('Admin Example', '0000').result.errorCode, 'setup_invalid_pin');
+  assert.equal(setup('Disabled Admin', '9999').result.errorCode, 'setup_authorization_failed');
 });
 
 test('SAM current and previous credentials can invoke authorized admin operations', () => {
@@ -412,6 +472,42 @@ test('first MTS pending-request write creates only the missing workflow tab cont
   assert.equal(sheet.values[1][1], 'session-test');
   assert.equal(sheet.values[1][7], 'pending');
   assert.equal(workbook.getSheetByName('candidate-deletion-requests'), null);
+});
+
+test('legacy Newbie Shift request tabs gain and return the missing previous schedule column', () => {
+  const legacyHeaders = [
+    'request_id', 'session_id', 'candidate_name', 'candidate_first_name', 'candidate_last_initial',
+    'tester_name', 'request_type', 'request_status', 'requested_by', 'request_reason',
+    'request_details', 'request_created_at', 'rescheduled_at', 'scheduled_at', 'timezone',
+    'within_24_hours', 'counts_as_attempt', 'final_attempt', 'admin_decision_at',
+    'admin_decision_by', 'denial_reason', 'updated_at',
+  ];
+  const sheet = createFakeSheet('newbie-shift-requests', legacyHeaders);
+  const workbook = createFakeWorkbook([sheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+
+  const written = responsePayload(api.doPost(postEvent('upsertPendingRequest', 'mts-current', {
+    request: {
+      request_id: 'reschedule-test',
+      request_type: 'newbie_shift_reschedule',
+      source_session_id: 'session-test',
+      candidate: 'Candidate Example',
+      tester: 'Tester Example',
+      original_scheduled_at: '2026-07-20T10:00:00-05:00',
+      requested_scheduled_at: '2026-07-22T11:30:00-05:00',
+      timezone: 'EST (Eastern)',
+    },
+  })));
+
+  assert.equal(written.ok, true);
+  const originalColumn = sheet.values[0].indexOf('original_scheduled_at');
+  assert.notEqual(originalColumn, -1);
+  assert.equal(sheet.values[1][originalColumn], '2026-07-20T10:00:00-05:00');
+
+  const listed = responsePayload(api.doGet(getEvent('getPendingRequests', 'sam-current')));
+  assert.equal(listed.ok, true);
+  assert.equal(listed.result.requests[0].original_scheduled_at, '2026-07-20T10:00:00-05:00');
+  assert.equal(listed.result.requests[0].requested_scheduled_at, '2026-07-22T11:30:00-05:00');
 });
 
 test('SAM tutorial setup creates only missing tabs with the exact headers and is idempotent', () => {

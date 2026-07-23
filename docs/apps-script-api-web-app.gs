@@ -67,6 +67,7 @@ const MTS_GET_ACTIONS = Object.freeze([
 
 const SAM_ONLY_GET_ACTIONS = Object.freeze([
   'getHeadsetReviewLog',
+  'getSamSetupStatus',
   'getSamAdmins',
   'getAdminPins',
   'getSheetMetadata',
@@ -81,6 +82,7 @@ const MTS_POST_ACTIONS = Object.freeze([
 ]);
 
 const SAM_ONLY_POST_ACTIONS = Object.freeze([
+  'completeSamSetup',
   'approveHeadset',
   'denyHeadset',
   'archiveHeadsetReview',
@@ -104,6 +106,10 @@ const MTS_PROTECTED_CANDIDATE_FIELDS = Object.freeze([
   'newbie_shift_admin_decision_at',
   'newbie_shift_admin_decision_by',
   'newbie_shift_denial_reason',
+]);
+
+const SAM_AUTHORIZED_USER_HEADERS = Object.freeze([
+  'name', 'pin', 'role', 'enabled', 'installed', 'install_date', 'device_name', 'notes',
 ]);
 
 const HEADSET_REVIEW_V2_HEADERS = Object.freeze([
@@ -162,6 +168,13 @@ const NEWBIE_SHIFT_REQUEST_HEADERS = Object.freeze([
   'admin_decision_by',
   'denial_reason',
   'updated_at',
+  'lead_time_seconds',
+  'lead_time_category',
+  'current_attempt',
+  'resulting_attempt',
+  'becomes_final_attempt',
+  'attempt_rule',
+  'terminal_outcome',
 ]);
 
 const CANDIDATE_DELETION_REQUEST_HEADERS = Object.freeze([
@@ -232,6 +245,8 @@ function dispatchGet_(action, params, role) {
       return { rows: readOptionalTableRows_('sam-tutorial-videos') };
     case 'getHeadsetReviewLog':
       return { rows: readOptionalTableRows_('headset-review-log') };
+    case 'getSamSetupStatus':
+      return getSamSetupStatus_();
     case 'getCandidateTracking':
     case 'getSharedCandidates':
       return {
@@ -279,6 +294,8 @@ function dispatchGet_(action, params, role) {
 
 function dispatchPost_(action, body, role) {
   switch (action) {
+    case 'completeSamSetup':
+      return completeSamSetup_(body);
     case 'submitHeadsetReview':
       return submitHeadsetReview_(body);
     case 'approveHeadset':
@@ -315,6 +332,71 @@ function dispatchPost_(action, body, role) {
       return ensureTutorialVideoTabs_();
     default:
       throw new Error('Unknown action: ' + action);
+  }
+}
+
+function getSamSetupStatus_() {
+  try {
+    const sheet = allowedSheet_('sam-authorized-users');
+    const headers = headerMap_(sheet);
+    const configured = SAM_AUTHORIZED_USER_HEADERS.every((header) => headers.index[header] !== undefined);
+    return { ok: true, configured: configured };
+  } catch (_error) {
+    return { ok: true, configured: false };
+  }
+}
+
+function completeSamSetup_(body) {
+  const enteredName = String(body.name || '').trim().replace(/\s+/g, ' ');
+  const enteredPin = String(body.pin || '').trim();
+  const deviceName = String(body.device_name || '').trim().slice(0, 120);
+  if (!enteredName) return { ok: false, errorCode: 'setup_invalid_admin' };
+  if (!enteredPin) return { ok: false, errorCode: 'setup_invalid_pin' };
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { ok: false, errorCode: 'setup_transport_unavailable' };
+  try {
+    const sheet = allowedSheet_('sam-authorized-users');
+    const headers = headerMap_(sheet);
+    if (!SAM_AUTHORIZED_USER_HEADERS.every((header) => headers.index[header] !== undefined)) {
+      return { ok: false, errorCode: 'setup_configuration_unavailable' };
+    }
+    const values = sheet.getDataRange().getValues();
+    const nameKey = enteredName.toLowerCase();
+    const rowOffset = values.slice(1).findIndex((row) => String(row[headers.index.name] || '').trim().toLowerCase() === nameKey);
+    if (rowOffset < 0) return { ok: false, errorCode: 'setup_admin_not_found' };
+
+    const row = values[rowOffset + 1].slice(0, headers.names.length);
+    const storedPin = String(row[headers.index.pin] || '').trim();
+    if (!constantTimeEqual_(storedPin, enteredPin)) return { ok: false, errorCode: 'setup_invalid_pin' };
+    if (!pendingRequestBoolean_(row[headers.index.enabled])) {
+      return { ok: false, errorCode: 'setup_authorization_failed' };
+    }
+
+    const alreadyInstalled = pendingRequestBoolean_(row[headers.index.installed]);
+    row[headers.index.installed] = 'TRUE';
+    if (!String(row[headers.index.install_date] || '').trim()) {
+      row[headers.index.install_date] = new Date().toISOString();
+    }
+    if (deviceName) row[headers.index.device_name] = deviceName;
+    sheet.getRange(rowOffset + 2, 1, 1, headers.names.length).setValues([row]);
+    return {
+      ok: true,
+      name: String(row[headers.index.name] || enteredName).trim(),
+      role: String(row[headers.index.role] || 'user').trim() || 'user',
+      alreadyInstalled: alreadyInstalled,
+    };
+  } catch (error) {
+    const message = String(error && error.message || error || '').toLowerCase();
+    const configurationFailure = message.indexOf('missing sheet') !== -1 ||
+      message.indexOf('missing headers') !== -1 ||
+      message.indexOf('not configured') !== -1;
+    return {
+      ok: false,
+      errorCode: configurationFailure ? 'setup_configuration_unavailable' : 'setup_transport_unavailable',
+    };
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -411,6 +493,21 @@ function ensureSheetWithHeaders_(title, expectedHeaders) {
     .map((value) => String(value || '').trim());
   if (!current.some(nonBlank_)) {
     sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([Array.prototype.slice.call(expectedHeaders)]);
+  } else {
+    let existingWidth = current.length;
+    while (existingWidth > 0 && !current[existingWidth - 1]) existingWidth -= 1;
+    const compatiblePrefix = current.slice(0, existingWidth).every((header, index) => header === expectedHeaders[index]);
+    if (compatiblePrefix && existingWidth < expectedHeaders.length) {
+      sheet.getRange(1, existingWidth + 1, 1, expectedHeaders.length - existingWidth)
+        .setValues([Array.prototype.slice.call(expectedHeaders, existingWidth)]);
+    } else if (String(title) === 'newbie-shift-requests') {
+      const existingHeaders = current.slice(0, existingWidth);
+      const missingHeaders = expectedHeaders.filter((header) => existingHeaders.indexOf(header) === -1);
+      if (missingHeaders.length) {
+        sheet.getRange(1, existingWidth + 1, 1, missingHeaders.length)
+          .setValues([missingHeaders]);
+      }
+    }
   }
   return sheet;
 }
@@ -510,7 +607,7 @@ function getPendingRequests_(params) {
   const hasStatusFilter = Boolean(String(params.status || '').trim());
   const requestedType = String(params.request_type || '').trim().toLowerCase();
   const includeResolved = String(params.include_resolved || '').trim().toLowerCase() === 'true';
-  const normalize = (row, sourceTab) => ({ request_id: String(row.request_id || '').trim(), request_type: String(row.request_type || (sourceTab === 'candidate-deletion-requests' ? 'candidate_deletion' : 'initial_newbie_shift')).trim().toLowerCase(), source_session_id: String(row.session_id || row.source_session_id || '').trim(), candidate: String(row.candidate_name || row.candidate || '').trim(), tester: String(row.tester_name || row.tester || '').trim(), requester: String(row.requested_by || row.requester || '').trim(), reason: String(row.request_reason || row.reason || '').trim(), details: String(row.request_details || row.audit_summary || '').trim(), original_scheduled_at: String(row.original_scheduled_at || '').trim(), requested_scheduled_at: String(row.scheduled_at || row.rescheduled_at || '').trim(), timezone: String(row.timezone || '').trim(), within_24_hours: pendingRequestBoolean_(row.within_24_hours), counts_as_attempt: pendingRequestBoolean_(row.counts_as_attempt), final_attempt: pendingRequestBoolean_(row.final_attempt), status: String(row.request_status || row.status || 'pending').trim().toLowerCase(), created_at: String(row.request_created_at || row.created_at || '').trim(), updated_at: String(row.updated_at || '').trim(), decision_at: String(row.admin_decision_at || '').trim(), decision_by: String(row.admin_decision_by || '').trim(), denial_reason: String(row.denial_reason || '').trim(), source_tab: sourceTab });
+  const normalize = (row, sourceTab) => ({ request_id: String(row.request_id || '').trim(), request_type: String(row.request_type || (sourceTab === 'candidate-deletion-requests' ? 'candidate_deletion' : 'initial_newbie_shift')).trim().toLowerCase(), source_session_id: String(row.session_id || row.source_session_id || '').trim(), candidate: String(row.candidate_name || row.candidate || '').trim(), tester: String(row.tester_name || row.tester || '').trim(), requester: String(row.requested_by || row.requester || '').trim(), reason: String(row.request_reason || row.reason || '').trim(), details: String(row.request_details || row.audit_summary || '').trim(), original_scheduled_at: String(row.original_scheduled_at || row.original_schedule || row.newbie_shift_original_scheduled_at || '').trim(), requested_scheduled_at: String(row.scheduled_at || row.rescheduled_at || row.requested_scheduled_at || '').trim(), timezone: String(row.timezone || '').trim(), within_24_hours: pendingRequestBoolean_(row.within_24_hours), counts_as_attempt: pendingRequestBoolean_(row.counts_as_attempt), final_attempt: pendingRequestBoolean_(row.final_attempt), lead_time_seconds: row.lead_time_seconds === '' ? '' : Number(row.lead_time_seconds), lead_time_category: String(row.lead_time_category || '').trim(), current_attempt: Number(row.current_attempt || 1), resulting_attempt: Number(row.resulting_attempt || row.current_attempt || 1), becomes_final_attempt: pendingRequestBoolean_(row.becomes_final_attempt), attempt_rule: String(row.attempt_rule || '').trim(), terminal_outcome: String(row.terminal_outcome || '').trim(), status: String(row.request_status || row.status || 'pending').trim().toLowerCase(), created_at: String(row.request_created_at || row.created_at || '').trim(), updated_at: String(row.updated_at || '').trim(), decision_at: String(row.admin_decision_at || '').trim(), decision_by: String(row.admin_decision_by || '').trim(), denial_reason: String(row.denial_reason || '').trim(), source_tab: sourceTab });
   const rows = readOptionalTableRows_('newbie-shift-requests').map((row) => normalize(row, 'newbie-shift-requests')).concat(readOptionalTableRows_('candidate-deletion-requests').map((row) => normalize(row, 'candidate-deletion-requests'))).filter((row) => row.request_id);
   const requests = rows.filter((row) => (hasStatusFilter ? row.status === requestedStatus : (includeResolved || row.status === 'pending')) && (!requestedType || row.request_type === requestedType)).sort((left, right) => right.created_at.localeCompare(left.created_at));
   return { requests: requests, counts: { total: requests.length, newbie_shift: requests.filter((row) => row.source_tab === 'newbie-shift-requests' && row.request_type !== 'newbie_shift_reschedule').length, reschedule: requests.filter((row) => row.request_type === 'newbie_shift_reschedule' || row.request_type === 'reschedule').length, candidate_deletion: requests.filter((row) => row.source_tab === 'candidate-deletion-requests').length } };
@@ -553,12 +650,12 @@ function upsertPendingRequest_(body, role) {
       const row = values[existingIndex + 1].slice(0, headers.names.length);
       const currentStatus = String(row[headers.index.request_status !== undefined ? headers.index.request_status : headers.index.status] || 'pending').trim().toLowerCase();
       if (currentStatus === 'approved' || currentStatus === 'denied') throw new Error('Pending request has already been resolved.');
-      headers.names.forEach((header, index) => { const value = request[header] === undefined ? request[{ session_id: 'source_session_id', request_status: 'status', requested_by: 'requester', request_reason: 'reason', request_details: 'details', scheduled_at: 'requested_scheduled_at', admin_decision_at: 'decision_at', admin_decision_by: 'decision_by' }[header]] : request[header]; if (value !== undefined && header !== 'created_at' && header !== 'request_created_at') row[index] = value; });
+      headers.names.forEach((header, index) => { const value = request[header] === undefined ? request[{ session_id: 'source_session_id', request_status: 'status', requested_by: 'requester', request_reason: 'reason', request_details: 'details', original_scheduled_at: 'original_schedule', scheduled_at: 'requested_scheduled_at', admin_decision_at: 'decision_at', admin_decision_by: 'decision_by' }[header]] : request[header]; if (value !== undefined && header !== 'created_at' && header !== 'request_created_at') row[index] = value; });
       if (headers.index.updated_at !== undefined) row[headers.index.updated_at] = now;
       sheet.getRange(existingIndex + 2, 1, 1, headers.names.length).setValues([row]);
       return { request_id: requestId, request_type: requestType, source_tab: sourceTab, action: 'updated', status: currentStatus, created_at: String(row[headers.index.created_at] || row[headers.index.request_created_at] || ''), updated_at: now };
     }
-    const row = headers.names.map((header) => { const aliases = { session_id: 'source_session_id', request_status: 'status', requested_by: 'requester', request_reason: 'reason', request_details: 'details', scheduled_at: 'requested_scheduled_at' }; if (header === 'request_id') return requestId; if (header === 'request_type') return requestType; if (header === 'status' || header === 'request_status') return status; if (header === 'created_at' || header === 'request_created_at') return request[header] || now; if (header === 'updated_at') return now; return request[header] === undefined ? (request[aliases[header]] || '') : request[header]; });
+    const row = headers.names.map((header) => { const aliases = { session_id: 'source_session_id', request_status: 'status', requested_by: 'requester', request_reason: 'reason', request_details: 'details', original_scheduled_at: 'original_schedule', scheduled_at: 'requested_scheduled_at' }; if (header === 'request_id') return requestId; if (header === 'request_type') return requestType; if (header === 'status' || header === 'request_status') return status; if (header === 'created_at' || header === 'request_created_at') return request[header] || now; if (header === 'updated_at') return now; return request[header] === undefined ? (request[aliases[header]] || '') : request[header]; });
     sheet.getRange(Math.max(sheet.getLastRow() + 1, 2), 1, 1, headers.names.length).setValues([row]);
     return { request_id: requestId, request_type: requestType, source_tab: sourceTab, action: 'created', status: status, created_at: now, updated_at: now };
   } finally { lock.releaseLock(); }
@@ -600,6 +697,11 @@ function decidePendingRequest_(body) {
         else {
           const candidateRow = candidateValues[candidateIndex + 1].slice(0, candidateHeaders.names.length);
           const changes = { newbie_shift_request_id: requestId, newbie_shift_request_status: nextStatus, newbie_shift_admin_decision_at: now, newbie_shift_admin_decision_by: String(body.decision_by || '').trim(), newbie_shift_denial_reason: decision === 'deny' ? denialReason : '' };
+          const resultingAttempt = Number(row[headers.index.resulting_attempt] || row[headers.index.current_attempt] || 1);
+          if (Number.isFinite(resultingAttempt) && resultingAttempt > 0) changes.attempt_number = resultingAttempt;
+          if (headers.index.final_attempt !== undefined) changes.final_attempt = pendingRequestBoolean_(row[headers.index.final_attempt]);
+          const terminalOutcome = headers.index.terminal_outcome === undefined ? '' : String(row[headers.index.terminal_outcome] || '').trim();
+          if (terminalOutcome) { changes.status = terminalOutcome; changes.final_result = terminalOutcome; }
           if (decision === 'approve') { changes.newbie_shift_scheduled_at = String(row[headers.index.scheduled_at] || row[headers.index.rescheduled_at] || '').trim(); changes.newbie_shift_timezone = String(row[headers.index.timezone] || '').trim(); }
           Object.keys(changes).forEach((key) => { if (candidateHeaders.index[key] !== undefined && (key !== 'newbie_shift_scheduled_at' || changes[key])) candidateRow[candidateHeaders.index[key]] = changes[key]; });
           candidateSheet.getRange(candidateIndex + 2, 1, 1, candidateHeaders.names.length).setValues([candidateRow]); candidateSessionSynced = true;
