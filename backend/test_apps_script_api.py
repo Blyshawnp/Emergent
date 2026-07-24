@@ -668,7 +668,7 @@ class AppsScriptApiTests(unittest.TestCase):
 
         server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
         server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
-        with mock.patch("server._sam_master_sheet_context") as mock_ctx:
+        with mock.patch("server._notification_read_sheet_context") as mock_ctx:
             mock_ctx.return_value = {
                 "ok": True,
                 "appsScriptClient": mock_client,
@@ -680,6 +680,317 @@ class AppsScriptApiTests(unittest.TestCase):
         self.assertFalse(result["fallback"])
         self.assertEqual(result["source"], "google")
         mock_client.get.assert_called_once_with("getTickerMessages", {})
+
+    def test_dedicated_read_resolver_mts_only_success(self):
+        # MTS-only configuration reads ticker successfully
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        # Mock load_apps_script_api_config:
+        # mts is ready, sam is missing.
+        def mock_load(root_dir, expected_role=None):
+            if expected_role == "mts":
+                return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+            return None, {"status": "missing"}
+
+        server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
+        server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
+        server._ticker_fetch_status.update({"source": "builtin", "status": "not fetched"})
+
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("server._is_development_mode", return_value=False), \
+             mock.patch("os.getenv", return_value=None):
+
+            # Call resolver
+            ctx = server._notification_read_sheet_context()
+            self.assertTrue(ctx["ok"])
+            self.assertEqual(ctx["resolved_role"], "mts")
+            self.assertEqual(ctx["transport"], "apps_script")
+
+    def test_dedicated_read_resolver_sam_only_success(self):
+        # SAM-only configuration reads ticker successfully
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        def mock_load(root_dir, expected_role=None):
+            if expected_role == "sam":
+                return AppsScriptApiConfig(True, "sam", "http://sam.exec", "token-sam", Path(".")), {"status": "ready"}
+            return None, {"status": "missing"}
+
+        server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
+        server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
+        server._ticker_fetch_status.update({"source": "builtin", "status": "not fetched"})
+
+        # Run as MTS preferred role (default), so when it finds MTS missing, it falls back to SAM config
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("server._is_development_mode", return_value=False), \
+             mock.patch("os.getenv", return_value=None):
+
+            ctx = server._notification_read_sheet_context()
+            self.assertTrue(ctx["ok"])
+            self.assertEqual(ctx["resolved_role"], "sam")
+            self.assertEqual(ctx["transport"], "apps_script")
+
+    def test_dedicated_read_resolver_both_present_uses_preferred(self):
+        # Both configs present, uses preferred (MTS by default when MTS_NOTIFICATION_MANAGER is not set)
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        def mock_load(root_dir, expected_role=None):
+            if expected_role == "sam":
+                return AppsScriptApiConfig(True, "sam", "http://sam.exec", "token-sam", Path(".")), {"status": "ready"}
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("server._is_development_mode", return_value=False), \
+             mock.patch("os.getenv", return_value=None):
+
+            ctx = server._notification_read_sheet_context()
+            self.assertTrue(ctx["ok"])
+            self.assertEqual(ctx["resolved_role"], "mts") # preferred for MTS app
+
+    def test_dedicated_read_resolver_preferred_absent_falls_back(self):
+        # Preferred config (say SAM is preferred because MTS_NOTIFICATION_MANAGER=1) is missing, falls back to MTS
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        def mock_load(root_dir, expected_role=None):
+            if expected_role == "sam":
+                return None, {"status": "missing"}
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        # Force SAM as preferred
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("server._is_development_mode", return_value=False), \
+             mock.patch.dict("os.environ", {"MTS_NOTIFICATION_MANAGER": "1"}):
+
+            ctx = server._notification_read_sheet_context()
+            self.assertTrue(ctx["ok"])
+            self.assertEqual(ctx["resolved_role"], "mts") # falls back to MTS
+
+    def test_invalid_sam_token_does_not_fall_back_to_mts(self):
+        # invalid SAM token does not fall back to MTS
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        def mock_load(root_dir, expected_role=None):
+            if expected_role == "sam":
+                # present but invalid/mismatched/unusable config status
+                return None, {"status": "role_mismatch", "message": "role mismatch error"}
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        # Force SAM as preferred
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("server._is_development_mode", return_value=False), \
+             mock.patch.dict("os.environ", {"MTS_NOTIFICATION_MANAGER": "1"}):
+
+            ctx = server._notification_read_sheet_context()
+            self.assertFalse(ctx["ok"])
+            self.assertEqual(ctx["resolved_role"], "sam")
+            self.assertEqual(ctx["errorCode"], "role_mismatch")
+
+    def test_sam_timeout_does_not_fall_back_to_mts(self):
+        # SAM timeout does not fall back to MTS
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        # SAM config is ready, MTS config is ready
+        def mock_load(root_dir, expected_role=None):
+            if expected_role == "sam":
+                return AppsScriptApiConfig(True, "sam", "http://sam.exec", "token-sam", Path(".")), {"status": "ready"}
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        mock_client = mock.MagicMock()
+        # Mock client to raise a timeout exception when calling getTickerMessages
+        mock_client.get.side_effect = asyncio.TimeoutError("timeout error")
+
+        server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
+        server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
+        server._ticker_fetch_status.update({"source": "builtin", "status": "not fetched"})
+
+        # Force SAM as preferred
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("services.apps_script_api.create_apps_script_sheet_service") as mock_srv, \
+             mock.patch("server._is_development_mode", return_value=False), \
+             mock.patch.dict("os.environ", {"MTS_NOTIFICATION_MANAGER": "1"}):
+
+            mock_srv.return_value = {"ok": True, "client": mock_client}
+
+            # Since timeout is raised during load, it should raise HTTPException 504 and not use fallback
+            from fastapi import HTTPException
+            with self.assertRaises(HTTPException) as context_exc:
+                asyncio.run(server.get_ticker())
+
+            self.assertEqual(context_exc.exception.status_code, 504)
+            self.assertIn("timeout", context_exc.exception.detail)
+
+    def test_unauthorized_does_not_become_generic_fallback_indefinitely(self):
+        # Unauthorized raises 401 HTTPException
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig, AppsScriptApiError
+
+        def mock_load(root_dir, expected_role=None):
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        mock_client = mock.MagicMock()
+        mock_client.get.side_effect = AppsScriptApiError(401, "Unauthorized access token")
+
+        server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
+        server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
+        server._ticker_fetch_status.update({"source": "builtin", "status": "not fetched"})
+
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("services.apps_script_api.create_apps_script_sheet_service") as mock_srv, \
+             mock.patch("server._is_development_mode", return_value=False):
+
+            mock_srv.return_value = {"ok": True, "client": mock_client}
+
+            from fastapi import HTTPException
+            with self.assertRaises(HTTPException) as context_exc:
+                asyncio.run(server.get_ticker())
+
+            self.assertEqual(context_exc.exception.status_code, 401)
+            self.assertIn("Unauthorized", context_exc.exception.detail)
+
+    def test_live_recovery_replaces_stale_content(self):
+        # live recovery replaces stale/default content
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        # Mock load config to be ready
+        def mock_load(root_dir, expected_role=None):
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        mock_client = mock.MagicMock()
+        mock_client.get.return_value = {
+            "rows": [{
+                "Enabled": "TRUE",
+                "ID": "rec-row",
+                "Type": "info",
+                "Title": "Recovered",
+                "Message": "Live recovered messages",
+                "ShowTicker": "TRUE",
+                "ShowPopup": "FALSE",
+                "ShowBanner": "FALSE",
+                "Persistent": "TRUE",
+            }]
+        }
+
+        # Initialize caches with fallback default messages
+        server._ticker_cache.update({"messages": ["Stale message"], "last_fetch": 100, "using_fallback": True})
+        server._notification_cache.update({"groups": server._notification_defaults, "last_fetch": 100, "url": "fallback"})
+        server._ticker_fetch_status.update({"source": "fallback", "status": "stale"})
+
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("services.apps_script_api.create_apps_script_sheet_service") as mock_srv, \
+             mock.patch("server._is_development_mode", return_value=False):
+
+            mock_srv.return_value = {"ok": True, "client": mock_client}
+
+            result = asyncio.run(server.get_ticker())
+            self.assertEqual(result["messages"], ["Recovered: Live recovered messages"])
+            self.assertFalse(result["fallback"])
+            self.assertEqual(result["source"], "google")
+
+    def test_valid_empty_live_response_distinguished_from_failure(self):
+        # valid empty live response is distinguished (returns messages=[] and fallback=False)
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        def mock_load(root_dir, expected_role=None):
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        mock_client = mock.MagicMock()
+        mock_client.get.return_value = {
+            "rows": [] # valid empty response
+        }
+
+        server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
+        server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
+        server._ticker_fetch_status.update({"source": "builtin", "status": "not fetched"})
+
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("services.apps_script_api.create_apps_script_sheet_service") as mock_srv, \
+             mock.patch("server._is_development_mode", return_value=False):
+
+            mock_srv.return_value = {"ok": True, "client": mock_client}
+
+            result = asyncio.run(server.get_ticker())
+            self.assertEqual(result["messages"], [])
+            self.assertFalse(result["fallback"])
+            self.assertEqual(result["source"], "google")
+
+    def test_malformed_response_raises_error(self):
+        # malformed response does not fallback, raises bad gateway / internal error
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+        from services.apps_script_api import AppsScriptApiConfig
+
+        def mock_load(root_dir, expected_role=None):
+            return AppsScriptApiConfig(True, "mts", "http://mts.exec", "token-mts", Path(".")), {"status": "ready"}
+
+        mock_client = mock.MagicMock()
+        mock_client.get.return_value = "Not a dictionary! Malformed response."
+
+        server._ticker_cache.update({"messages": None, "last_fetch": 0, "using_fallback": False})
+        server._notification_cache.update({"groups": None, "last_fetch": 0, "url": ""})
+        server._ticker_fetch_status.update({"source": "builtin", "status": "not fetched"})
+
+        with mock.patch("services.apps_script_api.load_apps_script_api_config", side_effect=mock_load), \
+             mock.patch("services.apps_script_api.create_apps_script_sheet_service") as mock_srv, \
+             mock.patch("server._is_development_mode", return_value=False):
+
+            mock_srv.return_value = {"ok": True, "client": mock_client}
+
+            from fastapi import HTTPException
+            with self.assertRaises(HTTPException) as context_exc:
+                asyncio.run(server.get_ticker())
+
+            self.assertEqual(context_exc.exception.status_code, 502)
+
+    def test_sam_notification_management_remains_sam_only(self):
+        # save and delete must call _sam_master_sheet_context directly
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        # We verify that they do not call the read-context resolver, but call _sam_master_sheet_context directly
+        with mock.patch("server._sam_master_sheet_context") as mock_sam_ctx, \
+             mock.patch("server._notification_read_sheet_context") as mock_read_ctx:
+
+            mock_sam_ctx.return_value = {"ok": False, "error": "test"}
+            server._delete_notification_from_google_sheet("123")
+
+            mock_sam_ctx.assert_called_once()
+            mock_read_ctx.assert_not_called()
+
+        with mock.patch("server._sam_master_sheet_context") as mock_sam_ctx, \
+             mock.patch("server._notification_read_sheet_context") as mock_read_ctx:
+
+            mock_sam_ctx.return_value = {"ok": False, "error": "test"}
+            server._save_notification_to_google_sheet({"ID": "123", "Message": "test", "Enabled": True, "Type": "info"})
+
+            mock_sam_ctx.assert_called_once()
+            mock_read_ctx.assert_not_called()
 
 
 if __name__ == "__main__":

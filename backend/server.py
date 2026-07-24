@@ -13623,14 +13623,129 @@ def _migrate_legacy_notifications_to_master(sheets_api, sheet_id):
     return {"ok": True, "migrated": len(rows_to_append)}
 
 
-def _load_notification_items_from_google_sheets_api():
-    context = _sam_master_sheet_context()
-    if context.get("ok"):
+def _notification_read_sheet_context():
+    preferred_role = (
+        (os.getenv("APPS_SCRIPT_API_ROLE") or "").strip().lower()
+    )
+    if preferred_role not in {"mts", "sam"}:
+        preferred_role = "sam" if (os.getenv("MTS_NOTIFICATION_MANAGER") or "").strip() == "1" else "mts"
+
+    from services.apps_script_api import create_apps_script_sheet_service, load_apps_script_api_config
+
+    # 1. Load config status of preferred role
+    _, status = load_apps_script_api_config(ROOT_DIR, expected_role=preferred_role)
+    cfg_status = status.get("status")
+
+    resolved_role = preferred_role
+
+    # 2. Check if we need cross-role fallback
+    # Fallback is allowed ONLY if preferred configuration is genuinely absent (missing) or disabled.
+    if cfg_status in {"missing", "disabled"}:
+        fallback_role = "mts" if preferred_role == "sam" else "sam"
+        _, fb_status = load_apps_script_api_config(ROOT_DIR, expected_role=fallback_role)
+        if fb_status.get("status") == "ready":
+            resolved_role = fallback_role
+            status = fb_status
+            cfg_status = "ready"
+
+    # Try initializing the client for the resolved role
+    if cfg_status == "ready":
         try:
-            if context.get("appsScriptClient"):
+            apps_script_result = create_apps_script_sheet_service(ROOT_DIR, expected_role=resolved_role)
+            if apps_script_result.get("ok") and apps_script_result.get("client"):
+                return {
+                    "ok": True,
+                    "service": None,
+                    "appsScriptClient": apps_script_result["client"],
+                    "sheet_id": "",
+                    "transport": "apps_script",
+                    "resolved_role": resolved_role,
+                    "role_status": status,
+                }
+        except Exception as exc:
+            logger.warning("[NOTIFICATIONS] Failed to initialize Apps Script client: %s", exc)
+
+    elif cfg_status not in {"missing", "disabled"}:
+        # Configuration is present but mismatched or invalid. Fallback is NOT allowed.
+        return {
+            "ok": False,
+            "error": status.get("message") or f"Apps Script config for role '{resolved_role}' is invalid.",
+            "errorCode": status.get("status") or "config_invalid",
+            "transport": "apps_script",
+            "resolved_role": resolved_role,
+            "role_status": status,
+        }
+
+    # 3. Direct Google Sheets API fallback (if in development mode and no Apps Script is available)
+    if _is_development_mode():
+        service_result = _get_shared_tracking_sheet_service()
+        if service_result.get("ok") and service_result.get("service"):
+            return {
+                "ok": True,
+                "service": service_result["service"],
+                "appsScriptClient": None,
+                "sheet_id": service_result["sheet_id"],
+                "transport": "direct_sheets_development",
+                "resolved_role": preferred_role,
+            }
+
+    return {
+        "ok": False,
+        "errorCode": "setup_configuration_unavailable",
+        "error": "Apps Script config is not ready and direct Sheets fallback is unavailable.",
+        "resolved_role": preferred_role,
+    }
+
+
+def _load_notification_items_from_google_sheets_api():
+    context = _notification_read_sheet_context()
+
+    if not context.get("ok"):
+        error_code = context.get("errorCode")
+        if error_code in {"role_mismatch", "invalid", "config_invalid"}:
+            return {
+                "ok": False,
+                "error": context.get("error") or "Apps Script configuration error.",
+                "errorCode": error_code,
+                "items": [],
+            }
+
+        legacy = _load_legacy_notification_items_from_google_sheets_api()
+        if legacy.get("ok"):
+            legacy["source"] = "legacy_fallback"
+            logger.warning("[NOTIFICATIONS] Active source=LEGACY fallback sheet.")
+        return legacy
+
+    try:
+        if context.get("appsScriptClient"):
+            try:
                 read_result = _read_sam_notification_items_via_apps_script(context["appsScriptClient"], context.get("sheet_id") or "")
                 logger.info("[NOTIFICATIONS] Active source=APPS_SCRIPT tab=%s rows=%d", SAM_NOTIFICATIONS_TAB, len(read_result.get("items") or []))
                 return read_result
+            except Exception as exc:
+                err_msg = str(exc)
+                err_code = "read_failed"
+                from services.apps_script_api import AppsScriptApiError
+                if isinstance(exc, AppsScriptApiError):
+                    if "Unauthorized" in err_msg or "Forbidden" in err_msg or "401" in err_msg or "403" in err_msg:
+                        err_code = "unauthorized"
+                    else:
+                        err_code = "action_failure"
+                elif "timeout" in err_msg.lower() or "time out" in err_msg.lower():
+                    err_code = "timeout"
+                elif "connect" in err_msg.lower() or "unreachable" in err_msg.lower() or "host" in err_msg.lower():
+                    err_code = "remote_unavailable"
+                elif isinstance(exc, (ValueError, TypeError, AttributeError, KeyError)) or "returned no rows array" in err_msg:
+                    err_code = "malformed_response"
+
+                logger.warning("[NOTIFICATIONS] Authenticated read failed (no fallback allowed): %s", exc)
+                return {
+                    "ok": False,
+                    "error": f"Authenticated Apps Script read failed: {exc}",
+                    "errorCode": err_code,
+                    "items": [],
+                }
+        else:
             sheets_api = context["service"].spreadsheets()
             read_result = _read_sam_notification_items(sheets_api, context["sheet_id"])
             if read_result.get("ok") and not read_result.get("items"):
@@ -13641,14 +13756,15 @@ def _load_notification_items_from_google_sheets_api():
             if read_result.get("ok"):
                 logger.info("[NOTIFICATIONS] Active source=MASTER tab=%s rows=%d", SAM_NOTIFICATIONS_TAB, len(read_result.get("items") or []))
             return read_result
-        except Exception as exc:
-            logger.warning("[NOTIFICATIONS] Master sam-notifications unavailable; using legacy fallback if available: %s", exc)
+    except Exception as exc:
+        logger.warning("[NOTIFICATIONS] Direct Sheets read failed: %s", exc)
+        return {
+            "ok": False,
+            "error": f"Direct Sheets read failed: {exc}",
+            "errorCode": "direct_sheets_failed",
+            "items": [],
+        }
 
-    legacy = _load_legacy_notification_items_from_google_sheets_api()
-    if legacy.get("ok"):
-        legacy["source"] = "legacy_fallback"
-        logger.warning("[NOTIFICATIONS] Active source=LEGACY fallback sheet.")
-    return legacy
 
 
 def _clear_notification_caches():
@@ -14021,6 +14137,30 @@ async def _fetch_notifications_from_sheet():
         logger.warning("[NOTIFICATIONS] Authenticated notification fetch failed before fallback: %s", exc)
         authenticated = {"ok": False, "items": [], "error": str(exc)}
 
+    # If the authenticated fetch was attempted but failed with a non-fallback error, raise immediately
+    if not authenticated.get("ok") and authenticated.get("errorCode") in {
+        "role_mismatch", "invalid", "config_invalid", "unauthorized", "action_failure", "timeout", "remote_unavailable", "malformed_response"
+    }:
+        err_code = authenticated["errorCode"]
+        _set_ticker_fetch_status("error", authenticated.get("error") or "Authenticated fetch failed", 0)
+        from fastapi import HTTPException
+        status_code = 500
+        if err_code == "unauthorized":
+            status_code = 401
+        elif err_code == "forbidden":
+            status_code = 403
+        elif err_code == "timeout":
+            status_code = 504
+        elif err_code == "remote_unavailable":
+            status_code = 503
+        elif err_code in {"role_mismatch", "invalid", "config_invalid"}:
+            status_code = 400
+        elif err_code == "action_failure":
+            status_code = 502
+        elif err_code == "malformed_response":
+            status_code = 502
+        raise HTTPException(status_code=status_code, detail=authenticated.get("error") or "Authenticated Google Sheets read failed.")
+
     if authenticated.get("ok") and authenticated.get("source") == "master":
         groups = _group_notification_manager_items(authenticated.get("items", []))
         _notification_cache["groups"] = groups
@@ -14149,6 +14289,20 @@ async def get_ticker():
         for item in groups.get("tickerMessages", [])
         if (item.get("message") or "").strip()
     ]
+
+    fetch_status = _ticker_fetch_status.get("source") or "unknown"
+    fetch_success = (fetch_status == "google")
+
+    if fetch_success:
+        _ticker_cache["messages"] = messages
+        _ticker_cache["last_fetch"] = time.time()
+        _ticker_cache["using_fallback"] = False
+        return {
+            "messages": messages,
+            "source": fetch_status,
+            "fallback": False,
+        }
+
     if messages:
         _ticker_cache["messages"] = messages
         _ticker_cache["last_fetch"] = time.time()
@@ -14157,7 +14311,7 @@ async def get_ticker():
             _set_ticker_fetch_status(_ticker_fetch_status.get("source") or "cache", _ticker_fetch_status.get("status") or "ticker loaded from cached/local notifications", len(messages))
         return {
             "messages": messages,
-            "source": _ticker_fetch_status.get("source") or "unknown",
+            "source": fetch_status,
             "fallback": False,
         }
 
