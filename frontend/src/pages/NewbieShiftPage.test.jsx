@@ -7,6 +7,7 @@ import api from '../api';
 const mockModal = {
   warning: jest.fn(),
   error: jest.fn(),
+  success: jest.fn(),
   confirm: jest.fn(),
   confirmDanger: jest.fn(),
 };
@@ -108,6 +109,7 @@ beforeEach(() => {
   api.discardSession.mockResolvedValue({ ok: true });
   mockModal.warning.mockResolvedValue(true);
   mockModal.error.mockResolvedValue(true);
+  mockModal.success.mockResolvedValue(true);
   mockModal.confirm.mockResolvedValue(true);
   mockModal.confirmDanger.mockResolvedValue(false);
   navigator.clipboard.writeText.mockResolvedValue(undefined);

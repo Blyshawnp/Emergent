@@ -3773,6 +3773,12 @@ def _session_with_workflow_defaults(session):
     doc.setdefault("deletion_request_id", "")
     doc.setdefault("deletion_request_status", "")
     doc.setdefault("deletion_request_created_at", "")
+    doc.setdefault("candidate_correction_request_id", "")
+    doc.setdefault("candidate_correction_status", "")
+    doc.setdefault("candidate_correction_pending", False)
+    doc.setdefault("candidate_correction_changes", [])
+    doc.setdefault("candidate_correction_reason", "")
+    doc.setdefault("candidate_correction_denial_reason", "")
     doc.setdefault("headset_review_requested", False)
     doc.setdefault("headset_review_id", "")
     doc.setdefault("headset_review_sync_status", "")
@@ -3785,6 +3791,7 @@ SHARED_CANDIDATE_SESSIONS_TAB = "Candidate Sessions"
 SHARED_PENDING_SUP_TRANSFERS_TAB = "Pending Sup Transfers"
 SHARED_NEWBIE_SHIFT_REQUESTS_TAB = "newbie-shift-requests"
 SHARED_CANDIDATE_DELETION_REQUESTS_TAB = "candidate-deletion-requests"
+SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB = "candidate-information-correction-requests"
 SAM_AUTHORIZED_USERS_TAB = "sam-authorized-users"
 SAM_NOTIFICATIONS_TAB = "sam-notifications"
 HEADSET_REVIEW_LOG_TAB = "headset-review-log"
@@ -4007,6 +4014,23 @@ SHARED_CANDIDATE_DELETION_REQUEST_HEADERS = [
     "updated_at",
 ]
 
+SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS = [
+    "request_id",
+    "request_type",
+    "source_session_id",
+    "candidate_id",
+    "candidate_name",
+    "tester_name",
+    "reason",
+    "changes_json",
+    "created_at",
+    "status",
+    "admin_decision_at",
+    "admin_decision_by",
+    "denial_reason",
+    "updated_at",
+]
+
 UPDATE_MTS_TAB = "update-MTS"
 UPDATE_SAM_TAB = "update-SAM"
 UPDATE_TAB_HEADERS = [
@@ -4030,6 +4054,7 @@ def _shared_tracking_required_setup():
         SHARED_PENDING_SUP_TRANSFERS_TAB: SHARED_PENDING_SUP_TRANSFER_HEADERS,
         SHARED_NEWBIE_SHIFT_REQUESTS_TAB: SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
         SHARED_CANDIDATE_DELETION_REQUESTS_TAB: SHARED_CANDIDATE_DELETION_REQUEST_HEADERS,
+        SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB: SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS,
         HEADSET_REVIEW_LOG_TAB: HEADSET_REVIEW_LOG_HEADERS,
         HEADSETS_TAB: HEADSETS_HEADERS,
     }
@@ -5855,8 +5880,8 @@ def _shared_admin_candidate_snapshot(context=None):
                 }
                 candidate["attempts"] = [dict(candidate)]
                 candidates.append(candidate)
-            active = [row for row in candidates if str(row.get("status") or "").strip().upper() not in {"ARCHIVED"}]
-            archived = [row for row in candidates if str(row.get("status") or "").strip().upper() == "ARCHIVED"]
+            active = [row for row in candidates if not _shared_truthy(row.get("archived")) and str(row.get("status") or "").strip().upper() not in {"ARCHIVED", "REMOVED", "DELETED"}]
+            archived = [row for row in candidates if _shared_truthy(row.get("archived")) or str(row.get("status") or "").strip().upper() in {"ARCHIVED", "REMOVED", "DELETED"}]
             withdrawn = [row for row in active if str(row.get("status") or "").strip().upper() == "WITHDREW FROM CERTIFICATION"]
             passed = [row for row in active if str(row.get("status") or "").strip().upper() in {"PASS", "PASSED", "RESUMED-PASS"}]
             failed_final = [row for row in active if str(row.get("status") or "").strip().upper() == "FAIL-FINAL ATTEMPT"]
@@ -6079,6 +6104,119 @@ def _public_deletion_request(row):
     }
 
 
+CORRECTION_REQUEST_TYPE = "candidate_information_correction"
+ADMIN_CANDIDATE_EDIT_ACTION = "edit_candidate_information"
+ADMIN_CANDIDATE_EDIT_AUDIT_TYPE = "candidate_information_admin_edit"
+CORRECTION_ALLOWED_FIELDS = {
+    "candidate_name": "Candidate Name",
+    "headset_model": "Headset Model",
+}
+
+CANDIDATE_UPDATE_ERROR_MESSAGES = {
+    "candidate_update_no_changes": "No candidate information was changed.",
+    "candidate_update_target_not_found": "The candidate session could not be found.",
+    "candidate_update_identity_mismatch": "The candidate record no longer matches this session.",
+    "candidate_update_unauthorized": "SAM is not authorized to update this candidate.",
+    "candidate_update_action_unavailable": "The deployed Google service does not support this update yet.",
+    "candidate_update_transport_failed": "The Google service is temporarily unavailable.",
+    "candidate_update_response_invalid": "The update response was invalid.",
+    "candidate_update_audit_failed": "The candidate was updated, but the audit record could not be saved.",
+    "candidate_update_failed": "The candidate information could not be updated.",
+}
+
+
+def _candidate_update_failure(error_code, **extra):
+    code = error_code if error_code in CANDIDATE_UPDATE_ERROR_MESSAGES else "candidate_update_failed"
+    return {"ok": False, "error_code": code, "error": CANDIDATE_UPDATE_ERROR_MESSAGES[code], **extra}
+
+
+def _candidate_update_error_code(value):
+    text = str(value or "").strip().lower()
+    if "no changes" in text or "has no changes" in text:
+        return "candidate_update_no_changes"
+    if "target was not found" in text or "session_id is required" in text or "session could not be found" in text:
+        return "candidate_update_target_not_found"
+    if "identity has changed" in text or "identity mismatch" in text or "no longer matches" in text:
+        return "candidate_update_identity_mismatch"
+    if "forbidden" in text or "unauthorized" in text or "not authorized" in text:
+        return "candidate_update_unauthorized"
+    if "unknown action" in text or "unsupported candidate operation" in text or "does not support" in text:
+        return "candidate_update_action_unavailable"
+    if "invalid response" in text:
+        return "candidate_update_response_invalid"
+    if "audit" in text:
+        return "candidate_update_audit_failed"
+    if any(token in text for token in ("timeout", "temporarily", "unavailable", "request failed", "connection")):
+        return "candidate_update_transport_failed"
+    return "candidate_update_failed"
+
+
+def _normalize_correction_changes(value, require_changes=True):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise ValueError("correction_validation_failed")
+    if not isinstance(value, list):
+        raise ValueError("correction_validation_failed")
+    normalized = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("correction_validation_failed")
+        field = str(item.get("field") or item.get("field_key") or "").strip().lower()
+        if field not in CORRECTION_ALLOWED_FIELDS:
+            raise ValueError("correction_unsupported_field")
+        if field in seen:
+            raise ValueError("correction_validation_failed")
+        previous = str(item.get("previous_value") or "").strip()
+        requested = str(item.get("requested_value") or "").strip()
+        if not requested:
+            raise ValueError("correction_validation_failed")
+        if previous == requested:
+            continue
+        seen.add(field)
+        normalized.append({
+            "field": field,
+            "field_key": field,
+            "label": CORRECTION_ALLOWED_FIELDS[field],
+            "previous_value": previous,
+            "requested_value": requested,
+        })
+    if require_changes and not normalized:
+        raise ValueError("correction_no_changes")
+    return normalized
+
+
+def _public_correction_request(row):
+    try:
+        changes = _normalize_correction_changes(row.get("changes_json") or row.get("changes") or [], require_changes=False)
+    except ValueError:
+        changes = []
+    return {
+        "id": row.get("request_id") or "",
+        "request_id": row.get("request_id") or "",
+        "session_id": row.get("source_session_id") or row.get("session_id") or "",
+        "candidate_id": row.get("candidate_id") or "",
+        "category": "candidate_correction",
+        "categoryLabel": "Candidate Information Correction",
+        "request_type": CORRECTION_REQUEST_TYPE,
+        "candidate": row.get("candidate_name") or row.get("candidate") or "",
+        "tester": row.get("tester_name") or row.get("tester") or "",
+        "requester": row.get("tester_name") or row.get("tester") or "Tester",
+        "reason": row.get("reason") or "",
+        "changes": changes,
+        "created_at": row.get("created_at") or row.get("submitted_at") or "",
+        "submitted_at": row.get("submitted_at") or row.get("created_at") or "",
+        "status": _approval_label(row.get("status")),
+        "raw_status": _request_status_value(row.get("status")),
+        "admin_decision_at": row.get("admin_decision_at") or row.get("decision_at") or "",
+        "admin_decision_by": row.get("admin_decision_by") or row.get("decision_by") or "",
+        "denial_reason": row.get("denial_reason") or "",
+        "warning": row.get("warning") or "",
+    }
+
+
 def _request_category_counts(requests, headset_pending_count=0):
     pending = [item for item in requests if item.get("raw_status") == "pending"]
     workflow_count = len(pending)
@@ -6086,6 +6224,7 @@ def _request_category_counts(requests, headset_pending_count=0):
         "newbieInitial": sum(1 for item in pending if item.get("category") == "newbie_initial"),
         "reschedules": sum(1 for item in pending if item.get("category") == "newbie_reschedule"),
         "candidateDeletions": sum(1 for item in pending if item.get("category") == "candidate_deletion"),
+        "candidateCorrections": sum(1 for item in pending if item.get("category") == "candidate_correction"),
         "headsetReviews": headset_pending_count,
         "workflowRequests": workflow_count,
         "actionableTotal": workflow_count + headset_pending_count,
@@ -6546,6 +6685,79 @@ def _reconcile_remote_newbie_requests_into_local_state(force=False):
     }
 
 
+def _fetch_remote_correction_requests():
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        raise RuntimeError("correction_transport_unavailable")
+    if context.get("appsScriptClient"):
+        result = context["appsScriptClient"].get("getPendingRequests", {
+            "include_resolved": "true", "request_type": CORRECTION_REQUEST_TYPE,
+        })
+        rows = result.get("requests") if isinstance(result, dict) else []
+    else:
+        rows = _shared_read_rows(
+            context["service"].spreadsheets(), context["sheet_id"],
+            SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS,
+        )
+    return [_public_correction_request(row) for row in (rows or []) if isinstance(row, dict)]
+
+
+def _reconcile_remote_corrections_into_local_history():
+    try:
+        requests = _fetch_remote_correction_requests()
+    except Exception as exc:
+        logger.warning("[CORRECTION RECONCILIATION] Remote refresh unavailable error_type=%s", type(exc).__name__)
+        return {"ok": False, "historyUpdated": 0, "error_code": "correction_transport_unavailable"}
+    by_request = {str(item.get("request_id") or "").strip(): item for item in requests if item.get("request_id")}
+    by_session = {}
+    for item in requests:
+        session_id = str(item.get("session_id") or "").strip()
+        if session_id:
+            by_session.setdefault(session_id, []).append(item)
+    updated = 0
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC", ())
+    for row in rows:
+        record = SQLiteCollection.decode(row["data"])
+        request_id = str(record.get("candidate_correction_request_id") or "").strip()
+        remote = by_request.get(request_id) if request_id else None
+        if not remote:
+            candidates = by_session.get(str(record.get("history_id") or record.get("session_id") or "").strip(), [])
+            remote = candidates[0] if len(candidates) == 1 else None
+        if not remote:
+            continue
+        status = str(remote.get("raw_status") or "pending").lower()
+        if status == str(record.get("candidate_correction_status") or "").lower() and status == "pending":
+            continue
+        next_record = SQLiteCollection.clone(record)
+        next_record.update({
+            "candidate_correction_request_id": remote.get("request_id") or request_id,
+            "candidate_correction_status": status,
+            "candidate_correction_changes": remote.get("changes") or [],
+            "candidate_correction_reason": remote.get("reason") or record.get("candidate_correction_reason") or "",
+            "candidate_correction_decision_at": remote.get("admin_decision_at") or "",
+            "candidate_correction_decision_by": remote.get("admin_decision_by") or "",
+            "candidate_correction_denial_reason": remote.get("denial_reason") or "",
+        })
+        if status == "approved" and not record.get("candidate_correction_applied_at"):
+            for change in remote.get("changes") or []:
+                if change.get("field") == "candidate_name":
+                    next_record["candidate"] = change.get("requested_value")
+                    next_record["candidate_name"] = change.get("requested_value")
+                elif change.get("field") == "headset_model":
+                    next_record["headset_brand"] = change.get("requested_value")
+            next_record["candidate_correction_applied_at"] = remote.get("admin_decision_at") or datetime.now(timezone.utc).isoformat()
+        if status in {"approved", "denied"}:
+            next_record["candidate_correction_pending"] = False
+        if next_record == record:
+            continue
+        db.history.store.execute(
+            "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+            (SQLiteCollection.encode(next_record), str(next_record.get("timestamp_iso") or next_record.get("timestamp") or ""), row["id"]),
+        )
+        updated += 1
+    return {"ok": True, "historyUpdated": updated}
+
+
 def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candidate_tracking=None):
     context = context or _shared_sheet_context()
     headset_snapshot = headset_snapshot or _headset_review_snapshot(context)
@@ -6559,7 +6771,17 @@ def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candid
             for row in raw_requests or []:
                 if not isinstance(row, dict):
                     continue
-                if row.get("source_tab") == SHARED_CANDIDATE_DELETION_REQUESTS_TAB:
+                if row.get("source_tab") == SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB or str(row.get("request_type") or "").lower() == CORRECTION_REQUEST_TYPE:
+                    requests.append(_public_correction_request({
+                        "request_id": row.get("request_id"), "source_session_id": row.get("source_session_id"),
+                        "candidate_id": row.get("candidate_id"), "candidate_name": row.get("candidate"),
+                        "tester_name": row.get("tester"), "reason": row.get("reason"),
+                        "changes_json": row.get("changes_json") or row.get("changes"),
+                        "created_at": row.get("created_at"), "status": row.get("status"),
+                        "admin_decision_at": row.get("decision_at"), "admin_decision_by": row.get("decision_by"),
+                        "denial_reason": row.get("denial_reason"), "warning": row.get("warning"),
+                    }))
+                elif row.get("source_tab") == SHARED_CANDIDATE_DELETION_REQUESTS_TAB:
                     requests.append(_public_deletion_request({
                         "request_id": row.get("request_id"), "session_id": row.get("source_session_id"),
                         "candidate_name": row.get("candidate"), "tester_name": row.get("tester"),
@@ -6616,7 +6838,14 @@ def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candid
         sheet_id = context["sheet_id"]
         newbie_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_NEWBIE_SHIFT_REQUESTS_TAB, SHARED_NEWBIE_SHIFT_REQUEST_HEADERS)
         deletion_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_DELETION_REQUESTS_TAB, SHARED_CANDIDATE_DELETION_REQUEST_HEADERS)
-        requests = [_public_newbie_request(row) for row in newbie_rows] + [_public_deletion_request(row) for row in deletion_rows]
+        correction_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS)
+        requests = ([_public_newbie_request(row) for row in newbie_rows]
+                    + [_public_deletion_request(row) for row in deletion_rows]
+                    + [
+                        _public_correction_request(row)
+                        for row in correction_rows
+                        if str(row.get("request_type") or CORRECTION_REQUEST_TYPE).strip().lower() == CORRECTION_REQUEST_TYPE
+                    ])
         requests = _filter_obsolete_pending_newbie_requests(requests, candidate_tracking)
         requests.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return {
@@ -6666,6 +6895,107 @@ def _set_row_value(row, key, value):
 
 def _find_request_row(rows, request_id):
     return next((row for row in rows if str(row.get("request_id") or "").strip() == str(request_id or "").strip()), None)
+
+
+def _apply_candidate_correction_direct(sheets_api, sheet_id, source_session_id, changes, candidate_id=""):
+    source_session_id = str(source_session_id or "").strip()
+    if not source_session_id:
+        return {"ok": False, "error_code": "correction_target_not_found", "updated": 0}
+    rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+    target = next((row for row in rows if str(row.get("session_id") or "").strip() == source_session_id), None)
+    if not target:
+        return {"ok": False, "error_code": "correction_target_not_found", "updated": 0}
+    candidate_id = str(candidate_id or "").strip()
+    target_candidate_id = str(target.get("candidate_id") or "").strip()
+    if candidate_id and target_candidate_id and candidate_id != target_candidate_id:
+        return {"ok": False, "error_code": "correction_identity_mismatch", "updated": 0}
+    normalized = _normalize_correction_changes(changes)
+    applied = []
+    for change in normalized:
+        storage_key = "candidate_name" if change["field"] == "candidate_name" else "headset_brand"
+        current = str(target.get(storage_key) or "").strip()
+        if current == change["requested_value"]:
+            continue
+        if change["previous_value"] and current != change["previous_value"]:
+            return {"ok": False, "error_code": "correction_identity_mismatch", "updated": 0}
+        target[storage_key] = change["requested_value"]
+        applied.append(change)
+    if applied:
+        _shared_update_existing_row(
+            sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS,
+            target["_row_number"], _shared_row_values(target, SHARED_CANDIDATE_SESSION_HEADERS),
+        )
+        name_change = next((item for item in applied if item["field"] == "candidate_name"), None)
+        if name_change:
+            try:
+                pending_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
+            except Exception as exc:
+                if "missing sheet" not in str(exc).lower():
+                    raise
+                pending_rows = []
+            for pending in pending_rows:
+                if str(pending.get("original_session_id") or "").strip() != source_session_id:
+                    continue
+                pending["candidate_name"] = name_change["requested_value"]
+                _shared_update_existing_row(
+                    sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS,
+                    pending["_row_number"], _shared_row_values(pending, SHARED_PENDING_SUP_TRANSFER_HEADERS),
+                )
+    return {"ok": True, "updated": len(applied), "already_applied": not applied, "changes": applied or normalized}
+
+
+def _apply_candidate_deletion_terminal_direct(sheets_api, sheet_id, source_session_id, request_id):
+    source_session_id = str(source_session_id or "").strip()
+    if not source_session_id:
+        return {"updated": 0, "pendingUpdated": 0, "already_applied": False}
+    candidates = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+    updated = 0
+    already_applied = False
+    for row in candidates:
+        if str(row.get("session_id") or "").strip() != source_session_id:
+            continue
+        already_applied = (_shared_truthy(row.get("archived")) and str(row.get("status") or "").strip().upper() in {"REMOVED", "DELETED"})
+        if not already_applied:
+            row.update({
+                "archived": True, "status": "REMOVED", "needs_sup_transfer": False,
+                "pending_sup_transfer_id": "", "newbie_shift_scheduled_at": "", "newbie_shift_timezone": "",
+                "newbie_shift_request_status": "", "deletion_request_id": request_id,
+                "deletion_request_status": "approved",
+            })
+            _shared_update_existing_row(
+                sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS,
+                row["_row_number"], _shared_row_values(row, SHARED_CANDIDATE_SESSION_HEADERS),
+            )
+            updated += 1
+        break
+    pending_updated = 0
+    pending_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS)
+    for row in pending_rows:
+        if str(row.get("original_session_id") or "").strip() != source_session_id:
+            continue
+        if str(row.get("status") or "").strip().lower() in {"pending", "in progress", "in_progress"}:
+            row["status"] = "cancelled"
+            row["notes"] = "Obsolete after approved candidate deletion."
+            _shared_update_existing_row(
+                sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB, SHARED_PENDING_SUP_TRANSFER_HEADERS,
+                row["_row_number"], _shared_row_values(row, SHARED_PENDING_SUP_TRANSFER_HEADERS),
+            )
+            pending_updated += 1
+    obsolete_requests = 0
+    for tab, headers, session_key, status_key in (
+        (SHARED_NEWBIE_SHIFT_REQUESTS_TAB, SHARED_NEWBIE_SHIFT_REQUEST_HEADERS, "session_id", "request_status"),
+        (SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS, "source_session_id", "status"),
+    ):
+        for row in _shared_read_rows(sheets_api, sheet_id, tab, headers):
+            if str(row.get(session_key) or "").strip() != source_session_id or _request_status_value(row.get(status_key)) != "pending":
+                continue
+            row[status_key] = "denied"
+            row["admin_decision_at"] = datetime.now(timezone.utc).isoformat()
+            row["admin_decision_by"] = "SAM deletion reconciliation"
+            row["denial_reason"] = "Request became obsolete after approved candidate deletion."
+            _shared_update_existing_row(sheets_api, sheet_id, tab, headers, row["_row_number"], _shared_row_values(row, headers))
+            obsolete_requests += 1
+    return {"updated": updated, "pendingUpdated": pending_updated, "obsoleteRequests": obsolete_requests, "already_applied": already_applied}
 
 
 def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_id, status, actor, decided_at, denial_reason="", attempt_outcome=None):
@@ -6734,6 +7064,8 @@ def _shared_pending_request_action(payload):
             request_type = "newbie_shift_reschedule"
         elif category == "candidate_deletion":
             request_type = "candidate_deletion"
+        elif category == "candidate_correction":
+            request_type = CORRECTION_REQUEST_TYPE
         else:
             return {"ok": False, "error": "Unsupported request category."}
 
@@ -6764,6 +7096,11 @@ def _shared_pending_request_action(payload):
             for field in [
                 "candidate_session_synced",
                 "deletion_action_required",
+                "candidate_session_updated",
+                "applied_changes",
+                "candidate_deletion_applied",
+                "candidate_updates",
+                "pending_updates",
                 "warning",
                 "error_code",
                 "message",
@@ -6857,12 +7194,55 @@ def _shared_pending_request_action(payload):
                 row["_row_number"],
                 _shared_row_values(row, SHARED_CANDIDATE_DELETION_REQUEST_HEADERS),
             )
+            terminal_result = {"updated": 0, "pendingUpdated": 0, "already_applied": False}
+            if decision == "approved":
+                terminal_result = _apply_candidate_deletion_terminal_direct(
+                    sheets_api, sheet_id, row.get("session_id") or "", request_id,
+                )
             return {
                 "ok": True,
                 "request_id": request_id,
                 "category": category,
                 "status": decision,
-                "deletion_action_required": decision == "approved",
+                "deletion_action_required": False,
+                "candidate_deletion_applied": decision == "approved",
+                "candidateUpdates": terminal_result.get("updated", 0),
+                "pendingUpdates": terminal_result.get("pendingUpdated", 0),
+                "already_applied": terminal_result.get("already_applied", False),
+            }
+
+        if category == "candidate_correction":
+            rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS)
+            row = _find_request_row(rows, request_id)
+            if not row:
+                return {"ok": False, "error": "Request was not found.", "error_code": "correction_target_not_found"}
+            current_status = _request_status_value(row.get("status"))
+            if current_status != expected_status:
+                return {"ok": False, "error": "Request has already been resolved.", "error_code": "correction_already_resolved"}
+            correction_result = {"ok": True, "updated": 0, "changes": []}
+            if decision == "approved":
+                try:
+                    correction_result = _apply_candidate_correction_direct(
+                        sheets_api, sheet_id, row.get("source_session_id") or "", row.get("changes_json") or "[]",
+                    )
+                except ValueError as exc:
+                    return {"ok": False, "error": "The correction request is invalid.", "error_code": str(exc)}
+                if not correction_result.get("ok"):
+                    return {"ok": False, "error": "The correction target no longer matches the submitted request.", "error_code": correction_result.get("error_code")}
+            row["status"] = decision
+            row["admin_decision_at"] = decided_at
+            row["admin_decision_by"] = actor
+            row["denial_reason"] = denial_reason if decision == "denied" else ""
+            row["updated_at"] = decided_at
+            _shared_update_existing_row(
+                sheets_api, sheet_id, SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS,
+                row["_row_number"], _shared_row_values(row, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS),
+            )
+            return {
+                "ok": True, "request_id": request_id, "category": category, "status": decision,
+                "candidate_session_updated": correction_result.get("updated", 0) > 0,
+                "applied_changes": correction_result.get("changes", []),
+                "already_applied": correction_result.get("already_applied", False),
             }
 
         return {"ok": False, "error": "Unsupported request category."}
@@ -6891,9 +7271,14 @@ def _shared_admin_candidate_action(payload):
         "mark_incomplete",
         "move_pending_sup_transfer",
         "remove_pending_sup_transfer",
+        ADMIN_CANDIDATE_EDIT_ACTION,
     }
     if action not in supported_actions:
         return {"ok": False, "error": "Unsupported candidate tracking action."}
+    if action == ADMIN_CANDIDATE_EDIT_ACTION and not session_id:
+        return _candidate_update_failure("candidate_update_target_not_found")
+    if action == ADMIN_CANDIDATE_EDIT_ACTION and not reason:
+        return {"ok": False, "error": "A correction reason is required.", "error_code": "correction_reason_required"}
     if action == "restore_active":
         action = "restore_withdrawal"
     if not candidate_name and not session_id and not pending_id:
@@ -6908,11 +7293,22 @@ def _shared_admin_candidate_action(payload):
     try:
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
+            from services.apps_script_api import AppsScriptApiError
             apps_script_payload = dict(payload or {})
             apps_script_payload["operation"] = action
             apps_script_payload.pop("action", None)
-            result = apps_script_client.post("updateCandidateTracking", apps_script_payload)
-            return {"ok": True, "action": action, **(result if isinstance(result, dict) else {})}
+            try:
+                result = apps_script_client.post("updateCandidateTracking", apps_script_payload)
+            except AppsScriptApiError as exc:
+                return _candidate_update_failure(_candidate_update_error_code(exc))
+            if not isinstance(result, dict):
+                return _candidate_update_failure("candidate_update_response_invalid")
+            if result.get("updated") is not True:
+                return _candidate_update_failure(
+                    result.get("error_code") or _candidate_update_error_code(result.get("error") or result.get("message")),
+                    candidate_updated=bool(result.get("candidateUpdated") or result.get("candidate_updated")),
+                )
+            return {"ok": True, "action": action, **result}
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         candidate_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
@@ -6923,6 +7319,45 @@ def _shared_admin_candidate_action(payload):
         updated_candidates = 0
         updated_pending = 0
         pending_append_row = None
+
+        if action == ADMIN_CANDIDATE_EDIT_ACTION:
+            try:
+                changes = _normalize_correction_changes((payload or {}).get("changes") or [])
+            except ValueError as exc:
+                return _candidate_update_failure("candidate_update_no_changes" if str(exc) == "correction_no_changes" else "candidate_update_failed")
+            try:
+                _shared_read_rows(
+                    sheets_api, sheet_id, SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB,
+                    SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS,
+                )
+            except Exception:
+                return _candidate_update_failure("candidate_update_audit_failed", candidate_updated=False)
+            correction = _apply_candidate_correction_direct(
+                sheets_api, sheet_id, session_id, changes, (payload or {}).get("candidate_id") or "",
+            )
+            if not correction.get("ok"):
+                code = "candidate_update_target_not_found" if correction.get("error_code") == "correction_target_not_found" else "candidate_update_identity_mismatch"
+                return _candidate_update_failure(code)
+            fingerprint = hashlib.sha256(json.dumps({"session": session_id, "changes": changes}, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+            request_id = str((payload or {}).get("request_id") or f"admin-correction-{session_id}-{fingerprint}")
+            now_iso = datetime.now(timezone.utc).isoformat()
+            audit_row = {
+                "request_id": request_id, "request_type": ADMIN_CANDIDATE_EDIT_AUDIT_TYPE,
+                "source_session_id": session_id, "candidate_id": (payload or {}).get("candidate_id") or session_id,
+                "candidate_name": candidate_name, "tester_name": actor,
+                "reason": reason, "changes_json": json.dumps(changes, separators=(",", ":")),
+                "created_at": now_iso, "status": "approved", "admin_decision_at": now_iso,
+                "admin_decision_by": actor, "denial_reason": "", "updated_at": now_iso,
+            }
+            try:
+                _shared_update_or_append_row(
+                    sheets_api, sheet_id, SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB,
+                    SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS, "request_id", request_id,
+                    _shared_row_values(audit_row, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS),
+                )
+            except Exception:
+                return _candidate_update_failure("candidate_update_audit_failed", candidate_updated=True)
+            return {"ok": True, "action": action, "request_id": request_id, **correction}
 
         def manual_note(previous_status, new_status, note_text=""):
             note = (
@@ -12231,6 +12666,7 @@ async def discard_session(request: Request):
 @api_router.get("/history")
 async def get_history():
     await asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state)
+    await asyncio.to_thread(_reconcile_remote_corrections_into_local_history)
     docs = _recent_history_docs(await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500))
     for index, doc in enumerate(docs):
         doc = _session_with_workflow_defaults(doc)
@@ -12350,6 +12786,92 @@ async def request_history_session_deletion(history_id: str, request: Request):
         "sharedRequest": shared_result,
         "message": "Removed from local history. Candidate-list deletion request is pending SAM review.",
     }
+
+
+@api_router.post("/history/session/{history_id:path}/correction-request")
+async def request_history_session_correction(history_id: str, request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    reason = str((payload or {}).get("reason") or "").strip()
+    if len(reason) < 10:
+        raise HTTPException(status_code=400, detail={"error_code": "correction_validation_failed", "message": "Provide a correction reason of at least 10 characters."})
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC")
+    target_row = None
+    target = None
+    for row in rows:
+        existing = SQLiteCollection.decode(row["data"])
+        if _history_record_matches_identifier(existing, history_id):
+            target_row, target = row, existing
+            break
+    if not target:
+        raise HTTPException(status_code=404, detail={"error_code": "correction_target_not_found", "message": "History session not found."})
+    source_session_id = str(target.get("history_id") or target.get("session_id") or _history_identity(target)).strip()
+    if not source_session_id:
+        raise HTTPException(status_code=400, detail={"error_code": "correction_validation_failed", "message": "This session does not have a stable identifier."})
+    requested_values = (payload or {}).get("changes") or {}
+    if isinstance(requested_values, list):
+        requested_values = {str(item.get("field") or ""): item.get("requested_value") for item in requested_values if isinstance(item, dict)}
+    if not isinstance(requested_values, dict):
+        raise HTTPException(status_code=400, detail={"error_code": "correction_validation_failed", "message": "Correction changes are invalid."})
+    raw_changes = []
+    for field, requested in requested_values.items():
+        field = str(field or "").strip().lower()
+        if field not in CORRECTION_ALLOWED_FIELDS:
+            raise HTTPException(status_code=400, detail={"error_code": "correction_unsupported_field", "message": "Only candidate name and headset model can be corrected."})
+        previous = target.get("candidate") or target.get("candidate_name") if field == "candidate_name" else target.get("headset_brand")
+        raw_changes.append({"field": field, "previous_value": previous or "", "requested_value": requested or ""})
+    try:
+        changes = _normalize_correction_changes(raw_changes)
+    except ValueError as exc:
+        code = str(exc)
+        message = "At least one value must be changed." if code == "correction_no_changes" else "The correction request is invalid."
+        raise HTTPException(status_code=400, detail={"error_code": code, "message": message})
+    fingerprint_source = json.dumps({"session": source_session_id, "changes": changes}, sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()
+    if target.get("candidate_correction_pending") and target.get("candidate_correction_fingerprint") == fingerprint:
+        raise HTTPException(status_code=409, detail={"error_code": "correction_already_pending", "message": "This correction request is already pending SAM review."})
+    request_id = f"correction-{source_session_id}-{fingerprint[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    request_row = {
+        "request_id": request_id, "request_type": CORRECTION_REQUEST_TYPE,
+        "source_session_id": source_session_id, "candidate_id": target.get("candidate_id") or source_session_id,
+        "candidate_name": target.get("candidate") or target.get("candidate_name") or "",
+        "tester_name": target.get("tester_name") or "", "reason": reason,
+        "changes_json": json.dumps(changes, separators=(",", ":")),
+        "created_at": now_iso, "submitted_at": now_iso, "status": "pending", "admin_decision_at": "",
+        "admin_decision_by": "", "denial_reason": "", "updated_at": now_iso,
+    }
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        raise HTTPException(status_code=503, detail={"error_code": "correction_transport_unavailable", "message": _candidate_tracking_temporary_unavailable_message()})
+    try:
+        if context.get("appsScriptClient"):
+            context["appsScriptClient"].post("upsertPendingRequest", {"request": request_row})
+        else:
+            _shared_update_or_append_row(
+                context["service"].spreadsheets(), context["sheet_id"],
+                SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS,
+                "request_id", request_id, _shared_row_values(request_row, SHARED_CANDIDATE_CORRECTION_REQUEST_HEADERS),
+            )
+    except Exception as exc:
+        logger.warning("[CORRECTIONS] Submission failed error_type=%s", type(exc).__name__)
+        message = str(exc).lower()
+        if "already been resolved" in message or "status has changed" in message:
+            raise HTTPException(status_code=409, detail={"error_code": "correction_already_resolved", "message": "This correction request has already been resolved."})
+        raise HTTPException(status_code=503, detail={"error_code": "correction_transport_unavailable", "message": "The correction request could not be submitted right now."})
+    next_target = {
+        **target, "candidate_correction_request_id": request_id, "candidate_correction_status": "pending",
+        "candidate_correction_pending": True, "candidate_correction_changes": changes,
+        "candidate_correction_reason": reason, "candidate_correction_created_at": now_iso,
+        "candidate_correction_fingerprint": fingerprint, "candidate_correction_denial_reason": "",
+    }
+    db.history.store.execute(
+        "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+        (SQLiteCollection.encode(next_target), str(next_target.get("timestamp_iso") or next_target.get("timestamp") or ""), target_row["id"]),
+    )
+    return {"ok": True, "request_id": request_id, "request_type": CORRECTION_REQUEST_TYPE, "status": "pending", "changes": changes}
 
 # ══════════════════════════════════════════════════════════════════
 # TICKER / NOTIFICATIONS (fetches from admin-configured Google Sheet, falls back to cache/defaults)

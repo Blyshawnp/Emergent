@@ -166,6 +166,7 @@ const api = {
   clearHistory: () => request('DELETE', '/history'),
   deleteHistorySession: (historyId) => request('DELETE', `/history/session/${encodeURIComponent(historyId)}`),
   requestHistorySessionDeletion: (historyId, reason) => request('POST', `/history/session/${encodeURIComponent(historyId)}/deletion-request`, { reason }),
+  requestHistorySessionCorrection: (historyId, changes, reason) => request('POST', `/history/session/${encodeURIComponent(historyId)}/correction-request`, { changes, reason }),
   lookupSharedCandidate: (name) => request('GET', `/shared/candidates/lookup?name=${encodeURIComponent(name || '')}`),
   getSharedPendingSupTransfers: () => request('GET', '/shared/pending-sup-transfers'),
   getSharedAdminCandidates: () => request('GET', '/shared/admin/candidates'),

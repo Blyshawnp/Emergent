@@ -759,9 +759,9 @@ function UpdateModal({ updateInfo, updaterStatus, onInstall, onManualDownload, o
   );
 }
 
-function StatusModal({ message, kind = 'info', onClose }) {
+function StatusModal({ message, kind = 'info', title: customTitle = '', actionLabel = 'OK', onClose }) {
   if (!message) return null;
-  const title = kind === 'error' ? 'Action Failed' : kind === 'warning' ? 'Warning' : 'Success';
+  const title = customTitle || (kind === 'error' ? 'Action Failed' : kind === 'warning' ? 'Warning' : 'Success');
   const badgeIcon = kind === 'error' ? (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
   ) : kind === 'warning' ? (
@@ -784,7 +784,7 @@ function StatusModal({ message, kind = 'info', onClose }) {
           <button type="button" className="nm-modal-close" onClick={onClose} aria-label="Close status">×</button>
         </div>
         <div className="nm-help-actions">
-          <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>OK</button>
+          <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>{actionLabel}</button>
         </div>
       </section>
     </div>
@@ -880,7 +880,7 @@ export function SamSetupWizard({ status, onComplete }) {
       });
       if (!result?.ok) {
         setError(getSamSetupErrorMessage(result));
-        return;
+        return result;
       }
       onComplete?.(result);
     } catch (setupError) {
@@ -973,7 +973,9 @@ const REQUEST_FILTERS = [
   { key: 'newbie', label: 'Newbie Shifts' },
   { key: 'reschedules', label: 'Reschedules' },
   { key: 'deletions', label: 'Candidate Deletions' },
+  { key: 'corrections', label: 'Information Corrections' },
   { key: 'headsets', label: 'Headset Reviews' },
+  { key: 'resolved', label: 'Resolved Requests' },
   { key: 'approved', label: 'Approved' },
   { key: 'denied', label: 'Denied' },
 ];
@@ -1050,6 +1052,49 @@ export function getPendingRequestSchedules(request = {}) {
   };
 }
 
+export function getVisiblePendingRequests(requests = [], filter = 'pending') {
+  return (Array.isArray(requests) ? requests : []).filter((request) => {
+    const status = String(request.raw_status || request.status || '').toLowerCase();
+    if (filter === 'pending') return status === 'pending';
+    if (filter === 'newbie') return status === 'pending' && request.category === 'newbie_initial';
+    if (filter === 'reschedules') return status === 'pending' && request.category === 'newbie_reschedule';
+    if (filter === 'deletions') return status === 'pending' && request.category === 'candidate_deletion';
+    if (filter === 'corrections') return status === 'pending' && request.category === 'candidate_correction';
+    if (filter === 'resolved') return status === 'approved' || status === 'denied';
+    if (filter === 'approved') return status === 'approved';
+    if (filter === 'denied') return status === 'denied';
+    return false;
+  }).sort((left, right) => String(right.admin_decision_at || right.created_at || '').localeCompare(String(left.admin_decision_at || left.created_at || '')));
+}
+
+export function buildCandidateInformationChanges(current = {}, requested = {}) {
+  const fields = [
+    { field_key: 'candidate_name', label: 'Candidate Name' },
+    { field_key: 'headset_model', label: 'Headset Model' },
+  ];
+  return fields.flatMap(({ field_key, label }) => {
+    const previousValue = String(current[field_key] || '').trim();
+    const requestedValue = String(requested[field_key] || '').trim();
+    if (!requestedValue || requestedValue === previousValue) return [];
+    return [{ field: field_key, field_key, label, previous_value: previousValue, requested_value: requestedValue }];
+  });
+}
+
+export function getCandidateUpdateErrorMessage(result = {}) {
+  const messages = {
+    candidate_update_no_changes: 'No candidate information was changed.',
+    candidate_update_target_not_found: 'The candidate session could not be found.',
+    candidate_update_identity_mismatch: 'The candidate record no longer matches this session.',
+    candidate_update_unauthorized: 'SAM is not authorized to update this candidate.',
+    candidate_update_action_unavailable: 'The deployed Google service does not support this update yet.',
+    candidate_update_transport_failed: 'The Google service is temporarily unavailable.',
+    candidate_update_response_invalid: 'The update response was invalid.',
+    candidate_update_audit_failed: 'The candidate was updated, but the audit record could not be saved.',
+    candidate_update_failed: 'The candidate information could not be updated.',
+  };
+  return messages[result?.error_code] || result?.error || messages.candidate_update_failed;
+}
+
 function isTimestampLikeHeadsetLabel(value) {
   const text = String(value || '').trim();
   return /^\d{4}-\d{2}-\d{2}[T\s]/.test(text) || /^\d{1,2}\/\d{1,2}\/\d{2,4}[,\s]/.test(text);
@@ -1065,6 +1110,7 @@ export function getHeadsetReviewDisplayTitle(item = {}) {
 }
 
 function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh, onDecision, onOpenHeadsets, actor }) {
+  const [approvalRequest, setApprovalRequest] = useState(null);
   const [denialRequest, setDenialRequest] = useState(null);
   const [denialReason, setDenialReason] = useState('');
   const [denialError, setDenialError] = useState('');
@@ -1072,18 +1118,9 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
   const [decisionError, setDecisionError] = useState('');
   const requests = Array.isArray(data?.requests) ? data.requests : [];
   const headsetRows = Array.isArray(data?.headsetReviews) ? data.headsetReviews : [];
-  const filteredRequests = requests.filter((request) => {
-    const status = String(request.raw_status || request.status || '').toLowerCase();
-    if (filter === 'pending') return status === 'pending';
-    if (filter === 'newbie') return request.category === 'newbie_initial';
-    if (filter === 'reschedules') return request.category === 'newbie_reschedule';
-    if (filter === 'deletions') return request.category === 'candidate_deletion';
-    if (filter === 'approved') return status === 'approved';
-    if (filter === 'denied') return status === 'denied';
-    return true;
-  });
+  const filteredRequests = getVisiblePendingRequests(requests, filter);
 
-  const approve = async (request) => {
+  const submitApproval = async (request) => {
     setSubmittingRequestId(request.request_id);
     setDecisionError('');
     try {
@@ -1097,7 +1134,16 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
       if (!result?.ok) setDecisionError(result?.error || 'The request decision could not be saved.');
     } finally {
       setSubmittingRequestId('');
+      setApprovalRequest(null);
     }
+  };
+
+  const approve = async (request) => {
+    if (request.category === 'candidate_correction') {
+      setApprovalRequest(request);
+      return;
+    }
+    await submitApproval(request);
   };
 
   const openDeny = (request) => {
@@ -1149,8 +1195,8 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
     <section className="nm-panel nm-request-panel" id="sam-pending-requests" data-testid="sam-pending-requests">
       <div className="nm-section-title">
         <div>
-          <h2>Pending Requests</h2>
-          <div className="nm-kicker">Approve or deny Newbie Shift, reschedule, candidate deletion, and headset review requests.</div>
+          <h2>{['resolved', 'approved', 'denied'].includes(filter) ? 'Resolved Requests' : 'Pending Requests'}</h2>
+          <div className="nm-kicker">Active requests remain separate from approved and denied request history.</div>
         </div>
         <div className="nm-section-title-actions">
           <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={onRefresh} disabled={loading}>
@@ -1205,11 +1251,24 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
                   {renderStatus(request)}
                 </div>
                 <div className="nm-note-title">{request.candidate || 'Unknown candidate'}</div>
-                <div className={`nm-note-preview ${request.category === 'candidate_deletion' ? 'nm-deletion-reason' : ''}`}>
-                  {request.category === 'candidate_deletion' ? <><strong>Deletion Reason</strong><span>{request.reason || 'No reason provided.'}</span></> : <>{request.reason || 'No reason provided.'}{request.details ? ` ${request.details}` : ''}</>}
+                <div className={`nm-note-preview ${['candidate_deletion', 'candidate_correction'].includes(request.category) ? 'nm-deletion-reason' : ''}`}>
+                  {request.category === 'candidate_deletion' ? <><strong>Deletion Reason</strong><span>{request.reason || 'No reason provided.'}</span></>
+                    : request.category === 'candidate_correction' ? <><strong>Correction Reason</strong><span>{request.reason || 'No reason provided.'}</span></>
+                      : <>{request.reason || 'No reason provided.'}{request.details ? ` ${request.details}` : ''}</>}
                 </div>
                 <div className="nm-request-grid">
-                  {request.category === 'candidate_deletion' ? <>
+                  {request.category === 'candidate_correction' ? <>
+                    <div><strong>Request Type</strong><span>Candidate Information Correction</span></div>
+                    <div><strong>Requested By</strong><span>{request.tester || request.requester || 'Tester'}</span></div>
+                    <div><strong>Submitted</strong><span>{formatRequestTime(request.created_at)}</span></div>
+                    <div><strong>Current Status</strong><span>{approvalLabel(request.raw_status || request.status)}</span></div>
+                    {(request.changes || []).map((change) => (
+                      <div className="nm-request-grid-wide nm-change-row" key={change.field}>
+                        <strong>{change.label || (change.field === 'candidate_name' ? 'Candidate Name' : 'Headset Model')}</strong>
+                        <span><span className="nm-change-value"><small>Previous</small>{change.previous_value || 'Not recorded'}</span><span className="nm-change-arrow" aria-hidden="true">→</span><span className="nm-change-value"><small>Requested</small>{change.requested_value}</span></span>
+                      </div>
+                    ))}
+                  </> : request.category === 'candidate_deletion' ? <>
                     <div><strong>Certification Result</strong><span><StatusChip meta={candidateCertificationMeta({ latest_status: request.session_status })} /></span></div>
                     <div><strong>Final Attempt</strong><span>{request.final_attempt ? 'Yes' : 'No'}</span></div>
                     <div><strong>Form Status</strong><span><StatusChip meta={formFillMeta(request.form_fill_status)} /></span></div>
@@ -1231,6 +1290,11 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
                     {request.terminal_outcome ? <div className="nm-request-grid-wide"><strong>Result if Applied</strong><span>{request.terminal_outcome === 'FAIL-Final Attempt' ? 'Fail – Final Attempt' : request.terminal_outcome}</span></div> : null}
                   </>}
                   {request.denial_reason ? <div className="nm-request-grid-wide"><strong>Denial Reason</strong><span>{request.denial_reason}</span></div> : null}
+                  {String(request.raw_status || '').toLowerCase() !== 'pending' ? <>
+                    <div><strong>Decision Date</strong><span>{formatRequestTime(request.admin_decision_at)}</span></div>
+                    <div><strong>Decision Maker</strong><span>{request.admin_decision_by || 'SAM administrator'}</span></div>
+                  </> : null}
+                  {request.warning ? <div className="nm-request-grid-wide"><strong>Synchronization</strong><span>{request.warning}</span></div> : null}
                 </div>
               </div>
               {String(request.raw_status || '').toLowerCase() === 'pending' ? (
@@ -1263,6 +1327,23 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
           </section>
         </div>
       ) : null}
+      {approvalRequest ? (
+        <div className="nm-modal-backdrop">
+          <section className="nm-modal-card" role="dialog" aria-modal="true" aria-labelledby="approve-correction-title">
+            <h3 id="approve-correction-title">Approve Candidate Information Correction?</h3>
+            <p className="nm-muted">Confirm the exact authoritative changes. Certification results and attempt state will not change.</p>
+            <div className="nm-correction-review-list">
+              {(approvalRequest.changes || []).map((change) => (
+                <div key={change.field}><strong>{change.label}</strong><span>{change.previous_value || 'Not recorded'} → {change.requested_value}</span></div>
+              ))}
+            </div>
+            <div className="nm-modal-actions">
+              <button type="button" className="nm-btn nm-btn-secondary" disabled={Boolean(submittingRequestId)} onClick={() => setApprovalRequest(null)}>Cancel</button>
+              <button type="button" className="nm-btn nm-btn-primary" disabled={Boolean(submittingRequestId)} onClick={() => submitApproval(approvalRequest)}>{submittingRequestId ? 'Approving...' : 'Approve Correction'}</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1273,7 +1354,22 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
   const [candidateActionMenu, setCandidateActionMenu] = useState(null);
+  const [editCandidateDraft, setEditCandidateDraft] = useState(null);
   const [expandedRowPreviews, setExpandedRowPreviews] = useState({});
+  useEffect(() => {
+    if (!candidateActionMenu) return undefined;
+    const close = () => setCandidateActionMenu(null);
+    const focusTimer = window.setTimeout(() => document.querySelector('.nm-action-menu-portal [role="menuitem"]')?.focus(), 0);
+    document.addEventListener('mousedown', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      window.clearTimeout(focusTimer);
+    };
+  }, [candidateActionMenu]);
   const rows = data?.views?.[view] || [];
   const searchText = search.trim().toLowerCase();
   const searchPool = searchText
@@ -1547,6 +1643,43 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     });
   };
 
+  const openCandidateInformationEdit = (row) => {
+    setCandidateActionMenu(null);
+    setEditCandidateDraft({ row, candidateName: row.candidate_name || '', headsetModel: row.headset_brand || '', reason: '', error: '', submitting: false });
+  };
+
+  const submitCandidateInformationEdit = async () => {
+    const current = editCandidateDraft.row;
+    const reason = editCandidateDraft.reason.trim();
+    if (!reason) {
+      setEditCandidateDraft((draft) => ({ ...draft, error: 'Enter a reason for this correction.' }));
+      return;
+    }
+    const changes = buildCandidateInformationChanges(
+      { candidate_name: current.candidate_name, headset_model: current.headset_brand },
+      { candidate_name: editCandidateDraft.candidateName, headset_model: editCandidateDraft.headsetModel },
+    );
+    if (!changes.length || changes.some((change) => !change.requested_value)) {
+      setEditCandidateDraft((draft) => ({ ...draft, error: !changes.length ? 'Change at least one value.' : 'Corrected values cannot be empty.' }));
+      return;
+    }
+    setEditCandidateDraft((draft) => ({ ...draft, submitting: true, error: '' }));
+    const result = await onAction({
+      action: 'edit_candidate_information',
+      candidate_name: current.candidate_name,
+      session_id: current.session_id || current.latest_session_id || current.original_session_id,
+      candidate_id: current.candidate_id || '',
+      changes,
+      reason,
+      actor,
+    });
+    if (!result?.ok) {
+      setEditCandidateDraft((draft) => ({ ...draft, submitting: false, error: result?.error || 'The candidate information could not be updated.' }));
+      return;
+    }
+    setEditCandidateDraft(null);
+  };
+
   const toggleRowPreview = (rowKey) => {
     setExpandedRowPreviews((current) => ({ ...current, [rowKey]: !current[rowKey] }));
   };
@@ -1598,6 +1731,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     if (!isArchived) {
       moreActions.push({ label: 'Archive', kind: 'secondary', onClick: () => handleArchive(row) });
     }
+    moreActions.unshift({ label: 'Edit Candidate Information', kind: 'primary', onClick: () => openCandidateInformationEdit(row) });
     moreActions.push(isWithdrawn
       ? { label: 'Restore', kind: 'primary', onClick: () => handleRestore(row) }
       : { label: 'Withdraw', kind: 'danger', onClick: () => handleWithdraw(row) });
@@ -1606,22 +1740,42 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     const renderMenu = (type, label, actions) => {
       if (!actions.length) return null;
       const menuKey = `${rowKey || getCandidateRowKey(row)}:${type}`;
-      const isOpen = candidateActionMenu === menuKey;
+      const isOpen = candidateActionMenu?.key === menuKey;
       return (
         <div className="nm-action-menu-wrap">
           <button
             type="button"
-            className="nm-btn nm-btn-secondary nm-btn-table nm-menu-trigger"
+            className={`nm-btn nm-btn-table nm-menu-trigger ${type === 'status' ? 'nm-candidate-action-workflow' : 'nm-candidate-action-secondary'}`}
             aria-haspopup="menu"
             aria-expanded={isOpen}
             aria-label={`${label} for ${row.candidate_name || 'candidate'}`}
-            onClick={() => setCandidateActionMenu(isOpen ? null : menuKey)}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (isOpen) setCandidateActionMenu(null);
+              else {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setCandidateActionMenu({ key: menuKey, rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, width: rect.width }, actions });
+              }
+            }}
           >
             {label}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           {isOpen ? (
-            <div className="nm-action-menu" role="menu" onKeyDown={(event) => { if (event.key === 'Escape') closeMenu(); }}>
+            <ModalPortal>
+            <div
+              className="nm-action-menu nm-action-menu-portal"
+              role="menu"
+              style={{
+                position: 'fixed',
+                top: candidateActionMenu.rect.bottom + 220 > window.innerHeight ? 'auto' : candidateActionMenu.rect.bottom + 6,
+                bottom: candidateActionMenu.rect.bottom + 220 > window.innerHeight ? window.innerHeight - candidateActionMenu.rect.top + 6 : 'auto',
+                left: Math.max(12, Math.min(candidateActionMenu.rect.left, window.innerWidth - Math.max(210, candidateActionMenu.rect.width) - 12)),
+                width: Math.max(210, candidateActionMenu.rect.width),
+              }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => { if (event.key === 'Escape') closeMenu(); }}
+            >
               {actions.map((action) => (
                 <button
                   key={action.label}
@@ -1634,6 +1788,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                 </button>
               ))}
             </div>
+            </ModalPortal>
           ) : null}
         </div>
       );
@@ -1641,7 +1796,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
 
     return (
       <div className="nm-row-actions nm-row-actions-compact">
-        <button type="button" className="nm-btn nm-btn-secondary nm-btn-table nm-view-details-btn" onClick={() => setDetailKey(rowKey)}>
+        <button type="button" className="nm-btn nm-btn-table nm-view-details-btn nm-candidate-action-secondary" onClick={() => setDetailKey(rowKey)}>
           View Details
         </button>
         {renderMenu('status', 'Update Status', statusActions)}
@@ -1734,6 +1889,10 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const detailEntry = visibleEntries.find((entry) => entry.key === detailKey) || null;
   const detailRow = detailEntry?.row || null;
   const detailMeta = detailRow ? computeRowMeta(detailRow) : null;
+  const editCandidateChanges = editCandidateDraft ? buildCandidateInformationChanges(
+    { candidate_name: editCandidateDraft.row.candidate_name, headset_model: editCandidateDraft.row.headset_brand },
+    { candidate_name: editCandidateDraft.candidateName, headset_model: editCandidateDraft.headsetModel },
+  ) : [];
 
   return (
     <section className="nm-panel nm-candidate-panel" id="sam-candidate-tracking" data-sam-tour="candidate-tracking">
@@ -1932,6 +2091,31 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
               </div>
               <div className="nm-candidate-detail-footer">
                 <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setDetailKey(null)}>Back / Close</button>
+              </div>
+            </section>
+          </div>
+        </ModalPortal>
+      ) : null}
+      {editCandidateDraft ? (
+        <ModalPortal>
+          <div className="nm-modal-backdrop">
+            <section className="nm-modal-card nm-edit-candidate-modal" role="dialog" aria-modal="true" aria-labelledby="edit-candidate-information-title">
+              <h3 id="edit-candidate-information-title">Edit Candidate Information</h3>
+              <p className="nm-muted">Only candidate name and headset model can be corrected. Attempts, results, and workflow decisions are unchanged.</p>
+              <label><span>Candidate name</span><small>Previous: {editCandidateDraft.row.candidate_name || 'Not recorded'}</small><input value={editCandidateDraft.candidateName} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, candidateName: event.target.value, error: '' }))} /></label>
+              <label><span>Headset model</span><small>Previous: {editCandidateDraft.row.headset_brand || 'Not recorded'}</small><input value={editCandidateDraft.headsetModel} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, headsetModel: event.target.value, error: '' }))} /></label>
+              <label><span>Correction reason</span><textarea className="nm-correction-reason-input" rows={4} required aria-invalid={Boolean(editCandidateDraft.error && !editCandidateDraft.reason.trim())} value={editCandidateDraft.reason} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, reason: event.target.value, error: '' }))} placeholder="Explain why this correction is needed, such as a misspelled candidate name or headset model." /></label>
+              <div className="nm-correction-review-list" aria-live="polite">
+                <strong>Changed fields</strong>
+                {editCandidateChanges.map((change) => (
+                  <div key={change.field_key}><strong>{change.label}</strong><span>{change.previous_value || 'Not recorded'} → {change.requested_value}</span></div>
+                ))}
+                {!editCandidateChanges.length ? <p className="nm-correction-empty">Change the candidate name or headset model to enable Save Correction.</p> : null}
+              </div>
+              {editCandidateDraft.error ? <div className="nm-form-error" role="alert">{editCandidateDraft.error}</div> : null}
+              <div className="nm-modal-actions">
+                <button type="button" className="nm-btn nm-btn-secondary" disabled={editCandidateDraft.submitting} onClick={() => setEditCandidateDraft(null)}>Cancel</button>
+                <button type="button" className="nm-btn nm-btn-primary" disabled={editCandidateDraft.submitting || !editCandidateChanges.length || !editCandidateDraft.reason.trim()} onClick={submitCandidateInformationEdit}>{editCandidateDraft.submitting ? 'Saving...' : 'Save Correction'}</button>
               </div>
             </section>
           </div>
@@ -2613,8 +2797,8 @@ export default function NotificationManagerApp() {
     samSnapshotCoordinatorRef.current = createSamSnapshotCoordinator(() => api.getSharedAdminSnapshot());
   }
   const [samSetupStatus, setSamSetupStatus] = useState({ loading: true, setupComplete: false, userName: '', userRole: '', ok: true, error: '' });
-  const showStatusModal = useCallback((message, kind = 'info') => {
-    setStatusModal({ message, kind });
+  const showStatusModal = useCallback((message, kind = 'info', title = '', actionLabel = 'OK') => {
+    setStatusModal({ message, kind, title, actionLabel });
   }, []);
   const updateSamSettings = useCallback((nextSettings) => {
     const normalized = normalizeSamSettings(nextSettings);
@@ -2992,11 +3176,11 @@ export default function NotificationManagerApp() {
     try {
       const result = await api.updateSharedAdminCandidate(payload);
       if (!result?.ok) {
-        const message = getSharedDataErrorMessage({ message: result?.error }, 'Candidate tracking update failed.');
+        const message = getCandidateUpdateErrorMessage(result);
         setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
         playSamActionSound('error');
         showStatusModal(message, 'error');
-        return;
+        return { ...result, ok: false, error: message };
       }
       const actionLabels = {
         grant_extra_attempt: 'An extra attempt was successfully granted. MTS will now allow this candidate to re-certify.',
@@ -3010,6 +3194,7 @@ export default function NotificationManagerApp() {
         mark_incomplete: 'The candidate was successfully marked as incomplete.',
         move_pending_sup_transfer: 'The candidate was successfully moved to Pending Sup Transfers.',
         remove_pending_sup_transfer: 'The candidate was successfully removed from Pending Sup Transfers and marked incomplete.',
+        edit_candidate_information: 'The candidate information was updated successfully. Certification results, attempts, and workflow decisions were not changed.',
       };
       setSheetState((current) => ({
         ...current,
@@ -3017,10 +3202,20 @@ export default function NotificationManagerApp() {
         statusMessage: actionLabels[payload?.action] || 'Candidate tracking successfully updated.',
       }));
       playSamActionSound('success');
-      showStatusModal(actionLabels[payload?.action] || 'Candidate tracking successfully updated.', 'success');
+      showStatusModal(
+        actionLabels[payload?.action] || 'Candidate tracking successfully updated.',
+        'success',
+        payload?.action === 'edit_candidate_information' ? 'Candidate Information Updated' : '',
+        payload?.action === 'edit_candidate_information' ? 'Done' : 'OK',
+      );
       await loadCandidateTracking({ silent: true, force: true });
+      return result;
     } catch (error) {
-      const message = getSharedDataErrorMessage(error, 'Candidate tracking update failed.');
+      const responseData = error?.response?.data || {};
+      const message = getCandidateUpdateErrorMessage({
+        error_code: responseData.error_code || responseData.detail?.error_code,
+        error: responseData.error || responseData.detail?.message,
+      });
       setSheetState((current) => ({
         ...current,
         statusKind: 'error',
@@ -3028,6 +3223,7 @@ export default function NotificationManagerApp() {
       }));
       playSamActionSound('error');
       showStatusModal(message, 'error');
+      return { ok: false, error: message };
     }
   }, [loadCandidateTracking, playSamActionSound, showStatusModal]);
 
@@ -4110,6 +4306,8 @@ export default function NotificationManagerApp() {
               ? 'reschedules'
               : request.category === 'candidate_deletion'
                 ? 'deletions'
+                : request.category === 'candidate_correction'
+                  ? 'corrections'
                 : 'newbie');
           }}
         />
@@ -4401,6 +4599,8 @@ export default function NotificationManagerApp() {
       <StatusModal
         message={statusModal?.message || ''}
         kind={statusModal?.kind || 'info'}
+        title={statusModal?.title || ''}
+        actionLabel={statusModal?.actionLabel || 'OK'}
         onClose={() => setStatusModal(null)}
       />
       <ConfirmModal

@@ -3,11 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import HistoryPage from './HistoryPage';
+import HistoryPage, { buildHistoryCorrectionChanges } from './HistoryPage';
 import api from '../api';
 
 const mockModal = {
   alert: jest.fn(),
+  success: jest.fn(),
   warning: jest.fn(),
   error: jest.fn(),
   confirm: jest.fn(),
@@ -24,6 +25,7 @@ jest.mock('../api', () => ({
     fillForm: jest.fn(),
     deleteHistorySession: jest.fn(),
     requestHistorySessionDeletion: jest.fn(),
+    requestHistorySessionCorrection: jest.fn(),
     clearHistory: jest.fn(),
   },
 }));
@@ -110,6 +112,7 @@ beforeAll(() => {
 beforeEach(() => {
   jest.clearAllMocks();
   mockModal.alert.mockResolvedValue(true);
+  mockModal.success.mockResolvedValue(true);
   mockModal.warning.mockResolvedValue(true);
   mockModal.error.mockResolvedValue(true);
   mockModal.confirm.mockResolvedValue(false);
@@ -389,7 +392,7 @@ test('candidate deletion request sends and preserves the custom reason when subm
   await view.unmount();
 });
 
-test('deletion submitted confirmation uses a pending-status icon and states local versus SAM effects', async () => {
+test('deletion submitted confirmation uses the shared success pattern and states local versus SAM effects', async () => {
   mockModal.showModal.mockResolvedValueOnce('request');
   api.requestHistorySessionDeletion.mockResolvedValueOnce({
     ok: true,
@@ -412,11 +415,9 @@ test('deletion submitted confirmation uses a pending-status icon and states loca
     await flushPromises();
   });
 
-  expect(mockModal.alert).toHaveBeenCalledWith(
+  expect(mockModal.success).toHaveBeenCalledWith(
     'Deletion Request Submitted',
-    expect.stringMatching(/removed from MTS History.*Candidate Tracking.*SAM administrator/s),
-    'clock',
-    'success'
+    expect.stringMatching(/removed from local History.*submitted to SAM.*awaiting review/s)
   );
   await view.unmount();
 });
@@ -436,4 +437,70 @@ test('History Only deletes locally without creating a candidate deletion request
   expect(api.requestHistorySessionDeletion).not.toHaveBeenCalled();
   expect(mockModal.alert).toHaveBeenCalledWith('Deleted', expect.stringContaining('session was deleted'));
   await view.unmount();
+});
+
+test('candidate information correction submits only changed allowed fields with stable history id', async () => {
+  api.requestHistorySessionCorrection.mockResolvedValueOnce({
+    ok: true,
+    request_id: 'correction-pass-1',
+    changes: [{ field: 'candidate_name', label: 'Candidate Name', previous_value: 'Alpha User', requested_value: 'Alpha Usher' }],
+  });
+  const view = await renderPage([historyRows[0]]);
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-correction-action"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  const inputs = view.container.querySelectorAll('.correction-request-modal input');
+  const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+  await act(async () => {
+    inputSetter.call(inputs[0], 'Alpha Usher');
+    inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+    const reason = view.container.querySelector('.correction-request-modal textarea');
+    textareaSetter.call(reason, 'Candidate surname was entered incorrectly.');
+    reason.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushPromises();
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="candidate-correction-submit"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(api.requestHistorySessionCorrection).toHaveBeenCalledWith(
+    'pass-1',
+    [expect.objectContaining({
+      field: 'candidate_name',
+      field_key: 'candidate_name',
+      previous_value: 'Taylor Example',
+      requested_value: 'Alpha Usher',
+    })],
+    'Candidate surname was entered incorrectly.'
+  );
+  expect(mockModal.success).toHaveBeenCalledWith(
+    'Correction Request Submitted',
+    'The requested correction was saved locally and sent to SAM for review. The current candidate information will remain authoritative until the request is approved.'
+  );
+  await view.unmount();
+});
+
+test('History correction preview omits unchanged whitespace and keeps capitalization-only changes', () => {
+  const record = { candidate_name: 'taylor example', headset_brand: 'Jabra Evolve 40' };
+  expect(buildHistoryCorrectionChanges(record, {
+    candidateName: 'Taylor Example',
+    headsetModel: ' Jabra Evolve 40 ',
+  })).toEqual([expect.objectContaining({ field: 'candidate_name', requested_value: 'Taylor Example' })]);
+  expect(buildHistoryCorrectionChanges(record, {
+    candidateName: ' taylor example ',
+    headsetModel: 'Jabra Evolve 40',
+  })).toEqual([]);
+});
+
+test('History correction dialog stacks above the session detail dialog', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'HistoryPage.jsx'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'App.css'), 'utf8');
+  expect(source).toMatch(/\{correctionDraft && \(\s*<div className="modal-overlay open correction-request-overlay">/);
+  expect(css).toMatch(/\.correction-request-overlay\s*\{\s*z-index:\s*1100;/);
 });

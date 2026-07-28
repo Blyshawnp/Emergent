@@ -76,6 +76,25 @@ function formatFollowUpParts(record) {
   };
 }
 
+export function buildHistoryCorrectionChanges(record = {}, draft = {}) {
+  const current = {
+    candidate_name: String(record.candidate || record.candidate_name || '').trim(),
+    headset_model: String(record.headset_brand || '').trim(),
+  };
+  const requested = {
+    candidate_name: String(draft.candidateName || '').trim(),
+    headset_model: String(draft.headsetModel || '').trim(),
+  };
+  return [
+    { field_key: 'candidate_name', label: 'Candidate Name' },
+    { field_key: 'headset_model', label: 'Headset Model' },
+  ].flatMap(({ field_key, label }) => (
+    requested[field_key] && requested[field_key] !== current[field_key]
+      ? [{ field: field_key, field_key, label, previous_value: current[field_key], requested_value: requested[field_key] }]
+      : []
+  ));
+}
+
 export default function HistoryPage({ onNavigate, navigationState, onHistoryRefresh }) {
   const modal = useModal();
   const [stats, setStats] = useState({});
@@ -83,6 +102,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   const [search, setSearch] = useState('');
   const [detail, setDetail] = useState(null);
   const [deletionRequestDraft, setDeletionRequestDraft] = useState(null);
+  const [correctionDraft, setCorrectionDraft] = useState(null);
   const [rescheduleDraft, setRescheduleDraft] = useState(null);
   const [rescheduleSubmitting, setRescheduleSubmitting] = useState(false);
   const [showAdminHistoryControls] = useState(() => adminHistoryControlsEnabled());
@@ -294,11 +314,9 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       if (detail && getHistoryIdentity(detail) === deletionRequestDraft.identity) setDetail(null);
       setDeletionRequestDraft(null);
       await load();
-      await modal.alert(
+      await modal.success(
         'Deletion Request Submitted',
-        response.message || 'This session was removed from MTS History. Its Candidate Tracking record will remain until a SAM administrator approves the deletion request.',
-        'clock',
-        'success'
+        'The session was removed from local History. The Candidate Tracking deletion request was submitted to SAM and is awaiting review.'
       );
     } catch (error) {
       setDeletionRequestDraft((current) => ({
@@ -306,6 +324,41 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         submitting: false,
         error: error.response?.data?.detail || error.message || 'Unable to submit the deletion request. Your reason has been preserved.',
       }));
+    }
+  };
+
+  const openCorrectionRequest = (record) => {
+    setCorrectionDraft({
+      record,
+      candidateName: record.candidate || record.candidate_name || '',
+      headsetModel: record.headset_brand || '',
+      reason: '', error: '', submitting: false,
+    });
+  };
+
+  const submitCorrectionRequest = async () => {
+    const reason = String(correctionDraft?.reason || '').trim();
+    if (reason.length < 10) {
+      setCorrectionDraft((current) => ({ ...current, error: 'Enter at least 10 characters explaining the correction.' }));
+      return;
+    }
+    const record = correctionDraft.record;
+    const changes = buildHistoryCorrectionChanges(record, correctionDraft);
+    if (!changes.length) {
+      setCorrectionDraft((current) => ({ ...current, error: 'Change the candidate name or headset model before submitting.' }));
+      return;
+    }
+    setCorrectionDraft((current) => ({ ...current, reason, error: '', submitting: true }));
+    try {
+      const response = await api.requestHistorySessionCorrection(getHistoryIdentity(record), changes, reason);
+      const pendingRecord = { ...record, candidate_correction_pending: true, candidate_correction_status: 'pending', candidate_correction_request_id: response.request_id, candidate_correction_changes: response.changes, candidate_correction_reason: reason };
+      setHistory((current) => current.map((item) => getHistoryIdentity(item) === getHistoryIdentity(record) ? pendingRecord : item));
+      setDetail(pendingRecord);
+      setCorrectionDraft(null);
+      await modal.success('Correction Request Submitted', 'The requested correction was saved locally and sent to SAM for review. The current candidate information will remain authoritative until the request is approved.');
+    } catch (error) {
+      const detailMessage = error.response?.data?.detail?.message || error.response?.data?.detail || error.message;
+      setCorrectionDraft((current) => ({ ...current, submitting: false, error: detailMessage || 'Unable to submit the correction request.' }));
     }
   };
 
@@ -332,8 +385,10 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         ? { ...item, headset_review_id: result.review_id || item.headset_review_id, headset_review_sync_status: 'synced', headset_review_status: result.status || 'pending' }
         : item
     )));
-    await modal.alert('Headset Review Submitted', 'The headset review request is now pending in SAM.');
+    await modal.success('Headset Review Submitted', 'The headset review request is now pending in SAM.');
   };
+
+  const correctionChanges = correctionDraft ? buildHistoryCorrectionChanges(correctionDraft.record, correctionDraft) : [];
 
   return (
     <div className="history-page" data-testid="history-page">
@@ -385,6 +440,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   <div className="hist-cell hist-tester" role="cell" data-label="Tester">{s.tester_name || ''}</div>
                   <div className="hist-cell hist-status" role="cell" data-label="Session Status"><StatusChip meta={sessionStatusMeta(s.status)} /></div>
                   <div className="hist-cell hist-followup text-sm" role="cell" data-label="Follow-Up">
+                    {s.candidate_correction_pending ? <StatusChip meta={{ label: 'Correction Pending', tone: 'pending' }} title="Candidate information correction pending SAM review" /> : null}
                     {getNewbieShiftEligibility(s).active || getNewbieShiftEligibility(s).denied ? (() => {
                       const followUp = formatFollowUpParts(s);
                       const meta = newbieShiftStatusMeta(s);
@@ -451,6 +507,32 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         </div>
       )}
 
+      {correctionDraft && (
+        <div className="modal-overlay open correction-request-overlay">
+          <section className="modal correction-request-modal" role="dialog" aria-modal="true" aria-labelledby="correction-request-title">
+            <div className="modal-header">
+              <div><h2 id="correction-request-title">Correct Candidate Information</h2><p className="text-muted text-sm">Request a correction to the candidate name or headset recorded for this session. Certification results and attempt information will not be changed.</p></div>
+              <button type="button" className="modal-close" onClick={() => setCorrectionDraft(null)} aria-label="Cancel correction request">×</button>
+            </div>
+            <div className="modal-body correction-request-fields">
+              <label><span>Candidate name</span><small>Current: {correctionDraft.record.candidate || correctionDraft.record.candidate_name || 'Not recorded'}</small><input value={correctionDraft.candidateName} onChange={(event) => setCorrectionDraft((current) => ({ ...current, candidateName: event.target.value, error: '' }))} /></label>
+              <label><span>Headset model</span><small>Current: {correctionDraft.record.headset_brand || 'Not recorded'}</small><input value={correctionDraft.headsetModel} onChange={(event) => setCorrectionDraft((current) => ({ ...current, headsetModel: event.target.value, error: '' }))} /></label>
+              <label><span>Correction reason</span><textarea className="correction-reason-input" rows={4} required aria-invalid={Boolean(correctionDraft.error && correctionDraft.reason.trim().length < 10)} value={correctionDraft.reason} onChange={(event) => setCorrectionDraft((current) => ({ ...current, reason: event.target.value, error: '' }))} placeholder="Explain why this correction is needed, such as a misspelled candidate name or headset model." /></label>
+              <div className="correction-review" aria-live="polite">
+                <strong>Changed fields</strong>
+                {correctionChanges.map((change) => <div key={change.field_key}><span>{change.label}</span><span>{change.previous_value || 'Not recorded'} → {change.requested_value}</span></div>)}
+                {!correctionChanges.length ? <p className="correction-empty-guidance">Change the candidate name or headset model to enable Submit Correction Request.</p> : null}
+              </div>
+              {correctionDraft.error ? <div className="form-error" role="alert">{correctionDraft.error}</div> : null}
+            </div>
+            <div className="modal-footer-actions">
+              <button type="button" className="btn btn-muted" onClick={() => setCorrectionDraft(null)} disabled={correctionDraft.submitting}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={submitCorrectionRequest} disabled={correctionDraft.submitting || !correctionChanges.length || correctionDraft.reason.trim().length < 10} data-testid="candidate-correction-submit">{correctionDraft.submitting ? 'Submitting…' : 'Submit Correction Request'}</button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {rescheduleDraft && (
         <RescheduleIntakeModal
           record={rescheduleDraft}
@@ -505,7 +587,24 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 <div className="text-sm"><strong>Final Attempt:</strong> {detail.final_attempt ? 'Yes' : 'No'}</div>
                 {detail.headset_brand && <div className="text-sm"><strong>Headset:</strong> {detail.headset_brand}</div>}
                 <div className="text-sm"><strong>Form Fill:</strong> <StatusChip meta={formFillStatusMeta(detail.form_fill_status, { legacy: !detail.form_fill_status })} /></div>
+                {detail.candidate_correction_status ? <div className="text-sm"><strong>Candidate Information Correction:</strong> <StatusChip meta={{ label: detail.candidate_correction_status === 'pending' ? 'Pending SAM Review' : detail.candidate_correction_status === 'approved' ? 'Approved' : 'Denied', tone: detail.candidate_correction_status === 'approved' ? 'approved' : detail.candidate_correction_status === 'denied' ? 'denied' : 'pending' }} /></div> : null}
+                {detail.candidate_correction_status !== 'approved' && Array.isArray(detail.candidate_correction_changes) && detail.candidate_correction_changes.length ? (
+                  <div className="history-correction-summary" data-testid="history-correction-summary">
+                    {detail.candidate_correction_changes.map((change) => (
+                      <div key={change.field_key || change.field}>
+                        <strong>{change.label || (change.field === 'candidate_name' ? 'Candidate Name' : 'Headset Model')}</strong>
+                        <span>Current: {change.previous_value || 'Not recorded'}</span>
+                        <span>Requested correction: {change.requested_value}</span>
+                      </div>
+                    ))}
+                    {detail.candidate_correction_reason ? <p><strong>Reason:</strong> {detail.candidate_correction_reason}</p> : null}
+                  </div>
+                ) : null}
+                {detail.candidate_correction_denial_reason ? <div className="text-sm"><strong>Correction Denial Reason:</strong> {detail.candidate_correction_denial_reason}</div> : null}
               </div>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => openCorrectionRequest(detail)} disabled={detail.candidate_correction_pending} data-testid="history-correction-action">
+                {detail.candidate_correction_pending ? 'Correction Pending' : 'Correct Candidate Information'}
+              </button>
               <strong>Tester:</strong> {detail.tester_name || 'N/A'}<br />
               {detail.auto_fail_reason && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{detail.auto_fail_reason}</span><br /></>}
               {detail.headset_brand && <><strong>Headset:</strong> {detail.headset_brand}<br /></>}

@@ -4,7 +4,13 @@ const React = require('react');
 const { act } = React;
 const { createRoot } = require('react-dom/client');
 const PendingRequestAlert = require('./components/PendingRequestAlert').default;
-const { getHeadsetReviewDisplayTitle, getPendingRequestSchedules } = require('./NotificationManagerApp');
+const {
+  buildCandidateInformationChanges,
+  getCandidateUpdateErrorMessage,
+  getHeadsetReviewDisplayTitle,
+  getPendingRequestSchedules,
+  getVisiblePendingRequests,
+} = require('./NotificationManagerApp');
 const {
   MAX_PENDING_REQUEST_SUPPRESSIONS,
   PENDING_REQUEST_SUPPRESSION_MS,
@@ -28,6 +34,17 @@ const samPolishCss = fs.readFileSync(path.join(__dirname, 'polish-sam.css'), 'ut
 const soundSource = fs.readFileSync(path.join(__dirname, 'utils', 'sound.js'), 'utf8');
 const basicsSource = fs.readFileSync(path.join(__dirname, 'pages', 'BasicsPage.jsx'), 'utf8');
 const electronMain = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'src', 'main.js'), 'utf8');
+
+test('Pending Requests and Resolved Requests remain separate across category filters', () => {
+  const rows = [
+    { request_id: 'pending-delete', category: 'candidate_deletion', raw_status: 'pending', created_at: '2026-07-20' },
+    { request_id: 'approved-delete', category: 'candidate_deletion', raw_status: 'approved', admin_decision_at: '2026-07-22' },
+    { request_id: 'denied-correction', category: 'candidate_correction', raw_status: 'denied', admin_decision_at: '2026-07-23' },
+  ];
+  expect(getVisiblePendingRequests(rows, 'pending').map((row) => row.request_id)).toEqual(['pending-delete']);
+  expect(getVisiblePendingRequests(rows, 'deletions').map((row) => row.request_id)).toEqual(['pending-delete']);
+  expect(getVisiblePendingRequests(rows, 'resolved').map((row) => row.request_id)).toEqual(['denied-correction', 'approved-delete']);
+});
 
 test('SAM status banner is dismissible and success/info banners auto-dismiss on configured duration', () => {
   expect(appSource).toContain('aria-label="Dismiss status message"');
@@ -428,8 +445,43 @@ test('SAM candidate actions use compact row menus with View Details first', () =
   expect(actionsBlock).toContain('role="menu"');
   expect(actionsBlock).toContain("role=\"menuitem\"");
   expect(samPolishCss).toContain('.nm-action-menu');
+  expect(appSource).toContain('nm-action-menu nm-action-menu-portal');
+  expect(appSource).toContain('<ModalPortal>');
+  expect(samPolishCss).not.toMatch(/\.nm-action-menu\s*\{[^}]*position:\s*static/s);
+  expect(samPolishCss).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))');
   expect(samPolishCss).toContain('grid-template-columns: minmax(0, 1fr)');
   expect(samPolishCss).toContain('.nm-candidate-table .nm-row-actions .nm-view-details-btn');
+});
+
+test('SAM candidate information edits require an audit reason', () => {
+  expect(appSource).toContain("error: 'Enter a reason for this correction.'");
+  expect(appSource).toContain('className="nm-correction-reason-input"');
+  expect(appSource).toContain('placeholder="Explain why this correction is needed, such as a misspelled candidate name or headset model."');
+  expect(appSource).not.toContain('Optional correction reason');
+});
+
+test('SAM candidate edits submit only bounded changed fields and preserve capitalization corrections', () => {
+  const current = { candidate_name: 'taylor example', headset_model: 'Jabra Evolve 40' };
+  expect(buildCandidateInformationChanges(current, {
+    candidate_name: 'Taylor Example',
+    headset_model: 'Jabra Evolve 40',
+  })).toEqual([expect.objectContaining({
+    field: 'candidate_name',
+    field_key: 'candidate_name',
+    previous_value: 'taylor example',
+    requested_value: 'Taylor Example',
+  })]);
+  expect(buildCandidateInformationChanges(current, {
+    candidate_name: ' taylor example ',
+    headset_model: ' Jabra Evolve 40 ',
+  })).toEqual([]);
+});
+
+test('SAM candidate update errors map stable backend codes to actionable messages', () => {
+  expect(getCandidateUpdateErrorMessage({ error_code: 'candidate_update_target_not_found' }))
+    .toMatch(/candidate session/i);
+  expect(getCandidateUpdateErrorMessage({ error_code: 'candidate_update_audit_failed', candidate_updated: true }))
+    .toMatch(/audit record/i);
 });
 
 test('SAM notification IDs are generated once for new and duplicated drafts', () => {

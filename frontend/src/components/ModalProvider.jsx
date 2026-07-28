@@ -93,6 +93,10 @@ export function ModalProvider({ children }) {
     return showModal({ type: 'confirm', title, body, icon, sound, buttons: [{ label: 'No', cls: 'btn-muted', value: false }, { label: 'Yes', cls: 'btn-primary', value: true }] });
   }, [showModal]);
 
+  const success = useCallback((title, body, actionLabel = 'Done') => {
+    return showModal({ type: 'success', title, body, icon: 'check-circle', sound: 'success', buttons: [{ label: actionLabel, cls: 'btn-success', value: true }] });
+  }, [showModal]);
+
   const confirmDanger = useCallback((title, body) => {
     return showModal({ type: 'danger', title, body, icon: 'trash-2', graphic: 'warning', buttons: [{ label: 'Cancel', cls: 'btn-muted', value: false }, { label: "Yes, I'm sure", cls: 'btn-danger', value: true }] });
   }, [showModal]);
@@ -101,10 +105,11 @@ export function ModalProvider({ children }) {
     alert,
     error,
     warning,
+    success,
     confirm,
     confirmDanger,
     showModal,
-  }), [alert, error, warning, confirm, confirmDanger, showModal]);
+  }), [alert, error, warning, success, confirm, confirmDanger, showModal]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -169,7 +174,7 @@ export function ModalProvider({ children }) {
       {modal && (
         <div className="cmodal-overlay open">
           <div
-            className="cmodal"
+            className={`cmodal cmodal-${modal.type || 'alert'}`}
             ref={dialogRef}
             role="dialog"
             aria-modal="true"

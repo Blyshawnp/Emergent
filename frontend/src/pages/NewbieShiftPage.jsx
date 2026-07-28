@@ -249,6 +249,12 @@ export default function NewbieShiftPage({ onNavigate }) {
         return;
       }
       if (response?.session) setSession(response.session);
+      await modal.success(
+        isReschedule ? 'Reschedule Request Submitted' : 'Newbie Shift Request Submitted',
+        isReschedule
+          ? 'The requested schedule change was submitted to SAM and is awaiting review.'
+          : 'The Newbie Shift request was submitted successfully and is awaiting review.'
+      );
       onNavigate('review');
     } catch (_error) {
       if (isReschedule) {

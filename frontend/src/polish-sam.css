@@ -1515,29 +1515,35 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
 
 .nm-candidate-table .nm-actions-column,
 .nm-candidate-table td:last-child {
-  width: 230px !important;
-  min-width: 230px;
+  width: 360px !important;
+  min-width: 360px;
   overflow: visible;
 }
 
 .nm-candidate-table .nm-row-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  align-items: stretch;
+  align-items: center;
   width: 100%;
 }
 
 .nm-candidate-table .nm-row-actions .nm-btn-table {
   min-width: 0;
   width: 100%;
-  min-height: 34px;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .nm-candidate-table .nm-row-actions .nm-view-details-btn {
-  min-width: 140px;
+  min-width: 0;
+  margin-top: 0;
 }
 
 .nm-action-menu-wrap {
@@ -1553,10 +1559,9 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
 }
 
 .nm-action-menu {
-  position: static;
+  position: fixed;
   z-index: 5400;
-  width: 100%;
-  margin-top: 6px;
+  width: max-content;
   display: grid;
   gap: 4px;
   padding: 8px;
@@ -1565,6 +1570,54 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
   border: 1px solid rgba(148, 163, 184, 0.24);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.45);
 }
+
+.nm-action-menu-portal { max-height: min(360px, calc(100vh - 24px)); overflow-y: auto; }
+.nm-action-menu-wrap { align-self: center; height: 38px; }
+
+.nm-candidate-action-secondary,
+.nm-candidate-action-workflow {
+  color: #e5edf8;
+  border: 1px solid rgba(125, 211, 252, 0.34);
+  background: linear-gradient(180deg, rgba(51,65,85,0.96), rgba(30,41,59,0.96));
+  box-shadow: 0 5px 14px rgba(2,6,23,0.22);
+  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.nm-candidate-action-workflow {
+  color: #eff6ff;
+  border-color: rgba(96,165,250,0.55);
+  background: linear-gradient(180deg, rgba(37,99,235,0.78), rgba(30,64,175,0.78));
+}
+.nm-candidate-action-secondary:hover:not(:disabled),
+.nm-candidate-action-workflow:hover:not(:disabled) { transform: translateY(-1px); border-color: #7dd3fc; box-shadow: 0 8px 18px rgba(2,6,23,0.34); }
+.nm-candidate-action-secondary:hover:not(:disabled) { background: linear-gradient(180deg, rgba(71,85,105,1), rgba(37,49,68,1)); }
+.nm-candidate-action-workflow:hover:not(:disabled) { background: linear-gradient(180deg, rgba(59,130,246,0.9), rgba(37,99,235,0.9)); }
+.nm-candidate-action-secondary:active:not(:disabled),
+.nm-candidate-action-workflow:active:not(:disabled) { transform: translateY(0); box-shadow: inset 0 2px 4px rgba(2,6,23,0.35); }
+.nm-candidate-action-secondary:focus-visible,
+.nm-candidate-action-workflow:focus-visible { outline: 3px solid rgba(125,211,252,0.45); outline-offset: 2px; }
+.nm-candidate-action-secondary:disabled,
+.nm-candidate-action-workflow:disabled { opacity: 0.48; cursor: not-allowed; box-shadow: none; }
+
+.nm-change-row > span { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: center; }
+.nm-change-value { display: grid; gap: 2px; overflow-wrap: anywhere; }
+.nm-change-value small { color: #94a3b8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.nm-change-arrow { color: #60a5fa; font-size: 18px; }
+.nm-correction-review-list { display: grid; gap: 8px; margin: 12px 0; }
+.nm-correction-review-list > div { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid rgba(148,163,184,0.2); border-radius: 8px; overflow-wrap: anywhere; }
+.nm-edit-candidate-modal { width: min(680px, calc(100vw - 32px)); max-height: min(88vh, 780px); display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.nm-edit-candidate-modal label { display: grid; gap: 5px; font-weight: 700; }
+.nm-edit-candidate-modal label small { color: #94a3b8; font-weight: 500; }
+.nm-edit-candidate-modal input,
+.nm-edit-candidate-modal textarea { width: 100%; color: #f8fafc; background: #111827; border: 1px solid #475569; border-radius: 8px; padding: 10px 12px; transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease; }
+.nm-edit-candidate-modal input:hover,
+.nm-edit-candidate-modal textarea:hover { background: #152033; border-color: #64748b; }
+.nm-edit-candidate-modal input:focus,
+.nm-edit-candidate-modal textarea:focus { outline: none; border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(96,165,250,0.25); }
+.nm-edit-candidate-modal textarea::placeholder { color: #7c8ba1; }
+.nm-edit-candidate-modal textarea[aria-invalid="true"] { border-color: #f87171; box-shadow: 0 0 0 3px rgba(248,113,113,0.18); }
+.nm-correction-reason-input { min-height: 112px; max-height: 220px; resize: vertical; overflow-y: auto; }
+.nm-correction-empty { margin: 0; color: #94a3b8; font-size: 0.875rem; }
+.nm-edit-candidate-modal .nm-modal-actions { position: sticky; bottom: 0; margin-top: auto; padding-top: 12px; background: linear-gradient(180deg, rgba(15,23,42,0), #0f172a 28%); }
 
 .nm-action-menu-item {
   min-height: 34px;
@@ -1594,13 +1647,18 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
 @media (max-width: 980px) {
   .nm-candidate-table .nm-actions-column,
   .nm-candidate-table td:last-child {
-    width: 210px !important;
-    min-width: 210px;
+    width: auto !important;
+    min-width: 0;
   }
 
   .nm-candidate-table .nm-row-actions {
     grid-template-columns: 1fr;
   }
+}
+
+@media (max-width: 620px) {
+  .nm-change-row > span { grid-template-columns: 1fr; }
+  .nm-change-arrow { transform: rotate(90deg); justify-self: center; }
 }
 
 /* Keep the responsive card layout authoritative over the desktop column widths above. */
@@ -1632,6 +1690,12 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
 @media (max-width: 760px) {
   .nm-candidate-table .nm-row-actions {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1050px) {
+  .nm-candidate-table .nm-row-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

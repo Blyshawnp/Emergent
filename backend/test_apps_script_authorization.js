@@ -156,6 +156,12 @@ function createRuntime(overrides = {}) {
         };
       },
     },
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'SHA_256' },
+      computeDigest(_algorithm, value) {
+        return Array.from(String(value)).slice(0, 32).map((character) => character.charCodeAt(0) - 128);
+      },
+    },
   };
 
   vm.createContext(context);
@@ -400,6 +406,7 @@ test('read-only optional request tabs return an empty snapshot instead of failin
         newbie_shift: 0,
         reschedule: 0,
         candidate_deletion: 0,
+        candidate_correction: 0,
       },
     },
   });
@@ -472,6 +479,108 @@ test('first MTS pending-request write creates only the missing workflow tab cont
   assert.equal(sheet.values[1][1], 'session-test');
   assert.equal(sheet.values[1][7], 'pending');
   assert.equal(workbook.getSheetByName('candidate-deletion-requests'), null);
+});
+
+test('candidate information correction is bounded, MTS-submittable, and SAM-decidable by stable session id', () => {
+  const candidateHeaders = ['session_id', 'candidate_name', 'headset_brand', 'status', 'archived'];
+  const candidateSheet = createFakeSheet('Candidate Sessions', candidateHeaders, [
+    ['session-1', 'Taylr Example', 'Jabra Evolve 40', 'PASS', 'FALSE'],
+  ]);
+  const pendingSheet = createFakeSheet('Pending Sup Transfers', ['pending_id', 'candidate_name', 'original_session_id', 'status'], [
+    ['pending-1', 'Taylr Example', 'session-1', 'pending'],
+  ]);
+  const workbook = createFakeWorkbook([candidateSheet, pendingSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const changes = [{ field: 'candidate_name', label: 'Candidate Name', previous_value: 'Taylr Example', requested_value: 'Taylor Example' }];
+
+  const submitted = responsePayload(api.doPost(postEvent('upsertPendingRequest', 'mts-current', {
+    request: {
+      request_id: 'correction-1', request_type: 'candidate_information_correction', source_session_id: 'session-1',
+      candidate_id: 'session-1', candidate_name: 'Taylr Example', tester_name: 'Tester Example',
+      reason: 'Candidate name was entered incorrectly.', changes_json: JSON.stringify(changes), status: 'pending',
+    },
+  })));
+  assert.equal(submitted.ok, true);
+  assert.equal(workbook.getSheetByName('candidate-information-correction-requests').values[1][9], 'pending');
+
+  const decided = responsePayload(api.doPost(postEvent('decidePendingRequest', 'sam-current', {
+    request_id: 'correction-1', request_type: 'candidate_information_correction', decision: 'approve',
+    expected_status: 'pending', decision_by: 'SAM Admin',
+  })));
+  assert.equal(decided.ok, true);
+  assert.equal(decided.result.status, 'approved');
+  assert.equal(candidateSheet.values[1][1], 'Taylor Example');
+  assert.equal(pendingSheet.values[1][1], 'Taylor Example');
+  assert.equal(workbook.getSheetByName('candidate-information-correction-requests').values[1][9], 'approved');
+});
+
+test('headset typo correction remains a correction and never creates a headset review', () => {
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name', 'headset_brand', 'status', 'archived'], [
+    ['session-1', 'Taylor Example', 'Logitec Zone 300', 'PASS', 'FALSE'],
+  ]);
+  const workbook = createFakeWorkbook([candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const changes = [{ field: 'headset_model', previous_value: 'Logitec Zone 300', requested_value: 'Logitech Zone 300' }];
+
+  responsePayload(api.doPost(postEvent('upsertPendingRequest', 'mts-current', {
+    request: {
+      request_id: 'correction-headset-1', request_type: 'candidate_information_correction', source_session_id: 'session-1',
+      candidate_name: 'Taylor Example', tester_name: 'Tester Example', reason: 'Correct the headset spelling.',
+      changes_json: JSON.stringify(changes), status: 'pending',
+    },
+  })));
+  const decided = responsePayload(api.doPost(postEvent('decidePendingRequest', 'sam-current', {
+    request_id: 'correction-headset-1', request_type: 'candidate_information_correction', decision: 'approve',
+    expected_status: 'pending', decision_by: 'SAM Admin',
+  })));
+
+  assert.equal(decided.ok, true);
+  assert.equal(candidateSheet.values[1][2], 'Logitech Zone 300');
+  assert.equal(workbook.getSheetByName('headset-review-log'), null);
+  assert.equal(Object.hasOwn(decided.result, 'headset_review_required'), false);
+});
+
+test('SAM direct candidate edit requires an audit reason before applying changes', () => {
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name', 'headset_brand'], [
+    ['session-1', 'Taylr Example', 'Jabra Evolve 40'],
+  ]);
+  const workbook = createFakeWorkbook([candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const response = responsePayload(api.doPost(postEvent('updateCandidateTracking', 'sam-current', {
+    operation: 'edit_candidate_information', session_id: 'session-1', candidate_name: 'Taylr Example', reason: '',
+    changes: [{ field: 'candidate_name', previous_value: 'Taylr Example', requested_value: 'Taylor Example' }],
+  })));
+
+  assert.equal(response.ok, false);
+  assert.equal(candidateSheet.values[1][1], 'Taylr Example');
+  assert.equal(workbook.getSheetByName('candidate-information-correction-requests'), null);
+});
+
+test('first SAM direct candidate edit safely creates its audit contract before updating the exact session', () => {
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_id', 'candidate_name', 'headset_brand', 'status', 'attempt_number'], [
+    ['session-1', 'candidate-1', 'Taylr Example', 'Jabra Evolve 40', 'PASS', 2],
+    ['session-2', 'candidate-2', 'Taylr Example', 'Jabra Evolve 40', 'FAIL', 1],
+  ]);
+  const workbook = createFakeWorkbook([candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const response = responsePayload(api.doPost(postEvent('updateCandidateTracking', 'sam-current', {
+    operation: 'edit_candidate_information', session_id: 'session-1', candidate_id: 'candidate-1',
+    candidate_name: 'Taylr Example', reason: 'Correct the candidate name spelling.', actor: 'SAM Admin',
+    changes: [{ field_key: 'candidate_name', previous_value: 'Taylr Example', requested_value: 'Taylor Example' }],
+  })));
+
+  assert.equal(response.ok, true, JSON.stringify(response));
+  assert.equal(response.result.updated, true);
+  assert.equal(candidateSheet.values[1][2], 'Taylor Example');
+  assert.equal(candidateSheet.values[1][4], 'PASS');
+  assert.equal(candidateSheet.values[1][5], 2);
+  assert.equal(candidateSheet.values[2][2], 'Taylr Example');
+  const auditSheet = workbook.getSheetByName('candidate-information-correction-requests');
+  assert.ok(auditSheet);
+  assert.equal(auditSheet.values[1][1], 'candidate_information_admin_edit');
+  assert.equal(auditSheet.values[1][2], 'session-1');
+  assert.equal(auditSheet.values[1][6], 'Correct the candidate name spelling.');
+  assert.equal(auditSheet.values[1][9], 'approved');
 });
 
 test('legacy Newbie Shift request tabs gain and return the missing previous schedule column', () => {

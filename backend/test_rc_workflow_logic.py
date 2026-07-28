@@ -1160,7 +1160,7 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
 
     @mock.patch("server._shared_read_rows")
     @mock.patch("server._shared_sheet_context")
-    def test_direct_sheets_candidate_deletion_approval_is_non_destructive(self, mock_sheet_context, mock_read_rows):
+    def test_direct_sheets_candidate_deletion_approval_applies_terminal_cleanup(self, mock_sheet_context, mock_read_rows):
         mock_sheet_context.return_value = {
             "ok": True,
             "service": mock.MagicMock(),
@@ -1177,7 +1177,7 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         ]
 
         with mock.patch("server._shared_update_existing_row") as mock_update, \
-             mock.patch("server._shared_admin_candidate_action") as mock_candidate_action:
+             mock.patch("server._apply_candidate_deletion_terminal_direct", return_value={"updated": 1, "pendingUpdated": 1, "already_applied": False}) as mock_terminal:
             response = server._shared_pending_request_action({
                 "request_id": "delete-request",
                 "category": "candidate_deletion",
@@ -1188,9 +1188,11 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
 
         self.assertTrue(response["ok"])
         self.assertEqual(response["status"], "approved")
-        self.assertTrue(response["deletion_action_required"])
+        self.assertFalse(response["deletion_action_required"])
+        self.assertTrue(response["candidate_deletion_applied"])
+        self.assertEqual(response["candidateUpdates"], 1)
         mock_update.assert_called_once()
-        mock_candidate_action.assert_not_called()
+        mock_terminal.assert_called_once()
 
     def test_authoritative_attempt_state_promotes_supervisor_retry_to_final_attempt(self):
         prior = [{
