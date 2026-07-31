@@ -174,7 +174,6 @@ const api = {
   updateSharedAdminCandidate: (payload) => request('POST', '/shared/admin/candidates/action', payload),
   getSharedAdminPendingRequests: () => request('GET', '/shared/admin/pending-requests'),
   updateSharedAdminPendingRequest: (payload) => request('POST', '/shared/admin/pending-requests/action', payload),
-  checkIpIntelligence: (ip) => request('POST', '/ip-intelligence/check', { ip }, 20000),
   getTicker: () => request('GET', '/ticker', null, 5000),
   getRuntimeStatus: () => request('GET', '/runtime/verify-token', null, 3000),
   getSamSetupStatus: () => request('GET', '/sam/setup/status', null, 60000),

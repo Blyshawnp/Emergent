@@ -68,6 +68,7 @@ const MTS_GET_ACTIONS = Object.freeze([
 
 const SAM_ONLY_GET_ACTIONS = Object.freeze([
   'getHeadsetReviewLog',
+  'getHeadsetReviewMigrationPlan',
   'getSamSetupStatus',
   'getSamAdmins',
   'getAdminPins',
@@ -86,6 +87,8 @@ const SAM_ONLY_POST_ACTIONS = Object.freeze([
   'completeSamSetup',
   'approveHeadset',
   'denyHeadset',
+  'editHeadsetReview',
+  'migrateHeadsetReviewSchema',
   'archiveHeadsetReview',
   'deleteHeadsetReview',
   'decidePendingRequest',
@@ -103,6 +106,13 @@ const SAM_ONLY_POST_ACTIONS = Object.freeze([
 const MTS_PROTECTED_CANDIDATE_FIELDS = Object.freeze([
   'extra_attempt_granted',
   'extra_attempt_reason',
+  'extra_attempts_granted',
+  'allowed_attempt_count',
+  'extra_attempt_last_action_id',
+  'extra_attempt_granted_by',
+  'extra_attempt_granted_at',
+  'readiness_override_by',
+  'readiness_override_at',
   'archived',
   'newbie_shift_admin_decision_at',
   'newbie_shift_admin_decision_by',
@@ -176,6 +186,13 @@ const NEWBIE_SHIFT_REQUEST_HEADERS = Object.freeze([
   'becomes_final_attempt',
   'attempt_rule',
   'terminal_outcome',
+  'newbie_shift_number',
+]);
+
+const CANDIDATE_SESSION_WORKFLOW_HEADERS = Object.freeze([
+  'extra_attempts_granted', 'allowed_attempt_count', 'current_attempt_number',
+  'extra_attempt_last_action_id', 'extra_attempt_granted_by', 'extra_attempt_granted_at',
+  'readiness_override_by', 'readiness_override_at', 'newbie_shift_number',
 ]);
 
 const CANDIDATE_DELETION_REQUEST_HEADERS = Object.freeze([
@@ -252,6 +269,8 @@ function dispatchGet_(action, params, role) {
       return { rows: readOptionalTableRows_('sam-tutorial-videos') };
     case 'getHeadsetReviewLog':
       return { rows: readOptionalTableRows_('headset-review-log') };
+    case 'getHeadsetReviewMigrationPlan':
+      return headsetReviewMigrationPlan_();
     case 'getSamSetupStatus':
       return getSamSetupStatus_();
     case 'getCandidateTracking':
@@ -309,6 +328,10 @@ function dispatchPost_(action, body, role) {
       return decideHeadset_(body, 'approved');
     case 'denyHeadset':
       return decideHeadset_(body, 'denied');
+    case 'editHeadsetReview':
+      return editHeadsetReview_(body);
+    case 'migrateHeadsetReviewSchema':
+      return migrateHeadsetReviewSchema_(body);
     case 'archiveHeadsetReview':
       return archiveHeadsetReview_(body);
     case 'deleteHeadsetReview':
@@ -519,6 +542,16 @@ function ensureSheetWithHeaders_(title, expectedHeaders) {
   return sheet;
 }
 
+function ensureHeadersPresent_(title, requiredHeaders) {
+  const sheet = allowedSheet_(title);
+  const headers = headerMap_(sheet);
+  const missing = requiredHeaders.filter((header) => headers.index[header] === undefined);
+  if (missing.length) {
+    sheet.getRange(1, headers.names.length + 1, 1, missing.length).setValues([missing]);
+  }
+  return sheet;
+}
+
 function ensureTutorialVideoTabs_() {
   const workbook = spreadsheet_();
   const created = [];
@@ -627,7 +660,7 @@ function getPendingRequests_(params) {
     changes_json: String(row.changes_json || '').trim(),
     original_scheduled_at: String(row.original_scheduled_at || row.original_schedule || row.newbie_shift_original_scheduled_at || '').trim(),
     requested_scheduled_at: String(row.scheduled_at || row.rescheduled_at || row.requested_scheduled_at || '').trim(),
-    timezone: String(row.timezone || '').trim(), within_24_hours: pendingRequestBoolean_(row.within_24_hours),
+    timezone: String(row.timezone || '').trim(), newbie_shift_number: String(row.newbie_shift_number || '').trim(), within_24_hours: pendingRequestBoolean_(row.within_24_hours),
     counts_as_attempt: pendingRequestBoolean_(row.counts_as_attempt), final_attempt: pendingRequestBoolean_(row.final_attempt),
     lead_time_seconds: row.lead_time_seconds === '' ? '' : Number(row.lead_time_seconds),
     lead_time_category: String(row.lead_time_category || '').trim(), current_attempt: Number(row.current_attempt || 1),
@@ -658,7 +691,7 @@ function correctionChanges_(value) {
     try { changes = JSON.parse(changes || '[]'); } catch (_error) { throw new Error('Correction request changes are invalid.'); }
   }
   if (!Array.isArray(changes) || !changes.length) throw new Error('Correction request has no changes.');
-  const allowed = { candidate_name: 'Candidate Name', headset_model: 'Headset Model' };
+  const allowed = { candidate_name: 'Candidate Name', headset_brand: 'Headset Brand', headset_model: 'Headset Model' };
   const seen = {};
   return changes.map((change) => {
     const field = String(change && (change.field || change.field_key) || '').trim().toLowerCase();
@@ -682,15 +715,75 @@ function applyCandidateCorrection_(sourceSessionId, changesValue, candidateId) {
   const actualCandidateId = headers.index.candidate_id === undefined ? '' : String(row[headers.index.candidate_id] || '').trim();
   if (expectedCandidateId && actualCandidateId && expectedCandidateId !== actualCandidateId) throw new Error('Correction target identity has changed.');
   let updated = false;
-  changes.forEach((change) => {
-    const key = change.field === 'candidate_name' ? 'candidate_name' : 'headset_brand';
-    const current = String(row[headers.index[key]] || '').trim();
+  let correctedHeadset = null;
+  changes.filter((change) => change.field === 'candidate_name').forEach((change) => {
+    const current = String(row[headers.index.candidate_name] || '').trim();
     if (current === change.requested_value) return;
     if (change.previous_value && current !== change.previous_value) throw new Error('Correction target identity has changed.');
-    row[headers.index[key]] = change.requested_value;
+    row[headers.index.candidate_name] = change.requested_value;
     updated = true;
   });
+  const headsetChanges = changes.filter((change) => change.field === 'headset_brand' || change.field === 'headset_model');
+  if (headsetChanges.length) {
+    const currentLabel = String(row[headers.index.headset_brand] || '').trim().replace(/\s+/g, ' ');
+    const brandChange = headsetChanges.find((change) => change.field === 'headset_brand');
+    const modelChange = headsetChanges.find((change) => change.field === 'headset_model');
+    const brandPrevious = String(brandChange && brandChange.previous_value || '').trim();
+    const modelPrevious = String(modelChange && modelChange.previous_value || '').trim();
+    const brandRequested = String(brandChange && brandChange.requested_value || '').trim();
+    const modelRequested = String(modelChange && modelChange.requested_value || '').trim();
+    const labelKey = currentLabel.toLowerCase();
+    let brand = '';
+    let model = '';
+    let split = false;
+    const alreadyApplied = Boolean(
+      brandChange && !modelChange && (currentLabel === brandRequested || currentLabel.indexOf(brandRequested + ' ') === 0)
+      || modelChange && !brandChange && (currentLabel === modelRequested || currentLabel.slice(-(modelRequested.length + 1)) === ' ' + modelRequested)
+    );
+    const legacyFullReplacement = Boolean(modelChange && !brandChange && modelPrevious === currentLabel);
+    if (!alreadyApplied && !legacyFullReplacement && brandPrevious && (labelKey === brandPrevious.toLowerCase() || labelKey.indexOf(brandPrevious.toLowerCase() + ' ') === 0)) {
+      brand = currentLabel.slice(0, brandPrevious.length);
+      model = currentLabel.slice(brandPrevious.length).trim();
+      split = true;
+    } else if (!alreadyApplied && !legacyFullReplacement && modelPrevious && (labelKey === modelPrevious.toLowerCase() || labelKey.slice(-(modelPrevious.length + 1)) === ' ' + modelPrevious.toLowerCase())) {
+      model = currentLabel.slice(-modelPrevious.length);
+      brand = currentLabel.slice(0, -modelPrevious.length).trim();
+      split = true;
+    }
+    let nextLabel = currentLabel;
+    if (alreadyApplied) {
+      nextLabel = currentLabel;
+    } else if (legacyFullReplacement) {
+      nextLabel = modelChange.requested_value;
+    } else {
+      headsetChanges.forEach((change) => {
+        const currentPart = change.field === 'headset_brand' ? brand : model;
+        if (change.previous_value && currentPart !== change.previous_value) throw new Error('Correction target identity has changed.');
+        if (change.field === 'headset_brand') brand = change.requested_value;
+        else model = change.requested_value;
+      });
+      const brandKey = brand.toLowerCase();
+      const modelKey = model.toLowerCase();
+      nextLabel = !brand ? model : !model ? brand : (modelKey === brandKey || modelKey.indexOf(brandKey + ' ') === 0 ? model : brand + ' ' + model);
+      correctedHeadset = brand && model ? { brand: brand, model: model } : null;
+    }
+    if (nextLabel !== currentLabel) {
+      row[headers.index.headset_brand] = nextLabel;
+      updated = true;
+    }
+  }
   if (updated) sheet.getRange(target + 2, 1, 1, headers.names.length).setValues([row]);
+  if (correctedHeadset) {
+    try {
+      updateMatchingRows_('headset-review-log', (review) => String(review.source_session_id || '').trim() === sourceSessionId, {
+        Brand: correctedHeadset.brand,
+        Model: correctedHeadset.model,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (String(error && error.message || error).indexOf('Missing sheet') === -1) throw error;
+    }
+  }
   const nameChange = changes.find((change) => change.field === 'candidate_name');
   if (nameChange) {
     try {
@@ -779,6 +872,7 @@ function decidePendingRequest_(body) {
   const decision = String(body.decision || '').trim().toLowerCase();
   const expectedStatus = String(body.expected_status || '').trim().toLowerCase();
   const denialReason = String(body.denial_reason || '').trim();
+  const newbieShiftNumber = String(body.newbie_shift_number || '').replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 64);
   const tabByType = { initial_newbie_shift: 'newbie-shift-requests', newbie_shift_reschedule: 'newbie-shift-requests', candidate_deletion: 'candidate-deletion-requests', candidate_information_correction: 'candidate-information-correction-requests' };
   const sourceTab = tabByType[requestType];
   if (!requestId || !sourceTab || expectedStatus !== 'pending' || ['approve', 'deny'].indexOf(decision) === -1) throw new Error('Pending request decision is invalid.');
@@ -802,13 +896,14 @@ function decidePendingRequest_(body) {
     if (headers.index.admin_decision_at !== undefined) row[headers.index.admin_decision_at] = now;
     if (headers.index.admin_decision_by !== undefined) row[headers.index.admin_decision_by] = String(body.decision_by || '').trim();
     if (headers.index.denial_reason !== undefined) row[headers.index.denial_reason] = decision === 'deny' ? denialReason : '';
+    if (decision === 'approve' && headers.index.newbie_shift_number !== undefined) row[headers.index.newbie_shift_number] = newbieShiftNumber;
     if (headers.index.updated_at !== undefined) row[headers.index.updated_at] = now;
     sheet.getRange(rowIndex + 2, 1, 1, headers.names.length).setValues([row]);
     let candidateSessionSynced = requestType === 'candidate_information_correction' && correctionResult.updated; let warning = '';
     if (requestType === 'initial_newbie_shift' || requestType === 'newbie_shift_reschedule') {
       if (!sourceSessionId) warning = 'Candidate session synchronization requires a source session id.';
       else {
-        const candidateSheet = allowedSheet_('Candidate Sessions'); const candidateHeaders = headerMap_(candidateSheet); const candidateValues = candidateSheet.getDataRange().getValues();
+        const candidateSheet = ensureHeadersPresent_('Candidate Sessions', CANDIDATE_SESSION_WORKFLOW_HEADERS); const candidateHeaders = headerMap_(candidateSheet); const candidateValues = candidateSheet.getDataRange().getValues();
         const candidateIndex = candidateValues.slice(1).findIndex((candidateRow) => String(candidateRow[candidateHeaders.index.session_id] || '').trim() === sourceSessionId);
         if (candidateIndex < 0) warning = 'The matching Candidate Sessions record was not found.';
         else {
@@ -820,6 +915,7 @@ function decidePendingRequest_(body) {
           const terminalOutcome = headers.index.terminal_outcome === undefined ? '' : String(row[headers.index.terminal_outcome] || '').trim();
           if (terminalOutcome) { changes.status = terminalOutcome; changes.final_result = terminalOutcome; }
           if (decision === 'approve') { changes.newbie_shift_scheduled_at = String(row[headers.index.scheduled_at] || row[headers.index.rescheduled_at] || '').trim(); changes.newbie_shift_timezone = String(row[headers.index.timezone] || '').trim(); }
+          if (decision === 'approve') changes.newbie_shift_number = newbieShiftNumber;
           Object.keys(changes).forEach((key) => { if (candidateHeaders.index[key] !== undefined && (key !== 'newbie_shift_scheduled_at' || changes[key])) candidateRow[candidateHeaders.index[key]] = changes[key]; });
           candidateSheet.getRange(candidateIndex + 2, 1, 1, candidateHeaders.names.length).setValues([candidateRow]); candidateSessionSynced = true;
         }
@@ -898,6 +994,210 @@ function headsetReviewSchema_(headers) {
 function headersStartWith_(headers, expected) {
   if (!Array.isArray(headers) || headers.length < expected.length) return false;
   return expected.every((header, index) => String(headers[index] || '').trim() === header);
+}
+
+function headsetReviewChecksum_(values) {
+  const serialized = JSON.stringify(values.map((row) => row.map(serializeCell_)));
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, serialized)
+    .map((value) => ('0' + ((value + 256) % 256).toString(16)).slice(-2))
+    .join('');
+}
+
+function legacyMigrationReviewId_(rowNumber, headers, row) {
+  const fingerprint = headsetReviewChecksum_([[rowNumber].concat(headers), row]);
+  return 'legacy-migrated-' + fingerprint.slice(0, 32);
+}
+
+function distinctNonBlank_(values) {
+  const seen = {};
+  return values.map((value) => String(serializeCell_(value) || '').trim())
+    .filter((value) => {
+      const key = normalize_(value);
+      if (!key || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+}
+
+function headsetReviewMigrationAnalysis_() {
+  const sheet = allowedSheet_('headset-review-log');
+  const headers = headerMap_(sheet);
+  const values = sheet.getDataRange().getValues();
+  const schema = headsetReviewSchema_(headers.names);
+  const rows = values.slice(1);
+  const counts = {
+    total_legacy_rows: schema === 'legacy' ? rows.length : 0,
+    exact_session_linkage: 0,
+    deterministic_legacy_only_linkage: 0,
+    ambiguous_rows: 0,
+    rows_already_current_schema: schema === 'v2' ? rows.length : 0,
+    duplicate_review_ids: 0,
+    duplicate_source_session_links: 0,
+    blank_brand: 0,
+    blank_model: 0,
+    unknown_status: 0,
+    rows_remaining_unlinked: 0,
+  };
+  if (schema === 'basic') throw new Error('Basic headset review rows need an explicit mapping before migration.');
+
+  const migratedRows = [];
+  const reviewIds = {};
+  const sourceSessionIds = {};
+  rows.forEach((row, offset) => {
+    const object = rowObject_(headers.names, row);
+    if (schema === 'v2') {
+      const reviewId = String(object.review_id || '').trim();
+      const sourceSessionId = String(object.source_session_id || '').trim();
+      if (reviewId) reviewIds[reviewId] = (reviewIds[reviewId] || 0) + 1;
+      if (sourceSessionId) sourceSessionIds[sourceSessionId] = (sourceSessionIds[sourceSessionId] || 0) + 1;
+      if (!String(object.Brand || '').trim()) counts.blank_brand += 1;
+      if (!String(object.Model || '').trim()) counts.blank_model += 1;
+      return;
+    }
+
+    const directBrand = String(object.Brand || '').trim();
+    const directModel = String(object.Model || '').trim();
+    const combinedLegacyModel = String(object.headset_model || '').trim();
+    const brand = directBrand;
+    const model = directModel || combinedLegacyModel;
+    const combinedDirect = (directBrand + ' ' + directModel).trim();
+    const timestampValues = distinctNonBlank_([object.entered_at, object.Timestamp]);
+    const testerValues = distinctNonBlank_([object.tester_name, object.SubmittedBy]);
+    const status = normalize_(object.review_status) || 'pending';
+    const noteParts = distinctNonBlank_([object.notes, object.Notes, object.ReviewNotes]);
+    const ambiguous = Boolean(
+      directModel && combinedLegacyModel && normalize_(combinedDirect) !== normalize_(combinedLegacyModel)
+      || timestampValues.length > 1
+      || testerValues.length > 1
+    );
+    if (ambiguous) counts.ambiguous_rows += 1;
+    if (!brand) counts.blank_brand += 1;
+    if (!model) counts.blank_model += 1;
+    if (['pending', 'approved', 'denied', 'archived'].indexOf(status) === -1) counts.unknown_status += 1;
+
+    const reviewId = legacyMigrationReviewId_(offset + 2, headers.names, row);
+    const sourceSessionId = String(object.source_session_id || '').trim();
+    reviewIds[reviewId] = (reviewIds[reviewId] || 0) + 1;
+    if (sourceSessionId) {
+      counts.exact_session_linkage += 1;
+      sourceSessionIds[sourceSessionId] = (sourceSessionIds[sourceSessionId] || 0) + 1;
+    } else {
+      counts.deterministic_legacy_only_linkage += 1;
+      counts.rows_remaining_unlinked += 1;
+    }
+    const createdAt = timestampValues[0] || '';
+    migratedRows.push([
+      reviewId,
+      sourceSessionId,
+      String(object.candidate_name || '').trim(),
+      testerValues[0] || '',
+      brand,
+      model,
+      status,
+      noteParts.join(' | '),
+      createdAt,
+      createdAt,
+      status === 'pending' ? '' : createdAt,
+      '',
+      status === 'denied' ? noteParts.join(' | ') : '',
+    ]);
+  });
+  counts.duplicate_review_ids = Object.keys(reviewIds).filter((key) => reviewIds[key] > 1).length;
+  counts.duplicate_source_session_links = Object.keys(sourceSessionIds).filter((key) => sourceSessionIds[key] > 1).length;
+  return {
+    schema: schema,
+    current_headers: headers.names,
+    expected_headers: HEADSET_REVIEW_V2_HEADERS.slice(),
+    source_row_count: rows.length,
+    source_checksum: headsetReviewChecksum_(values),
+    counts: counts,
+    safe_to_migrate: schema === 'legacy'
+      && counts.ambiguous_rows === 0
+      && counts.duplicate_review_ids === 0
+      && counts.duplicate_source_session_links === 0,
+    already_current: schema === 'v2',
+    migratedRows: migratedRows,
+    sourceValues: values,
+  };
+}
+
+function publicHeadsetReviewMigrationPlan_(analysis) {
+  return {
+    schema: analysis.schema,
+    current_headers: analysis.current_headers,
+    expected_headers: analysis.expected_headers,
+    source_row_count: analysis.source_row_count,
+    source_checksum: analysis.source_checksum,
+    counts: analysis.counts,
+    safe_to_migrate: analysis.safe_to_migrate,
+    already_current: analysis.already_current,
+  };
+}
+
+function headsetReviewMigrationPlan_() {
+  return publicHeadsetReviewMigrationPlan_(headsetReviewMigrationAnalysis_());
+}
+
+function migrateHeadsetReviewSchema_(body) {
+  if (String(body.confirm || '') !== 'MIGRATE_HEADSET_REVIEW_V2') {
+    throw new Error('Explicit migration confirmation is required.');
+  }
+  const expectedChecksum = required_(body.expected_checksum, 'expected_checksum');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('Headset review migration is busy. Please try again.');
+  try {
+    const analysis = headsetReviewMigrationAnalysis_();
+    if (analysis.source_checksum !== expectedChecksum) throw new Error('Headset review data changed after the dry run.');
+    if (analysis.counts.duplicate_review_ids || analysis.counts.duplicate_source_session_links) {
+      throw new Error('Headset review migration dry run found duplicate identity.');
+    }
+    if (analysis.already_current) {
+      return Object.assign(publicHeadsetReviewMigrationPlan_(analysis), {
+        migrated: false,
+        final_row_count: analysis.source_row_count,
+        changed_rows: 0,
+        backup_created: false,
+      });
+    }
+    if (!analysis.safe_to_migrate) throw new Error('Headset review migration dry run found blocking ambiguity or duplicate identity.');
+
+    const workbook = spreadsheet_();
+    const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+    let backupTitle = 'headset-review-log-migration-backup-' + timestamp;
+    let suffix = 1;
+    while (workbook.getSheetByName(backupTitle)) {
+      backupTitle = 'headset-review-log-migration-backup-' + timestamp + '-' + suffix;
+      suffix += 1;
+    }
+    const backup = workbook.insertSheet(backupTitle);
+    const sourceWidth = Math.max(analysis.current_headers.length, 1);
+    if (analysis.sourceValues.length) {
+      backup.getRange(1, 1, analysis.sourceValues.length, sourceWidth)
+        .setValues(padRows_(analysis.sourceValues, sourceWidth));
+    }
+    const backupValues = backup.getDataRange().getValues();
+    const backupChecksum = headsetReviewChecksum_(backupValues);
+    if (backupValues.length !== analysis.sourceValues.length || backupChecksum !== analysis.source_checksum) {
+      throw new Error('Headset review migration backup verification failed.');
+    }
+
+    const target = allowedSheet_('headset-review-log');
+    const output = [HEADSET_REVIEW_V2_HEADERS.slice()].concat(analysis.migratedRows);
+    target.getRange(1, 1, output.length, HEADSET_REVIEW_V2_HEADERS.length).setValues(output);
+    const verified = headsetReviewMigrationAnalysis_();
+    if (!verified.already_current || verified.source_row_count !== analysis.source_row_count || verified.counts.duplicate_review_ids) {
+      throw new Error('Headset review migration verification failed. Restore from the retained backup.');
+    }
+    return Object.assign(publicHeadsetReviewMigrationPlan_(verified), {
+      migrated: true,
+      backup_title: backupTitle,
+      backup_verified: true,
+      backup_row_count: backupValues.length - 1,
+      backup_checksum: backupChecksum,
+    });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function headsetReviewStatus_(row, schema) {
@@ -993,32 +1293,30 @@ function submitHeadsetReview_(body) {
     const headers = headerMap_(sheet);
     const schema = headsetReviewSchema_(headers.names);
     const values = sheet.getDataRange().getValues();
-    const target = values.slice(1).findIndex((row) => headsetReviewMatches_(rowObject_(headers.names, row), schema, {
-      review_id: reviewId,
-      source_session_id: sourceSessionId,
-      brand: brand,
-      model: model,
-    }));
+    const target = values.slice(1).findIndex((row) => {
+      const object = rowObject_(headers.names, row);
+      if (schema === 'v2') {
+        return String(object.review_id || '').trim() === reviewId
+          || String(object.source_session_id || '').trim() === sourceSessionId;
+      }
+      return headsetReviewMatches_(object, schema, { brand: brand, model: model });
+    });
     const now = new Date().toISOString();
     if (target >= 0) {
       const row = values[target + 1].slice(0, headers.names.length);
       const currentStatus = headsetReviewStatus_(rowObject_(headers.names, row), schema);
       if (currentStatus !== 'pending') return { updated: false, skipped: true, reason: 'already_resolved', review_id: reviewId, status: currentStatus };
-      const changes = headsetReviewValues_(schema, {
-        review_id: reviewId,
-        source_session_id: sourceSessionId,
-        candidate_name: candidateName,
-        tester_name: testerName,
-        brand: brand,
-        model: model,
+      const current = rowObject_(headers.names, row);
+      return {
+        updated: false,
+        skipped: true,
+        reason: 'duplicate_pending',
+        review_id: String(current.review_id || reviewId),
+        source_session_id: String(current.source_session_id || sourceSessionId),
+        brand: String(current.Brand || brand),
+        model: String(current.Model || model),
         status: 'pending',
-        note: String(body.note || ''),
-        created_at: String(row[headers.index.created_at] || row[headers.index.entered_at] || now),
-        updated_at: now,
-      });
-      headers.names.forEach((header, index) => { if (changes[header] !== undefined) row[index] = changes[header]; });
-      sheet.getRange(target + 2, 1, 1, headers.names.length).setValues([row]);
-      return { updated: true, action: 'updated', review_id: reviewId, status: 'pending' };
+      };
     }
     appendObject_(sheet, headers, headsetReviewValues_(schema, {
       review_id: reviewId,
@@ -1041,10 +1339,72 @@ function submitHeadsetReview_(body) {
   }
 }
 
+function editHeadsetReview_(body) {
+  const reviewId = required_(body.review_id, 'review_id');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('Headset review edit is busy. Please try again.');
+  try {
+    const sheet = allowedSheet_('headset-review-log');
+    const headers = headerMap_(sheet);
+    const schema = headsetReviewSchema_(headers.names);
+    if (schema !== 'v2') throw new Error('Pending headset editing requires the stable review schema.');
+    const values = sheet.getDataRange().getValues();
+    const target = values.slice(1).findIndex((row) => String(rowObject_(headers.names, row).review_id || '').trim() === reviewId);
+    if (target < 0) throw new Error('Headset review was not found.');
+    const row = values[target + 1].slice(0, headers.names.length);
+    const current = rowObject_(headers.names, row);
+    if (headsetReviewStatus_(current, schema) !== 'pending') throw new Error('Only pending headset reviews can be edited.');
+    const brand = String(body.brand === undefined ? current.Brand : body.brand).trim().replace(/\s+/g, ' ');
+    const model = String(body.model === undefined ? current.Model : body.model).trim().replace(/\s+/g, ' ');
+    if (!brand && !model) throw new Error('Enter a headset brand or model.');
+    const note = String(body.note === undefined ? current.Note : body.note).trim();
+    const now = new Date().toISOString();
+    const changes = headsetReviewValues_(schema, {
+      brand: brand,
+      model: model,
+      note: note,
+      updated_at: now,
+      decision_by: String(body.actor || 'SAM'),
+    });
+    headers.names.forEach((header, index) => { if (changes[header] !== undefined) row[index] = changes[header]; });
+    sheet.getRange(target + 2, 1, 1, headers.names.length).setValues([row]);
+    const sourceSessionId = String(current.source_session_id || '').trim();
+    if (sourceSessionId) {
+      updateMatchingRows_('Candidate Sessions', (candidate) => String(candidate.session_id || '').trim() === sourceSessionId, {
+        headset_brand: (brand + ' ' + model).trim().replace(/\s+/g, ' '),
+      });
+    }
+    const approvedMatch = readTableRows_('headsets').some((headset) =>
+      normalize_(headset.Brand) === normalize_(brand)
+      && normalize_(headset.Model) === normalize_(model)
+      && (!headset.Status || normalize_(headset.Status) === 'approved'));
+    return {
+      updated: true,
+      review_id: reviewId,
+      source_session_id: sourceSessionId,
+      brand: brand,
+      model: model,
+      note: note,
+      status: 'pending',
+      approved_match: approvedMatch,
+      updated_at: now,
+      audit: {
+        actor: String(body.actor || 'SAM'),
+        before: { brand: String(current.Brand || ''), model: String(current.Model || ''), note: String(current.Note || '') },
+        after: { brand: brand, model: model, note: note },
+      },
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function decideHeadset_(body, status) {
-  const reviewId = String(body.review_id || '').trim();
+  let reviewId = String(body.review_id || '').trim();
   const brand = required_(body.brand, 'brand');
   const model = required_(body.model, 'model');
+  let authoritativeBrand = brand;
+  let authoritativeModel = model;
   const note = String(body.note || body.reason || '').trim();
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) throw new Error('Headset review decision is busy. Please try again.');
@@ -1052,30 +1412,66 @@ function decideHeadset_(body, status) {
     const sheet = allowedSheet_('headset-review-log');
     const headers = headerMap_(sheet);
     const schema = headsetReviewSchema_(headers.names);
-    if (schema === 'v2' && !reviewId) throw new Error('review_id is required.');
     const values = sheet.getDataRange().getValues();
     const target = values.slice(1).findIndex((row) => headsetReviewMatches_(rowObject_(headers.names, row), schema, {
       review_id: reviewId,
+      source_session_id: String(body.session_id || ''),
       brand: brand,
       model: model,
     }));
-    if (target < 0) throw new Error('Headset review was not found.');
-    const row = values[target + 1].slice(0, headers.names.length);
-    const currentStatus = headsetReviewStatus_(rowObject_(headers.names, row), schema);
-    if (currentStatus !== 'pending' && currentStatus !== status) throw new Error('Headset review status has changed.');
+
     const now = new Date().toISOString();
-    const changes = headsetReviewValues_(schema, {
-      status: status,
-      note: note,
-      updated_at: now,
-      decision_at: now,
-      decision_by: String(body.actor || 'SAM'),
-      denial_reason: status === 'denied' ? String(body.reason || '') : '',
+    let row;
+    if (target < 0) {
+      if (schema === 'legacy') throw new Error('Headset review was not found.');
+      reviewId = reviewId || ('review-' + Math.random().toString(36).substring(2, 10));
+      appendObject_(sheet, headers, headsetReviewValues_(schema, {
+        review_id: reviewId,
+        source_session_id: String(body.session_id || ''),
+        candidate_name: String(body.candidate_name || body.admin_name || 'SAM'),
+        tester_name: String(body.tester_name || body.actor || 'SAM'),
+        brand: brand,
+        model: model,
+        status: status,
+        note: note,
+        created_at: now,
+        updated_at: now,
+        decision_at: now,
+        decision_by: String(body.actor || 'SAM'),
+        denial_reason: status === 'denied' ? String(body.reason || '') : '',
+      }));
+    } else {
+      if (schema === 'v2' && !reviewId) throw new Error('review_id is required.');
+      row = values[target + 1].slice(0, headers.names.length);
+      const authoritative = rowObject_(headers.names, row);
+      authoritativeBrand = String(authoritative.Brand || brand).trim().replace(/\s+/g, ' ');
+      authoritativeModel = String(authoritative.Model || model).trim().replace(/\s+/g, ' ');
+      const currentStatus = headsetReviewStatus_(authoritative, schema);
+      if (currentStatus !== 'pending' && currentStatus !== status) throw new Error('Headset review status has changed.');
+      const changes = headsetReviewValues_(schema, {
+        status: status,
+        note: note,
+        updated_at: now,
+        decision_at: now,
+        decision_by: String(body.actor || 'SAM'),
+        denial_reason: status === 'denied' ? String(body.reason || '') : '',
+      });
+      headers.names.forEach((header, index) => { if (changes[header] !== undefined) row[index] = changes[header]; });
+      sheet.getRange(target + 2, 1, 1, headers.names.length).setValues([row]);
+    }
+    upsertObject_('headsets', ['Brand', 'Model'], {
+      Brand: authoritativeBrand,
+      Model: authoritativeModel,
+      Status: status,
+      Note: note,
     });
-    headers.names.forEach((header, index) => { if (changes[header] !== undefined) row[index] = changes[header]; });
-    sheet.getRange(target + 2, 1, 1, headers.names.length).setValues([row]);
-    upsertObject_('headsets', ['Brand', 'Model'], { Brand: brand, Model: model, Status: status, Note: note });
-    return { updated: true, review_id: reviewId, status: status };
+    return {
+      updated: true,
+      review_id: reviewId,
+      brand: authoritativeBrand,
+      model: authoritativeModel,
+      status: status,
+    };
   } finally {
     lock.releaseLock();
   }
@@ -1191,6 +1587,8 @@ function applyCandidateOperation_(body) {
   const candidateName = String(body.candidate_name || '').trim();
   const sessionId = String(body.session_id || body.latest_session_id || '').trim();
   const pendingId = String(body.pending_id || '').trim();
+  const exactSessionOperations = ['mark_passed', 'mark_failed', 'grant_extra_attempt', 'mark_incomplete', 'move_pending_sup_transfer', 'remove_pending_sup_transfer'];
+  if (exactSessionOperations.indexOf(operation) !== -1 && !sessionId) throw new Error('session_id is required.');
   if (operation === 'edit_candidate_information') {
     if (!sessionId) throw new Error('session_id is required.');
     const reason = String(body.reason || '').trim();
@@ -1247,18 +1645,36 @@ function applyCandidateOperation_(body) {
       (candidateName && normalize_(row.candidate_name) === normalize_(candidateName)),
       { status: operation === 'cancel_pending' ? 'cancelled' : 'incomplete' });
   }
+  ensureHeadersPresent_('Candidate Sessions', CANDIDATE_SESSION_WORKFLOW_HEADERS);
   const changes = {};
   if (operation === 'withdraw') Object.assign(changes, { withdrawn: 'TRUE', status: 'WITHDREW FROM CERTIFICATION', withdrawn_at: new Date().toISOString() });
+  else if (operation === 'restore_active') Object.assign(changes, { archived: 'FALSE', status: 'INCOMPLETE' });
   else if (operation === 'restore_withdrawal') Object.assign(changes, { withdrawn: 'FALSE', withdrawn_at: '', status: 'INCOMPLETE' });
-  else if (operation === 'grant_extra_attempt') Object.assign(changes, { extra_attempt_granted: 'TRUE', extra_attempt_reason: String(body.reason || '') });
+  else if (operation === 'grant_extra_attempt') {
+    const candidates = readTableRows_('Candidate Sessions').filter((row) => String(row.session_id || '').trim() === sessionId);
+    if (candidates.length !== 1) throw new Error('Candidate session could not be found.');
+    const candidate = candidates[0];
+    const currentExtra = Math.max(Number(candidate.extra_attempts_granted || 0) || 0, pendingRequestBoolean_(candidate.extra_attempt_granted) ? 1 : 0);
+    if (body.expected_extra_attempts_granted !== undefined && Number(body.expected_extra_attempts_granted) !== currentExtra) {
+      return { updated: true, already_applied: true, extra_attempts_granted: currentExtra, allowed_attempt_count: Math.max(3 + currentExtra, Number(candidate.allowed_attempt_count || 0) || 0) };
+    }
+    const nextExtra = currentExtra + 1;
+    Object.assign(changes, {
+      extra_attempt_granted: 'TRUE', extra_attempt_reason: String(body.reason || ''),
+      extra_attempts_granted: nextExtra, allowed_attempt_count: Math.max(3 + nextExtra, Number(candidate.allowed_attempt_count || 0) || 0),
+      extra_attempt_last_action_id: String(body.action_id || ('extra-' + sessionId + '-' + nextExtra)),
+      extra_attempt_granted_by: String(body.actor || 'SAM'), extra_attempt_granted_at: new Date().toISOString(),
+    });
+  }
   else if (operation === 'archive_candidate') Object.assign(changes, { archived: 'TRUE' });
-  else if (operation === 'mark_passed') Object.assign(changes, { status: 'PASS' });
-  else if (operation === 'mark_failed') Object.assign(changes, { status: 'FAIL' });
+  else if (operation === 'mark_passed') Object.assign(changes, { status: 'PASS', final_result: 'PASS', readiness_override_applied: 'TRUE', readiness_override_result: 'PASS', readiness_override_reason: String(body.reason || ''), readiness_override_explanation: 'Manual SAM status override.', readiness_override_by: String(body.actor || 'SAM'), readiness_override_at: new Date().toISOString() });
+  else if (operation === 'mark_failed') Object.assign(changes, { status: 'FAIL', final_result: 'FAIL', readiness_override_applied: 'TRUE', readiness_override_result: 'FAIL', readiness_override_reason: String(body.reason || ''), readiness_override_explanation: 'Manual SAM status override.', readiness_override_by: String(body.actor || 'SAM'), readiness_override_at: new Date().toISOString() });
   else if (operation === 'mark_incomplete') Object.assign(changes, { status: 'INCOMPLETE' });
   else throw new Error('Unsupported candidate operation: ' + operation);
-  return updateMatchingRows_('Candidate Sessions', (row) =>
-    (sessionId && String(row.session_id || '') === sessionId) ||
-    (candidateName && normalize_(row.candidate_name) === normalize_(candidateName)), changes);
+  return updateMatchingRows_('Candidate Sessions', (row) => exactSessionOperations.indexOf(operation) !== -1
+    ? String(row.session_id || '') === sessionId
+    : ((sessionId && String(row.session_id || '') === sessionId) ||
+      (candidateName && normalize_(row.candidate_name) === normalize_(candidateName))), changes);
 }
 
 function deleteMatchingRows_(title, predicate) {

@@ -41,7 +41,8 @@ Original shift: July 20 at 2:00 PM ET. Record separate requests at July 19 3:00 
 | 3:55-5:20 | Exact rule | “A candidate request received less than 24 hours before the original shift counts as an attempt and maps to NC/NS form behavior. At exactly 24 hours, or more, it does not count as an attempt. A tester request does not penalize the candidate.” | Show 23-hour prepared request and **Less than 24 hours / Counts as Attempt: Yes**. Then exact-24-hour example with No. | `23:59 counts; 24:00 does not` | Freeze each example three seconds. |
 | 5:20-6:00 | Final attempt | “Inside the less-than-24-hour window, a final-attempt candidate is directed to certification@acdsupport.com. The requested reschedule is not guaranteed.” | Show synthetic final-attempt warning. | `Approval is not guaranteed` | Verify email in captions. |
 | 6:00-6:50 | Discord post | “Review the Temporary Discord Post. It starts open for initial scheduling and rescheduling, contains no automatic tags, and stays editable. Add any required mentions manually, hide and show without losing edits, copy the exact edited text, or reset to generated wording.” | Edit safe phrase, Hide, Show, select **Copy**, show Copied, then show **Reset to Generated Text**. | `Manual tags only` | Crop private mentions if any. |
-| 6:50-7:35 | Statuses | “Pending means the request awaits an admin decision. Approved confirms the decision. Denied preserves the request and shows a denial reason when supplied. Refresh History rather than creating a duplicate request.” | Show synthetic Pending, Approved, and Denied History details. | `Pending is tentative` | Hold each chip. |
+| 6:50-7:35 | Statuses | “Pending means the request awaits an admin decision. Approved confirms the decision. If the administrator entered an optional Newbie Shift Number, History shows it with the scheduled follow-up. Rescheduling can retain or update that number. Denied preserves the request and shows a denial reason when supplied.” | Show synthetic blank and numbered Approved records plus Denied History details. | `Shift number is optional` | Hold each chip. |
+| 7:35-8:10 | One linked workflow | “Rescheduling updates the original logical Newbie Shift workflow. It does not create a second mock-call session, another Resume Supervisor Transfer choice, or another Headset Review. Cancelling the intake keeps the current schedule unchanged; a submitted reschedule remains Pending until SAM decides it.” | Cancel one synthetic intake and show the unchanged History row. Then show one submitted reschedule linked to the same History detail. | `Reschedule, do not duplicate` | Use one synthetic record throughout. |
 
 ## Mistakes to emphasize
 
@@ -50,6 +51,7 @@ Original shift: July 20 at 2:00 PM ET. Record separate requests at July 19 3:00 
 - Treating exactly 24 hours as less than 24.
 - Penalizing a tester-requested change.
 - Creating a duplicate when status looks stale.
+- Expecting rescheduling to create a new mock-call, resume choice, or headset review.
 - Expecting the temporary post to add automatic tags.
 - Editing a managed Discord template instead of the temporary post.
 
@@ -78,3 +80,4 @@ Use an on-screen timeline graphic for the boundary. Keep original and request ti
 - [ ] Canonical email correct.
 - [ ] Temporary post is shown by default, has no automatic tags, preserves edits while hidden, and copies exact edited text.
 - [ ] Calendar and Discord content synthetic.
+- [ ] Cancellation leaves the current schedule unchanged and rescheduling stays linked to the original workflow.

@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import fs from 'fs';
 import path from 'path';
-import HomePage, { buildResumedSession, ResumeSupTransferModal } from './HomePage';
+import HomePage, { buildResumedSession, canonicalResumableHistory, ResumeSupTransferModal } from './HomePage';
 
 const mockModal = {
   showModal: jest.fn(),
@@ -50,6 +50,21 @@ test('Smart Resume preserves Newbie Shift audit state until Supervisor Transfer 
   expect(resumed.newbie_shift_request_id).toBe('stale-request');
   expect(resumed.newbie_shift_request_status).toBe('approved');
   expect(resumed.supervisor_retry_required).toBe(false);
+});
+
+test('Smart Resume excludes Newbie Shift reschedules and deduplicates derivative source sessions', () => {
+  const base = {
+    tester_name: 'Tester One', status: 'Incomplete', call_1: { result: 'Pass' },
+    call_2: { result: 'Pass' }, supervisor_only: false,
+  };
+  const rows = [
+    { ...base, history_id: 'source-1', candidate_name: 'Fred Testone', timestamp_iso: '2026-07-29T10:00:00Z' },
+    { ...base, history_id: 'derived-1', resume_source_history_id: 'source-1', candidate_name: 'Fred Testone', timestamp_iso: '2026-07-29T10:05:00Z' },
+    { ...base, history_id: 'schedule-1', candidate_name: 'Fred Testone', newbie_shift_request_type: 'reschedule', timestamp_iso: '2026-07-29T10:06:00Z' },
+    { ...base, history_id: 'source-2', candidate_name: 'Fred Testone', timestamp_iso: '2026-07-29T09:00:00Z' },
+  ];
+  const eligible = canonicalResumableHistory(rows, ['Tester One']);
+  expect(eligible.map((row) => row.history_id)).toEqual(['derived-1', 'source-2']);
 });
 
 function flushPromises() {

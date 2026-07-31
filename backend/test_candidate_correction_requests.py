@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import sys
 import tempfile
 import unittest
@@ -26,6 +27,15 @@ class CandidateCorrectionRequestTests(unittest.TestCase):
             server._normalize_correction_changes([{"field": "attempt_number", "previous_value": "1", "requested_value": "2"}])
         with self.assertRaisesRegex(ValueError, "correction_no_changes"):
             server._normalize_correction_changes([{"field": "candidate_name", "previous_value": "Same", "requested_value": " Same "}])
+
+    def test_separate_brand_and_model_build_one_deduplicated_display_label(self):
+        self.assertEqual(server._headset_display_label("Logitech", "H390"), "Logitech H390")
+        self.assertEqual(server._headset_display_label("Logitech", "Logitech H390"), "Logitech H390")
+        legacy = server._apply_headset_correction_values(
+            {"headset_brand": "Logitec H390"},
+            [{"field": "headset_model", "previous_value": "Logitec H390", "requested_value": "Logitech H390"}],
+        )
+        self.assertEqual(legacy, {"brand": "", "model": "", "label": "Logitech H390", "separate": False})
 
     def test_pending_counts_exclude_resolved_corrections(self):
         requests = [
@@ -65,7 +75,7 @@ class CandidateCorrectionRequestTests(unittest.TestCase):
     @mock.patch("server._shared_read_rows")
     def test_headset_typo_correction_never_starts_headset_review(self, read_rows, update_row):
         candidate = {"session_id": "session-1", "candidate_name": "Taylor Example", "headset_brand": "Logitec Zone 300", "_row_number": 2}
-        read_rows.return_value = [candidate]
+        read_rows.side_effect = [[candidate], []]
         result = server._apply_candidate_correction_direct(
             mock.MagicMock(), "sheet-id", "session-1",
             [{"field": "headset_model", "previous_value": "Logitec Zone 300", "requested_value": "Logitech Zone 300"}],
@@ -73,6 +83,39 @@ class CandidateCorrectionRequestTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertNotIn("headset_review_required", result)
         update_row.assert_called_once()
+
+    @mock.patch("server._append_headset_review_log")
+    @mock.patch("server._shared_update_existing_row")
+    @mock.patch("server._shared_read_rows")
+    def test_brand_only_correction_updates_candidate_session_without_catalog_or_review(self, read_rows, update_row, append_review):
+        candidate = {"session_id": "session-brand", "candidate_name": "Taylor", "headset_brand": "Logitec H390", "_row_number": 2}
+        read_rows.side_effect = [[candidate], []]
+        approved_before = copy.deepcopy(server.EXTERNAL_CONTENT.get("approved_headsets"))
+        result = server._apply_candidate_correction_direct(
+            mock.MagicMock(), "sheet-id", "session-brand",
+            [{"field": "headset_brand", "previous_value": "Logitec", "requested_value": "Logitech"}],
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(candidate["headset_brand"], "Logitech H390")
+        self.assertEqual(server.EXTERNAL_CONTENT.get("approved_headsets"), approved_before)
+        self.assertEqual(read_rows.call_args_list[0].args[2], server.SHARED_CANDIDATE_SESSIONS_TAB)
+        update_row.assert_called_once()
+        append_review.assert_not_called()
+
+    @mock.patch("server._append_headset_review_log")
+    @mock.patch("server._shared_update_existing_row")
+    @mock.patch("server._shared_read_rows")
+    def test_model_only_correction_updates_combined_candidate_label_without_review(self, read_rows, update_row, append_review):
+        candidate = {"session_id": "session-model", "candidate_name": "Taylor", "headset_brand": "Logitech H390x", "_row_number": 2}
+        read_rows.return_value = [candidate]
+        result = server._apply_candidate_correction_direct(
+            mock.MagicMock(), "sheet-id", "session-model",
+            [{"field": "headset_model", "previous_value": "H390x", "requested_value": "H390"}],
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(candidate["headset_brand"], "Logitech H390")
+        update_row.assert_called_once()
+        append_review.assert_not_called()
 
     def test_sam_direct_edit_requires_audit_reason_before_transport(self):
         result = server._shared_admin_candidate_action({
@@ -151,6 +194,95 @@ class CandidateCorrectionRequestTests(unittest.TestCase):
             self.assertEqual(record["headset_brand"], "Jabra Evolve 40")
             self.assertEqual(record["candidate_correction_denial_reason"], "Authoritative entry was correct.")
             self.assertFalse(record["candidate_correction_pending"])
+            store.conn.close()
+
+    def test_authoritative_candidate_sync_uses_exact_session_and_preserves_workflow_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = server.SQLiteDocumentStore(Path(temp_dir) / "correction.sqlite3")
+            protected = {
+                "status": "PASS", "final_status": "Pass", "attempt_number": 2,
+                "form_fill_status": "filled", "review_summary": "Preserve this",
+            }
+            asyncio.run(store.history.insert_one({
+                "history_id": "session-1", "candidate": "taylor example", "candidate_name": "taylor example",
+                "headset_brand": "Old Headset", **protected,
+            }))
+            asyncio.run(store.history.insert_one({
+                "history_id": "session-2", "candidate": "taylor example", "candidate_name": "taylor example",
+                "headset_brand": "Other Headset", **protected,
+            }))
+            remote = [{
+                "session_id": "session-1", "candidate_name": "Taylor Example", "headset_brand": "New Headset",
+            }]
+            with mock.patch.object(server, "db", store):
+                result = server._reconcile_authoritative_candidate_information(remote)
+            records = {row["history_id"]: row for row in store.history._read_history_docs()}
+            self.assertEqual(result["historyUpdated"], 1)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(records["session-1"]["candidate_name"], "Taylor Example")
+            self.assertEqual(records["session-1"]["headset_brand"], "New Headset")
+            self.assertEqual(records["session-2"]["headset_brand"], "Other Headset")
+            for key, value in protected.items():
+                self.assertEqual(records["session-1"][key], value)
+            store.conn.close()
+
+    def test_authoritative_separate_headset_fields_update_combined_history_display(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = server.SQLiteDocumentStore(Path(temp_dir) / "correction.sqlite3")
+            asyncio.run(store.history.insert_one({
+                "history_id": "session-1", "candidate_name": "Taylor",
+                "headset_brand": "Old Combined", "status": "PASS",
+            }))
+            with mock.patch.object(server, "db", store):
+                result = server._reconcile_authoritative_candidate_information([{
+                    "session_id": "session-1", "candidate_name": "Taylor",
+                    "headset_brand": "Logitech", "headset_model": "H390",
+                }])
+            record = store.history._read_history_docs()[0]
+            self.assertEqual(result["historyUpdated"], 1)
+            self.assertEqual(record["headset_brand"], "Logitech")
+            self.assertEqual(record["headset_model"], "H390")
+            self.assertEqual(record["headset_label"], "Logitech H390")
+            self.assertEqual(record["status"], "PASS")
+            store.conn.close()
+
+    def test_authoritative_candidate_sync_rejects_ambiguous_or_mismatched_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = server.SQLiteDocumentStore(Path(temp_dir) / "correction.sqlite3")
+            asyncio.run(store.history.insert_one({
+                "history_id": "session-1", "candidate_id": "candidate-1",
+                "candidate_name": "Original", "headset_brand": "Original Headset",
+            }))
+            with mock.patch.object(server, "db", store):
+                ambiguous = server._reconcile_authoritative_candidate_information([
+                    {"session_id": "session-1", "candidate_name": "First"},
+                    {"session_id": "session-1", "candidate_name": "Second"},
+                ])
+                mismatched = server._reconcile_authoritative_candidate_information([
+                    {"session_id": "session-1", "candidate_id": "candidate-2", "candidate_name": "Wrong"},
+                ])
+            record = store.history._read_history_docs()[0]
+            self.assertEqual(ambiguous["ambiguousSessionIds"], 1)
+            self.assertEqual(ambiguous["historyUpdated"], 0)
+            self.assertEqual(mismatched["historyUpdated"], 0)
+            self.assertEqual(record["candidate_name"], "Original")
+            store.conn.close()
+
+    def test_local_history_read_does_not_wait_for_remote_reconciliation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = server.SQLiteDocumentStore(Path(temp_dir) / "correction.sqlite3")
+            asyncio.run(store.history.insert_one({"history_id": "session-local", "candidate_name": "Synthetic"}))
+            with (
+                mock.patch.object(server, "db", store),
+                mock.patch.object(server, "_reconcile_remote_newbie_requests_into_local_state") as newbie,
+                mock.patch.object(server, "_reconcile_remote_corrections_into_local_history") as corrections,
+                mock.patch.object(server, "_reconcile_remote_candidate_information_into_local_history") as candidates,
+            ):
+                result = asyncio.run(server.get_history())
+            self.assertEqual(len(result), 1)
+            newbie.assert_not_called()
+            corrections.assert_not_called()
+            candidates.assert_not_called()
             store.conn.close()
 
 

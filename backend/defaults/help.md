@@ -53,8 +53,8 @@ Basics verifies candidate readiness before any scoring begins.
 - Select the headset brand/model before answering USB and Noise Cancelling.
 - Headset must be USB with a noise-cancelling microphone. Approved headset selections automatically mark USB and Noise Cancelling as Yes.
 - VPN must be off, and required browser checks must pass before you can continue.
-- When checking for VPN or proxy, use VPN / Proxy Check as decision support and manually review the result.
-- VPN / Proxy Check never fails a candidate automatically. The tester always makes the final decision.
+- When a manual IP check is needed, expand **VPN / Proxy Lookup Sites**, copy one of the three website links, open it separately, and enter the candidate IP on that site.
+- These external sites are reference tools only. MTS does not automatically verify VPN/proxy status, fill the VPN answers, or determine pass/fail.
 - Headset and VPN fail popups include Discord copy buttons when the matching post template is available.
 - Candidate lookup waits for a stronger name entry, such as first name plus part of last name, before checking shared candidate records.
 - When prior records appear, use Review Previous Session to inspect Basics info, tester, date/status, call results, supervisor-transfer results, summaries, and notes.

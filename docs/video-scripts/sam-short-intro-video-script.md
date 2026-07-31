@@ -46,7 +46,7 @@ Show:
 
 Say:
 
-"Help includes local settings for sounds, banner timing, default candidate view, archived search, and tutorial video behavior."
+"Help includes searchable topics, Tutorial Videos, Quick Start Choices, Replay Guided Walkthrough, and local preferences. Tutorial content is not edited in Settings."
 
 Show:
 

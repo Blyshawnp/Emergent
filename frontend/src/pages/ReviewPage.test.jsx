@@ -530,7 +530,7 @@ test('history session with legacy final notes still loads read-only review', asy
   await view.unmount();
 });
 
-test('review displays saved VPN proxy check result and keeps trainer notes on review', async () => {
+test('review does not render legacy automatic VPN provider results', async () => {
   const view = await renderReview({
     ...passingSession,
     candidate_ip_intelligence: {
@@ -548,10 +548,10 @@ test('review displays saved VPN proxy check result and keeps trainer notes on re
     },
   });
 
-  expect(view.container.textContent).toContain('VPN / Proxy Check');
-  expect(view.container.textContent).toContain('REVIEW');
-  expect(view.container.textContent).toContain('Last Seen:');
-  expect(view.container.querySelector('[data-testid="candidate-ip-trainer-notes"]').value).toBe('Candidate said they turned off their VPN.');
+  expect(view.container.textContent).not.toContain('VPN / Proxy Check');
+  expect(view.container.textContent).not.toContain('IP2Location / IP2Proxy');
+  expect(view.container.textContent).not.toContain('Candidate said they turned off their VPN.');
+  expect(view.container.querySelector('[data-testid="candidate-ip-trainer-notes"]')).toBeNull();
 
   await view.unmount();
 });

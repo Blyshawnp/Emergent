@@ -1,5 +1,7 @@
 # MTS Admin Training Video Script
 
+Recording impact: partial Basics scene replacement for the manual-only VPN lookup workflow.
+
 Target length: 8 to 15 minutes
 
 Tone: relaxed, clear, and practical. This is a screen recording for testers and admins who need to understand the full Mock Testing Suite workflow.
@@ -54,14 +56,15 @@ Show:
 
 Say:
 
-"Help is meant to be the quick reference area. Use search if you know what you’re looking for, or use the quick buttons for common tasks. The tutorial can be replayed from here. If a local tutorial video is included in the build, the video option appears. If not, the guided tutorial stays available."
+"Help is the quick reference area. Use search, open Tutorial Videos, choose Quick Start Choices, or select Replay Guided Walkthrough. If a video is unavailable, written Help remains available. Tutorial topics are not edited in Settings."
 
 Show:
 
 - Help search
 - Quick actions
-- Replay Tutorial
-- Optional video button if present
+- Tutorial Videos
+- Quick Start Choices
+- Replay Guided Walkthrough
 
 ## Discord Posts and Screenshots
 
@@ -89,13 +92,31 @@ Show:
 - Final Attempt
 - Headset search
 - Search examples `H390` and `H650e`
-- Approved headset auto-marking USB and Noise Cancelling
+- Approved and unlisted headset examples
+- Research Headset and the Research Complete confirmation
+- Explicit USB and Noise Cancelling Mic Yes/No answers
 - VPN questions
+- VPN / Proxy Lookup Sites with three Copy Link buttons
 - Browser checks
 
 Say:
 
 "If the headset or VPN requirements fail, MTS shows a confirmation popup. The purple Discord Post button tells you exactly what it copies."
+
+Say:
+
+"Answer Has VPN and, when applicable, Can turn off. For a manual IP check, expand VPN / Proxy Lookup Sites. Copy Link copies only the selected website address. Open it separately and enter the candidate IP on the site. These sites are reference tools only. MTS does not automatically verify VPN or proxy status, fill the answers, or determine pass or fail."
+
+Show:
+
+- Has VPN and Can turn off conditional behavior
+- IP2Location, IPinfo, and ip.teoh.io
+- Each Copy Link action and temporary Copied feedback
+- No browser launch and no automatic result
+
+Say:
+
+"For an unlisted headset, Research Headset opens the lookup. When you return, choose Yes only if the research supports both wired USB and a noise-cancelling microphone. MTS returns the headset selected, so do not click Use This Headset again. USB and Noise Cancelling Mic still need explicit answers. Research does not approve the headset; SAM handles any later Headset Review."
 
 Show:
 
@@ -208,6 +229,23 @@ Show:
 - History list
 - Open a saved session
 - Review details
+- Correct Candidate Information in the session-detail footer
+
+Say:
+
+"Correct Candidate Information requests a candidate-name or headset-spelling correction for this exact session. A reason is required. Pending keeps the current value authoritative, approval applies the correction, and denial keeps the original. It does not change results, attempts, headset approval, USB, or Noise Cancelling Mic."
+
+## Smart Resume and Rescheduling
+
+Say:
+
+"Resume Supervisor Transfer shows only eligible incomplete mock-call sessions. Completed transfers, Newbie Shift scheduling records, reschedules, and duplicate continuations are excluded. A continuation keeps the original workflow and does not create another headset review. Rescheduling a Newbie Shift also stays linked to the original workflow instead of creating another mock-call session."
+
+Show:
+
+- Resume Supervisor Transfer
+- An eligible Smart Resume row
+- History Reschedule on the original session
 
 ## Close
 

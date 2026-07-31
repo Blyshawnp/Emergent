@@ -28,7 +28,7 @@ This directory is the production source for user guides, department training, tu
 3. Department policy must not be inferred from a button or status. Unverified policy is marked **Department confirmation required.**
 4. Use only synthetic demo names and data. Never record candidate data, private company data, secrets, private content locations, or private deployment information.
 5. `Form Filled` means MTS completed filling the Microsoft Form. It does not mean the trainer selected Submit.
-6. Candidate IP or VPN information is decision support. The tester makes the final decision; manual verification may be required.
+6. VPN/proxy lookup is manual-only: copy one of the three Basics website links, open it separately, and enter the candidate IP there. The sites are reference tools; MTS does not fill answers or decide pass/fail.
 
 ## Publishing workflow
 
@@ -44,3 +44,6 @@ This directory is the production source for user guides, department training, tu
 ## Release-control note
 
 The P0 minimum launch set is identified in `TRAINING-CONTENT-MAP.md`. A script being complete does not mean its video has been recorded, approved, uploaded, or activated.
+# Data-provider note for developers
+
+The Supabase foundation is not a production cutover. Current MTS/SAM training continues to describe Google Sheets and Apps Script behavior. Developer-only migration, reconciliation, shadow-read, backup, and rollback guidance is maintained in `docs/supabase-mts-sam-data-foundation.md`; user-facing tutorial scripts must not claim Supabase authority until a separately approved cutover.

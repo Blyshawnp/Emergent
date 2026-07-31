@@ -1786,10 +1786,10 @@ def _normalize_approved_headsets(rows):
         row = row or {}
         brand = " ".join(str(row.get("Brand") or "").split())
         model = " ".join(str(row.get("Model") or "").split())
-        status = str(row.get("Status") or "approved").strip().lower()
+        status = _normalize_headset_catalog_status(row.get("Status"), legacy_blank_approved=True)
         if not brand or brand.lower() in ignored_brands or not model:
             continue
-        if status not in {"approved", "active", "allowed"}:
+        if status != "approved":
             continue
         brand_key = brand.casefold()
         model_key = model.casefold()
@@ -1811,9 +1811,9 @@ def _normalize_denied_headsets(rows):
         row = row or {}
         brand = " ".join(str(row.get("Brand") or "").split())
         model = " ".join(str(row.get("Model") or "").split())
-        status = str(row.get("Status") or "").strip().lower()
+        status = _normalize_headset_catalog_status(row.get("Status"))
         key = (brand.casefold(), model.casefold())
-        if brand and model and key not in seen and status in {"denied", "rejected"}:
+        if brand and model and key not in seen and status == "denied":
             seen.add(key)
             denied.append({
                 "brand": brand,
@@ -1822,6 +1822,24 @@ def _normalize_denied_headsets(rows):
                 "note": str(row.get("Note") or "").strip(),
             })
     return sorted(denied, key=lambda item: (_natural_sort_key(item["brand"]), _natural_sort_key(item["model"])))
+
+
+def _normalize_headset_catalog_status(value, legacy_blank_approved=False):
+    """Return the one internal catalog status used by MTS and SAM."""
+    normalized = " ".join(str(value or "").strip().lower().split())
+    if not normalized:
+        return "approved" if legacy_blank_approved else "unknown"
+    if normalized in {"approved", "active", "allowed"}:
+        return "approved"
+    if normalized in {"denied", "rejected"}:
+        return "denied"
+    if normalized in {"archived", "archive"}:
+        return "archived"
+    if normalized in {"deleted", "removed", "tombstoned"}:
+        return "deleted"
+    if normalized in {"inactive", "withdrawn"}:
+        return "inactive"
+    return "unknown"
 
 
 TUTORIAL_VIDEO_HEADERS = [
@@ -3506,6 +3524,7 @@ def empty_session():
         "form_filled_at": "",
         "form_fill_error_summary": "",
         "newbie_shift_scheduled_at": "",
+        "newbie_shift_number": "",
         "newbie_shift_timezone": "",
         "newbie_shift_calendar_created": False,
         "newbie_shift_request_id": "",
@@ -3745,6 +3764,7 @@ def _session_with_workflow_defaults(session):
     doc.setdefault("form_filled_at", "")
     doc.setdefault("form_fill_error_summary", "")
     doc.setdefault("newbie_shift_scheduled_at", "")
+    doc.setdefault("newbie_shift_number", "")
     doc.setdefault("newbie_shift_timezone", "")
     doc.setdefault("newbie_shift_calendar_created", False)
     doc.setdefault("newbie_shift_request_id", "")
@@ -3904,6 +3924,15 @@ SHARED_CANDIDATE_SESSION_HEADERS = [
     "deletion_request_id",
     "deletion_request_status",
     "deletion_request_created_at",
+    "extra_attempts_granted",
+    "allowed_attempt_count",
+    "current_attempt_number",
+    "extra_attempt_last_action_id",
+    "extra_attempt_granted_by",
+    "extra_attempt_granted_at",
+    "readiness_override_by",
+    "readiness_override_at",
+    "newbie_shift_number",
 ]
 
 SHARED_PENDING_SUP_TRANSFER_HEADERS = [
@@ -3959,6 +3988,7 @@ SHARED_PENDING_SUP_TRANSFER_HEADERS = [
     "newbie_shift_rescheduled_at",
     "newbie_shift_within_24_hours",
     "newbie_shift_counts_as_attempt",
+    "newbie_shift_number",
 ]
 
 SHARED_NEWBIE_SHIFT_REQUEST_HEADERS = [
@@ -3992,6 +4022,7 @@ SHARED_NEWBIE_SHIFT_REQUEST_HEADERS = [
     "becomes_final_attempt",
     "attempt_rule",
     "terminal_outcome",
+    "newbie_shift_number",
 ]
 
 SHARED_CANDIDATE_DELETION_REQUEST_HEADERS = [
@@ -5035,6 +5066,11 @@ def _normalize_headset_review_key(value):
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
+def _headset_identity_key(brand="", model=""):
+    """Exact, display-safe headset comparison key; deliberately not fuzzy."""
+    return (_normalize_headset_review_key(brand), _normalize_headset_review_key(model))
+
+
 def _approved_headset_review_keys():
     keys = set()
     for group in EXTERNAL_CONTENT.get("approved_headsets") or []:
@@ -5047,9 +5083,26 @@ def _approved_headset_review_keys():
     return keys
 
 
+def _approved_headset_identity_keys():
+    return {
+        _headset_identity_key((group or {}).get("brand"), model)
+        for group in EXTERNAL_CONTENT.get("approved_headsets") or []
+        for model in (group or {}).get("models") or []
+        if str((group or {}).get("brand") or "").strip() and str(model or "").strip()
+    }
+
+
 def _denied_headset_review_keys():
     return {
         _normalize_headset_review_key(f"{item.get('brand', '')} {item.get('model', '')}")
+        for item in EXTERNAL_CONTENT.get("denied_headsets") or []
+        if str(item.get("brand") or "").strip() and str(item.get("model") or "").strip()
+    }
+
+
+def _denied_headset_identity_keys():
+    return {
+        _headset_identity_key(item.get("brand"), item.get("model"))
         for item in EXTERNAL_CONTENT.get("denied_headsets") or []
         if str(item.get("brand") or "").strip() and str(item.get("model") or "").strip()
     }
@@ -5156,6 +5209,92 @@ def _split_headset_brand_model(value, brand="", model=""):
     return (parts[0] if parts else ""), (parts[1] if len(parts) > 1 else combined)
 
 
+def _headset_display_label(brand="", model="", combined=""):
+    brand = re.sub(r"\s+", " ", str(brand or "").strip())
+    model = re.sub(r"\s+", " ", str(model or "").strip())
+    combined = re.sub(r"\s+", " ", str(combined or "").strip())
+    if not brand and not model:
+        return combined
+    if not brand:
+        return model
+    if not model:
+        return brand
+    if model.casefold() == brand.casefold() or model.casefold().startswith(f"{brand.casefold()} "):
+        return model
+    return f"{brand} {model}"
+
+
+def _candidate_headset_values(record):
+    record = record or {}
+    explicit_model = next((
+        re.sub(r"\s+", " ", str(record.get(key) or "").strip())
+        for key in ("headset_model", "HeadsetModel", "Model", "model")
+        if str(record.get(key) or "").strip()
+    ), "")
+    brand = next((
+        re.sub(r"\s+", " ", str(record.get(key) or "").strip())
+        for key in ("headset_brand", "HeadsetBrand", "Brand", "brand")
+        if str(record.get(key) or "").strip()
+    ), "")
+    if explicit_model:
+        return {
+            "brand": brand,
+            "model": explicit_model,
+            "label": _headset_display_label(brand, explicit_model),
+            "separate": True,
+        }
+    return {"brand": "", "model": "", "label": brand, "separate": False}
+
+
+def _apply_headset_correction_values(record, changes):
+    current = _candidate_headset_values(record)
+    combined = current["label"]
+    brand = current["brand"]
+    model = current["model"]
+    separate = current["separate"]
+    headset_changes = [item for item in changes or [] if item.get("field") in {"headset_brand", "headset_model"}]
+    if not headset_changes:
+        return current
+    if not separate:
+        brand_change = next((item for item in headset_changes if item.get("field") == "headset_brand"), None)
+        model_change = next((item for item in headset_changes if item.get("field") == "headset_model"), None)
+        brand_previous = str((brand_change or {}).get("previous_value") or "").strip()
+        model_previous = str((model_change or {}).get("previous_value") or "").strip()
+        brand_requested = str((brand_change or {}).get("requested_value") or "").strip()
+        model_requested = str((model_change or {}).get("requested_value") or "").strip()
+        if brand_change and not model_change and (combined == brand_requested or combined.startswith(f"{brand_requested} ")):
+            return {"brand": "", "model": "", "label": combined, "separate": False}
+        if model_change and not brand_change and (combined == model_requested or combined.endswith(f" {model_requested}")):
+            return {"brand": "", "model": "", "label": combined, "separate": False}
+        if model_change and not brand_change and model_previous == combined:
+            return {"brand": "", "model": "", "label": model_change["requested_value"], "separate": False}
+        if brand_previous and (combined.casefold() == brand_previous.casefold() or combined.casefold().startswith(f"{brand_previous.casefold()} ")):
+            brand = combined[:len(brand_previous)]
+            model = combined[len(brand_previous):].strip()
+            separate = True
+        elif model_previous and (combined.casefold() == model_previous.casefold() or combined.casefold().endswith(f" {model_previous.casefold()}")):
+            model = combined[-len(model_previous):]
+            brand = combined[:-len(model_previous)].strip()
+            separate = True
+    for change in headset_changes:
+        field = change["field"]
+        previous = str(change.get("previous_value") or "").strip()
+        requested = str(change.get("requested_value") or "").strip()
+        current_value = brand if field == "headset_brand" else model
+        if separate and previous and current_value != previous:
+            raise ValueError("correction_identity_mismatch")
+        if field == "headset_brand":
+            brand = requested
+        else:
+            model = requested
+    return {
+        "brand": brand,
+        "model": model,
+        "label": _headset_display_label(brand, model, combined),
+        "separate": separate,
+    }
+
+
 def _headset_review_schema_from_context(context):
     statuses = ((context or {}).get("setupStatus") or {}).get("statuses") or []
     match = next((status for status in statuses if status.get("tab") == HEADSET_REVIEW_LOG_TAB and "schema" in status), {})
@@ -5179,11 +5318,12 @@ def _append_headset_review_log(payload):
     )
     headset_model = f"{brand} {model}".strip()
     normalized_model = _normalize_headset_review_key(headset_model)
+    normalized_identity = _headset_identity_key(brand, model)
     if not normalized_model:
         return {"ok": True, "skipped": True, "reason": "blank_headset"}
-    if normalized_model in _approved_headset_review_keys():
+    if normalized_identity in _approved_headset_identity_keys():
         return {"ok": True, "skipped": True, "reason": "approved_headset"}
-    if normalized_model in _denied_headset_review_keys():
+    if normalized_identity in _denied_headset_identity_keys():
         return {"ok": True, "skipped": True, "reason": "resolved_headset", "status": "denied"}
 
     source_session_id = str((payload or {}).get("source_session_id") or (payload or {}).get("session_id") or "").strip()
@@ -5193,7 +5333,7 @@ def _append_headset_review_log(payload):
         return {"ok": False, "reason": "invalid_request", "error": "Headset review request data is incomplete."}
     review_id = str((payload or {}).get("review_id") or "").strip() or str(uuid.uuid5(
         uuid.NAMESPACE_URL,
-        f"mts-headset-review:{source_session_id}:{normalized_model}",
+        f"mts-headset-review:{source_session_id}",
     ))
     note = str((payload or {}).get("note") or (payload or {}).get("trainer_note") or "").strip()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -5230,35 +5370,23 @@ def _append_headset_review_log(payload):
                 schema == "review"
                 and (
                     str(row.get("review_id") or "").strip() == review_id
-                    or (
-                        str(row.get("source_session_id") or "").strip() == source_session_id
-                        and existing_model == normalized_model
-                    )
+                    or str(row.get("source_session_id") or "").strip() == source_session_id
                 )
             ) or (schema != "review" and existing_model == normalized_model)
             if not identity_matches:
                 continue
             if existing_status not in {"", "pending"}:
                 return {"ok": True, "skipped": True, "reason": "already_resolved", "review_id": review_id, "status": existing_status}
-            if schema == "review":
-                next_row = dict(row)
-                next_row.update({
-                    "review_id": review_id,
-                    "source_session_id": source_session_id,
-                    "candidate_name": candidate_name,
-                    "tester_name": tester_name,
-                    "Brand": brand,
-                    "Model": model,
-                    "Status": "pending",
-                    "Note": note or row.get("Note") or "",
-                    "created_at": row.get("created_at") or now_iso,
-                    "updated_at": now_iso,
-                })
-                _shared_update_existing_row(
-                    sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers,
-                    row.get("_row_number"), _shared_row_values(next_row, headers),
-                )
-            return {"ok": True, "skipped": True, "reason": "duplicate_pending", "review_id": review_id, "source_session_id": source_session_id, "status": "pending"}
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "duplicate_pending",
+                "review_id": str(row.get("review_id") or review_id).strip(),
+                "source_session_id": str(row.get("source_session_id") or source_session_id).strip(),
+                "status": "pending",
+                "brand": str(row.get("Brand") or brand).strip(),
+                "model": str(row.get("Model") or model).strip(),
+            }
 
         quoted = _quote_sheet_title_for_a1(HEADSET_REVIEW_LOG_TAB)
         row_values = ([
@@ -5325,16 +5453,169 @@ def _normalize_headset_review_row(row, schema):
 
 def _read_headsets_rows(sheets_api, sheet_id):
     return [
-        {
+        _with_headset_catalog_identity({
             "brand": str(row.get("Brand") or "").strip(),
             "model": str(row.get("Model") or "").strip(),
-            "status": str(row.get("Status") or "approved").strip().lower() or "approved",
+            "status": _normalize_headset_catalog_status(row.get("Status"), legacy_blank_approved=True),
             "note": str(row.get("Note") or "").strip(),
             "_row_number": row.get("_row_number"),
-        }
+        })
         for row in _shared_read_rows(sheets_api, sheet_id, HEADSETS_TAB, HEADSETS_HEADERS)
         if str(row.get("Brand") or "").strip() and str(row.get("Model") or "").strip()
     ]
+
+
+def _headset_catalog_identity(row_number, brand, model, status, note):
+    """Return an exact, stale-safe identity for one physical catalog row."""
+    canonical = json.dumps({
+        "row": int(row_number or 0),
+        "brand": str(brand or "").strip(),
+        "model": str(model or "").strip(),
+        "status": str(status or "approved").strip().lower() or "approved",
+        "note": str(note or "").strip(),
+    }, sort_keys=True, separators=(",", ":"))
+    return f"headset-catalog-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _with_headset_catalog_identity(row):
+    next_row = dict(row or {})
+    row_number = int(next_row.get("_row_number") or 0)
+    next_row["catalog_row_number"] = row_number
+    next_row["catalog_identity"] = _headset_catalog_identity(
+        row_number,
+        next_row.get("brand"),
+        next_row.get("model"),
+        next_row.get("status"),
+        next_row.get("note"),
+    )
+    return next_row
+
+
+class _HeadsetCatalogMutationError(ValueError):
+    pass
+
+
+def _apps_script_headset_catalog_rows(apps_script_client):
+    response = apps_script_client.get("getSheetRange", {"range": "'headsets'!A:D"})
+    values = response.get("values") if isinstance(response, dict) else None
+    values = values if isinstance(values, list) else []
+    if not values:
+        return []
+    headers = [str(value or "").strip() for value in values[0]]
+    if headers[:len(HEADSETS_HEADERS)] != HEADSETS_HEADERS:
+        raise ValueError("Approved headset catalog headers do not match the supported schema.")
+    rows = []
+    for offset, values_row in enumerate(values[1:]):
+        padded = list(values_row or []) + [""] * len(HEADSETS_HEADERS)
+        brand = str(padded[0] or "").strip()
+        model = str(padded[1] or "").strip()
+        if not brand or not model:
+            continue
+        rows.append(_with_headset_catalog_identity({
+            "brand": brand,
+            "model": model,
+            "status": _normalize_headset_catalog_status(padded[2], legacy_blank_approved=True),
+            "note": str(padded[3] or "").strip(),
+            "_row_number": offset + 2,
+        }))
+    return rows
+
+
+def _headset_catalog_target(rows, payload):
+    identity = str((payload or {}).get("catalog_identity") or "").strip()
+    try:
+        row_number = int((payload or {}).get("catalog_row_number") or 0)
+    except (TypeError, ValueError):
+        row_number = 0
+    if not identity or row_number < 2:
+        raise _HeadsetCatalogMutationError("Refresh Headset Review before changing this approved headset.")
+    target = next((row for row in rows if int(row.get("catalog_row_number") or 0) == row_number), None)
+    if not target or not hmac.compare_digest(str(target.get("catalog_identity") or ""), identity):
+        raise _HeadsetCatalogMutationError("This approved headset changed after it was loaded. Refresh Headset Review and try again.")
+    return target
+
+
+def _apply_headset_catalog_action(context, payload, action, decision_note=""):
+    apps_script_client = (context or {}).get("appsScriptClient")
+    sheet_id = (context or {}).get("sheet_id")
+    sheets_api = None
+    if apps_script_client:
+        rows = _apps_script_headset_catalog_rows(apps_script_client)
+    else:
+        sheets_api = context["service"].spreadsheets()
+        rows = _read_headsets_rows(sheets_api, sheet_id)
+    target = _headset_catalog_target(rows, payload)
+    previous_status = str(target.get("status") or "approved").strip().lower() or "approved"
+    new_status = {
+        "approve": "approved",
+        "deny": "denied",
+        "archive": "archived",
+    }.get(action, "")
+    row_number = int(target["catalog_row_number"])
+    changed_rows = 0
+    deleted = action == "delete"
+
+    if apps_script_client:
+        if deleted:
+            metadata = apps_script_client.get("getSheetMetadata")
+            sheets = metadata.get("sheets") if isinstance(metadata, dict) else []
+            sheet = next((item for item in (sheets or []) if ((item.get("properties") or {}).get("title") == HEADSETS_TAB)), None)
+            sheet_numeric_id = (sheet or {}).get("properties", {}).get("sheetId")
+            if sheet_numeric_id is None:
+                raise _HeadsetCatalogMutationError("Approved headset catalog identity could not be resolved. Refresh Headset Review and try again.")
+            result = apps_script_client.post("batchUpdateSpreadsheet", {
+                "requests": [{
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": sheet_numeric_id,
+                            "dimension": "ROWS",
+                            "startIndex": row_number - 1,
+                            "endIndex": row_number,
+                        },
+                    },
+                }],
+            })
+            replies = result.get("replies") if isinstance(result, dict) else []
+            changed_rows = 1 if replies and (replies[0].get("deleteDimension") or {}).get("deletedRows") == 1 else 0
+        else:
+            note = decision_note if action == "deny" and decision_note else target.get("note") or ""
+            result = apps_script_client.post("updateSheetRange", {
+                "range": f"'headsets'!A{row_number}:D{row_number}",
+                "values": [[target["brand"], target["model"], new_status, note]],
+            })
+            changed_rows = int((result or {}).get("updatedRows") or 0)
+    elif deleted:
+        _shared_delete_existing_row(sheets_api, sheet_id, HEADSETS_TAB, row_number)
+        changed_rows = 1
+    else:
+        note = decision_note if action == "deny" and decision_note else target.get("note") or ""
+        _shared_update_existing_row(
+            sheets_api,
+            sheet_id,
+            HEADSETS_TAB,
+            HEADSETS_HEADERS,
+            row_number,
+            [target["brand"], target["model"], new_status, note],
+        )
+        changed_rows = 1
+
+    if changed_rows != 1:
+        raise _HeadsetCatalogMutationError("The approved headset catalog did not confirm exactly one changed row.")
+    updated_rows = _apps_script_headset_catalog_rows(apps_script_client) if apps_script_client else _read_headsets_rows(sheets_api, sheet_id)
+    _sync_headset_content_cache(updated_rows)
+    return {
+        "ok": True,
+        "operation": action,
+        "catalog_identity": target["catalog_identity"],
+        "catalog_row_number": row_number,
+        "brand": target["brand"],
+        "model": target["model"],
+        "previous_status": previous_status,
+        "new_status": "deleted" if deleted else new_status,
+        "deleted": deleted,
+        "changed_rows": changed_rows,
+        "skipped": False,
+    }
 
 
 def _sync_headset_content_cache(rows):
@@ -5359,7 +5640,6 @@ def _headset_review_snapshot(context=None):
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
             raw_reviews = _apps_script_rows(apps_script_client, "getHeadsetReviewLog")
-            raw_headsets = _apps_script_rows(apps_script_client, "getHeadsets")
             review_rows = []
             for row in raw_reviews:
                 brand, model = _split_headset_brand_model(
@@ -5379,17 +5659,7 @@ def _headset_review_snapshot(context=None):
                     "candidate": str(row.get("candidate_name") or row.get("CandidateName") or "").strip(),
                     "tester": str(row.get("tester_name") or row.get("SubmittedBy") or "").strip(),
                 })
-            headset_rows = [
-                {
-                    "brand": str(row.get("Brand") or row.get("brand") or "").strip(),
-                    "model": str(row.get("Model") or row.get("model") or "").strip(),
-                    "status": str(row.get("Status") or row.get("status") or "approved").strip().lower() or "approved",
-                    "note": str(row.get("Note") or row.get("note") or "").strip(),
-                }
-                for row in raw_headsets
-                if str(row.get("Brand") or row.get("brand") or "").strip()
-                and str(row.get("Model") or row.get("model") or "").strip()
-            ]
+            headset_rows = _apps_script_headset_catalog_rows(apps_script_client)
             _sync_headset_content_cache(headset_rows)
             public_row = lambda row: {
                 "review_id": row.get("review_id") or "",
@@ -5402,6 +5672,8 @@ def _headset_review_snapshot(context=None):
                 "updated_at": row.get("updated_at") or "",
                 "candidate": row.get("candidate") or "",
                 "tester": row.get("tester") or "",
+                "catalog_identity": row.get("catalog_identity") or "",
+                "catalog_row_number": row.get("catalog_row_number") or 0,
             }
             return {
                 "ok": True,
@@ -5431,6 +5703,8 @@ def _headset_review_snapshot(context=None):
             "updated_at": row.get("updated_at") or "",
             "candidate": row.get("candidate") or "",
             "tester": row.get("tester") or "",
+            "catalog_identity": row.get("catalog_identity") or "",
+            "catalog_row_number": row.get("catalog_row_number") or 0,
         }
         return {
             "ok": True,
@@ -5444,12 +5718,92 @@ def _headset_review_snapshot(context=None):
         return {"ok": False, "pending": [], "approved": [], "denied": [], "error": _headset_review_temporary_unavailable_message()}
 
 
+def _edit_headset_review(payload):
+    review_id = str((payload or {}).get("review_id") or "").strip()
+    actor = str((payload or {}).get("actor") or "SAM").strip() or "SAM"
+    if not review_id:
+        return {"ok": False, "error": "Refresh Headset Review before editing this item."}
+    try:
+        context = _shared_sheet_context()
+        if not context.get("ok"):
+            return {"ok": False, "error": _headset_review_temporary_unavailable_message()}
+        apps_script_client = context.get("appsScriptClient")
+        if apps_script_client:
+            result = apps_script_client.post("editHeadsetReview", {
+                "review_id": review_id,
+                "brand": str((payload or {}).get("brand") or "").strip(),
+                "model": str((payload or {}).get("model") or "").strip(),
+                "note": str((payload or {}).get("note") or "").strip(),
+                "actor": actor,
+            })
+            return {"ok": True, "action": "edit", **(result if isinstance(result, dict) else {})}
+
+        sheets_api = context["service"].spreadsheets()
+        sheet_id = context["sheet_id"]
+        schema = _headset_review_schema_from_context(context)
+        headers = _headset_review_headers(schema)
+        rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers)
+        target = next((row for row in rows if _normalize_headset_review_row(row, schema).get("review_id") == review_id), None)
+        if not target:
+            return {"ok": False, "error": "The selected headset review could not be found. Refresh Headset Review and try again."}
+        normalized = _normalize_headset_review_row(target, schema)
+        if str(normalized.get("status") or "pending").lower() not in {"", "pending"}:
+            return {"ok": False, "error": "Only pending headset reviews can be edited."}
+        brand_value = (payload or {}).get("brand") if "brand" in (payload or {}) else normalized.get("brand")
+        model_value = (payload or {}).get("model") if "model" in (payload or {}) else normalized.get("model")
+        brand = re.sub(r"\s+", " ", str(brand_value or "").strip())
+        model = re.sub(r"\s+", " ", str(model_value or "").strip())
+        if not brand and not model:
+            return {"ok": False, "error": "Enter a headset brand or model."}
+        note = str((payload or {}).get("note") or "").strip()
+        approved_match = any(
+            _headset_identity_key(row.get("brand"), row.get("model")) == _headset_identity_key(brand, model)
+            and str(row.get("status") or "approved").lower() == "approved"
+            for row in _read_headsets_rows(sheets_api, sheet_id)
+        )
+        before = {"brand": normalized.get("brand") or "", "model": normalized.get("model") or "", "note": normalized.get("note") or ""}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        next_row = dict(target)
+        if schema == "legacy":
+            next_row.update({"headset_model": _headset_display_label(brand, model), "notes": note})
+        else:
+            next_row.update({"Brand": brand, "Model": model, "Note": note})
+            if schema == "review":
+                next_row.update({"updated_at": now_iso, "decision_by": actor})
+        _shared_update_existing_row(
+            sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers,
+            target.get("_row_number"), _shared_row_values(next_row, headers),
+        )
+        source_session_id = str(normalized.get("source_session_id") or "").strip()
+        if source_session_id:
+            candidate_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+            candidate = next((row for row in candidate_rows if str(row.get("session_id") or "").strip() == source_session_id), None)
+            if candidate:
+                candidate["headset_brand"] = _headset_display_label(brand, model)
+                _shared_update_existing_row(
+                    sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS,
+                    candidate.get("_row_number"), _shared_row_values(candidate, SHARED_CANDIDATE_SESSION_HEADERS),
+                )
+        return {
+            "ok": True, "action": "edit", "review_id": review_id,
+            "source_session_id": source_session_id, "brand": brand, "model": model,
+            "note": note, "status": "pending", "updated_at": now_iso,
+            "approved_match": approved_match,
+            "audit": {"actor": actor, "before": before, "after": {"brand": brand, "model": model, "note": note}},
+        }
+    except Exception as exc:
+        logger.exception("[HEADSET-REVIEW] Failed to edit pending headset review: %s", exc)
+        return {"ok": False, "error": "Unable to update the pending headset review."}
+
+
 def _headset_review_action(payload):
     action = str((payload or {}).get("action") or "").strip().lower()
+    if action == "edit":
+        return _edit_headset_review(payload)
     if action == "review_later":
         return {"ok": True, "action": action}
     if action not in {"approve", "deny", "archive", "delete"}:
-        return {"ok": False, "error": "Select Approve, Deny, Archive, Delete, or Review Later."}
+        return {"ok": False, "error": "Select Edit, Approve, Deny, Archive, Delete, or Review Later."}
 
     brand = str((payload or {}).get("brand") or "").strip()
     model = str((payload or {}).get("model") or "").strip()
@@ -5475,6 +5829,8 @@ def _headset_review_action(payload):
         context = _shared_sheet_context()
         if not context.get("ok"):
             return {"ok": False, "error": _headset_review_temporary_unavailable_message()}
+        if str((payload or {}).get("catalog_identity") or "").strip():
+            return _apply_headset_catalog_action(context, payload, action, decision_note)
         apps_script_client = context.get("appsScriptClient")
         if apps_script_client:
             post_action = {
@@ -5516,17 +5872,22 @@ def _headset_review_action(payload):
         schema = _headset_review_schema_from_context(context)
         review_headers = _headset_review_headers(schema)
         review_rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, review_headers)
-        target_key = _normalize_headset_review_key(f"{brand} {model}")
+        target_key = _headset_identity_key(brand, model)
         matched_review = False
         for row in review_rows:
             normalized = _normalize_headset_review_row(row, schema)
-            row_key = _normalize_headset_review_key(f"{normalized['brand']} {normalized['model']}")
+            row_key = _headset_identity_key(normalized["brand"], normalized["model"])
             if schema == "review" and review_id:
                 if normalized.get("review_id") != review_id:
                     continue
             elif row_key != target_key:
                 continue
             matched_review = True
+            # A stable review ID is authoritative. The card may have been
+            # edited after it loaded, so approval must use the current row.
+            brand = normalized.get("brand") or brand
+            model = normalized.get("model") or model
+            target_key = _headset_identity_key(brand, model)
             current_status = str(normalized.get("status") or "pending").lower()
             if current_status not in {"", "pending", decision_status}:
                 return {"ok": False, "error": "This headset review was already resolved with a different decision."}
@@ -5564,7 +5925,7 @@ def _headset_review_action(payload):
             return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
 
         headset_rows = _read_headsets_rows(sheets_api, sheet_id)
-        existing = next((row for row in headset_rows if _normalize_headset_review_key(f"{row['brand']} {row['model']}") == target_key), None)
+        existing = next((row for row in headset_rows if _headset_identity_key(row["brand"], row["model"]) == target_key), None)
         row_values = [brand, model, decision_status, decision_note]
         quoted = _quote_sheet_title_for_a1(HEADSETS_TAB)
         if existing:
@@ -5588,6 +5949,9 @@ def _headset_review_action(payload):
         sorted_rows = sorted(updated_rows, key=lambda row: (row.get("brand", "").lower(), row.get("model", "").lower()))
         _sync_headset_content_cache(sorted_rows)
         return {"ok": True, "action": action, "status": decision_status, "brand": brand, "model": model}
+    except _HeadsetCatalogMutationError as exc:
+        logger.warning("[HEADSET-REVIEW] Catalog mutation stopped safely: %s", exc)
+        return {"ok": False, "error": str(exc)}
     except Exception as exc:
         logger.exception("[HEADSET-REVIEW] Failed to apply headset decision: %s", exc)
         return {"ok": False, "error": "Unable to save the headset review decision."}
@@ -5677,7 +6041,34 @@ def _candidate_row_withdrawn(row):
 
 
 def _candidate_row_extra_attempt(row):
-    return _shared_truthy((row or {}).get("extra_attempt_granted"))
+    source = row or {}
+    try:
+        if int(source.get("extra_attempts_granted") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return _shared_truthy(source.get("extra_attempt_granted"))
+
+
+def _candidate_extra_attempt_count(row):
+    source = row or {}
+    try:
+        explicit = max(0, int(source.get("extra_attempts_granted") or 0))
+    except (TypeError, ValueError):
+        explicit = 0
+    return max(explicit, 1 if _shared_truthy(source.get("extra_attempt_granted")) else 0)
+
+
+def _candidate_stored_attempt_number(row):
+    source = row or {}
+    for key in ("current_attempt_number", "attempt_number", "newbie_shift_current_attempt"):
+        try:
+            value = int(source.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+    return 0
 
 
 def _candidate_attempt_identity(row, fallback_index=0):
@@ -5748,6 +6139,16 @@ def calculate_candidate_attempt_state(rows, active_session=None):
         (counted_events if counts else non_counting_events).append(event)
 
     counted_attempts = len(counted_events)
+    highest_completed_attempt = max(
+        (
+            _candidate_stored_attempt_number(row)
+            for row in records
+            if _candidate_attempt_disposition(row)[0]
+        ),
+        default=0,
+    )
+    counted_attempts = max(counted_attempts, highest_completed_attempt)
+    active_counts = False
     if active:
         try:
             stored_prior = max(0, int(active.get("prior_counted_attempts") or 0))
@@ -5761,18 +6162,21 @@ def calculate_candidate_attempt_state(rows, active_session=None):
             counted_attempts += 1
             seen.add(active_identity)
 
-    extra_attempt_granted = any(_candidate_row_extra_attempt(row) for row in records)
-    if active and _shared_truthy(active.get("extra_attempt_granted")):
-        extra_attempt_granted = True
-    stored_max = 0
-    if active and isinstance(active.get("attempt_state"), dict):
-        try:
-            stored_max = int(active["attempt_state"].get("max_attempts") or 0)
-        except (TypeError, ValueError):
-            stored_max = 0
-    max_attempts = max(CERTIFICATION_BASE_MAX_ATTEMPTS + (1 if extra_attempt_granted else 0), stored_max)
-
     all_records = records + ([active] if active else [])
+    extra_attempts_granted = max((_candidate_extra_attempt_count(row) for row in all_records), default=0)
+    extra_attempt_granted = extra_attempts_granted > 0
+    stored_max = 0
+    for row in all_records:
+        candidates = [row.get("allowed_attempt_count")]
+        if isinstance(row.get("attempt_state"), dict):
+            candidates.append(row["attempt_state"].get("max_attempts"))
+        for candidate in candidates:
+            try:
+                stored_max = max(stored_max, int(candidate or 0))
+            except (TypeError, ValueError):
+                continue
+    max_attempts = max(CERTIFICATION_BASE_MAX_ATTEMPTS + extra_attempts_granted, stored_max)
+
     withdrawn = any(_candidate_row_withdrawn(row) for row in all_records)
     passed = any(_shared_status_upper(row) in {"PASS", "PASSED", "RESUMED-PASS"} for row in all_records)
     final_attempt_failed = any(
@@ -5786,6 +6190,8 @@ def calculate_candidate_attempt_state(rows, active_session=None):
         for row in all_records
     )
     exhausted = counted_attempts >= max_attempts
+    explicit_active_attempt = _candidate_stored_attempt_number(active) if active else 0
+    final_attempt_failed = bool(final_attempt_failed and max(counted_attempts, explicit_active_attempt) >= max_attempts)
     terminal = bool(withdrawn or passed or final_attempt_failed or exhausted)
     if withdrawn:
         reason = "candidate_withdrawn"
@@ -5800,9 +6206,13 @@ def calculate_candidate_attempt_state(rows, active_session=None):
     else:
         reason = "first_attempt"
 
-    current_attempt = min(max_attempts, max(1, counted_attempts if terminal else counted_attempts + 1))
+    current_attempt = max(
+        1,
+        explicit_active_attempt if active and not active_counts else (counted_attempts if terminal else counted_attempts + 1),
+    )
+    current_attempt = min(max_attempts, current_attempt)
     remaining_attempts = max(0, max_attempts - current_attempt)
-    final_attempt = bool(current_attempt >= max_attempts)
+    final_attempt = bool(current_attempt == max_attempts)
     return {
         "current_attempt": current_attempt,
         "max_attempts": max_attempts,
@@ -5815,6 +6225,7 @@ def calculate_candidate_attempt_state(rows, active_session=None):
         "counted_events": counted_events,
         "non_counting_events": non_counting_events,
         "extra_attempt_granted": extra_attempt_granted,
+        "extra_attempts_granted": extra_attempts_granted,
         "withdrawn": withdrawn,
         "passed": passed,
     }
@@ -5824,6 +6235,9 @@ def _candidate_attempt_summary(rows):
     state = calculate_candidate_attempt_state(rows)
     return {
         "attempt_count": state["counted_attempts"],
+        "current_attempt_number": state["current_attempt"],
+        "allowed_attempt_count": state["max_attempts"],
+        "extra_attempts_granted": state["extra_attempts_granted"],
         "final_attempt_risk": state["final_attempt"] and not state["terminal"],
         "extra_attempt_granted": state["extra_attempt_granted"],
         "withdrawn": state["withdrawn"],
@@ -5838,6 +6252,66 @@ def _shared_sheet_gid(sheets_api, sheet_id, tab_name):
         if props.get("title") == tab_name:
             return props.get("sheetId")
     return None
+
+
+def _candidate_authoritative_status(row):
+    """Resolve one candidate-level result for tracking, history, and exports."""
+    source = row or {}
+
+    def normalized(value):
+        text = re.sub(r"[\u2013\u2014_-]+", " ", str(value or "").strip().upper())
+        return re.sub(r"\s+", " ", text).strip()
+
+    def public(value, final=False):
+        value = normalized(value)
+        if value in {"PASS", "PASSED", "RESUMED PASS"}:
+            return "Pass"
+        if value in {"FAIL FINAL ATTEMPT", "FAILED FINAL ATTEMPT"} or final:
+            return "FAIL-Final Attempt"
+        if value in {"FAIL", "FAILED"}:
+            return "Fail"
+        if value in {"WITHDREW FROM CERTIFICATION", "WITHDRAWN"}:
+            return "WITHDREW FROM CERTIFICATION"
+        if value in {"ARCHIVED", "REMOVED", "DELETED"}:
+            return value
+        if value in {"INCOMPLETE", "PENDING", "IN PROGRESS"}:
+            return "INCOMPLETE"
+        return str(value or "").strip()
+
+    override = source.get("readiness_override_result") if _shared_truthy(source.get("readiness_override_applied")) else ""
+    if normalized(override) in {"PASS", "PASSED", "FAIL", "FAILED", "FAIL FINAL ATTEMPT", "FAILED FINAL ATTEMPT"}:
+        return public(override, normalized(override) in {"FAIL FINAL ATTEMPT", "FAILED FINAL ATTEMPT"})
+
+    final_result = normalized(source.get("final_result"))
+    if final_result in {"FAIL", "FAILED", "FAIL FINAL ATTEMPT", "FAILED FINAL ATTEMPT"}:
+        return public(final_result, final_result in {"FAIL FINAL ATTEMPT", "FAILED FINAL ATTEMPT"})
+
+    status = normalized(source.get("status") or source.get("latest_status"))
+    if status in {"FAIL FINAL ATTEMPT", "FAILED FINAL ATTEMPT"}:
+        return "FAIL-Final Attempt"
+    sup_results = [
+        normalized(source.get(f"sup_transfer_{index}_result") or (source.get(f"sup_transfer_{index}") or {}).get("result"))
+        for index in range(1, 3)
+    ]
+    required_sup_failed = sum(1 for result in sup_results if result in {"FAIL", "FAILED"}) >= 2
+    if _shared_truthy(source.get("final_attempt")) and (required_sup_failed or _candidate_qualifying_failure(source)):
+        return "FAIL-Final Attempt"
+    if status in {"FAIL", "FAILED"}:
+        return "Fail"
+    if final_result in {"PASS", "PASSED", "RESUMED PASS"}:
+        return public(final_result)
+    if status:
+        return public(status)
+    return public(source.get("calculated_result")) or "INCOMPLETE"
+
+
+def _apply_authoritative_candidate_status(row):
+    next_row = dict(row or {})
+    authoritative = _candidate_authoritative_status(next_row)
+    next_row["status"] = authoritative
+    next_row["latest_status"] = authoritative
+    next_row["authoritative_status"] = authoritative
+    return next_row
 
 
 def _shared_admin_candidate_snapshot(context=None):
@@ -5861,7 +6335,7 @@ def _shared_admin_candidate_snapshot(context=None):
                 timestamp = str(row.get("completed_at") or row.get("Timestamp") or row.get("created_at") or "").strip()
                 notes = str(row.get("notes") or row.get("Notes") or row.get("review_notes") or "").strip()
                 updated_by = str(row.get("tester_name") or row.get("UpdatedBy") or row.get("updated_by") or "").strip()
-                candidate = {
+                candidate = _apply_authoritative_candidate_status({
                     **{
                         key: value
                         for key, value in row.items()
@@ -5877,7 +6351,7 @@ def _shared_admin_candidate_snapshot(context=None):
                     "review_notes": notes,
                     "tester_name": updated_by,
                     "attempt_count": row.get("attempt_count") or row.get("attempt_number") or 1,
-                }
+                })
                 candidate["attempts"] = [dict(candidate)]
                 candidates.append(candidate)
             active = [row for row in candidates if not _shared_truthy(row.get("archived")) and str(row.get("status") or "").strip().upper() not in {"ARCHIVED", "REMOVED", "DELETED"}]
@@ -5923,7 +6397,7 @@ def _shared_admin_candidate_snapshot(context=None):
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         candidate_rows = [
-            _normalize_shared_row(row)
+            _apply_authoritative_candidate_status(_normalize_shared_row(row))
             for row in _shared_read_rows(
                 sheets_api,
                 sheet_id,
@@ -6031,6 +6505,11 @@ def _approval_label(status):
     return "Pending"
 
 
+def _normalize_newbie_shift_number(value):
+    text = re.sub(r"[\x00-\x1f\x7f]", "", str(value or "")).strip()
+    return text[:64]
+
+
 def _public_newbie_request(row):
     request_type = str(row.get("request_type") or "").strip().lower()
     requested_by = str(row.get("requested_by") or "").strip().lower()
@@ -6046,6 +6525,7 @@ def _public_newbie_request(row):
         "requested_schedule": row.get("scheduled_at") or row.get("rescheduled_at") or row.get("requested_scheduled_at") or "",
         "original_schedule": row.get("original_scheduled_at") or row.get("original_schedule") or row.get("newbie_shift_original_scheduled_at") or "",
         "timezone": row.get("timezone") or "",
+        "newbie_shift_number": str(row.get("newbie_shift_number") or "").strip(),
         "requester": "Candidate" if requested_by == NEWBIE_REQUESTED_BY_CANDIDATE else "Tester/Trainer" if requested_by == NEWBIE_REQUESTED_BY_TESTER else "Other" if requested_by == "other" else "",
         "reason": row.get("request_reason") or "",
         "details": row.get("request_details") or "",
@@ -6109,6 +6589,7 @@ ADMIN_CANDIDATE_EDIT_ACTION = "edit_candidate_information"
 ADMIN_CANDIDATE_EDIT_AUDIT_TYPE = "candidate_information_admin_edit"
 CORRECTION_ALLOWED_FIELDS = {
     "candidate_name": "Candidate Name",
+    "headset_brand": "Headset Brand",
     "headset_model": "Headset Model",
 }
 
@@ -6316,6 +6797,7 @@ def _canonical_remote_newbie_request(row):
         ).strip(),
         "rescheduled_at": str(row.get("rescheduled_at") or row.get("requested_scheduled_at") or "").strip(),
         "timezone": str(row.get("timezone") or "").strip(),
+        "newbie_shift_number": str(row.get("newbie_shift_number") or "").strip(),
         "within_24_hours": row.get("within_24_hours"),
         "counts_as_attempt": row.get("counts_as_attempt"),
         "final_attempt": row.get("final_attempt"),
@@ -6352,6 +6834,7 @@ def _candidate_row_remote_newbie_request(row):
         "requested_scheduled_at": row.get("newbie_shift_scheduled_at") or row.get("newbie_shift_rescheduled_at"),
         "rescheduled_at": row.get("newbie_shift_rescheduled_at"),
         "timezone": row.get("newbie_shift_timezone"),
+        "newbie_shift_number": row.get("newbie_shift_number"),
         "within_24_hours": row.get("newbie_shift_within_24_hours"),
         "counts_as_attempt": row.get("newbie_shift_counts_as_attempt"),
         "final_attempt": row.get("final_attempt"),
@@ -6523,6 +7006,8 @@ def _reconcile_local_newbie_request_record(record, remote):
             continue
         if overwrite_metadata or not str(local.get(local_key) or "").strip():
             updates[local_key] = remote_value
+    if overwrite_metadata and "newbie_shift_number" in remote:
+        updates["newbie_shift_number"] = str(remote.get("newbie_shift_number") or "").strip()
     for local_key, remote_key in (
         ("newbie_shift_within_24_hours", "within_24_hours"),
         ("newbie_shift_counts_as_attempt", "counts_as_attempt"),
@@ -6739,12 +7224,19 @@ def _reconcile_remote_corrections_into_local_history():
             "candidate_correction_denial_reason": remote.get("denial_reason") or "",
         })
         if status == "approved" and not record.get("candidate_correction_applied_at"):
+            headset_changes = []
             for change in remote.get("changes") or []:
                 if change.get("field") == "candidate_name":
                     next_record["candidate"] = change.get("requested_value")
                     next_record["candidate_name"] = change.get("requested_value")
-                elif change.get("field") == "headset_model":
-                    next_record["headset_brand"] = change.get("requested_value")
+                elif change.get("field") in {"headset_brand", "headset_model"}:
+                    headset_changes.append(change)
+            if headset_changes:
+                headset = _apply_headset_correction_values(record, headset_changes)
+                next_record["headset_brand"] = headset["brand"] if headset["separate"] else headset["label"]
+                if headset["separate"]:
+                    next_record["headset_model"] = headset["model"]
+                next_record["headset_label"] = headset["label"]
             next_record["candidate_correction_applied_at"] = remote.get("admin_decision_at") or datetime.now(timezone.utc).isoformat()
         if status in {"approved", "denied"}:
             next_record["candidate_correction_pending"] = False
@@ -6756,6 +7248,142 @@ def _reconcile_remote_corrections_into_local_history():
         )
         updated += 1
     return {"ok": True, "historyUpdated": updated}
+
+
+def _fetch_remote_candidate_information():
+    context = _shared_sheet_context()
+    if not context.get("ok"):
+        raise RuntimeError("candidate_information_transport_unavailable")
+    if context.get("appsScriptClient"):
+        result = context["appsScriptClient"].get("getCandidateTracking", {})
+        rows = result.get("rows") if isinstance(result, dict) else []
+    else:
+        rows = _shared_read_rows(
+            context["service"].spreadsheets(),
+            context["sheet_id"],
+            SHARED_CANDIDATE_SESSIONS_TAB,
+            SHARED_CANDIDATE_SESSION_HEADERS,
+        )
+    return [row for row in (rows or []) if isinstance(row, dict)]
+
+
+def _reconcile_authoritative_candidate_information(candidate_rows):
+    """Merge only authoritative candidate fields into exact local session IDs."""
+    by_session = {}
+    duplicate_sessions = set()
+    for candidate in candidate_rows or []:
+        session_id = str(candidate.get("session_id") or candidate.get("source_session_id") or "").strip()
+        if not session_id:
+            continue
+        if session_id in by_session:
+            duplicate_sessions.add(session_id)
+            continue
+        by_session[session_id] = candidate
+    for session_id in duplicate_sessions:
+        by_session.pop(session_id, None)
+
+    updated = 0
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC", ())
+    for row in rows:
+        record = SQLiteCollection.decode(row["data"])
+        session_ids = {
+            str(value).strip()
+            for value in (
+                record.get("history_id"),
+                record.get("session_id"),
+                record.get("source_session_id"),
+            )
+            if str(value or "").strip()
+        }
+        matches = [by_session[session_id] for session_id in session_ids if session_id in by_session]
+        if len(matches) != 1:
+            continue
+        authoritative = matches[0]
+        local_candidate_id = str(record.get("candidate_id") or "").strip()
+        remote_candidate_id = str(authoritative.get("candidate_id") or "").strip()
+        if local_candidate_id and remote_candidate_id and local_candidate_id != remote_candidate_id:
+            continue
+
+        candidate_name = str(
+            authoritative.get("candidate_name")
+            or authoritative.get("CandidateName")
+            or authoritative.get("Candidate Name")
+            or ""
+        ).strip()
+        headset = _candidate_headset_values(authoritative)
+        next_record = SQLiteCollection.clone(record)
+        if candidate_name:
+            next_record["candidate"] = candidate_name
+            next_record["candidate_name"] = candidate_name
+        if headset["label"]:
+            next_record["headset_brand"] = headset["brand"] if headset["separate"] else headset["label"]
+            if headset["separate"]:
+                next_record["headset_model"] = headset["model"]
+            else:
+                next_record.pop("headset_model", None)
+            next_record["headset_label"] = headset["label"]
+        has_authoritative_status = any(
+            field in authoritative
+            for field in (
+                "status", "latest_status", "final_result", "calculated_result",
+                "readiness_override_applied", "readiness_override_result",
+                "sup_transfer_1_result", "sup_transfer_2_result", "final_attempt",
+            )
+        )
+        authoritative_status = _candidate_authoritative_status(authoritative) if has_authoritative_status else ""
+        if authoritative_status:
+            next_record["status"] = authoritative_status
+            next_record["final_status"] = authoritative_status
+        for field in (
+            "calculated_result", "final_result", "readiness_override_applied",
+            "readiness_override_result", "readiness_override_reason",
+            "readiness_override_explanation", "readiness_override_by",
+            "readiness_override_at", "newbie_shift_number",
+            "extra_attempt_granted", "extra_attempts_granted",
+            "allowed_attempt_count", "current_attempt_number", "attempt_number",
+        ):
+            if field in authoritative:
+                next_record[field] = authoritative.get(field)
+        if any(field in authoritative for field in (
+            "attempt_number", "current_attempt_number", "allowed_attempt_count",
+            "extra_attempt_granted", "extra_attempts_granted", "final_attempt",
+        )):
+            attempt_state = calculate_candidate_attempt_state([authoritative])
+            next_record["attempt_state"] = attempt_state
+            next_record["current_attempt_number"] = attempt_state["current_attempt"]
+            next_record["allowed_attempt_count"] = attempt_state["max_attempts"]
+            next_record["final_attempt"] = attempt_state["final_attempt"]
+        if next_record == record:
+            continue
+        db.history.store.execute(
+            "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+            (
+                SQLiteCollection.encode(next_record),
+                str(next_record.get("timestamp_iso") or next_record.get("timestamp") or ""),
+                row["id"],
+            ),
+        )
+        updated += 1
+    return {
+        "ok": True,
+        "historyUpdated": updated,
+        "ambiguousSessionIds": len(duplicate_sessions),
+    }
+
+
+def _reconcile_remote_candidate_information_into_local_history():
+    try:
+        return _reconcile_authoritative_candidate_information(_fetch_remote_candidate_information())
+    except Exception as exc:
+        logger.warning(
+            "[CANDIDATE INFO RECONCILIATION] Remote refresh unavailable error_type=%s",
+            type(exc).__name__,
+        )
+        return {
+            "ok": False,
+            "historyUpdated": 0,
+            "error_code": "candidate_information_transport_unavailable",
+        }
 
 
 def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candidate_tracking=None):
@@ -6800,6 +7428,7 @@ def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candid
                         "request_details": row.get("details"), "request_created_at": row.get("created_at"),
                         "original_scheduled_at": row.get("original_scheduled_at"),
                         "scheduled_at": row.get("requested_scheduled_at"), "timezone": row.get("timezone"),
+                        "newbie_shift_number": row.get("newbie_shift_number"),
                         "within_24_hours": row.get("within_24_hours"), "counts_as_attempt": row.get("counts_as_attempt"),
                         "final_attempt": row.get("final_attempt"), "admin_decision_at": row.get("decision_at"),
                         "lead_time_seconds": row.get("lead_time_seconds"), "lead_time_category": row.get("lead_time_category"),
@@ -6911,20 +7540,50 @@ def _apply_candidate_correction_direct(sheets_api, sheet_id, source_session_id, 
         return {"ok": False, "error_code": "correction_identity_mismatch", "updated": 0}
     normalized = _normalize_correction_changes(changes)
     applied = []
-    for change in normalized:
-        storage_key = "candidate_name" if change["field"] == "candidate_name" else "headset_brand"
-        current = str(target.get(storage_key) or "").strip()
+    name_changes = [change for change in normalized if change["field"] == "candidate_name"]
+    headset_changes = [change for change in normalized if change["field"] in {"headset_brand", "headset_model"}]
+    corrected_headset = None
+    for change in name_changes:
+        current = str(target.get("candidate_name") or "").strip()
         if current == change["requested_value"]:
             continue
         if change["previous_value"] and current != change["previous_value"]:
             return {"ok": False, "error_code": "correction_identity_mismatch", "updated": 0}
-        target[storage_key] = change["requested_value"]
+        target["candidate_name"] = change["requested_value"]
         applied.append(change)
+    if headset_changes:
+        try:
+            headset = _apply_headset_correction_values(target, headset_changes)
+            corrected_headset = headset
+        except ValueError:
+            return {"ok": False, "error_code": "correction_identity_mismatch", "updated": 0}
+        current_label = _candidate_headset_values(target)["label"]
+        if headset["label"] != current_label:
+            target["headset_brand"] = headset["label"]
+            applied.extend(headset_changes)
     if applied:
         _shared_update_existing_row(
             sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS,
             target["_row_number"], _shared_row_values(target, SHARED_CANDIDATE_SESSION_HEADERS),
         )
+        if corrected_headset and corrected_headset.get("brand") and corrected_headset.get("model"):
+            try:
+                review_rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, HEADSET_REVIEW_LOG_HEADERS)
+            except Exception as exc:
+                if "missing sheet" not in str(exc).lower():
+                    raise
+                review_rows = []
+            for review in review_rows:
+                if str(review.get("source_session_id") or "").strip() != source_session_id:
+                    continue
+                review["Brand"] = corrected_headset["brand"]
+                review["Model"] = corrected_headset["model"]
+                review["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _shared_update_existing_row(
+                    sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, HEADSET_REVIEW_LOG_HEADERS,
+                    review["_row_number"], _shared_row_values(review, HEADSET_REVIEW_LOG_HEADERS),
+                )
+                break
         name_change = next((item for item in applied if item["field"] == "candidate_name"), None)
         if name_change:
             try:
@@ -6998,7 +7657,7 @@ def _apply_candidate_deletion_terminal_direct(sheets_api, sheet_id, source_sessi
     return {"updated": updated, "pendingUpdated": pending_updated, "obsoleteRequests": obsolete_requests, "already_applied": already_applied}
 
 
-def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_id, status, actor, decided_at, denial_reason="", attempt_outcome=None):
+def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_id, status, actor, decided_at, denial_reason="", attempt_outcome=None, newbie_shift_number=None):
     if not session_id:
         return 0
     candidate_rows = _shared_read_rows(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
@@ -7011,6 +7670,8 @@ def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_i
         row["newbie_shift_admin_decision_at"] = decided_at
         row["newbie_shift_admin_decision_by"] = actor
         row["newbie_shift_denial_reason"] = denial_reason
+        if newbie_shift_number is not None:
+            row["newbie_shift_number"] = _normalize_newbie_shift_number(newbie_shift_number)
         outcome = dict(attempt_outcome or {})
         resulting_attempt = _positive_attempt_number(outcome.get("resulting_attempt"), 0)
         if resulting_attempt > 0:
@@ -7040,6 +7701,7 @@ def _shared_pending_request_action(payload):
     actor = str((payload or {}).get("actor") or (payload or {}).get("admin") or "SAM").strip() or "SAM"
     denial_reason = str((payload or {}).get("denial_reason") or "").strip()
     expected_status = str((payload or {}).get("expected_status") or "pending").strip().lower()
+    newbie_shift_number = _normalize_newbie_shift_number((payload or {}).get("newbie_shift_number"))
     if decision_input in {"approve", "approved"}:
         decision_cmd = "approve"
         decision = "approved"
@@ -7078,7 +7740,8 @@ def _shared_pending_request_action(payload):
                 "decision": decision_cmd,
                 "expected_status": expected_status,
                 "decision_by": actor,
-                "denial_reason": denial_reason
+                "denial_reason": denial_reason,
+                "newbie_shift_number": newbie_shift_number,
             })
             if not isinstance(result, dict):
                 result = {}
@@ -7153,6 +7816,8 @@ def _shared_pending_request_action(payload):
             row["admin_decision_at"] = decided_at
             row["admin_decision_by"] = actor
             row["denial_reason"] = denial_reason if decision == "denied" else ""
+            if decision == "approved":
+                row["newbie_shift_number"] = newbie_shift_number
             _shared_update_existing_row(
                 sheets_api,
                 sheet_id,
@@ -7171,6 +7836,7 @@ def _shared_pending_request_action(payload):
                 decided_at,
                 denial_reason if decision == "denied" else "",
                 attempt_outcome=row,
+                newbie_shift_number=newbie_shift_number if decision == "approved" else None,
             )
             return {"ok": True, "request_id": request_id, "category": category, "status": decision, "candidateUpdates": candidate_updates}
 
@@ -7279,8 +7945,9 @@ def _shared_admin_candidate_action(payload):
         return _candidate_update_failure("candidate_update_target_not_found")
     if action == ADMIN_CANDIDATE_EDIT_ACTION and not reason:
         return {"ok": False, "error": "A correction reason is required.", "error_code": "correction_reason_required"}
-    if action == "restore_active":
-        action = "restore_withdrawal"
+    exact_session_actions = {"mark_passed", "mark_failed", "grant_extra_attempt", "mark_incomplete", "move_pending_sup_transfer", "remove_pending_sup_transfer"}
+    if action in exact_session_actions and not session_id:
+        return {"ok": False, "error": "Refresh Candidate Tracking before changing this exact certification record."}
     if not candidate_name and not session_id and not pending_id:
         targets = (payload or {}).get("targets") or []
         if action != "delete_candidate_history" or not isinstance(targets, list) or not targets:
@@ -7504,8 +8171,12 @@ def _shared_admin_candidate_action(payload):
 
         for row in candidate_rows:
             matches = (
-                (session_id and str(row.get("session_id") or "").strip() == session_id)
-                or (target_key and _candidate_name_key(row.get("candidate_name")) == target_key)
+                str(row.get("session_id") or "").strip() == session_id
+                if action in exact_session_actions
+                else (
+                    (session_id and str(row.get("session_id") or "").strip() == session_id)
+                    or (target_key and _candidate_name_key(row.get("candidate_name")) == target_key)
+                )
             )
             if not matches:
                 continue
@@ -7514,6 +8185,11 @@ def _shared_admin_candidate_action(payload):
                 row["withdrawn"] = "TRUE"
                 row["withdrawn_at"] = now_iso
                 row["retention_until"] = row.get("retention_until") or retention_until
+            elif action == "restore_active":
+                row["archived"] = "FALSE"
+                if str(row.get("status") or "").upper() in {"ARCHIVED", "REMOVED"}:
+                    row["status"] = "INCOMPLETE"
+                row["review_notes"] = append_note(row.get("review_notes"), f"Restored from archive by {actor} at {now_iso}.")
             elif action == "restore_withdrawal":
                 row["withdrawn"] = "FALSE"
                 row["withdrawn_at"] = ""
@@ -7521,8 +8197,29 @@ def _shared_admin_candidate_action(payload):
                     row["status"] = "INCOMPLETE"
                 row["review_notes"] = "\n\n".join(part for part in [row.get("review_notes") or "", "Admin restored candidate from withdrew from certification status."] if part)
             elif action == "grant_extra_attempt":
+                current_extra_count = _candidate_extra_attempt_count(row)
+                expected_extra_count = (payload or {}).get("expected_extra_attempts_granted")
+                if expected_extra_count not in (None, ""):
+                    try:
+                        if int(expected_extra_count) != current_extra_count:
+                            return {
+                                "ok": True, "action": action, "already_applied": True,
+                                "extra_attempts_granted": current_extra_count,
+                                "allowed_attempt_count": max(CERTIFICATION_BASE_MAX_ATTEMPTS + current_extra_count, _positive_attempt_number(row.get("allowed_attempt_count"), 0)),
+                            }
+                    except (TypeError, ValueError):
+                        return {"ok": False, "error": "Refresh Candidate Tracking before granting another attempt."}
+                next_extra_count = current_extra_count + 1
                 row["extra_attempt_granted"] = "TRUE"
                 row["extra_attempt_reason"] = reason
+                row["extra_attempts_granted"] = next_extra_count
+                row["allowed_attempt_count"] = max(
+                    CERTIFICATION_BASE_MAX_ATTEMPTS + next_extra_count,
+                    _positive_attempt_number(row.get("allowed_attempt_count"), 0),
+                )
+                row["extra_attempt_last_action_id"] = str((payload or {}).get("action_id") or f"extra-{session_id}-{next_extra_count}")
+                row["extra_attempt_granted_by"] = actor
+                row["extra_attempt_granted_at"] = now_iso
                 row["withdrawn"] = "FALSE"
                 row["withdrawn_at"] = ""
                 if str(row.get("status") or "").upper() == "WITHDREW FROM CERTIFICATION":
@@ -7538,12 +8235,14 @@ def _shared_admin_candidate_action(payload):
                 previous_status = row.get("status") or ""
                 if action == "mark_passed":
                     row["status"] = "Pass"
+                    row["final_result"] = "Pass"
                     row["mock_calls_completed"] = "TRUE"
                     row["sup_transfers_completed"] = "TRUE"
                     row["needs_sup_transfer"] = "FALSE"
                     row["pending_sup_transfer_id"] = ""
                 elif action == "mark_failed":
                     row["status"] = fail_status_for_row(row)
+                    row["final_result"] = row["status"]
                     row["needs_sup_transfer"] = "FALSE"
                     row["pending_sup_transfer_id"] = ""
                 elif action == "mark_incomplete":
@@ -7563,6 +8262,13 @@ def _shared_admin_candidate_action(payload):
                     row["pending_sup_transfer_id"] = ""
                 row["withdrawn"] = "FALSE"
                 row["withdrawn_at"] = ""
+                if action in {"mark_passed", "mark_failed"}:
+                    row["readiness_override_applied"] = "TRUE"
+                    row["readiness_override_result"] = row["status"]
+                    row["readiness_override_reason"] = reason
+                    row["readiness_override_explanation"] = manual_note(previous_status, row.get("status"), reason)
+                    row["readiness_override_by"] = actor
+                    row["readiness_override_at"] = now_iso
                 row["review_notes"] = append_note(row.get("review_notes"), manual_note(previous_status, row.get("status"), reason))
             _shared_update_existing_row(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS, row["_row_number"], _shared_row_values(row, SHARED_CANDIDATE_SESSION_HEADERS))
             updated_candidates += 1
@@ -8128,6 +8834,15 @@ def _candidate_session_row(session, existing_rows=None):
         session.get("deletion_request_id") or "",
         session.get("deletion_request_status") or "",
         session.get("deletion_request_created_at") or "",
+        session.get("extra_attempts_granted") or "",
+        session.get("allowed_attempt_count") or "",
+        session.get("current_attempt_number") or attempt_number,
+        session.get("extra_attempt_last_action_id") or "",
+        session.get("extra_attempt_granted_by") or "",
+        session.get("extra_attempt_granted_at") or "",
+        session.get("readiness_override_by") or "",
+        session.get("readiness_override_at") or "",
+        session.get("newbie_shift_number") or "",
     ], pending_id, needs_sup
 
 
@@ -8207,6 +8922,7 @@ def _pending_sup_transfer_row(session, pending_id, existing_row=None, completed=
         session.get("newbie_shift_rescheduled_at") or "",
         _shared_bool(session.get("newbie_shift_within_24_hours")),
         _shared_bool(session.get("newbie_shift_counts_as_attempt")),
+        session.get("newbie_shift_number") or "",
     ]
 
 
@@ -8249,6 +8965,7 @@ def _newbie_shift_request_row(session):
         _shared_bool(session.get("newbie_shift_becomes_final_attempt")),
         session.get("newbie_shift_attempt_rule") or "",
         session.get("newbie_shift_terminal_outcome") or "",
+        session.get("newbie_shift_number") or "",
     ], request_id
 
 
@@ -8267,6 +8984,7 @@ def _newbie_request_submission_fingerprint(session):
         "newbie_shift_rescheduled_at",
         "newbie_shift_scheduled_at",
         "newbie_shift_timezone",
+        "newbie_shift_number",
         "newbie_shift_lead_time_seconds",
         "newbie_shift_current_attempt",
         "newbie_shift_resulting_attempt",
@@ -12488,9 +13206,15 @@ async def google_sheet_permission_check(request: Request):
 
 
 async def _sync_started_session_headset_review(session):
+    source_session_id = str(
+        session.get("resume_source_history_id")
+        or session.get("source_session_id")
+        or session.get("session_id")
+        or ""
+    ).strip()
     headset_review = await asyncio.to_thread(_append_headset_review_log, {
         "review_id": session.get("headset_review_id"),
-        "source_session_id": session.get("session_id"),
+        "source_session_id": source_session_id,
         "candidate_name": session.get("candidate_name"),
         "tester_name": session.get("tester_name"),
         "headset_model": session.get("headset_brand"),
@@ -12665,8 +13389,6 @@ async def discard_session(request: Request):
 # ══════════════════════════════════════════════════════════════════
 @api_router.get("/history")
 async def get_history():
-    await asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state)
-    await asyncio.to_thread(_reconcile_remote_corrections_into_local_history)
     docs = _recent_history_docs(await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500))
     for index, doc in enumerate(docs):
         doc = _session_with_workflow_defaults(doc)
@@ -12677,6 +13399,29 @@ async def get_history():
         doc["history_id"] = doc.get("history_id") or _history_identity(doc)
         docs[index] = doc
     return docs
+
+
+@api_router.post("/history/reconcile")
+async def reconcile_history():
+    started_at = time.perf_counter()
+    newbie_result, correction_result, candidate_result = await asyncio.gather(
+        asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state),
+        asyncio.to_thread(_reconcile_remote_corrections_into_local_history),
+        asyncio.to_thread(_reconcile_remote_candidate_information_into_local_history),
+    )
+    docs = await get_history()
+    stats = await get_history_stats()
+    return {
+        "ok": any(result.get("ok") for result in (newbie_result, correction_result, candidate_result)),
+        "history": docs,
+        "stats": stats,
+        "reconciliation": {
+            "newbieRequests": newbie_result,
+            "corrections": correction_result,
+            "candidateInformation": candidate_result,
+        },
+        "duration_ms": round((time.perf_counter() - started_at) * 1000, 1),
+    }
 
 
 @api_router.get("/history/stats")
@@ -12816,11 +13561,17 @@ async def request_history_session_correction(history_id: str, request: Request):
     if not isinstance(requested_values, dict):
         raise HTTPException(status_code=400, detail={"error_code": "correction_validation_failed", "message": "Correction changes are invalid."})
     raw_changes = []
+    headset = _candidate_headset_values(target)
     for field, requested in requested_values.items():
         field = str(field or "").strip().lower()
         if field not in CORRECTION_ALLOWED_FIELDS:
-            raise HTTPException(status_code=400, detail={"error_code": "correction_unsupported_field", "message": "Only candidate name and headset model can be corrected."})
-        previous = target.get("candidate") or target.get("candidate_name") if field == "candidate_name" else target.get("headset_brand")
+            raise HTTPException(status_code=400, detail={"error_code": "correction_unsupported_field", "message": "Only candidate name, headset brand, and headset model can be corrected."})
+        if field == "candidate_name":
+            previous = target.get("candidate") or target.get("candidate_name")
+        elif field == "headset_brand":
+            previous = headset["brand"]
+        else:
+            previous = headset["model"] if headset["separate"] else headset["label"]
         raw_changes.append({"field": field, "previous_value": previous or "", "requested_value": requested or ""})
     try:
         changes = _normalize_correction_changes(raw_changes)
@@ -14853,7 +15604,11 @@ async def get_ticker():
 @api_router.get("/notifications")
 async def get_notifications():
     groups = await _fetch_notifications_from_sheet()
-    return groups
+    return {
+        **groups,
+        "source": _ticker_fetch_status.get("source") or "unknown",
+        "fallback": (_ticker_fetch_status.get("source") or "unknown") not in {"google", "cache"},
+    }
 
 
 @api_router.get("/config-status")
@@ -15100,10 +15855,55 @@ async def get_headset_reviews(request: Request):
     return await asyncio.to_thread(_headset_review_snapshot)
 
 
+async def _propagate_headset_review_edit_to_local_records(result, payload):
+    if not result.get("ok") or str((payload or {}).get("action") or "").lower() != "edit":
+        return 0
+    review_id = str(result.get("review_id") or (payload or {}).get("review_id") or "").strip()
+    source_session_id = str(result.get("source_session_id") or "").strip()
+    label = _headset_display_label(result.get("brand"), result.get("model"))
+    if not label:
+        return 0
+    updated = 0
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC")
+    for row in rows:
+        record = SQLiteCollection.decode(row["data"])
+        identities = {
+            str(record.get(key) or "").strip()
+            for key in ("history_id", "session_id", "source_session_id", "resume_source_history_id")
+            if str(record.get(key) or "").strip()
+        }
+        if not (
+            (review_id and str(record.get("headset_review_id") or "").strip() == review_id)
+            or (source_session_id and source_session_id in identities)
+        ):
+            continue
+        record["headset_brand"] = label
+        record["headset_review_id"] = review_id or record.get("headset_review_id") or ""
+        record["headset_review_status"] = "pending"
+        db.history.store.execute(
+            "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+            (SQLiteCollection.encode(record), str(record.get("timestamp_iso") or record.get("timestamp") or ""), row["id"]),
+        )
+        updated += 1
+    active = await db.sessions.find_one({"_id": "active_session"})
+    if active:
+        identities = {str(active.get(key) or "").strip() for key in ("session_id", "source_session_id", "resume_source_history_id")}
+        if (review_id and str(active.get("headset_review_id") or "").strip() == review_id) or (source_session_id and source_session_id in identities):
+            await db.sessions.update_one({"_id": "active_session"}, {"$set": {
+                "headset_brand": label,
+                "headset_review_id": review_id or active.get("headset_review_id") or "",
+                "headset_review_status": "pending",
+            }})
+            updated += 1
+    return updated
+
+
 @api_router.post("/headsets/reviews/action")
 async def post_headset_review_action(payload: dict, request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_headset_review_action, payload or {})
+    result = await asyncio.to_thread(_headset_review_action, payload or {})
+    result["local_records_updated"] = await _propagate_headset_review_edit_to_local_records(result, payload or {})
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════

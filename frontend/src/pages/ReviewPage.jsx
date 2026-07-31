@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
-import { CandidateIpReviewBlock, storeCandidateIpIntelligence } from '../components/CandidateIpIntelligence';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
@@ -706,17 +705,6 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
     await api.updateSession({ evaluatorNotesSummaryEdited: editingNotesText });
   };
 
-  const handleCandidateIpNotesChange = async (notes) => {
-    const current = session?.candidate_ip_intelligence;
-    if (!current) return;
-    const nextIpIntelligence = { ...current, trainerNotes: notes };
-    setSession({ ...session, candidate_ip_intelligence: nextIpIntelligence });
-    storeCandidateIpIntelligence(nextIpIntelligence);
-    if (!isHistoricalReview) {
-      await api.updateSession({ candidate_ip_intelligence: nextIpIntelligence }).catch(() => {});
-    }
-  };
-
   const handleClearNotes = async () => {
     const confirmed = await modal.confirmDanger(
       'Clear Final Notes',
@@ -1258,14 +1246,6 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           </>)}
         </div>
       </div>
-
-      <CandidateIpReviewBlock
-        result={s.candidate_ip_intelligence}
-        notes={s.candidate_ip_intelligence?.trainerNotes || ''}
-        onNotesChange={handleCandidateIpNotesChange}
-        readOnly={isHistoricalReview}
-        showTrainerNotes
-      />
 
       <div style={{ marginTop: 32 }}>
         {summaryStatusText && (

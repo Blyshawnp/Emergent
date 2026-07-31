@@ -42,11 +42,11 @@
 | VideoKey | Opening | Main demonstration | Safety pause | Closing |
 |---|---|---|---|---|
 | `mts-quick-start` | Purpose and Home | Lookup, Basics, Calls, Transfers, Review, History, Help | Form Filled is not submitted | Recap full path |
-| `mts-candidate-lookup-basics` | Verify before scoring | Typed name, eligibility, final attempt, headset, VPN, Browser Checklist, Smart Resume recognition | Manual verification and blocked candidates | Readiness checklist |
+| `mts-candidate-lookup-basics` | Verify before scoring | Typed name, eligibility, final attempt, research confirmation, explicit headset answers, VPN answers and three manual Copy Link sites, Browser Checklist, Smart Resume recognition | Research and lookup sites are reference tools, not automatic decisions | Readiness checklist |
 | `mts-mock-calls` | Score what happened | Setup, Pass/Fail, coaching, fail reasons, Other, routing | NC/NS vs Same Day Drop vs Tech Issue | Accurate record |
-| `mts-supervisor-transfers-smart-resume` | Complete remaining work | Queue text, normal transfers, Smart Resume, Supervisor Transfer Only, resumed NC/NS, final attempt | Prefer Smart Resume when data exists | Correct resume path |
-| `mts-newbie-shifts-rescheduling` | Follow-up without penalty errors | Initial schedule, Calendar, requester/reason, exact 24-hour rule, Discord, statuses | Show boundary examples | Pending is tentative |
-| `mts-review-form-fill-history` | Final checkpoint | Results, summaries, Incomplete Reason, Next Actions, Fill Form, partial success, History/actions | Never refill after status warning | Verify then finish |
+| `mts-supervisor-transfers-smart-resume` | Complete remaining work | Queue text, filtered Resume Supervisor Transfer, Smart Resume, Supervisor Transfer Only, identity reuse, resumed NC/NS, final attempt | Exclude scheduling derivatives and completed transfers | Correct resume path |
+| `mts-newbie-shifts-rescheduling` | Follow-up without penalty errors | Initial schedule, Calendar, requester/reason, exact 24-hour rule, Discord, statuses, one linked reschedule workflow | Show boundary and no-duplicate examples | Pending is tentative |
+| `mts-review-form-fill-history` | Final checkpoint | Results, summaries, Fill Form, partial success, History/actions, Correct Candidate Information | Pending correction preserves current values | Verify then finish |
 | `mts-discord-help-shortcuts` | Find content quickly | Search, categories, favorites, screenshots, copy, shortcuts, palette, Help videos | Shortcuts can be customized | Written Help remains available |
 
 ## Exact narration

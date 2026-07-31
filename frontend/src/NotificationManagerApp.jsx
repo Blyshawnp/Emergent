@@ -31,6 +31,7 @@ import { TutorialVideoLibrary } from './components/TutorialVideoPlayer';
 import { normalizeTutorialVideos } from './utils/tutorialVideos';
 import { createSamSnapshotCoordinator } from './utils/samSnapshotCoordinator';
 import { newbieShiftStatusMeta } from './utils/certificationWorkflow';
+import { buildHeadsetDisplayLabel, getCandidateHeadset } from './utils/headsetDisplay';
 import { playSound, setSoundSettings } from './utils/sound';
 import {
   NOTIFICATION_CSV_COLUMNS,
@@ -1014,16 +1015,22 @@ function newbieApprovalMeta(status, requestType) {
   return workflowApprovalMeta(isReschedule ? 'Newbie Shift Reschedule' : 'Newbie Shift', status);
 }
 
-function candidateCertificationMeta(row = {}) {
-  const raw = String(row.latest_status || row.status || '').trim().toUpperCase();
+export function candidateCertificationMeta(row = {}) {
+  const override = sheetTruthy(row.readiness_override_applied) ? row.readiness_override_result : '';
+  const raw = String(override || row.authoritative_status || row.latest_status || row.status || '').trim().toUpperCase();
   const callResults = [row.call_1_result, row.call_2_result, row.call_3_result]
     .map((value) => String(value || '').trim().toLowerCase());
+  const supResults = [row.sup_transfer_1_result, row.sup_transfer_2_result]
+    .map((value) => String(value || '').trim().toLowerCase());
+  const failedRequiredSup = supResults.filter((value) => value === 'fail' || value === 'failed').length >= 2;
+  if (override && ['PASS', 'PASSED'].includes(raw)) return { label: 'Pass', tone: 'approved', Icon: CheckCircle };
   if (raw === 'RESUMED-PASS') return { label: 'Resumed – Pass', tone: 'approved', Icon: CheckCircle };
-  if (['PASS', 'PASSED'].includes(raw) || callResults.filter((value) => value === 'pass').length >= 2) {
-    return { label: 'Pass', tone: 'approved', Icon: CheckCircle };
-  }
   if (raw === 'FAIL-FINAL ATTEMPT') return { label: 'Fail – Final Attempt', tone: 'denied', Icon: XCircle };
   if (['FAIL', 'FAILED'].includes(raw)) return { label: 'Fail', tone: 'denied', Icon: XCircle };
+  if (sheetTruthy(row.final_attempt) && failedRequiredSup) return { label: 'Fail – Final Attempt', tone: 'denied', Icon: XCircle };
+  if (['PASS', 'PASSED'].includes(raw) || (!raw && !failedRequiredSup && callResults.filter((value) => value === 'pass').length >= 2)) {
+    return { label: 'Pass', tone: 'approved', Icon: CheckCircle };
+  }
   if (raw === 'WITHDREW FROM CERTIFICATION') return { label: 'Withdrawn', tone: 'denied', Icon: XCircle };
   if (raw === 'INCOMPLETE' || row.pending_id) return { label: 'Incomplete', tone: 'pending', Icon: Clock };
   if (raw === 'ARCHIVED') return { label: 'Archived', tone: 'neutral', Icon: Clock };
@@ -1067,9 +1074,79 @@ export function getVisiblePendingRequests(requests = [], filter = 'pending') {
   }).sort((left, right) => String(right.admin_decision_at || right.created_at || '').localeCompare(String(left.admin_decision_at || left.created_at || '')));
 }
 
+export function applyPendingRequestDecision(data = {}, payload = {}, result = {}) {
+  const requestId = String(payload.request_id || '');
+  const nextStatus = payload.decision === 'approved' ? 'approved' : 'denied';
+  const categoryKeys = {
+    newbie_initial: 'newbieInitial',
+    newbie_reschedule: 'reschedules',
+    candidate_deletion: 'candidateDeletions',
+    candidate_correction: 'candidateCorrections',
+  };
+  let changedCategory = '';
+  const requests = (Array.isArray(data.requests) ? data.requests : []).map((request) => {
+    if (String(request.request_id || '') !== requestId) return request;
+    changedCategory = request.category || payload.category || '';
+    return {
+      ...request,
+      raw_status: nextStatus,
+      status: nextStatus === 'approved' ? 'Approved' : 'Denied',
+      admin_decision_at: result.decision_at || new Date().toISOString(),
+      admin_decision_by: payload.actor || request.admin_decision_by || 'SAM administrator',
+      denial_reason: nextStatus === 'denied' ? payload.denial_reason || '' : '',
+      ...(nextStatus === 'approved' && ['newbie_initial', 'newbie_reschedule'].includes(request.category)
+        ? { newbie_shift_number: String(payload.newbie_shift_number || '').trim() }
+        : {}),
+    };
+  });
+  const counts = { ...(data.counts || {}) };
+  const decrement = (key) => {
+    if (Number.isFinite(Number(counts[key]))) counts[key] = Math.max(0, Number(counts[key]) - 1);
+  };
+  decrement(categoryKeys[changedCategory]);
+  ['workflowRequests', 'actionableTotal', 'unresolved'].forEach(decrement);
+  return { ...data, requests, counts };
+}
+
+export function applyCandidateInformationUpdate(data = {}, payload = {}) {
+  const sessionId = String(payload.session_id || payload.latest_session_id || '').trim();
+  if (!sessionId) return data;
+  const changes = Array.isArray(payload.changes) ? payload.changes : [];
+  const values = Object.fromEntries(changes.map((change) => [change.field || change.field_key, change.requested_value]));
+  const updateRows = (rows) => (Array.isArray(rows) ? rows.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    let next = row;
+    if (String(row.session_id || row.source_session_id || '').trim() === sessionId) {
+      next = { ...row };
+      if (values.candidate_name) {
+        next.candidate_name = values.candidate_name;
+        if ('candidate' in next) next.candidate = values.candidate_name;
+      }
+      const headset = getCandidateHeadset(row);
+      if (headset.separate && (values.headset_brand || values.headset_model)) {
+        const brand = values.headset_brand || headset.brand;
+        const model = values.headset_model || headset.model;
+        next.headset_brand = brand;
+        next.headset_model = model;
+        next.headset_label = buildHeadsetDisplayLabel(brand, model);
+      } else if (values.headset_model) {
+        next.headset_brand = values.headset_model;
+        next.headset_label = values.headset_model;
+      }
+    }
+    if (Array.isArray(row.attempts)) next = { ...next, attempts: updateRows(row.attempts) };
+    return next;
+  }) : rows);
+  const views = Object.fromEntries(Object.entries(data.views || {}).map(([key, rows]) => [key, updateRows(rows)]));
+  return { ...data, candidates: updateRows(data.candidates), views };
+}
+
 export function buildCandidateInformationChanges(current = {}, requested = {}) {
   const fields = [
     { field_key: 'candidate_name', label: 'Candidate Name' },
+    ...(Object.prototype.hasOwnProperty.call(current, 'headset_brand') || Object.prototype.hasOwnProperty.call(requested, 'headset_brand')
+      ? [{ field_key: 'headset_brand', label: 'Headset Brand' }]
+      : []),
     { field_key: 'headset_model', label: 'Headset Model' },
   ];
   return fields.flatMap(({ field_key, label }) => {
@@ -1111,6 +1188,7 @@ export function getHeadsetReviewDisplayTitle(item = {}) {
 
 function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh, onDecision, onOpenHeadsets, actor }) {
   const [approvalRequest, setApprovalRequest] = useState(null);
+  const [approvalShiftNumber, setApprovalShiftNumber] = useState('');
   const [denialRequest, setDenialRequest] = useState(null);
   const [denialReason, setDenialReason] = useState('');
   const [denialError, setDenialError] = useState('');
@@ -1130,6 +1208,9 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
         decision: 'approved',
         expected_status: request.raw_status || 'pending',
         actor,
+        ...(['newbie_initial', 'newbie_reschedule'].includes(request.category)
+          ? { newbie_shift_number: approvalShiftNumber.trim() }
+          : {}),
       });
       if (!result?.ok) setDecisionError(result?.error || 'The request decision could not be saved.');
     } finally {
@@ -1139,7 +1220,8 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
   };
 
   const approve = async (request) => {
-    if (request.category === 'candidate_correction') {
+    if (['candidate_correction', 'newbie_initial', 'newbie_reschedule'].includes(request.category)) {
+      setApprovalShiftNumber(String(request.newbie_shift_number || '').trim());
       setApprovalRequest(request);
       return;
     }
@@ -1271,6 +1353,7 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
                   </> : request.category === 'candidate_deletion' ? <>
                     <div><strong>Certification Result</strong><span><StatusChip meta={candidateCertificationMeta({ latest_status: request.session_status })} /></span></div>
                     <div><strong>Final Attempt</strong><span>{request.final_attempt ? 'Yes' : 'No'}</span></div>
+                    {request.newbie_shift_number ? <div><strong>Newbie Shift Number</strong><span>Shift #{request.newbie_shift_number}</span></div> : null}
                     <div><strong>Form Status</strong><span><StatusChip meta={formFillMeta(request.form_fill_status)} /></span></div>
                     <div><strong>Requested By</strong><span>{request.tester ? `${request.tester} / Tester` : 'Tester'}</span></div>
                     <div><strong>Deletion Scope</strong><span>{request.deletion_scope || 'Session History and Candidate Tracking'}</span></div>
@@ -1330,16 +1413,29 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
       {approvalRequest ? (
         <div className="nm-modal-backdrop">
           <section className="nm-modal-card" role="dialog" aria-modal="true" aria-labelledby="approve-correction-title">
-            <h3 id="approve-correction-title">Approve Candidate Information Correction?</h3>
-            <p className="nm-muted">Confirm the exact authoritative changes. Certification results and attempt state will not change.</p>
-            <div className="nm-correction-review-list">
-              {(approvalRequest.changes || []).map((change) => (
-                <div key={change.field}><strong>{change.label}</strong><span>{change.previous_value || 'Not recorded'} → {change.requested_value}</span></div>
-              ))}
-            </div>
+            <h3 id="approve-correction-title">{approvalRequest.category === 'candidate_correction' ? 'Approve Candidate Information Correction?' : `Approve ${approvalRequest.category === 'newbie_reschedule' ? 'Newbie Shift Reschedule' : 'Newbie Shift'}?`}</h3>
+            {approvalRequest.category === 'candidate_correction' ? <>
+              <p className="nm-muted">Confirm the exact authoritative changes. Certification results and attempt state will not change.</p>
+              <div className="nm-correction-review-list">
+                {(approvalRequest.changes || []).map((change) => (
+                  <div key={change.field}><strong>{change.label}</strong><span>{change.previous_value || 'Not recorded'} → {change.requested_value}</span></div>
+                ))}
+              </div>
+            </> : <label className="nm-field nm-approval-shift-number">
+              <span>Newbie Shift Number</span>
+              <input
+                type="text"
+                maxLength={64}
+                value={approvalShiftNumber}
+                onChange={(event) => setApprovalShiftNumber(event.target.value)}
+                placeholder="Optional"
+                data-testid="newbie-shift-number"
+              />
+              <small>Optional. Add the assigned Newbie Shift number so it appears in the shared candidate record and tester History.</small>
+            </label>}
             <div className="nm-modal-actions">
               <button type="button" className="nm-btn nm-btn-secondary" disabled={Boolean(submittingRequestId)} onClick={() => setApprovalRequest(null)}>Cancel</button>
-              <button type="button" className="nm-btn nm-btn-primary" disabled={Boolean(submittingRequestId)} onClick={() => submitApproval(approvalRequest)}>{submittingRequestId ? 'Approving...' : 'Approve Correction'}</button>
+              <button type="button" className="nm-btn nm-btn-primary" disabled={Boolean(submittingRequestId)} onClick={() => submitApproval(approvalRequest)}>{submittingRequestId ? 'Approving...' : approvalRequest.category === 'candidate_correction' ? 'Approve Correction' : 'Approve'}</button>
             </div>
           </section>
         </div>
@@ -1467,7 +1563,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
 
   const serializeCandidatesToCsv = (rowList) => {
     if (!rowList.length) return '';
-    const headers = ['Candidate Name', 'Status', 'Attempts', 'Tester', 'Date', 'Result', 'Notes'];
+    const headers = ['Candidate Name', 'Status', 'Attempts', 'Tester', 'Date', 'Result', 'Newbie Shift Number', 'Notes'];
     const escapeCsv = (str) => {
       if (str === null || str === undefined) return '';
       const text = String(str).replace(/"/g, '""');
@@ -1483,6 +1579,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
         escapeCsv(row.tester_name || meta.attempts[0]?.tester_name || ''),
         escapeCsv(formatSamTimestamp(row.updated_at || meta.attempts[0]?.completed_at || '')),
         escapeCsv(meta.results),
+        escapeCsv(row.newbie_shift_number || ''),
         escapeCsv(meta.notes)
       ].join(','));
     }
@@ -1546,7 +1643,11 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     const confirmed = await onConfirm(`Grant an additional attempt for ${row.candidate_name || 'this candidate'}?`, { confirmLabel: 'Grant' });
     if (!confirmed) return;
     const reason = '';
-    await onAction({ action: 'grant_extra_attempt', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id, reason });
+    await onAction({
+      action: 'grant_extra_attempt', candidate_name: row.candidate_name,
+      session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id, reason, actor,
+      expected_extra_attempts_granted: Number(row.extra_attempts_granted || (sheetTruthy(row.extra_attempt_granted) ? 1 : 0)),
+    });
   };
 
   const handleArchive = async (row) => {
@@ -1644,8 +1745,17 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   };
 
   const openCandidateInformationEdit = (row) => {
+    const headset = getCandidateHeadset(row);
     setCandidateActionMenu(null);
-    setEditCandidateDraft({ row, candidateName: row.candidate_name || '', headsetModel: row.headset_brand || '', reason: '', error: '', submitting: false });
+    setEditCandidateDraft({
+      row,
+      candidateName: row.candidate_name || '',
+      headsetBrand: headset.brand,
+      headsetModel: headset.model,
+      headsetCombined: headset.label,
+      separateHeadsetFields: headset.separate,
+      reason: '', error: '', submitting: false,
+    });
   };
 
   const submitCandidateInformationEdit = async () => {
@@ -1655,9 +1765,14 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
       setEditCandidateDraft((draft) => ({ ...draft, error: 'Enter a reason for this correction.' }));
       return;
     }
+    const currentHeadset = getCandidateHeadset(current);
     const changes = buildCandidateInformationChanges(
-      { candidate_name: current.candidate_name, headset_model: current.headset_brand },
-      { candidate_name: editCandidateDraft.candidateName, headset_model: editCandidateDraft.headsetModel },
+      currentHeadset.separate
+        ? { candidate_name: current.candidate_name, headset_brand: currentHeadset.brand, headset_model: currentHeadset.model }
+        : { candidate_name: current.candidate_name, headset_model: currentHeadset.label },
+      currentHeadset.separate
+        ? { candidate_name: editCandidateDraft.candidateName, headset_brand: editCandidateDraft.headsetBrand, headset_model: editCandidateDraft.headsetModel }
+        : { candidate_name: editCandidateDraft.candidateName, headset_model: editCandidateDraft.headsetCombined },
     );
     if (!changes.length || changes.some((change) => !change.requested_value)) {
       setEditCandidateDraft((draft) => ({ ...draft, error: !changes.length ? 'Change at least one value.' : 'Corrected values cannot be empty.' }));
@@ -1710,19 +1825,19 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
       await action();
     };
     const statusActions = [];
-    if (isIncomplete || isPendingTransfer || isWithdrawn) {
+    if (!isArchived) {
       statusActions.push(
         { label: 'Mark Passed', kind: 'success', onClick: () => handleManualCorrection(row, 'mark_passed', 'Mark Passed') },
         { label: 'Mark Failed', kind: 'danger', onClick: () => handleManualCorrection(row, 'mark_failed', 'Mark Failed') },
       );
+      if (isIncomplete && !isPendingTransfer) {
+        statusActions.push({ label: 'Pending Supervisor Transfer', kind: 'action', onClick: () => handleManualCorrection(row, 'move_pending_sup_transfer', 'Move to Pending Supervisor Transfer') });
+      }
+      if (isPendingTransfer) {
+        statusActions.push({ label: 'Mark Incomplete', kind: 'action', onClick: () => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete') });
+      }
+      statusActions.push({ label: 'Grant Extra Attempt', kind: 'info', onClick: () => handleExtraAttempt(row) });
     }
-    if (isIncomplete && !isPendingTransfer) {
-      statusActions.push({ label: 'Move to Pending Sup', kind: 'action', onClick: () => handleManualCorrection(row, 'move_pending_sup_transfer', 'Move to Pending Sup Transfer') });
-    }
-    if (isPendingTransfer) {
-      statusActions.push({ label: 'Mark Incomplete', kind: 'action', onClick: () => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete') });
-    }
-    statusActions.push({ label: 'Extra Attempt', kind: 'info', onClick: () => handleExtraAttempt(row) });
 
     const moreActions = [];
     if (row.pending_id) {
@@ -1731,10 +1846,14 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     if (!isArchived) {
       moreActions.push({ label: 'Archive', kind: 'secondary', onClick: () => handleArchive(row) });
     }
-    moreActions.unshift({ label: 'Edit Candidate Information', kind: 'primary', onClick: () => openCandidateInformationEdit(row) });
-    moreActions.push(isWithdrawn
-      ? { label: 'Restore', kind: 'primary', onClick: () => handleRestore(row) }
-      : { label: 'Withdraw', kind: 'danger', onClick: () => handleWithdraw(row) });
+    if (isArchived) {
+      moreActions.push({ label: 'Restore', kind: 'primary', onClick: () => onAction({ action: 'restore_active', candidate_name: row.candidate_name, session_id: row.session_id || row.latest_session_id, actor }) });
+    } else {
+      moreActions.unshift({ label: 'Edit Candidate Information', kind: 'primary', onClick: () => openCandidateInformationEdit(row) });
+      moreActions.push(isWithdrawn
+        ? { label: 'Restore', kind: 'primary', onClick: () => handleRestore(row) }
+        : { label: 'Withdraw', kind: 'danger', onClick: () => handleWithdraw(row) });
+    }
     moreActions.push({ label: 'Delete', kind: 'danger', onClick: () => handleDeleteRow(row) });
 
     const renderMenu = (type, label, actions) => {
@@ -1820,7 +1939,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
         </section>
         <section className="nm-detail-card">
           <strong>Basics</strong>
-          <div>Headset: {row.headset_brand || 'N/A'}</div>
+          <div>Headset: {getCandidateHeadset(row).label || 'N/A'}</div>
           <div>USB: {row.headset_usb === true ? 'Yes' : row.headset_usb === false ? 'No' : 'N/A'}</div>
           <div>Noise cancelling: {row.noise_cancel === true ? 'Yes' : row.noise_cancel === false ? 'No' : 'N/A'}</div>
           <div>VPN: {row.vpn_on === true ? 'Yes' : row.vpn_on === false ? 'No' : 'N/A'}</div>
@@ -1838,6 +1957,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           </div>
           {row.form_filled_at ? <div>Form filled: {formatSamTimestamp(row.form_filled_at)}</div> : null}
           {row.newbie_shift_scheduled_at ? <div>Newbie Shift: {formatSamTimestamp(row.newbie_shift_scheduled_at)} {row.newbie_shift_timezone || ''}</div> : null}
+          {row.newbie_shift_number ? <div>Newbie Shift Number: Shift #{row.newbie_shift_number}</div> : null}
           {row.newbie_shift_original_scheduled_at ? <div>Original schedule: {formatSamTimestamp(row.newbie_shift_original_scheduled_at)}</div> : null}
           {row.newbie_shift_rescheduled_at ? <div>Tentative reschedule: {formatSamTimestamp(row.newbie_shift_rescheduled_at)}</div> : null}
           {row.newbie_shift_denial_reason ? <div>Denial reason: {row.newbie_shift_denial_reason}</div> : null}
@@ -1889,10 +2009,17 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   const detailEntry = visibleEntries.find((entry) => entry.key === detailKey) || null;
   const detailRow = detailEntry?.row || null;
   const detailMeta = detailRow ? computeRowMeta(detailRow) : null;
-  const editCandidateChanges = editCandidateDraft ? buildCandidateInformationChanges(
-    { candidate_name: editCandidateDraft.row.candidate_name, headset_model: editCandidateDraft.row.headset_brand },
-    { candidate_name: editCandidateDraft.candidateName, headset_model: editCandidateDraft.headsetModel },
-  ) : [];
+  const editCandidateChanges = editCandidateDraft ? (() => {
+    const headset = getCandidateHeadset(editCandidateDraft.row);
+    return buildCandidateInformationChanges(
+      headset.separate
+        ? { candidate_name: editCandidateDraft.row.candidate_name, headset_brand: headset.brand, headset_model: headset.model }
+        : { candidate_name: editCandidateDraft.row.candidate_name, headset_model: headset.label },
+      headset.separate
+        ? { candidate_name: editCandidateDraft.candidateName, headset_brand: editCandidateDraft.headsetBrand, headset_model: editCandidateDraft.headsetModel }
+        : { candidate_name: editCandidateDraft.candidateName, headset_model: editCandidateDraft.headsetCombined },
+    );
+  })() : [];
 
   return (
     <section className="nm-panel nm-candidate-panel" id="sam-candidate-tracking" data-sam-tour="candidate-tracking">
@@ -2025,6 +2152,7 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
                       <div className="nm-row-chip-list">
                         <StatusChip meta={formMeta} title={`Form fill status: ${formMeta.label}`} />
                         {hasNewbieRequest ? <StatusChip meta={approvalMeta} title={`Newbie Shift approval status: ${approvalMeta.label}`} /> : null}
+                        {row.newbie_shift_number ? <span className="nm-meta">Shift #{row.newbie_shift_number}</span> : null}
                         {supervisorTransferMeta ? <StatusChip meta={supervisorTransferMeta} /> : null}
                         {deletionMeta ? <StatusChip meta={deletionMeta} /> : null}
                       </div>
@@ -2101,16 +2229,23 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
           <div className="nm-modal-backdrop">
             <section className="nm-modal-card nm-edit-candidate-modal" role="dialog" aria-modal="true" aria-labelledby="edit-candidate-information-title">
               <h3 id="edit-candidate-information-title">Edit Candidate Information</h3>
-              <p className="nm-muted">Only candidate name and headset model can be corrected. Attempts, results, and workflow decisions are unchanged.</p>
+              <p className="nm-muted">Only candidate name and the headset recorded for this session can be corrected. Attempts, results, and workflow decisions are unchanged.</p>
               <label><span>Candidate name</span><small>Previous: {editCandidateDraft.row.candidate_name || 'Not recorded'}</small><input value={editCandidateDraft.candidateName} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, candidateName: event.target.value, error: '' }))} /></label>
-              <label><span>Headset model</span><small>Previous: {editCandidateDraft.row.headset_brand || 'Not recorded'}</small><input value={editCandidateDraft.headsetModel} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, headsetModel: event.target.value, error: '' }))} /></label>
+              {editCandidateDraft.separateHeadsetFields ? (
+                <>
+                  <label><span>Headset brand</span><small>Previous: {getCandidateHeadset(editCandidateDraft.row).brand || 'Not recorded'}</small><input value={editCandidateDraft.headsetBrand} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, headsetBrand: event.target.value, error: '' }))} /></label>
+                  <label><span>Headset model</span><small>Previous: {getCandidateHeadset(editCandidateDraft.row).model || 'Not recorded'}</small><input value={editCandidateDraft.headsetModel} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, headsetModel: event.target.value, error: '' }))} /></label>
+                </>
+              ) : (
+                <label><span>Headset</span><small>Previous: {getCandidateHeadset(editCandidateDraft.row).label || 'Not recorded'}</small><input value={editCandidateDraft.headsetCombined} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, headsetCombined: event.target.value, error: '' }))} /></label>
+              )}
               <label><span>Correction reason</span><textarea className="nm-correction-reason-input" rows={4} required aria-invalid={Boolean(editCandidateDraft.error && !editCandidateDraft.reason.trim())} value={editCandidateDraft.reason} onChange={(event) => setEditCandidateDraft((draft) => ({ ...draft, reason: event.target.value, error: '' }))} placeholder="Explain why this correction is needed, such as a misspelled candidate name or headset model." /></label>
               <div className="nm-correction-review-list" aria-live="polite">
                 <strong>Changed fields</strong>
                 {editCandidateChanges.map((change) => (
                   <div key={change.field_key}><strong>{change.label}</strong><span>{change.previous_value || 'Not recorded'} → {change.requested_value}</span></div>
                 ))}
-                {!editCandidateChanges.length ? <p className="nm-correction-empty">Change the candidate name or headset model to enable Save Correction.</p> : null}
+                {!editCandidateChanges.length ? <p className="nm-correction-empty">Change the candidate name or headset value to enable Save Correction.</p> : null}
               </div>
               {editCandidateDraft.error ? <div className="nm-form-error" role="alert">{editCandidateDraft.error}</div> : null}
               <div className="nm-modal-actions">
@@ -2486,12 +2621,85 @@ function formatHeadsetSubmittedDate(value) {
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
 }
 
+function normalizedHeadsetValue(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export function headsetRowIdentity(item, kind = '') {
+  if (item?.catalog_identity) return `catalog:${item.catalog_identity}`;
+  if (item?.review_id) return `review:${item.review_id}`;
+  const rowNumber = Number(item?.catalog_row_number || 0);
+  const parts = [kind, rowNumber, item?.brand, item?.model].map(normalizedHeadsetValue);
+  return `headset:${parts.join(':')}`;
+}
+
+function canonicalHeadsetReviewData(value = {}) {
+  const canonicalRows = (rows, kind) => (rows || []).map((item) => ({
+    identity: headsetRowIdentity(item, kind),
+    brand: normalizedHeadsetValue(item?.brand),
+    model: normalizedHeadsetValue(item?.model),
+    status: normalizedHeadsetValue(item?.status),
+    note: String(item?.note || '').trim(),
+    source_session_id: String(item?.source_session_id || '').trim(),
+    submitted_date: String(item?.submitted_date || '').trim(),
+    updated_at: String(item?.updated_at || '').trim(),
+  })).sort((left, right) => left.identity.localeCompare(right.identity));
+  return JSON.stringify({
+    ok: value?.ok !== false,
+    error: String(value?.error || ''),
+    pending: canonicalRows(value?.pending, 'pending'),
+    approved: canonicalRows(value?.approved, 'approved'),
+    denied: canonicalRows(value?.denied, 'denied'),
+  });
+}
+
+export function preserveEqualHeadsetReviewState(current, incoming) {
+  const next = { ...current, ...incoming };
+  return canonicalHeadsetReviewData(current) === canonicalHeadsetReviewData(next) ? current : next;
+}
+
+export function applyHeadsetDecisionToState(current, payload, result = {}) {
+  const action = String(payload?.action || result?.operation || '').toLowerCase();
+  if (!result?.ok || action === 'review_later') return current;
+  const targetIdentity = payload?.catalog_identity
+    ? `catalog:${payload.catalog_identity}`
+    : payload?.review_id
+      ? `review:${payload.review_id}`
+      : headsetRowIdentity(payload, '');
+  const matches = (item, kind) => headsetRowIdentity(item, kind) === targetIdentity
+    || (payload?.catalog_identity && item?.catalog_identity === payload.catalog_identity)
+    || (payload?.review_id && item?.review_id === payload.review_id);
+  const removeTarget = (rows, kind) => (rows || []).filter((item) => !matches(item, kind));
+  const pending = removeTarget(current?.pending, 'pending');
+  const approved = removeTarget(current?.approved, 'approved');
+  const denied = removeTarget(current?.denied, 'denied');
+  if (action === 'delete' || action === 'archive') return { ...current, pending, approved, denied };
+
+  const sourceRows = [...(current?.pending || []), ...(current?.approved || []), ...(current?.denied || [])];
+  const source = sourceRows.find((item) => matches(item, item?.status || '')) || payload;
+  const updated = {
+    ...source,
+    brand: result?.brand || payload?.brand || source?.brand || '',
+    model: result?.model || payload?.model || source?.model || '',
+    note: payload?.note || result?.note || source?.note || '',
+    status: action === 'approve' ? 'approved' : action === 'deny' ? 'denied' : source?.status,
+    catalog_identity: result?.new_catalog_identity || source?.catalog_identity || payload?.catalog_identity || '',
+    catalog_row_number: result?.catalog_row_number || source?.catalog_row_number || payload?.catalog_row_number || 0,
+  };
+  if (action === 'edit') return { ...current, pending: [...pending, { ...updated, status: 'pending' }], approved, denied };
+  if (action === 'approve') return { ...current, pending, approved: [...approved, updated], denied };
+  if (action === 'deny') return { ...current, pending, approved, denied: [...denied, updated] };
+  return current;
+}
+
 export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus, onConfirm }) {
   const [deferred, setDeferred] = useState({});
   const [denial, setDenial] = useState(null);
+  const [editReview, setEditReview] = useState(null);
   const [lookupReview, setLookupReview] = useState(null);
   const [activeTab, setActiveTab] = useState('pending');
-  const [pendingDecisionKey, setPendingDecisionKey] = useState('');
+  const [pendingDecisionKeys, setPendingDecisionKeys] = useState({});
+  const pendingDecisionKeysRef = useRef(new Set());
   const [decisionError, setDecisionError] = useState('');
   const pending = (data?.pending || []).filter((item) => !deferred[`${item.brand}::${item.model}`]);
 
@@ -2512,12 +2720,18 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
     review_id: item.review_id || '',
     submitted_date: item.submitted_date || '',
     tester: item.tester || '',
+    ...(item.catalog_identity ? {
+      catalog_identity: item.catalog_identity,
+      catalog_row_number: item.catalog_row_number || 0,
+    } : {}),
     ...extra,
   });
 
   const decide = async (item, action, extra = {}) => {
-    const decisionKey = item.review_id || `${item.brand}::${item.model}`;
-    setPendingDecisionKey(decisionKey);
+    const decisionKey = headsetRowIdentity(item, item.status || 'pending');
+    if (pendingDecisionKeysRef.current.has(decisionKey)) return { ok: false, busy: true };
+    pendingDecisionKeysRef.current.add(decisionKey);
+    setPendingDecisionKeys((current) => ({ ...current, [decisionKey]: action }));
     setDecisionError('');
     try {
       const result = await onDecision(buildDecisionPayload(item, action, extra));
@@ -2534,8 +2748,32 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
       setLookupReview(null);
       return result;
     } finally {
-      setPendingDecisionKey('');
+      pendingDecisionKeysRef.current.delete(decisionKey);
+      setPendingDecisionKeys((current) => {
+        const next = { ...current };
+        delete next[decisionKey];
+        return next;
+      });
     }
+  };
+
+  const pendingDecisionAction = (item) => pendingDecisionKeys[headsetRowIdentity(item, item.status || 'pending')] || '';
+  const isDecisionPending = (item) => Boolean(pendingDecisionAction(item));
+
+  const saveEdit = async () => {
+    if (!editReview) return;
+    const brand = String(editReview.brand || '').trim().replace(/\s+/g, ' ');
+    const model = String(editReview.model || '').trim().replace(/\s+/g, ' ');
+    if (!brand && !model) {
+      setDecisionError('Enter a headset brand or model.');
+      return;
+    }
+    const result = await decide(editReview.item, 'edit', {
+      brand,
+      model,
+      note: String(editReview.note || '').trim(),
+    });
+    if (result?.ok) setEditReview(null);
   };
 
   const reviewLater = async (item) => {
@@ -2570,31 +2808,31 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
       <table className="nm-table nm-headset-table">
         <thead><tr><th>Brand</th><th>Model</th>{kind === 'pending' ? <><th>Submitted</th><th>Tester</th></> : <th>Status</th>}<th className="nm-headset-note-column">Note</th><th className="nm-actions-column">Actions</th></tr></thead>
         <tbody>
-          {rows.map((item, index) => (
-            <tr key={`${kind}-${item.brand}-${item.model}-${index}`}>
+          {rows.map((item) => (
+            <tr key={headsetRowIdentity(item, kind)} data-headset-row-id={headsetRowIdentity(item, kind)}>
               <td>{item.brand}</td><td>{item.model}</td>
               {kind === 'pending' ? <><td>{formatHeadsetSubmittedDate(item.submitted_date)}</td><td>{item.tester || 'N/A'}</td></> : <td><strong>{item.status || kind}</strong></td>}
               <td className="nm-headset-note-cell">{item.note || 'N/A'}</td>
               {kind === 'pending' ? (
                 <td className="nm-actions-column"><div className="nm-row-actions">
-                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Research Headset</button>
-                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
-                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
-                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
-                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
-                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => lookUp(item)}>Research Headset</button>
+                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => decide(item, 'approve')}>{pendingDecisionAction(item) === 'approve' ? 'Saving...' : 'Approve'}</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={isDecisionPending(item)} onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => reviewLater(item)}>Review Later</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => archiveReview(item)}>Archive</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={isDecisionPending(item)} onClick={() => deleteReview(item)}>Delete</button>
                 </div></td>
               ) : kind === 'approved' ? (
                 <td className="nm-actions-column"><div className="nm-row-actions">
-                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button>
-                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
-                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={isDecisionPending(item)} onClick={() => setDenial({ item, reason: '', note: '' })}>Change to Denied</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => archiveReview(item)}>Archive</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={isDecisionPending(item)} onClick={() => deleteReview(item)}>{pendingDecisionAction(item) === 'delete' ? 'Deleting...' : 'Delete'}</button>
                 </div></td>
               ) : (
                 <td className="nm-actions-column"><div className="nm-row-actions">
-                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" onClick={() => decide(item, 'approve')}>Approve</button>
-                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
-                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
+                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => decide(item, 'approve')}>{pendingDecisionAction(item) === 'approve' ? 'Saving...' : 'Approve'}</button>
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => archiveReview(item)}>Archive</button>
+                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={isDecisionPending(item)} onClick={() => deleteReview(item)}>{pendingDecisionAction(item) === 'delete' ? 'Deleting...' : 'Delete'}</button>
                 </div></td>
               )}
             </tr>
@@ -2614,8 +2852,8 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
       </div>
     ) : (
       <div className="nm-ticket-queue">
-        {rows.map((item, index) => (
-          <article className="nm-ticket" key={item.review_id || `pending-${item.brand}-${item.model}-${index}`}>
+        {rows.map((item) => (
+          <article className="nm-ticket" key={headsetRowIdentity(item, 'pending')}>
             <div className="nm-ticket-head">
               <div className="nm-ticket-id">
                 <div className="nm-ticket-title">{getHeadsetReviewDisplayTitle(item)}</div>
@@ -2633,8 +2871,9 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
             </dl>
             <div className="nm-ticket-actions nm-row-actions">
               <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => lookUp(item)}>Look Up</button>
-              <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={Boolean(pendingDecisionKey)} onClick={() => decide(item, 'approve')}>{pendingDecisionKey === (item.review_id || `${item.brand}::${item.model}`) ? 'Saving...' : 'Approve'}</button>
-              <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={Boolean(pendingDecisionKey)} onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
+              <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => setEditReview({ item, brand: item.brand || '', model: item.model || '', note: item.note || '' })}>Edit Headset</button>
+              <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={isDecisionPending(item)} onClick={() => decide(item, 'approve')}>{isDecisionPending(item) ? 'Saving...' : 'Approve'}</button>
+              <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={isDecisionPending(item)} onClick={() => setDenial({ item, reason: '', note: '' })}>Deny</button>
               <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => reviewLater(item)}>Review Later</button>
               <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => archiveReview(item)}>Archive</button>
               <button type="button" className="nm-btn nm-btn-danger nm-btn-table" onClick={() => deleteReview(item)}>Delete</button>
@@ -2672,10 +2911,28 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
             <div className="modal-body">
               <p>Use the search results to decide whether <strong>{lookupReview.brand} {lookupReview.model}</strong> meets both headset requirements.</p>
               <div className="nm-row-actions" style={{ marginTop: 18 }}>
-                <button type="button" className="nm-btn nm-btn-primary" disabled={Boolean(pendingDecisionKey)} onClick={() => decide(lookupReview, 'approve')}>{pendingDecisionKey ? 'Saving...' : 'Approve Headset'}</button>
+                <button type="button" className="nm-btn nm-btn-primary" disabled={isDecisionPending(lookupReview)} onClick={() => decide(lookupReview, 'approve')}>{isDecisionPending(lookupReview) ? 'Saving...' : 'Approve Headset'}</button>
                 <button type="button" className="nm-btn nm-btn-danger" onClick={() => { setDenial({ item: lookupReview, reason: '', note: '' }); setLookupReview(null); }}>Deny Headset</button>
                 <button type="button" className="nm-btn nm-btn-secondary" onClick={() => reviewLater(lookupReview)}>Review Later</button>
                 <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setLookupReview(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {editReview ? (
+        <div className="modal-overlay open">
+          <div className="modal" style={{ width: 560, maxWidth: '92vw' }} role="dialog" aria-modal="true" aria-label="Edit headset information">
+            <div className="modal-header"><h2>Edit Headset Information</h2><button className="modal-close" disabled={isDecisionPending(editReview.item)} onClick={() => setEditReview(null)}>&times;</button></div>
+            <div className="modal-body nm-headset-edit-form">
+              <label>Headset brand<input value={editReview.brand} onChange={(event) => setEditReview((current) => ({ ...current, brand: event.target.value }))} /></label>
+              <label>Headset model<input value={editReview.model} onChange={(event) => setEditReview((current) => ({ ...current, model: event.target.value }))} /></label>
+              <label>Notes<textarea rows={3} value={editReview.note} onChange={(event) => setEditReview((current) => ({ ...current, note: event.target.value }))} /></label>
+              <div className="nm-headset-edit-preview"><span>Combined preview</span><strong>{buildHeadsetDisplayLabel(editReview.brand, editReview.model) || 'Enter a brand or model'}</strong></div>
+              {decisionError ? <div className="nm-form-error">{decisionError}</div> : null}
+              <div className="nm-row-actions">
+                <button type="button" className="nm-btn nm-btn-secondary" disabled={isDecisionPending(editReview.item)} onClick={() => setEditReview(null)}>Cancel</button>
+                <button type="button" className="nm-btn nm-btn-primary" disabled={isDecisionPending(editReview.item) || (!editReview.brand.trim() && !editReview.model.trim())} onClick={saveEdit}>{isDecisionPending(editReview.item) ? 'Saving...' : 'Save Headset'}</button>
               </div>
             </div>
           </div>
@@ -2693,8 +2950,8 @@ export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onSta
               {denial.reason === 'Other' ? <textarea rows={3} value={denial.note} onChange={(event) => setDenial((current) => ({ ...current, note: event.target.value }))} placeholder="Denial note is required" /> : null}
               {decisionError ? <div className="nm-form-error">{decisionError}</div> : null}
               <div className="nm-row-actions">
-                <button type="button" className="nm-btn nm-btn-secondary" disabled={Boolean(pendingDecisionKey)} onClick={() => setDenial(null)}>Cancel</button>
-                <button type="button" className="nm-btn nm-btn-danger" disabled={Boolean(pendingDecisionKey) || !denial.reason || (denial.reason === 'Other' && !denial.note.trim())} onClick={() => decide(denial.item, 'deny', { reason: denial.reason, note: denial.note })}>{pendingDecisionKey ? 'Saving...' : 'Deny'}</button>
+                <button type="button" className="nm-btn nm-btn-secondary" disabled={isDecisionPending(denial.item)} onClick={() => setDenial(null)}>Cancel</button>
+                <button type="button" className="nm-btn nm-btn-danger" disabled={isDecisionPending(denial.item) || !denial.reason || (denial.reason === 'Other' && !denial.note.trim())} onClick={() => decide(denial.item, 'deny', { reason: denial.reason, note: denial.note })}>{isDecisionPending(denial.item) ? 'Saving...' : 'Deny'}</button>
               </div>
             </div>
           </div>
@@ -2793,6 +3050,9 @@ export default function NotificationManagerApp() {
   const [requestBellOpen, setRequestBellOpen] = useState(false);
   const [pendingRequestsRefreshCycle, setPendingRequestsRefreshCycle] = useState(0);
   const samSnapshotCoordinatorRef = useRef(null);
+  const samSnapshotRequestSequenceRef = useRef(0);
+  const latestSamSnapshotRequestRef = useRef(0);
+  const headsetMutationGenerationRef = useRef(0);
   if (!samSnapshotCoordinatorRef.current) {
     samSnapshotCoordinatorRef.current = createSamSnapshotCoordinator(() => api.getSharedAdminSnapshot());
   }
@@ -3031,6 +3291,9 @@ export default function NotificationManagerApp() {
   }, [handleCheckForUpdates]);
 
   const loadSamSnapshot = useCallback(async ({ silent = false, force = false, showPendingNotice = false } = {}) => {
+    const requestSequence = ++samSnapshotRequestSequenceRef.current;
+    latestSamSnapshotRequestRef.current = requestSequence;
+    const headsetMutationGeneration = headsetMutationGenerationRef.current;
     if (!silent) {
       setCandidateTrackingLoading(true);
       setHeadsetReviewsLoading(true);
@@ -3038,6 +3301,7 @@ export default function NotificationManagerApp() {
     }
     try {
       const snapshot = await samSnapshotCoordinatorRef.current.load({ force });
+      if (requestSequence !== latestSamSnapshotRequestRef.current) return snapshot;
       const candidateNext = snapshot?.candidateTracking || {};
       const headsetNext = snapshot?.headsetReviews || {};
       const pendingNext = snapshot?.pendingRequests || {};
@@ -3046,11 +3310,12 @@ export default function NotificationManagerApp() {
         ...candidateNext,
         error: candidateNext.ok === false ? SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE : (candidateNext.error || ''),
       }));
-      setHeadsetReviews((current) => ({
-        ...current,
-        ...headsetNext,
-        error: headsetNext.ok === false ? SAM_HEADSET_REVIEW_TEMPORARY_MESSAGE : (headsetNext.error || ''),
-      }));
+      if (headsetMutationGeneration === headsetMutationGenerationRef.current) {
+        setHeadsetReviews((current) => preserveEqualHeadsetReviewState(current, {
+          ...headsetNext,
+          error: headsetNext.ok === false ? SAM_HEADSET_REVIEW_TEMPORARY_MESSAGE : (headsetNext.error || ''),
+        }));
+      }
       setPendingRequests((current) => ({
         ...current,
         ...pendingNext,
@@ -3078,6 +3343,7 @@ export default function NotificationManagerApp() {
       }
       return snapshot;
     } catch (error) {
+      if (requestSequence !== latestSamSnapshotRequestRef.current) return null;
       console.warn('[SAM] Shared snapshot request failed; user-facing details were sanitized.');
       setCandidateTracking((current) => ({ ...current, ok: false, error: SAM_CANDIDATE_TRACKING_TEMPORARY_MESSAGE }));
       setHeadsetReviews((current) => ({ ...current, ok: false, error: SAM_HEADSET_REVIEW_TEMPORARY_MESSAGE }));
@@ -3087,9 +3353,11 @@ export default function NotificationManagerApp() {
         : { ...current, statusKind: 'warning', statusMessage: SAM_SHARED_DATA_TEMPORARY_MESSAGE });
       return null;
     } finally {
-      setCandidateTrackingLoading(false);
-      setHeadsetReviewsLoading(false);
-      setPendingRequestsLoading(false);
+      if (requestSequence === latestSamSnapshotRequestRef.current) {
+        setCandidateTrackingLoading(false);
+        setHeadsetReviewsLoading(false);
+        setPendingRequestsLoading(false);
+      }
     }
   }, []);
 
@@ -3121,9 +3389,18 @@ export default function NotificationManagerApp() {
         showStatusModal(message, 'error');
         return result;
       }
+      if (payload.catalog_identity && Number(result.changed_rows || 0) !== 1 && !result.skipped) {
+        const message = 'The approved headset catalog did not confirm exactly one changed row.';
+        setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
+        playSamActionSound('error');
+        showStatusModal(message, 'error');
+        return { ...result, ok: false, error: message };
+      }
       const reviewLater = payload.action === 'review_later';
       const message = payload.action === 'approve'
         ? 'Headset approved.'
+        : payload.action === 'edit'
+          ? (result.approved_match ? 'Headset information updated. This now matches an approved headset.' : 'Headset information updated.')
         : payload.action === 'deny'
           ? 'Headset denied.'
           : payload.action === 'archive'
@@ -3131,11 +3408,21 @@ export default function NotificationManagerApp() {
             : payload.action === 'delete'
               ? 'Headset review deleted.'
               : 'Headset left pending for later review.';
+      if (!reviewLater) {
+        headsetMutationGenerationRef.current += 1;
+        samSnapshotCoordinatorRef.current.invalidate?.();
+        setHeadsetReviews((current) => applyHeadsetDecisionToState(current, payload, result));
+      }
       setSheetState((current) => ({ ...current, statusKind: reviewLater ? 'info' : 'success', statusMessage: message }));
       if (!reviewLater) {
         playSamActionSound('success');
         showStatusModal(message, 'success');
-        await loadSamSnapshot({ silent: true, force: true });
+        const refreshed = await loadSamSnapshot({ silent: true, force: true });
+        if (!refreshed || refreshed?.headsetReviews?.ok === false) {
+          const warning = 'The headset change was saved, but the list could not be refreshed. Use Refresh to confirm current data.';
+          setSheetState((current) => ({ ...current, statusKind: 'warning', statusMessage: warning }));
+          showStatusModal(warning, 'warning');
+        }
       }
       return result;
     } catch (error) {
@@ -3158,10 +3445,11 @@ export default function NotificationManagerApp() {
         return result;
       }
       const message = payload.decision === 'approved' ? 'Request approved.' : 'Request denied.';
+      setPendingRequests((current) => applyPendingRequestDecision(current, payload, result));
       setSheetState((current) => ({ ...current, statusKind: 'success', statusMessage: message }));
       playSamActionSound('success');
       showStatusModal(message, 'success');
-      await loadSamSnapshot({ silent: true, force: true });
+      void loadSamSnapshot({ silent: true, force: true });
       return result;
     } catch (error) {
       const message = getSharedDataErrorMessage(error, 'Pending request update failed.');
@@ -3208,7 +3496,10 @@ export default function NotificationManagerApp() {
         payload?.action === 'edit_candidate_information' ? 'Candidate Information Updated' : '',
         payload?.action === 'edit_candidate_information' ? 'Done' : 'OK',
       );
-      await loadCandidateTracking({ silent: true, force: true });
+      if (payload?.action === 'edit_candidate_information') {
+        setCandidateTracking((current) => applyCandidateInformationUpdate(current, payload));
+      }
+      void loadCandidateTracking({ silent: true, force: true });
       return result;
     } catch (error) {
       const responseData = error?.response?.data || {};

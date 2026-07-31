@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import api, { findDiscordTemplateMessage } from '../api';
 import { useModal } from '../components/ModalProvider';
-import CandidateIpIntelligencePanel, { loadStoredCandidateIpIntelligence, normalizeVpnProxyCheckMode, vpnProxyNeedsTesterDecision } from '../components/CandidateIpIntelligence';
+import CandidateIpIntelligencePanel from '../components/CandidateIpIntelligence';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
@@ -292,14 +292,12 @@ export default function BasicsPage({ onNavigate }) {
   const dropdownRef = useRef(null);
   const containerRef = useRef(null);
   const headsetInputRef = useRef(null);
+  const headsetVerificationRef = useRef(null);
   const itemRefs = useRef([]);
   const candidateLookupRetryTimerRef = useRef(null);
   const candidateLookupAttemptRef = useRef(0);
   const candidateLookupFailureCountRef = useRef(0);
   const candidateLookupLastQueryRef = useRef('');
-  const [candidateIpIntelligence, setCandidateIpIntelligence] = useState(() => loadStoredCandidateIpIntelligence());
-  const vpnProxyCheckMode = normalizeVpnProxyCheckMode(settings?.vpnProxyCheckMode);
-  const activeCandidateIpIntelligence = vpnProxyCheckMode === 'checker' ? candidateIpIntelligence : null;
   const [form, setForm] = useState({
     candidate_name: '', tester_name: '', final_attempt: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
@@ -337,12 +335,10 @@ export default function BasicsPage({ onNavigate }) {
         if (cancelled) return;
 
         const session = sessionResponse?.session || null;
-        const storedIpIntelligence = session?.candidate_ip_intelligence || loadStoredCandidateIpIntelligence();
         const storedSupervisorOnly = Boolean(session?.supervisor_only) || window.sessionStorage.getItem(SUP_ONLY_MODE_KEY) === '1';
         setSupervisorOnlyMode(storedSupervisorOnly);
         setSettings(currentSettings);
         setDefaults(defaultsResponse || {});
-        setCandidateIpIntelligence(storedIpIntelligence || null);
         setForm((prev) => ({
           ...prev,
           tester_name: currentSettings.tester_name || '',
@@ -423,14 +419,13 @@ export default function BasicsPage({ onNavigate }) {
     const timer = window.setTimeout(() => {
       api.updateSession({
         ...form,
-        candidate_ip_intelligence: activeCandidateIpIntelligence,
         supervisor_only: supervisorOnlyMode,
         status: 'In Progress',
       }).catch(() => {});
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [activeCandidateIpIntelligence, form, supervisorOnlyMode]);
+  }, [form, supervisorOnlyMode]);
 
   useEffect(() => {
     const candidateName = form.candidate_name.trim();
@@ -833,11 +828,12 @@ export default function BasicsPage({ onNavigate }) {
       setForm((current) => ({
         ...current,
         headset_brand: headsetModel,
-        headset_usb: true,
-        noise_cancel: true,
+        headset_usb: null,
+        noise_cancel: null,
       }));
       setDropdownOpen(false);
       await api.updateSession({ auto_fail_reason: null, final_status: null }).catch(() => {});
+      window.requestAnimationFrame(() => headsetVerificationRef.current?.focus());
       return;
     }
     if (researchChoice !== 'no') return;
@@ -952,7 +948,7 @@ export default function BasicsPage({ onNavigate }) {
         setSuppressedCandidateLookupName(normalizeName(candidateName).toLowerCase());
         setCandidateLookup(curr => ({ ...curr, matches: [] }));
         setForm(linkedForm);
-        await api.updateSession({ ...linkedForm, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, status: 'In Progress' }).catch(() => {});
+        await api.updateSession({ ...linkedForm, supervisor_only: supervisorOnlyMode, status: 'In Progress' }).catch(() => {});
         await modal.warning(
           'Basics Required',
           'No previous Basics information exists for this candidate. Please complete the Basics screen before continuing.'
@@ -974,7 +970,7 @@ export default function BasicsPage({ onNavigate }) {
       );
     }
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
-    await startSessionWithHeadsetReview({ ...nextForm, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, time_for_sup: supervisorOnlyMode ? true : null });
+    await startSessionWithHeadsetReview({ ...nextForm, supervisor_only: supervisorOnlyMode, time_for_sup: supervisorOnlyMode ? true : null });
     onNavigate(supervisorOnlyMode ? 'suptransfer' : 'calls');
   };
 
@@ -1033,7 +1029,7 @@ export default function BasicsPage({ onNavigate }) {
     }
     const confirmed = await modal.confirm('Confirm Auto-Fail', body, 'alert-triangle', 'warning');
     if (!confirmed) return;
-    const data = { ...form, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, auto_fail_reason: resolvedReason, final_status: 'Fail' };
+    const data = { ...form, supervisor_only: supervisorOnlyMode, auto_fail_reason: resolvedReason, final_status: 'Fail' };
     window.sessionStorage.removeItem(SUP_ONLY_MODE_KEY);
     await startSessionWithHeadsetReview(data);
     onNavigate('review');
@@ -1054,52 +1050,6 @@ export default function BasicsPage({ onNavigate }) {
     return true;
   };
 
-  const handleVpnProxyDecision = async (sessionData) => {
-    if (vpnProxyCheckMode !== 'checker' || !vpnProxyNeedsTesterDecision(activeCandidateIpIntelligence)) {
-      return { shouldContinue: true, sessionData };
-    }
-    const resultId = `${activeCandidateIpIntelligence.ip || ''}:${activeCandidateIpIntelligence.timestamp || ''}`;
-    if (activeCandidateIpIntelligence?.testerDecision?.resultId === resultId) {
-      return { shouldContinue: true, sessionData: { ...sessionData, candidate_ip_intelligence: activeCandidateIpIntelligence } };
-    }
-    const decision = await modal.showModal({
-      type: 'confirm',
-      title: 'VPN / Proxy Check',
-      body: 'Was the candidate able to turn off the VPN/proxy?<br><br>If the candidate turns off a VPN/proxy, wait 2-3 minutes before checking again. Reputation and routing services may take a few minutes to reflect the change.',
-      graphic: 'warning',
-      buttons: [
-        { label: 'Yes, recheck after a few minutes', cls: 'btn-primary', value: 'recheck' },
-        { label: 'No, continue to VPN/proxy auto-fail', cls: 'btn-danger', value: 'fail' },
-        { label: 'Continue without auto-fail / manual review', cls: 'btn-muted', value: 'manual' },
-      ],
-    });
-    if (decision === 'recheck') {
-      await modal.warning('Recheck Needed', 'Wait 2-3 minutes, then run VPN / Proxy Check again before continuing.');
-      return { shouldContinue: false, sessionData };
-    }
-    if (decision === 'fail') {
-      const nextIp = {
-        ...activeCandidateIpIntelligence,
-        testerDecision: { resultId, decision: 'auto_fail', decidedAt: new Date().toISOString() },
-      };
-      setCandidateIpIntelligence(nextIp);
-      const failData = { ...sessionData, candidate_ip_intelligence: nextIp };
-      await runVpnAutoFailFlow(
-        failData,
-        'Using a VPN/proxy is not accepted when contracting with ACD and the candidate was not able to turn it off.<br><br>This will mark the candidate as failed for this session. Continue?'
-      );
-      return { shouldContinue: false, sessionData: failData };
-    }
-    if (decision === 'manual') {
-      const nextIp = {
-        ...activeCandidateIpIntelligence,
-        testerDecision: { resultId, decision: 'manual_review', decidedAt: new Date().toISOString() },
-      };
-      setCandidateIpIntelligence(nextIp);
-      return { shouldContinue: true, sessionData: { ...sessionData, candidate_ip_intelligence: nextIp } };
-    }
-    return { shouldContinue: false, sessionData };
-  };
 
   const handleContinue = async () => {
     const headsetApproved = Boolean(String(form.headset_brand || '').trim()) && headsetIsApproved(form.headset_brand, approvedHeadsets);
@@ -1139,7 +1089,6 @@ export default function BasicsPage({ onNavigate }) {
         headset_usb: deniedForUsb ? false : d.headset_usb,
         noise_cancel: deniedForNoiseCancelling ? false : d.noise_cancel,
         supervisor_only: supervisorOnlyMode,
-        candidate_ip_intelligence: activeCandidateIpIntelligence,
         auto_fail_reason: deniedAutoFailReason,
         final_status: 'Fail',
       };
@@ -1153,9 +1102,7 @@ export default function BasicsPage({ onNavigate }) {
     if (d.vpn_on && d.vpn_off === null) { await modal.warning('Missing Info', 'Please confirm if the candidate can turn off their VPN.'); return; }
     if (d.chrome_default === null || d.extensions_disabled === null || d.popups_allowed === null) { await modal.warning('Missing Info', 'All Browser Checklist questions must be answered.'); return; }
 
-    const vpnDecision = await handleVpnProxyDecision({ ...d, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode });
-    if (!vpnDecision.shouldContinue) return;
-    const workflowData = vpnDecision.sessionData;
+    const workflowData = { ...d, supervisor_only: supervisorOnlyMode };
 
     if (!workflowData.headset_usb || !workflowData.noise_cancel) {
       const reason = buildHeadsetAutoFailReason(workflowData.headset_usb, workflowData.noise_cancel);
@@ -1225,7 +1172,7 @@ export default function BasicsPage({ onNavigate }) {
   };
 
   const saveBasicsForTechIssue = useCallback(async () => {
-    const prepared = { ...form, candidate_ip_intelligence: activeCandidateIpIntelligence, supervisor_only: supervisorOnlyMode, status: 'In Progress' };
+    const prepared = { ...form, supervisor_only: supervisorOnlyMode, status: 'In Progress' };
     const current = await api.getCurrentSession().catch(() => null);
     if (current?.session?.candidate_name) {
       await api.updateSession(prepared);
@@ -1233,7 +1180,7 @@ export default function BasicsPage({ onNavigate }) {
       await api.startSession(prepared);
     }
     return prepared;
-  }, [activeCandidateIpIntelligence, form, supervisorOnlyMode]);
+  }, [form, supervisorOnlyMode]);
 
   const RadioGroup = ({ name, value, onChange, disabled = false }) => (
     <div className="radio-group">
@@ -1454,7 +1401,7 @@ export default function BasicsPage({ onNavigate }) {
                 </span>
               </div>
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div ref={headsetVerificationRef} tabIndex={-1} style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <label className="text-sm font-bold" style={{ minWidth: 160 }}>Is the headset USB?</label>
               <RadioGroup name="b-usb" value={form.headset_usb} onChange={v => set('headset_usb', v)} disabled={currentHeadsetIsApproved} />
             </div>
@@ -1478,17 +1425,21 @@ export default function BasicsPage({ onNavigate }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <label className="text-sm font-bold" style={{ minWidth: 110 }}>Has VPN?</label>
-              <RadioGroup name="b-vpn" value={form.vpn_on} onChange={v => { set('vpn_on', v); if (!v) set('vpn_off', null); }} />
+              <RadioGroup
+                name="b-vpn"
+                value={form.vpn_on}
+                onChange={(v) => setForm((current) => ({
+                  ...current,
+                  vpn_on: v,
+                  vpn_off: v ? current.vpn_off : null,
+                }))}
+              />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, opacity: form.vpn_on ? 1 : 0.3, pointerEvents: form.vpn_on ? 'auto' : 'none' }}>
               <label className="text-sm font-bold" style={{ minWidth: 110 }}>Can turn off?</label>
               <RadioGroup name="b-vpnoff" value={form.vpn_off} onChange={v => set('vpn_off', v)} />
             </div>
-            <CandidateIpIntelligencePanel
-              initialResult={activeCandidateIpIntelligence}
-              onResultChange={setCandidateIpIntelligence}
-              mode={vpnProxyCheckMode}
-            />
+            <CandidateIpIntelligencePanel />
           </div>
         </div>
         <div className="card" style={{ padding: '16px 24px' }} data-tour="basics-browser-section">

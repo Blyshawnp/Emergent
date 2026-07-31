@@ -25,7 +25,7 @@
 
 - Create one inactive synthetic notification with Ticker, Banner, and Popup examples.
 - Seed candidates in pending, incomplete, withdrawn, archived, extra-attempt, and passed views.
-- Seed initial Newbie Shift, reschedule, candidate deletion, and headset review requests.
+- Seed initial Newbie Shift, reschedule, candidate correction, candidate deletion, and headset review requests.
 - Use synthetic denial reasons and no real report exports.
 
 ## Recording checklist
@@ -42,9 +42,9 @@
 | VideoKey | Opening | Main demonstration | Safety pause | Closing |
 |---|---|---|---|---|
 | `sam-quick-start` | Dashboard purpose | Navigation, Notifications, Candidate Tracking, bell/Pending Requests, Headset Review, Help | View Details before action | Daily queue order |
-| `sam-notifications-live-preview` | Communicate safely | Create/generated ID, edit, duplicate, disable, delete, preview modes | Disable versus Delete | Preview then save |
-| `sam-candidate-tracking-headset-review` | Manage the correct record | Search, filters, Show More/View Details, status actions, archive/withdraw/restore/extra attempt, headset decision | Destructive actions and evidence | Record decision |
-| `sam-pending-requests` | Resolve requests, not alerts | Bell/counts, View, Remind, Dismiss, approval/denial/reason, MTS sync, deletion limitation | Suppression is not resolution | Verify resolved state |
+| `sam-notifications-live-preview` | Communicate safely | Create/generated ID, edit, duplicate, disable, delete, preview modes, MTS ticker handoff | SAM manages content; MTS controls speed | Preview then save |
+| `sam-candidate-tracking-headset-review` | Manage the correct record | Search, status actions, Edit Headset, Save Headset, corrected approval, catalog deduplication | Destructive actions and evidence | Record decision |
+| `sam-pending-requests` | Resolve requests, not alerts | Bell/counts, correction previous/requested values, approval/denial/reason, exact-session sync, deletion limitation | Suppression is not resolution | Verify resolved state |
 
 ## Exact narration
 

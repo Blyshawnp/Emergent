@@ -239,10 +239,10 @@ test('update metadata reads are bound to the authenticated MTS or SAM role', () 
   assert.equal(sam.result.row['Release Title'], 'SAM release');
 });
 
-test('MTS credentials cannot invoke SAM-only setup, decisions, or generic sheet administration', () => {
+test('MTS credentials cannot invoke SAM-only setup, decisions, migration, or generic sheet administration', () => {
   const { api } = createRuntime();
 
-  for (const action of ['completeSamSetup', 'approveHeadset', 'decidePendingRequest', 'deleteNotification', 'batchUpdateSpreadsheet', 'ensureTutorialVideoTabs']) {
+  for (const action of ['completeSamSetup', 'approveHeadset', 'editHeadsetReview', 'migrateHeadsetReviewSchema', 'decidePendingRequest', 'deleteNotification', 'batchUpdateSpreadsheet', 'ensureTutorialVideoTabs']) {
     const result = responsePayload(api.doPost(postEvent(action, 'mts-current', {
       requests: [],
       request_id: 'request-test',
@@ -425,6 +425,150 @@ test('headset review compatibility recognizes V2, basic, and legacy headers', ()
   ]), 'legacy');
 });
 
+test('headset review migration dry run is aggregate-only and apply retains an exact verified backup', () => {
+  const headers = [
+    'headset_model', 'candidate_name', 'tester_name', 'entered_at', 'review_status', 'notes',
+    'Timestamp', 'Brand', 'Model', 'SubmittedBy', 'Notes', 'ReviewNotes',
+  ];
+  const legacySheet = createFakeSheet('headset-review-log', headers, [
+    ['USB Training One', 'Candidate One', 'Tester One', '2026-07-01T12:00:00Z', 'pending', 'First note', '', '', '', '', '', ''],
+    ['USB Training Two', 'Candidate Two', 'Tester Two', '2026-07-02T12:00:00Z', 'approved', '', '', 'USB', 'Training Two', '', 'Second note', ''],
+  ]);
+  const workbook = createFakeWorkbook([legacySheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+
+  const dryRun = responsePayload(api.doGet(getEvent('getHeadsetReviewMigrationPlan', 'sam-current')));
+  assert.equal(dryRun.ok, true);
+  assert.equal(dryRun.result.schema, 'legacy');
+  assert.equal(dryRun.result.source_row_count, 2);
+  assert.equal(dryRun.result.counts.deterministic_legacy_only_linkage, 2);
+  assert.equal(dryRun.result.counts.rows_remaining_unlinked, 2);
+  assert.equal(dryRun.result.safe_to_migrate, true);
+  assert.equal(Object.hasOwn(dryRun.result, 'migratedRows'), false);
+  assert.equal(JSON.stringify(dryRun).includes('Candidate One'), false);
+
+  const migrated = responsePayload(api.doPost(postEvent('migrateHeadsetReviewSchema', 'sam-current', {
+    confirm: 'MIGRATE_HEADSET_REVIEW_V2', expected_checksum: dryRun.result.source_checksum,
+  })));
+  assert.equal(migrated.ok, true, JSON.stringify(migrated));
+  assert.equal(migrated.result.migrated, true);
+  assert.equal(migrated.result.backup_verified, true);
+  assert.equal(migrated.result.backup_row_count, 2);
+  assert.deepEqual(legacySheet.values[0].slice(0, 13), [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ]);
+  assert.match(legacySheet.values[1][0], /^legacy-migrated-/);
+  assert.equal(legacySheet.values[1][1], '');
+  assert.equal(legacySheet.values[1][5], 'USB Training One');
+  const backup = workbook.getSheetByName(migrated.result.backup_title);
+  assert.ok(backup);
+  assert.deepEqual(backup.values, [headers, ...[
+    ['USB Training One', 'Candidate One', 'Tester One', '2026-07-01T12:00:00Z', 'pending', 'First note', '', '', '', '', '', ''],
+    ['USB Training Two', 'Candidate Two', 'Tester Two', '2026-07-02T12:00:00Z', 'approved', '', '', 'USB', 'Training Two', '', 'Second note', ''],
+  ]]);
+});
+
+test('headset review migration refuses conflicting legacy mappings before creating a backup', () => {
+  const headers = [
+    'headset_model', 'candidate_name', 'tester_name', 'entered_at', 'review_status', 'notes',
+    'Timestamp', 'Brand', 'Model', 'SubmittedBy', 'Notes', 'ReviewNotes',
+  ];
+  const legacySheet = createFakeSheet('headset-review-log', headers, [[
+    'USB Old Model', 'Candidate', 'Tester', '2026-07-01T12:00:00Z', 'pending', '',
+    '2026-07-03T12:00:00Z', 'USB', 'Different Model', '', '', '',
+  ]]);
+  const workbook = createFakeWorkbook([legacySheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const dryRun = responsePayload(api.doGet(getEvent('getHeadsetReviewMigrationPlan', 'sam-current')));
+  assert.equal(dryRun.result.safe_to_migrate, false);
+  assert.equal(dryRun.result.counts.ambiguous_rows, 1);
+
+  const migrated = responsePayload(api.doPost(postEvent('migrateHeadsetReviewSchema', 'sam-current', {
+    confirm: 'MIGRATE_HEADSET_REVIEW_V2', expected_checksum: dryRun.result.source_checksum,
+  })));
+  assert.equal(migrated.ok, false);
+  assert.equal(workbook.getSheets().length, 1);
+  assert.deepEqual(legacySheet.values[0], headers);
+});
+
+test('current V2 headset review migration is a deterministic write-free no-op', () => {
+  const headers = [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ];
+  const currentRows = [[
+    'review-current', 'session-current', 'Candidate', 'Tester', 'USB', 'Training One',
+    'approved', '', '2026-07-01T12:00:00Z', '2026-07-01T12:00:00Z', '', '', '',
+  ]];
+  const currentSheet = createFakeSheet('headset-review-log', headers, currentRows);
+  const workbook = createFakeWorkbook([currentSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const before = JSON.stringify(currentSheet.values);
+  const plan = responsePayload(api.doGet(getEvent('getHeadsetReviewMigrationPlan', 'sam-current')));
+
+  const first = responsePayload(api.doPost(postEvent('migrateHeadsetReviewSchema', 'sam-current', {
+    confirm: 'MIGRATE_HEADSET_REVIEW_V2', expected_checksum: plan.result.source_checksum,
+  })));
+  const second = responsePayload(api.doPost(postEvent('migrateHeadsetReviewSchema', 'sam-current', {
+    confirm: 'MIGRATE_HEADSET_REVIEW_V2', expected_checksum: plan.result.source_checksum,
+  })));
+
+  for (const response of [first, second]) {
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.result.schema, 'v2');
+    assert.equal(response.result.already_current, true);
+    assert.equal(response.result.migrated, false);
+    assert.equal(response.result.source_row_count, 1);
+    assert.equal(response.result.final_row_count, 1);
+    assert.equal(response.result.changed_rows, 0);
+    assert.equal(response.result.backup_created, false);
+    assert.doesNotThrow(() => JSON.stringify(response.result));
+  }
+  assert.deepEqual(first.result, second.result);
+  assert.equal(JSON.stringify(currentSheet.values), before);
+  assert.equal(workbook.getSheets().length, 1);
+
+  const stale = responsePayload(api.doPost(postEvent('migrateHeadsetReviewSchema', 'sam-current', {
+    confirm: 'MIGRATE_HEADSET_REVIEW_V2', expected_checksum: 'stale-checksum',
+  })));
+  assert.equal(stale.ok, false);
+  assert.match(stale.error, /changed after the dry run/i);
+  assert.equal(JSON.stringify(currentSheet.values), before);
+  assert.equal(workbook.getSheets().length, 1);
+});
+
+test('current V2 headset review migration fails closed on duplicate identities', () => {
+  const headers = [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ];
+  for (const rows of [
+    [
+      ['duplicate-review', 'session-one'],
+      ['duplicate-review', 'session-two'],
+    ],
+    [
+      ['review-one', 'duplicate-session'],
+      ['review-two', 'duplicate-session'],
+    ],
+  ]) {
+    const sheetRows = rows.map(([reviewId, sessionId]) => [
+      reviewId, sessionId, 'Candidate', 'Tester', 'USB', 'Training', 'pending', '', '', '', '', '', '',
+    ]);
+    const sheet = createFakeSheet('headset-review-log', headers, sheetRows);
+    const workbook = createFakeWorkbook([sheet]);
+    const { api } = createRuntime({ __workbook: workbook });
+    const plan = responsePayload(api.doGet(getEvent('getHeadsetReviewMigrationPlan', 'sam-current')));
+    const result = responsePayload(api.doPost(postEvent('migrateHeadsetReviewSchema', 'sam-current', {
+      confirm: 'MIGRATE_HEADSET_REVIEW_V2', expected_checksum: plan.result.source_checksum,
+    })));
+    assert.equal(result.ok, false);
+    assert.match(result.error, /duplicate identity/i);
+    assert.equal(workbook.getSheets().length, 1);
+  }
+});
+
 test('legacy headset review submission and SAM decision preserve the existing schema', () => {
   const legacySheet = createFakeSheet('headset-review-log', [
     'headset_model', 'candidate_name', 'tester_name', 'entered_at', 'review_status', 'notes',
@@ -457,6 +601,38 @@ test('legacy headset review submission and SAM decision preserve the existing sc
   assert.equal(headsetsSheet.values[1][2], 'approved');
 });
 
+test('pending headset edit updates the exact review and approval uses corrected authoritative values', () => {
+  const headers = [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ];
+  const reviewSheet = createFakeSheet('headset-review-log', headers, [[
+    'review-1', 'session-1', 'Candidate Example', 'Tester Example', 'SYNTHETIC USB', 'MIGRATION HEDSET',
+    'pending', '', 'created', 'created', '', '', '',
+  ]]);
+  const headsetsSheet = createFakeSheet('headsets', ['Brand', 'Model', 'Status', 'Note']);
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name', 'headset_brand'], [
+    ['session-1', 'Candidate Example', 'SYNTHETIC USB MIGRATION HEDSET'],
+  ]);
+  const workbook = createFakeWorkbook([reviewSheet, headsetsSheet, candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+
+  const edited = responsePayload(api.doPost(postEvent('editHeadsetReview', 'sam-current', {
+    review_id: 'review-1', brand: 'SYNTHETIC USB', model: '  MIGRATION   HEADSET ', actor: 'SAM Admin',
+  })));
+  assert.equal(edited.ok, true);
+  assert.equal(edited.result.status, 'pending');
+  assert.equal(reviewSheet.values[1][5], 'MIGRATION HEADSET');
+  assert.equal(candidateSheet.values[1][2], 'SYNTHETIC USB MIGRATION HEADSET');
+
+  const approved = responsePayload(api.doPost(postEvent('approveHeadset', 'sam-current', {
+    review_id: 'review-1', brand: 'SYNTHETIC USB', model: 'MIGRATION HEDSET', actor: 'SAM Admin',
+  })));
+  assert.equal(approved.ok, true);
+  assert.deepEqual(headsetsSheet.values[1].slice(0, 3), ['SYNTHETIC USB', 'MIGRATION HEADSET', 'approved']);
+  assert.equal(headsetsSheet.values.length, 2);
+});
+
 test('first MTS pending-request write creates only the missing workflow tab contract', () => {
   const workbook = createFakeWorkbook();
   const { api } = createRuntime({ __workbook: workbook });
@@ -479,6 +655,70 @@ test('first MTS pending-request write creates only the missing workflow tab cont
   assert.equal(sheet.values[1][1], 'session-test');
   assert.equal(sheet.values[1][7], 'pending');
   assert.equal(workbook.getSheetByName('candidate-deletion-requests'), null);
+});
+
+test('Newbie Shift approval stores optional number as text on exact request and session', () => {
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name', 'status'], [
+    ['session-1', 'Candidate Example', 'INCOMPLETE'],
+  ]);
+  const workbook = createFakeWorkbook([candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const submitted = responsePayload(api.doPost(postEvent('upsertPendingRequest', 'mts-current', {
+    request: {
+      request_id: 'newbie-1', request_type: 'initial_newbie_shift', source_session_id: 'session-1',
+      candidate_name: 'Candidate Example', scheduled_at: '2026-08-01T10:00:00-04:00', status: 'pending',
+    },
+  })));
+  assert.equal(submitted.ok, true);
+
+  const decided = responsePayload(api.doPost(postEvent('decidePendingRequest', 'sam-current', {
+    request_id: 'newbie-1', request_type: 'initial_newbie_shift', decision: 'approve',
+    expected_status: 'pending', decision_by: 'SAM Admin', newbie_shift_number: '001842',
+  })));
+  assert.equal(decided.ok, true);
+  const requestSheet = workbook.getSheetByName('newbie-shift-requests');
+  const requestHeaders = requestSheet.values[0];
+  assert.equal(requestSheet.values[1][requestHeaders.indexOf('newbie_shift_number')], '001842');
+  const candidateHeaders = candidateSheet.values[0];
+  assert.equal(candidateSheet.values[1][candidateHeaders.indexOf('newbie_shift_number')], '001842');
+});
+
+test('candidate overrides are audited and extra-attempt count is idempotent by expected count', () => {
+  const candidateSheet = createFakeSheet('Candidate Sessions', [
+    'session_id', 'candidate_name', 'status', 'calculated_result', 'final_result',
+    'extra_attempt_granted', 'extra_attempt_reason', 'readiness_override_applied',
+    'readiness_override_result', 'readiness_override_reason', 'readiness_override_explanation',
+  ], [['session-1', 'Candidate Example', 'FAIL', 'Pass', 'FAIL', '', '', '', '', '', '']]);
+  const workbook = createFakeWorkbook([candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+
+  const marked = responsePayload(api.doPost(postEvent('updateCandidateTracking', 'sam-current', {
+    operation: 'mark_passed', session_id: 'session-1', candidate_name: 'Candidate Example',
+    actor: 'SAM Admin', reason: 'Authorized review completed.',
+  })));
+  assert.equal(marked.ok, true);
+  let headers = candidateSheet.values[0];
+  assert.equal(candidateSheet.values[1][headers.indexOf('calculated_result')], 'Pass');
+  assert.equal(candidateSheet.values[1][headers.indexOf('readiness_override_result')], 'PASS');
+  assert.equal(candidateSheet.values[1][headers.indexOf('readiness_override_by')], 'SAM Admin');
+  assert.ok(candidateSheet.values[1][headers.indexOf('readiness_override_at')]);
+
+  const granted = responsePayload(api.doPost(postEvent('updateCandidateTracking', 'sam-current', {
+    operation: 'grant_extra_attempt', session_id: 'session-1', candidate_name: 'Candidate Example',
+    actor: 'SAM Admin', expected_extra_attempts_granted: 0,
+  })));
+  assert.equal(granted.ok, true);
+  headers = candidateSheet.values[0];
+  assert.equal(Number(candidateSheet.values[1][headers.indexOf('extra_attempts_granted')]), 1);
+  assert.equal(Number(candidateSheet.values[1][headers.indexOf('allowed_attempt_count')]), 4);
+
+  const duplicate = responsePayload(api.doPost(postEvent('updateCandidateTracking', 'sam-current', {
+    operation: 'grant_extra_attempt', session_id: 'session-1', candidate_name: 'Candidate Example',
+    actor: 'SAM Admin', expected_extra_attempts_granted: 0,
+  })));
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.result.already_applied, true);
+  assert.equal(Number(candidateSheet.values[1][headers.indexOf('extra_attempts_granted')]), 1);
 });
 
 test('candidate information correction is bounded, MTS-submittable, and SAM-decidable by stable session id', () => {
@@ -538,6 +778,31 @@ test('headset typo correction remains a correction and never creates a headset r
   assert.equal(candidateSheet.values[1][2], 'Logitech Zone 300');
   assert.equal(workbook.getSheetByName('headset-review-log'), null);
   assert.equal(Object.hasOwn(decided.result, 'headset_review_required'), false);
+});
+
+test('headset correction updates the existing linked pending review instead of creating another identity', () => {
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name', 'headset_brand'], [
+    ['session-1', 'Taylor Example', 'SYNTHETIC USB MIGRATION HEDSET'],
+  ]);
+  const reviewHeaders = [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ];
+  const reviewSheet = createFakeSheet('headset-review-log', reviewHeaders, [[
+    'review-1', 'session-1', 'Taylor Example', 'Tester Example', 'SYNTHETIC USB', 'MIGRATION HEDSET',
+    'pending', '', 'created', 'created', '', '', '',
+  ]]);
+  const workbook = createFakeWorkbook([candidateSheet, reviewSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const response = responsePayload(api.doPost(postEvent('updateCandidateTracking', 'sam-current', {
+    operation: 'edit_candidate_information', session_id: 'session-1', reason: 'Correct the model spelling.', actor: 'SAM Admin',
+    changes: [{ field: 'headset_model', previous_value: 'MIGRATION HEDSET', requested_value: 'MIGRATION HEADSET' }],
+  })));
+  assert.equal(response.ok, true);
+  assert.equal(candidateSheet.values[1][2], 'SYNTHETIC USB MIGRATION HEADSET');
+  assert.equal(reviewSheet.values[1][5], 'MIGRATION HEADSET');
+  assert.equal(reviewSheet.values[1][6], 'pending');
+  assert.equal(reviewSheet.values.length, 2);
 });
 
 test('SAM direct candidate edit requires an audit reason before applying changes', () => {
@@ -695,4 +960,77 @@ test('authorization failures reveal no credential or deployment details', () => 
     api.safeError_(new Error('Deployment https://script.google.com/macros/s/private-marker/exec rejected token')),
     'Request failed.',
   );
+});
+
+
+
+test('explicit decision for live USB pair remains distinct and does not merge', () => {
+  const headers = [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ];
+  const reviewSheet = createFakeSheet('headset-review-log', headers, [[
+    'review-1', 'session-1', 'Candidate Example', 'Tester Example', 'USB', 'TEST HEADSET',
+    'pending', '', 'created', 'updated', '', '', '',
+  ], [
+    'review-2', 'session-2', 'Candidate Example 2', 'Tester Example 2', 'USB', 'TESTER HEADSET',
+    'pending', '', 'created', 'updated', '', '', '',
+  ]]);
+  const headsetsSheet = createFakeSheet('headsets', ['Brand', 'Model', 'Status', 'Note']);
+  const workbook = createFakeWorkbook([reviewSheet, headsetsSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+
+  const approved = responsePayload(api.doPost(postEvent('approveHeadset', 'sam-current', {
+    review_id: 'review-1', brand: 'USB', model: 'TEST HEADSET', actor: 'SAM Admin',
+  })));
+  assert.equal(approved.ok, true);
+
+  const denied = responsePayload(api.doPost(postEvent('denyHeadset', 'sam-current', {
+    review_id: 'review-2', brand: 'USB', model: 'TESTER HEADSET', note: 'Headset does not connect via USB', actor: 'SAM Admin',
+  })));
+  assert.equal(denied.ok, true);
+
+  assert.equal(headsetsSheet.values.length, 3);
+  assert.deepEqual(headsetsSheet.values[1].slice(0, 4), ['USB', 'TEST HEADSET', 'approved', '']);
+  assert.deepEqual(headsetsSheet.values[2].slice(0, 4), ['USB', 'TESTER HEADSET', 'denied', 'Headset does not connect via USB']);
+});
+
+test('approval and denial use current authoritative row and stale requests are ignored', () => {
+  const headers = [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ];
+  const reviewSheet = createFakeSheet('headset-review-log', headers, [[
+    'review-1', 'session-1', 'Candidate Example', 'Tester Example', 'USB', 'NEW MODEL',
+    'pending', 'New note', 'created', 'updated', '', '', '',
+  ]]);
+  const headsetsSheet = createFakeSheet('headsets', ['Brand', 'Model', 'Status', 'Note']);
+  const workbook = createFakeWorkbook([reviewSheet, headsetsSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+
+  const approved = responsePayload(api.doPost(postEvent('approveHeadset', 'sam-current', {
+    review_id: 'review-1', brand: 'USB', model: 'OLD MODEL', actor: 'SAM Admin',
+  })));
+  assert.equal(approved.ok, true);
+  assert.deepEqual(headsetsSheet.values[1].slice(0, 4), ['USB', 'NEW MODEL', 'approved', '']);
+});
+
+test('denial uses current authoritative row and preserves note', () => {
+  const headers = [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ];
+  const reviewSheet = createFakeSheet('headset-review-log', headers, [[
+    'review-1', 'session-1', 'Candidate Example', 'Tester Example', 'USB', 'NEW MODEL',
+    'pending', 'New note', 'created', 'updated', '', '', '',
+  ]]);
+  const headsetsSheet = createFakeSheet('headsets', ['Brand', 'Model', 'Status', 'Note']);
+  const workbook = createFakeWorkbook([reviewSheet, headsetsSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+
+  const denied = responsePayload(api.doPost(postEvent('denyHeadset', 'sam-current', {
+    review_id: 'review-1', brand: 'USB', model: 'OLD MODEL', note: 'Stale note', actor: 'SAM Admin',
+  })));
+  assert.equal(denied.ok, true);
+  assert.deepEqual(headsetsSheet.values[1].slice(0, 4), ['USB', 'NEW MODEL', 'denied', 'Stale note']);
 });

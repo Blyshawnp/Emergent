@@ -2,6 +2,15 @@
 
 > This is the living technical and release handoff document for MTS and SAM. Update it whenever a major workflow, fallback, release rule, build command, security decision, or architecture detail changes. Repository code and validated runtime behavior remain the final source of truth.
 
+## 2026-07-30 candidate outcome and scheduling contract
+
+- Headset catalog identity remains exact `Brand` plus `Model`. Only normalized active approved rows are MTS-selectable; denied, archived, deleted, inactive, and unsupported statuses are excluded without headset-name special cases.
+- Candidate display status uses the active authorized readiness override first, then final/required-component outcomes. Passed mock calls cannot override a failed required Supervisor Transfer on a final attempt.
+- Candidate Tracking status changes target the exact session. Mark Passed/Failed reuse `readiness_override_*` audit fields and preserve `calculated_result`; Grant Extra Attempt increments `extra_attempts_granted` and `allowed_attempt_count` without rewriting prior outcomes.
+- Attempt state distinguishes `current_attempt_number`, `allowed_attempt_count`, and `extra_attempts_granted`. A newly authorized fourth certification attempt is `4 of 4`; derivative Supervisor Transfer, Newbie Shift, reschedule, and form workflows do not create a new certification sequence.
+- `newbie_shift_number` is the sole canonical optional shift-number key. It is stored as trimmed text, preserves leading zeroes, follows exact request/session identity, and is omitted from displays when blank.
+- The Apps Script source adds these workflow columns through the existing compatible header-extension path. Source changes require a new immutable deployment; this repository task does not deploy or mutate live data.
+
 Last verified: 2026-07-15 by final content synchronization, static repository inspection, all 20 frontend suites (166 tests), backend compile plus all release/feature suites, frontend production build, process-ownership checks, and sequential SAM/MTS 1.0.1 package builds. Current conclusion is blocked: the shared Apps Script token does not separate routine client actions from destructive admin actions, and fixed-port backend reuse does not prove listener identity. Service-account packaging and deployment-path logging were fixed locally. Live managed content, workflow round trips, Form dry runs, high-DPI UI, lifecycle, updater, and installed-app checks remain manual. See `docs/RELEASE_CHECKLIST_v1.0.1.md`.
 Active branch: `feature/newbie-shift-request-workflows`
 Release target: `v1.0.1`
@@ -265,20 +274,16 @@ Unknown/unapproved headset review creation happens when the trainer confirms hea
 VPN/IP verification is implemented in:
 
 - MTS UI component: `frontend/src/components/CandidateIpIntelligence.jsx`.
-- Backend endpoint: `/api/ip-intelligence/check` in `backend/server.py`.
+- Inactive internal backend endpoint: `/api/ip-intelligence/check` in `backend/server.py`.
 - VPN docs: `docs/vpn-proxy-check.md`.
 
 Current release decision:
 
-- Automatic lookup is the default via `vpnProxyCheckMode: "checker"` in `backend/server.py` and `frontend/src/components/CandidateIpIntelligence.jsx`.
-- The visible manual IP entry UI was removed for `v1.0.1`; the panel no longer shows `Candidate Public IP Address`, an IPv4/IPv6 textbox, or `Copy IP`.
-- Automatic lookup still uses the backend `/api/ip-intelligence/check` provider pipeline when a saved candidate IP exists in session state.
-- Trainer-facing wording must treat Candidate IP Intelligence as decision support; the tester makes the final decision.
-- Manual verification links remain available and reversible through Settings with `vpnProxyCheckMode: "links"`.
-- Manual provider cards use a `Lookup` action and a separate `Copy URL` action.
-- Integrated lookup must not automatically pass/fail a candidate; it can trigger trainer review/auto-fail workflow only through the existing explicit decision modal.
-
-Recent stabilization replaced broken/manual providers and added copy URL behavior; verify current provider list in `CandidateIpIntelligence.jsx` before changing it.
+- Automatic VPN/proxy lookup is not shipped in the MTS release UI. Basics does not call providers, require a saved candidate IP, or display an automatic result.
+- The trainer answers `Has VPN?` and, when applicable, `Can turn off?` using the existing `vpn_on` and `vpn_off` mappings.
+- Basics displays exactly three manual reference links: IP2Location, IPinfo, and ip.teoh.io. Each `Copy Link` action copies only the public site URL and never opens the browser or submits an IP.
+- External lookup results do not fill either answer and never determine pass/fail. The existing explicit trainer workflow remains authoritative.
+- There is no release Settings toggle for automatic VPN verification. Legacy `vpnProxyCheckMode` data and the backend provider endpoint are retained as inactive internal/future-development code only; the frontend has no call path to them and they do not run at startup.
 
 ### Calls
 
@@ -684,7 +689,7 @@ Do not claim full accessibility compliance without a dedicated audit. Current ac
 | Shared candidate history | Shared Candidate Sessions / Pending Sup Transfers via backend helpers | SAM admin actions | Local SQLite/session history | Shared views unavailable or stale until reconnect |
 | Approved headsets | Google/admin content when configured | Settings/admin sheet override | `backend/defaults/headsets.csv`, `docs/admin-content-package/csv-tabs/approved-headsets.csv` | Falls back to packaged list |
 | Headset research | SAM/headset review Google-backed rows | SAM admin review action | Backend/local persistence where configured | Review queue may be unavailable; trainer flow should continue |
-| VPN verification | Automatic backend intelligence check plus manual provider lookup links | Settings `vpnProxyCheckMode` | Manual trainer decision and manual provider cards | Falls back to manual verification when provider coverage is limited |
+| VPN verification | Three manual external lookup links on Basics | None; no release Settings toggle | Manual trainer decision using IP2Location, IPinfo, or ip.teoh.io | Copy-only reference links; MTS does not call providers or classify the result |
 | Google Sheets | Authenticated Google service-account client | Apps Script/public CSV for selected content where configured | Packaged CSV/Markdown/default constants | Feature-specific fallback or warning |
 | Google Apps Script | Apps Script config/docs and backend adapter | Role-specific ignored `backend/config/apps-script-api-mts.json` or `apps-script-api-sam.json` when configured | Direct Sheets/local defaults | Should degrade to direct/fallback paths |
 | Help/FAQ | Trainer-focused Google Doc override via runtime config | `admin_help_doc_url`, `admin_faq_doc_url` | `backend/defaults/help.md`, `backend/defaults/faq.md`, backend fallback, `frontend/src/pages/HelpPage.jsx` topic cards | Falls back to local markdown; clearly internal remote sections/lines are filtered before rendering |
@@ -941,8 +946,8 @@ Automated validation and production build validation are not the same as package
 Accepted limitations for `v1.0.x`:
 
 - No service-account credential may be packaged. Live Google access must use an approved service boundary and must fail safely when it is unavailable.
-- Automatic VPN/provider lookup is the default, but provider results remain decision support and must not be treated as automatic pass/fail decisions without explicit trainer workflow confirmation.
-- Automatic VPN/IP lookup depends on an available saved candidate IP. The visible manual IP entry field is intentionally removed; manual provider cards remain available for external lookup/recovery.
+- Automatic VPN/provider lookup is not shipped. The packaged MTS uses three manual Copy Link actions and requires the trainer to open a site separately and enter the candidate IP there.
+- Manual lookup requires no saved candidate IP in MTS, does not populate VPN answers, and cannot automatically determine pass/fail.
 - Gemini availability depends on configuration, network access, API availability, and prompt/model behavior. Fallback summaries are required.
 - Google Sheets/Docs access can fail due to network, quota, permissions, missing tabs, or service-account configuration. Local fallbacks must remain safe.
 - Selenium form fill is sensitive to browser availability, driver availability, Microsoft Form structure, and environment. Manual recovery remains necessary.
@@ -952,6 +957,14 @@ Accepted limitations for `v1.0.x`:
 Unresolved blocker vs future enhancement must be decided from current validation. Do not move a genuine release blocker into this section to make release status look healthier.
 
 ## 12. Release Checklist
+
+### 2026-07-30: Manual-only VPN/proxy lookup release correction
+
+- Removed the experimental integrated VPN/proxy checker from active MTS frontend paths: no `Check IP`, provider progress/results, saved-IP warning, Review result block, frontend provider request, or Settings toggle remains.
+- Restored the three repository-verified original manual sites on Basics: IP2Location, IPinfo, and ip.teoh.io. Each row has a copy-only `Copy Link` action with temporary feedback; MTS does not open the site or include an IP in copied text.
+- Preserved `Has VPN?`, conditional `Can turn off?`, session/history mappings, explicit trainer confirmation, summary behavior, and form-fill mappings.
+- Retained the backend provider endpoint and legacy setting parsing only as inactive internal/future-development code. The release frontend has no invocation or startup path for it.
+- Updated Help, user/admin guides, tutorial scripts, training inventory/map, recording-impact notes, screenshot plan, and the VPN release decision document for manual-only behavior.
 
 ### Repository safety
 
@@ -1156,7 +1169,7 @@ Verification needed from current packaged-app smoke testing:
 
 ### 2026-07-11: Final RC UI polish and Google Sheets stability
 
-- Removed visible manual IP entry controls from `frontend/src/components/CandidateIpIntelligence.jsx`; the panel no longer shows `Candidate Public IP Address`, IPv4/IPv6 text input, `Copy IP`, or the old helper text while preserving automatic lookup and manual provider cards.
+- Removed visible manual IP entry controls from `frontend/src/components/CandidateIpIntelligence.jsx`; this older entry was later superseded by the 2026-07-30 manual-only release correction documented below.
 - Adjusted MTS Home Quick Actions in `frontend/src/polish-mts.css` so normal desktop widths keep five cards on one row and smaller widths fall back to a balanced `3+2` layout instead of `4+1`.
 - Tightened SAM Candidate Tracking action layout in `frontend/src/NotificationManagerApp.jsx` and `frontend/src/polish-sam.css`; `View Details` is a full-width first action and remaining buttons use a readable two-column layout.
 - Hardened Google Sheets quota handling for SAM Candidate Tracking in `frontend/src/NotificationManagerApp.jsx` and `backend/server.py`: concurrent loads are deduplicated, successful data is briefly cached, quota/rate-limit failures trigger a `60000ms` backoff, previous data stays visible when possible, and trainer-facing messages are sanitized.
@@ -1177,7 +1190,7 @@ Verification needed from current packaged-app smoke testing:
 - Confirmation dialogs corrected safe-left/affirmative-right ordering for No Coaching, NC/NS choices, and related save/exit flows. Relevant files: `frontend/src/pages/CallsPage.jsx`, `frontend/src/pages/BasicsPage.jsx`, `frontend/src/pages/SupTransferPage.jsx`, `frontend/src/pages/ReviewPage.jsx`, `frontend/src/App.js`.
 - Candidate lookup no longer exposes raw `mock_session`; Basics formats session types as trainer-facing labels.
 - Discord shortcuts now use window-level modal handling plus global handoff for Search, Favorites, Command Palette, Screenshot Library, and favorite shortcut copy actions. Duplicate shortcut display was removed from Settings.
-- VPN/proxy checking restored automatic lookup as the default while preserving manual lookup links and `Copy URL` actions.
+- VPN/proxy checking restored automatic lookup as the default while preserving manual lookup links and `Copy URL` actions. This older release-candidate decision was superseded by the 2026-07-30 manual-only correction below.
 - Validation completed: targeted frontend regression tests, backend compile/RC/IP tests, desktop process ownership checks, frontend production build, SAM package build, and MTS package build. Hands-on packaged close/port cleanup remains required.
 
 ### 2026-07-11: SAM packaged startup regression fix

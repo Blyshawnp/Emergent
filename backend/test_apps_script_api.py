@@ -46,6 +46,7 @@ class AppsScriptApiTests(unittest.TestCase):
             "getSharedCandidates",
             "getSheetMetadata",
             "getSheetRange",
+            "getHeadsetReviewMigrationPlan",
             "updateSheetRange",
             "appendSheetRows",
             "batchGetSheetRanges",
@@ -54,6 +55,8 @@ class AppsScriptApiTests(unittest.TestCase):
             "getSettings",
             "getNotificationRecipients",
             "approveHeadset",
+            "editHeadsetReview",
+            "migrateHeadsetReviewSchema",
             "denyHeadset",
             "archiveHeadsetReview",
             "deleteHeadsetReview",
@@ -66,6 +69,27 @@ class AppsScriptApiTests(unittest.TestCase):
             self.assertIn(f"case '{action}'", source)
         self.assertNotIn("BEGIN PRIVATE KEY", source)
         self.assertNotIn("private_key", source)
+
+    def test_headset_review_migration_requires_verified_backup_and_checksum_guard(self):
+        source = (Path(__file__).resolve().parents[1] / "docs" / "apps-script-api-web-app.gs").read_text(encoding="utf-8")
+        migration = source.split("function migrateHeadsetReviewSchema_", 1)[1].split("function headsetReviewStatus_", 1)[0]
+        self.assertIn("MIGRATE_HEADSET_REVIEW_V2", migration)
+        self.assertIn("expected_checksum", migration)
+        self.assertIn("migration-backup-", migration)
+        self.assertIn("backupChecksum !== analysis.source_checksum", migration)
+        self.assertIn("analysis.safe_to_migrate", migration)
+        self.assertNotIn("deleteSheet", migration)
+
+    def test_candidate_correction_preserves_catalog_boundary_and_updates_only_linked_review(self):
+        source = (Path(__file__).resolve().parents[1] / "docs" / "apps-script-api-web-app.gs").read_text(encoding="utf-8")
+        self.assertIn("'Brand',\n  'Model',\n  'Status',\n  'Note'", source)
+        correction_body = source.split("function applyCandidateCorrection_", 1)[1].split("function applyCandidateDeletionTerminal_", 1)[0]
+        self.assertIn("change.field === 'headset_brand'", correction_body)
+        self.assertIn("change.field === 'headset_model'", correction_body)
+        self.assertNotIn("allowedSheet_('headsets')", correction_body)
+        self.assertIn("updateMatchingRows_('headset-review-log'", correction_body)
+        self.assertIn("String(review.source_session_id || '').trim() === sourceSessionId", correction_body)
+        self.assertNotIn("submitHeadsetReview_", correction_body)
 
     def test_missing_disabled_and_placeholder_configs_fall_back_safely(self):
         with tempfile.TemporaryDirectory() as root:
@@ -680,6 +704,25 @@ class AppsScriptApiTests(unittest.TestCase):
         self.assertFalse(result["fallback"])
         self.assertEqual(result["source"], "google")
         mock_client.get.assert_called_once_with("getTickerMessages", {})
+
+    def test_notifications_endpoint_labels_successful_remote_content_for_safe_renderer_cache(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import server
+
+        groups = {
+            "tickerMessages": [{"id": "live", "message": "Remote"}],
+            "banners": [],
+            "popups": [],
+        }
+        server._ticker_fetch_status.update({"source": "google", "status": "test success"})
+
+        with mock.patch("server._fetch_notifications_from_sheet", new=mock.AsyncMock(return_value=groups)):
+            result = asyncio.run(server.get_notifications())
+
+        self.assertEqual(result["tickerMessages"], groups["tickerMessages"])
+        self.assertEqual(result["source"], "google")
+        self.assertFalse(result["fallback"])
 
     def test_dedicated_read_resolver_mts_only_success(self):
         # MTS-only configuration reads ticker successfully

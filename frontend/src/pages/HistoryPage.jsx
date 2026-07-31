@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import RescheduleIntakeModal from '../components/RescheduleIntakeModal';
@@ -14,6 +14,7 @@ import {
   sessionStatusMeta,
 } from '../utils/certificationWorkflow';
 import { buildNewbieShiftRescheduleSession } from '../utils/newbieShiftWorkflow';
+import { getCandidateHeadset } from '../utils/headsetDisplay';
 
 function adminHistoryControlsEnabled() {
   try {
@@ -77,16 +78,25 @@ function formatFollowUpParts(record) {
 }
 
 export function buildHistoryCorrectionChanges(record = {}, draft = {}) {
+  const headset = getCandidateHeadset(record);
   const current = {
     candidate_name: String(record.candidate || record.candidate_name || '').trim(),
-    headset_model: String(record.headset_brand || '').trim(),
+    ...(headset.separate
+      ? { headset_brand: headset.brand, headset_model: headset.model }
+      : { headset_model: headset.label }),
   };
   const requested = {
     candidate_name: String(draft.candidateName || '').trim(),
-    headset_model: String(draft.headsetModel || '').trim(),
+    ...(headset.separate
+      ? {
+        headset_brand: String(draft.headsetBrand || '').trim(),
+        headset_model: String(draft.headsetModel || '').trim(),
+      }
+      : { headset_model: String(draft.headsetCombined ?? draft.headsetModel ?? '').trim() }),
   };
   return [
     { field_key: 'candidate_name', label: 'Candidate Name' },
+    ...(headset.separate ? [{ field_key: 'headset_brand', label: 'Headset Brand' }] : []),
     { field_key: 'headset_model', label: 'Headset Model' },
   ].flatMap(({ field_key, label }) => (
     requested[field_key] && requested[field_key] !== current[field_key]
@@ -95,11 +105,12 @@ export function buildHistoryCorrectionChanges(record = {}, draft = {}) {
   ));
 }
 
-export default function HistoryPage({ onNavigate, navigationState, onHistoryRefresh }) {
+export default function HistoryPage({ onNavigate, navigationState, onHistoryRefresh, history: initialHistory = [], historyStats: initialStats = {} }) {
   const modal = useModal();
-  const [stats, setStats] = useState({});
-  const [history, setHistory] = useState([]);
+  const [stats, setStats] = useState(() => initialStats || {});
+  const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory.map(applyFormRecoveryMarker) : []));
   const [search, setSearch] = useState('');
+  const [syncState, setSyncState] = useState({ syncing: false, error: '' });
   const [detail, setDetail] = useState(null);
   const [deletionRequestDraft, setDeletionRequestDraft] = useState(null);
   const [correctionDraft, setCorrectionDraft] = useState(null);
@@ -108,22 +119,43 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   const [showAdminHistoryControls] = useState(() => adminHistoryControlsEnabled());
   const rescheduleTriggerRef = useRef(null);
   const restoreRescheduleFocusRef = useRef(false);
+  const mountedRef = useRef(true);
 
-  const load = useCallback(async () => {
+  const loadLocal = useCallback(async () => {
     try {
       const result = onHistoryRefresh
-        ? await onHistoryRefresh('history-page')
-        : { stats: await api.getHistoryStats(), history: await api.getHistory() };
+        ? await onHistoryRefresh('history-local')
+        : await Promise.all([api.getHistory(), api.getHistoryStats()]).then(([localHistory, localStats]) => ({ history: localHistory, stats: localStats }));
       const nextHistory = (Array.isArray(result?.history) ? result.history : []).map(applyFormRecoveryMarker);
+      if (!mountedRef.current) return;
       setStats(result?.stats || {});
       setHistory(nextHistory);
-      console.log('[HISTORY PAGE] fresh history loaded', { count: nextHistory.length });
-    } catch (_err) {
-      // History data load failed - table remains empty
+    } catch (_error) {
+      // Initial props remain visible if the local refresh is unavailable.
     }
   }, [onHistoryRefresh]);
 
-  useEffect(() => { load(); }, [load]);
+  const reconcile = useCallback(async () => {
+    setSyncState({ syncing: true, error: '' });
+    try {
+      const result = await api.reconcileHistory(20000);
+      if (!mountedRef.current) return;
+      setHistory((Array.isArray(result?.history) ? result.history : []).map(applyFormRecoveryMarker));
+      if (result?.stats) setStats(result.stats);
+      setSyncState({ syncing: false, error: '' });
+    } catch (_error) {
+      if (mountedRef.current) {
+        setSyncState({ syncing: false, error: 'Candidate updates could not be synchronized. Local History is still available.' });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void loadLocal();
+    void reconcile();
+    return () => { mountedRef.current = false; };
+  }, [loadLocal, reconcile]);
 
   useEffect(() => {
     if (navigationState?.selectedHistoryRecord) {
@@ -138,7 +170,10 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
     }
   }, [detail, rescheduleDraft]);
 
-  const filtered = history.filter(s => ((s.candidate || s.candidate_name || '')).toLowerCase().includes(search.toLowerCase()));
+  const filtered = useMemo(() => {
+    const query = search.toLowerCase();
+    return history.filter(s => ((s.candidate || s.candidate_name || '')).toLowerCase().includes(query));
+  }, [history, search]);
 
   const getHistoryIdentity = (record) => {
     if (record?.history_id) return record.history_id;
@@ -249,7 +284,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
           setFormRecoveryMarker(record, false);
           await modal.alert('Form Filled', response.message || 'The Microsoft Form was filled.', 'check-circle', 'success');
         }
-        await load();
+        await loadLocal();
         return;
       }
       await modal.error('Form Fill Failed', response.message || 'Unable to send this historical session to the Cert Form.');
@@ -295,7 +330,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       }
       await api.deleteHistorySession(identity);
       if (detail && getHistoryIdentity(detail) === identity) setDetail(null);
-      await load();
+      await loadLocal();
       await modal.alert('Deleted', 'The session was deleted and Smart Resume references were cleaned up.');
     } catch (error) {
       await modal.error('Delete Failed', error.response?.data?.detail || error.message || 'Unable to delete this history session.');
@@ -313,7 +348,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       const response = await api.requestHistorySessionDeletion(deletionRequestDraft.identity, reason);
       if (detail && getHistoryIdentity(detail) === deletionRequestDraft.identity) setDetail(null);
       setDeletionRequestDraft(null);
-      await load();
+      await loadLocal();
       await modal.success(
         'Deletion Request Submitted',
         'The session was removed from local History. The Candidate Tracking deletion request was submitted to SAM and is awaiting review.'
@@ -328,10 +363,14 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   };
 
   const openCorrectionRequest = (record) => {
+    const headset = getCandidateHeadset(record);
     setCorrectionDraft({
       record,
       candidateName: record.candidate || record.candidate_name || '',
-      headsetModel: record.headset_brand || '',
+      headsetBrand: headset.brand,
+      headsetModel: headset.model,
+      headsetCombined: headset.label,
+      separateHeadsetFields: headset.separate,
       reason: '', error: '', submitting: false,
     });
   };
@@ -345,7 +384,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
     const record = correctionDraft.record;
     const changes = buildHistoryCorrectionChanges(record, correctionDraft);
     if (!changes.length) {
-      setCorrectionDraft((current) => ({ ...current, error: 'Change the candidate name or headset model before submitting.' }));
+      setCorrectionDraft((current) => ({ ...current, error: 'Change the candidate name, headset brand, or headset model before submitting.' }));
       return;
     }
     setCorrectionDraft((current) => ({ ...current, reason, error: '', submitting: true }));
@@ -355,6 +394,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       setHistory((current) => current.map((item) => getHistoryIdentity(item) === getHistoryIdentity(record) ? pendingRecord : item));
       setDetail(pendingRecord);
       setCorrectionDraft(null);
+      void reconcile();
       await modal.success('Correction Request Submitted', 'The requested correction was saved locally and sent to SAM for review. The current candidate information will remain authoritative until the request is approved.');
     } catch (error) {
       const detailMessage = error.response?.data?.detail?.message || error.response?.data?.detail || error.message;
@@ -370,7 +410,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         source_session_id: record.session_id || record.history_id || '',
         candidate_name: record.candidate_name || record.candidate || '',
         tester_name: record.tester_name || '',
-        headset_model: record.headset_brand || '',
+        headset_model: getCandidateHeadset(record).label,
         note: record.headset_review_note || '',
       });
     } catch (_error) {
@@ -400,7 +440,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
             const c = await modal.confirmDanger('Clear History', `This will permanently delete ${history.length} session records. This cannot be undone.`);
             if (!c) return;
             if (!await modal.confirm('Confirm', 'This cannot be undone. Are you absolutely sure?')) return;
-            await api.clearHistory(); await modal.alert('Cleared', 'Session history has been cleared.'); await load();
+            await api.clearHistory(); await modal.alert('Cleared', 'Session history has been cleared.'); await loadLocal();
           }} data-testid="history-clear">Clear All History</button>
         )}
       </div>
@@ -417,7 +457,13 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         <SC label="Pass Rate" value={`${stats.pass_rate || 0}%`} color="var(--color-success)" />
       </div>
 
-      <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by candidate name..." style={{ marginBottom: 16, maxWidth: 400 }} data-testid="history-search" />
+      <div className="history-toolbar">
+        <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by candidate name..." data-testid="history-search" />
+        <div className="history-sync-state" aria-live="polite">
+          {syncState.syncing ? <span data-testid="history-syncing">Checking for candidate updates…</span> : null}
+          {syncState.error ? <><span role="alert">{syncState.error}</span><button type="button" className="btn btn-muted btn-sm" onClick={() => void reconcile()}>Retry</button></> : null}
+        </div>
+      </div>
 
       <div className="card history-list-card" style={{ padding: 0 }}>
         {filtered.length === 0 ? (
@@ -425,36 +471,39 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
         ) : (
           <div className="hist-grid" role="table" aria-label="Session history">
             <div className="hist-grid-head" role="row">
-              <div role="columnheader">Date</div>
+              <div role="columnheader">Date / Follow-Up</div>
               <div role="columnheader">Candidate</div>
-              <div role="columnheader">Tester</div>
+              <div role="columnheader">Tester / Form Status</div>
               <div role="columnheader">Session Status</div>
-              <div role="columnheader">Follow-Up</div>
-              <div role="columnheader">Form Status</div>
               <div role="columnheader">Actions</div>
             </div>
               {filtered.map((s, i) => (
                 <div key={getHistoryIdentity(s) || i} className="hist-row" role="row" data-testid={`history-row-${i}`}>
-                  <div className="hist-cell hist-date" role="cell" data-label="Date">{s.timestamp || 'Unknown'}</div>
-                  <div className="hist-cell hist-name" role="cell" data-label="Candidate">{s.candidate || s.candidate_name || 'Unknown'}</div>
-                  <div className="hist-cell hist-tester" role="cell" data-label="Tester">{s.tester_name || ''}</div>
-                  <div className="hist-cell hist-status" role="cell" data-label="Session Status"><StatusChip meta={sessionStatusMeta(s.status)} /></div>
-                  <div className="hist-cell hist-followup text-sm" role="cell" data-label="Follow-Up">
-                    {s.candidate_correction_pending ? <StatusChip meta={{ label: 'Correction Pending', tone: 'pending' }} title="Candidate information correction pending SAM review" /> : null}
-                    {getNewbieShiftEligibility(s).active || getNewbieShiftEligibility(s).denied ? (() => {
-                      const followUp = formatFollowUpParts(s);
-                      const meta = newbieShiftStatusMeta(s);
-                      return (
-                        <>
-                          <span className="hist-followup-date" title={formatNewbieSchedule(s.newbie_shift_data)}>{followUp.dateTime}</span>
-                          {followUp.timezone && <span className="hist-followup-tz">{followUp.timezone}</span>}
-                          {meta ? <StatusChip meta={meta} /> : null}
-                        </>
-                      );
-                    })() : <span className="text-muted">No follow-up</span>}
+                  <div className="hist-cell hist-date-followup" role="cell" data-label="Date / Follow-Up">
+                    <span className="hist-date">{s.timestamp || 'Unknown'}</span>
+                    <div className="hist-followup text-sm">
+                      {getNewbieShiftEligibility(s).active || getNewbieShiftEligibility(s).denied ? (() => {
+                        const followUp = formatFollowUpParts(s);
+                        const meta = newbieShiftStatusMeta(s);
+                        return (
+                          <>
+                            <span className="hist-followup-date" title={formatNewbieSchedule(s.newbie_shift_data)}>{followUp.dateTime}</span>
+                            {followUp.timezone && <span className="hist-followup-tz">{followUp.timezone}</span>}
+                            {meta ? <StatusChip meta={meta} /> : null}
+                            {s.newbie_shift_number ? <span className="hist-followup-tz">Shift #{s.newbie_shift_number}</span> : null}
+                          </>
+                        );
+                      })() : <span className="text-muted">No follow-up</span>}
+                    </div>
                   </div>
-                  <div className="hist-cell hist-form-status" role="cell" data-label="Form Status">
+                  <div className="hist-cell hist-name" role="cell" data-label="Candidate">{s.candidate || s.candidate_name || 'Unknown'}</div>
+                  <div className="hist-cell hist-tester-form" role="cell" data-label="Tester / Form Status">
+                    <span className="hist-tester">{s.tester_name || 'Not recorded'}</span>
                     <StatusChip meta={formFillStatusMeta(s.form_fill_status, { legacy: !s.form_fill_status })} />
+                  </div>
+                  <div className="hist-cell hist-status" role="cell" data-label="Session Status">
+                    <StatusChip meta={sessionStatusMeta(s.status)} />
+                    {s.candidate_correction_pending ? <StatusChip meta={{ label: 'Correction Pending', tone: 'pending' }} title="Candidate information correction pending SAM review" /> : null}
                   </div>
                   <div className="hist-cell hist-actions" role="cell" data-label="Actions">
                     <div className="hist-actions-group">
@@ -516,12 +565,19 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
             </div>
             <div className="modal-body correction-request-fields">
               <label><span>Candidate name</span><small>Current: {correctionDraft.record.candidate || correctionDraft.record.candidate_name || 'Not recorded'}</small><input value={correctionDraft.candidateName} onChange={(event) => setCorrectionDraft((current) => ({ ...current, candidateName: event.target.value, error: '' }))} /></label>
-              <label><span>Headset model</span><small>Current: {correctionDraft.record.headset_brand || 'Not recorded'}</small><input value={correctionDraft.headsetModel} onChange={(event) => setCorrectionDraft((current) => ({ ...current, headsetModel: event.target.value, error: '' }))} /></label>
+              {correctionDraft.separateHeadsetFields ? (
+                <>
+                  <label><span>Headset brand</span><small>Current: {getCandidateHeadset(correctionDraft.record).brand || 'Not recorded'}</small><input value={correctionDraft.headsetBrand} onChange={(event) => setCorrectionDraft((current) => ({ ...current, headsetBrand: event.target.value, error: '' }))} /></label>
+                  <label><span>Headset model</span><small>Current: {getCandidateHeadset(correctionDraft.record).model || 'Not recorded'}</small><input value={correctionDraft.headsetModel} onChange={(event) => setCorrectionDraft((current) => ({ ...current, headsetModel: event.target.value, error: '' }))} /></label>
+                </>
+              ) : (
+                <label><span>Headset</span><small>Current: {getCandidateHeadset(correctionDraft.record).label || 'Not recorded'}</small><input value={correctionDraft.headsetCombined} onChange={(event) => setCorrectionDraft((current) => ({ ...current, headsetCombined: event.target.value, error: '' }))} /></label>
+              )}
               <label><span>Correction reason</span><textarea className="correction-reason-input" rows={4} required aria-invalid={Boolean(correctionDraft.error && correctionDraft.reason.trim().length < 10)} value={correctionDraft.reason} onChange={(event) => setCorrectionDraft((current) => ({ ...current, reason: event.target.value, error: '' }))} placeholder="Explain why this correction is needed, such as a misspelled candidate name or headset model." /></label>
               <div className="correction-review" aria-live="polite">
                 <strong>Changed fields</strong>
                 {correctionChanges.map((change) => <div key={change.field_key}><span>{change.label}</span><span>{change.previous_value || 'Not recorded'} → {change.requested_value}</span></div>)}
-                {!correctionChanges.length ? <p className="correction-empty-guidance">Change the candidate name or headset model to enable Submit Correction Request.</p> : null}
+                {!correctionChanges.length ? <p className="correction-empty-guidance">Change the candidate name or headset value to enable Submit Correction Request.</p> : null}
               </div>
               {correctionDraft.error ? <div className="form-error" role="alert">{correctionDraft.error}</div> : null}
             </div>
@@ -585,7 +641,8 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 )}
                 <div className="text-sm"><strong>Date:</strong> {detailDate(detail) || 'Unknown'}</div>
                 <div className="text-sm"><strong>Final Attempt:</strong> {detail.final_attempt ? 'Yes' : 'No'}</div>
-                {detail.headset_brand && <div className="text-sm"><strong>Headset:</strong> {detail.headset_brand}</div>}
+                {getCandidateHeadset(detail).label && <div className="text-sm"><strong>Headset:</strong> {getCandidateHeadset(detail).label}</div>}
+                {detail.newbie_shift_number ? <div className="text-sm"><strong>Newbie Shift Number:</strong> Shift #{detail.newbie_shift_number}</div> : null}
                 <div className="text-sm"><strong>Form Fill:</strong> <StatusChip meta={formFillStatusMeta(detail.form_fill_status, { legacy: !detail.form_fill_status })} /></div>
                 {detail.candidate_correction_status ? <div className="text-sm"><strong>Candidate Information Correction:</strong> <StatusChip meta={{ label: detail.candidate_correction_status === 'pending' ? 'Pending SAM Review' : detail.candidate_correction_status === 'approved' ? 'Approved' : 'Denied', tone: detail.candidate_correction_status === 'approved' ? 'approved' : detail.candidate_correction_status === 'denied' ? 'denied' : 'pending' }} /></div> : null}
                 {detail.candidate_correction_status !== 'approved' && Array.isArray(detail.candidate_correction_changes) && detail.candidate_correction_changes.length ? (
@@ -602,12 +659,9 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 ) : null}
                 {detail.candidate_correction_denial_reason ? <div className="text-sm"><strong>Correction Denial Reason:</strong> {detail.candidate_correction_denial_reason}</div> : null}
               </div>
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => openCorrectionRequest(detail)} disabled={detail.candidate_correction_pending} data-testid="history-correction-action">
-                {detail.candidate_correction_pending ? 'Correction Pending' : 'Correct Candidate Information'}
-              </button>
               <strong>Tester:</strong> {detail.tester_name || 'N/A'}<br />
               {detail.auto_fail_reason && <><strong>Auto-Fail:</strong> <span style={{ color: 'var(--color-danger)' }}>{detail.auto_fail_reason}</span><br /></>}
-              {detail.headset_brand && <><strong>Headset:</strong> {detail.headset_brand}<br /></>}
+              {getCandidateHeadset(detail).label && <><strong>Headset:</strong> {getCandidateHeadset(detail).label}<br /></>}
               {[1, 2, 3].map(i => {
                 const call = detail[`call_${i}`];
                 if (!call || !call.result) return null;
@@ -635,7 +689,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 );
               })}
               {(getNewbieShiftEligibility(detail).active || getNewbieShiftEligibility(detail).denied) && (
-                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data || {})}<br /><strong>Approval Status:</strong> <StatusChip meta={newbieShiftStatusMeta(detail)} />{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}{detail.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && detail.newbie_shift_denial_reason && <><br /><strong>Denial Reason:</strong> {detail.newbie_shift_denial_reason}</>}</>
+                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data || {})}{detail.newbie_shift_number && <><br /><strong>Newbie Shift Number:</strong> Shift #{detail.newbie_shift_number}</>}<br /><strong>Approval Status:</strong> <StatusChip meta={newbieShiftStatusMeta(detail)} />{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}{detail.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && detail.newbie_shift_denial_reason && <><br /><strong>Denial Reason:</strong> {detail.newbie_shift_denial_reason}</>}</>
               )}
               <div style={{ marginTop: 16 }}>
                 <div className="text-sm font-bold">Coaching Summary</div>
@@ -667,18 +721,23 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 </div>
               </div>
             </div>
-            <div className="cmodal-btns" style={{ padding: '0 24px 24px' }}>
-              <button className="btn btn-muted" onClick={() => setDetail(null)}>Close</button>
-              <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
-              <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">{detail.form_fill_status === 'filled' ? 'Refill Cert Form' : 'Fill Cert Form'}</button>
-              {canRescheduleNewbieShift(detail) && <button ref={rescheduleTriggerRef} className="btn btn-warning" onClick={() => handleRescheduleSession(detail)} data-testid="history-detail-reschedule">Reschedule</button>}
-              <button
-                className="btn btn-primary"
-                onClick={() => onNavigate('review', { historyRecord: detail })}
-                data-testid="history-open-review"
-              >
-                Open in Review
-              </button>
+            <div className="history-detail-footer" data-testid="history-detail-footer">
+              <button className="btn btn-muted history-detail-close" onClick={() => setDetail(null)}>Close</button>
+              <div className="history-detail-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => openCorrectionRequest(detail)} disabled={detail.candidate_correction_pending} data-testid="history-correction-action" aria-label="Correct Candidate Information">
+                  {detail.candidate_correction_pending ? 'Correction Pending' : 'Correct Candidate Info'}
+                </button>
+                <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
+                <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">{detail.form_fill_status === 'filled' ? 'Refill Cert Form' : 'Fill Cert Form'}</button>
+                {canRescheduleNewbieShift(detail) && <button ref={rescheduleTriggerRef} className="btn btn-warning" onClick={() => handleRescheduleSession(detail)} data-testid="history-detail-reschedule">Reschedule</button>}
+                <button
+                  className="btn btn-primary"
+                  onClick={() => onNavigate('review', { historyRecord: detail })}
+                  data-testid="history-open-review"
+                >
+                  Open in Review
+                </button>
+              </div>
             </div>
           </div>
         </div>

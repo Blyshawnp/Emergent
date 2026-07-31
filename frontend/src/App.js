@@ -4,6 +4,7 @@ import '@/polish-mts.css';
 import api from './api';
 import { ModalProvider, useModal } from './components/ModalProvider';
 import NotificationBanner from './components/NotificationBanner';
+import MtsTickerBar from './components/MtsTickerBar';
 import HomePage from './pages/HomePage';
 import SetupPage from './pages/SetupPage';
 import BasicsPage from './pages/BasicsPage';
@@ -15,10 +16,14 @@ import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import HelpPage from './pages/HelpPage';
 import { setSoundSettings, unlockSounds } from './utils/sound';
+import { DEFAULT_NOTIFICATION_GROUPS } from './utils/notifications';
 import {
-  DEFAULT_NOTIFICATION_GROUPS,
-  resolveTickerDurationSeconds,
-} from './utils/notifications';
+  createTickerRequestGuard,
+  normalizeTickerGroups,
+  readTickerCache,
+  refreshTickerNotifications,
+  writeTickerCache,
+} from './utils/tickerStartup';
 import { normalizeDiscordKeyList, nextDiscordFavoriteKeys } from './utils/discordFavorites';
 import { normalizeDiscordMessageWhitespace } from './utils/discordContent';
 import {
@@ -157,19 +162,6 @@ function getNotificationModalTitle(notification) {
   if (notification?.type === 'urgent') return 'System Alert';
   if (notification?.type === 'warning') return 'Alert';
   return 'Notification';
-}
-
-function getTickerMessage(notification) {
-  if (!notification?.message) return '';
-  if (notification.type === 'warning') return `WARNING: ${notification.message}`;
-  if (notification.type === 'urgent') return `URGENT: ${notification.message}`;
-  return notification.message;
-}
-
-function getTickerItemClass(notification) {
-  if (notification?.type === 'urgent') return 'ticker-item ticker-item-urgent';
-  if (notification?.type === 'warning') return 'ticker-item ticker-item-warning';
-  return 'ticker-item ticker-item-info';
 }
 
 function getBackendUrl() {
@@ -586,8 +578,7 @@ function AppShell() {
   const [appVersion, setAppVersion] = useState(() => window.electronAPI?.getVersion?.() || APP_VERSION_FALLBACK);
   const [updateState, setUpdateState] = useState({ currentVersion: APP_VERSION_FALLBACK, pendingUpdate: null, installedUpdate: null });
   const [mtsUpdateModal, setMtsUpdateModal] = useState(null);
-  const [tickerMessages, setTickerMessages] = useState([]);
-  const [notificationGroups, setNotificationGroups] = useState(DEFAULT_NOTIFICATION_GROUPS);
+  const [notificationGroups, setNotificationGroups] = useState(() => readTickerCache());
   const [dismissedBannerIds, setDismissedBannerIds] = useState(() => readStoredIds(DISMISSED_NOTIFICATION_BANNERS_KEY));
   const [discordOpen, setDiscordOpen] = useState(false);
   const [discordInitialTab, setDiscordInitialTab] = useState('templates');
@@ -961,6 +952,16 @@ function AppShell() {
           () => setHistoryStats({})
         );
 
+        // Candidate-name/headset reconciliation is intentionally non-blocking.
+        // The local History request above is allowed to render first.
+        api.reconcileHistory(20000).then((result) => {
+          if (cancelled) return;
+          if (Array.isArray(result?.history)) setHistory(result.history);
+          if (result?.stats) setHistoryStats(result.stats);
+        }).catch(() => {
+          // Local History remains authoritative for availability while remote sync is unavailable.
+        });
+
       } catch (_err) {
         if (cancelled) return;
         if (attempt < INITIAL_SETTINGS_MAX_RETRIES) {
@@ -1010,44 +1011,32 @@ function AppShell() {
       return undefined;
     }
 
-    const fetchTicker = async () => {
-      const startedAt = Date.now();
-      console.log('[STARTUP] ticker started');
-      try {
-        const data = await api.getTicker();
-        setTickerMessages(Array.isArray(data.messages) ? data.messages : []);
-        logTimedRequest('ticker', 'succeeded', startedAt, {
-          shape: summarizePayload(data),
-          fallbackUsed: Boolean(data?.fallback),
-          source: data?.source || 'unknown',
-        });
-      } catch (_err) {
-        logTimedRequest('ticker', 'failed', startedAt, { error: _err?.message || String(_err), fallbackUsed: true });
-      }
-    };
-    fetchTicker();
-    const interval = setInterval(fetchTicker, TICKER_REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [loading, remoteContentVersion]);
-
-  useEffect(() => {
-    if (loading) {
-      return undefined;
-    }
-
     let cancelled = false;
 
+    const requestGuard = createTickerRequestGuard();
+
     const refreshNotifications = async () => {
+      const sequence = requestGuard.begin();
+      const startedAt = Date.now();
+      console.log('[STARTUP] ticker notifications started');
       try {
-        const groups = await api.getNotifications();
-        if (!cancelled) {
-          setNotificationGroups(groups || DEFAULT_NOTIFICATION_GROUPS);
+        const payload = await refreshTickerNotifications(() => api.getNotifications());
+        const groups = normalizeTickerGroups(payload);
+        if (!cancelled && requestGuard.isLatest(sequence) && groups) {
+          setNotificationGroups(groups);
+          writeTickerCache(payload);
+          logTimedRequest('tickerNotifications', 'succeeded', startedAt, {
+            shape: summarizePayload(payload),
+            source: payload?.source || 'unknown',
+          });
         }
       } catch (error) {
-        if (!cancelled) {
-          setNotificationGroups(DEFAULT_NOTIFICATION_GROUPS);
-        }
+        // Preserve the cached/default ticker already on screen.
         console.warn('[NOTIFICATIONS] Failed to load notifications:', error?.message || error);
+        logTimedRequest('tickerNotifications', 'failed', startedAt, {
+          error: error?.message || String(error),
+          fallbackUsed: true,
+        });
       }
     };
 
@@ -1056,6 +1045,7 @@ function AppShell() {
 
     return () => {
       cancelled = true;
+      requestGuard.invalidate();
       window.clearInterval(interval);
     };
   }, [loading, remoteContentVersion]);
@@ -1292,46 +1282,9 @@ function AppShell() {
     }
   }, [modal]);
 
-  const notificationTickerMessages = notificationGroups.tickerMessages
-    .map((notification) => ({
-      id: notification.id,
-      className: getTickerItemClass(notification),
-      text: getTickerMessage(notification),
-    }))
-    .filter((notification) => notification.text);
-
-  const fallbackTickerMessages = tickerMessages
-    .map((message, index) => ({
-      id: `fallback-${index}`,
-      className: 'ticker-item ticker-item-info',
-      text: String(message || '').replace(/^\d+[\.\)]\s+/, '').trim(),
-    }))
-    .filter((message) => message.text);
-
-  const displayTickerMessages = notificationTickerMessages.length > 0
-    ? notificationTickerMessages
-    : fallbackTickerMessages;
-
-  const tickerDurationSeconds = resolveTickerDurationSeconds(
-    settings?.ticker_speed || 'normal',
-  );
-
   const visibleBanners = notificationGroups.banners.filter((notification) => (
     notification.persistent || !dismissedBannerIds.has(notification.id)
   ));
-
-  const tickerContent = displayTickerMessages.length > 0
-    ? displayTickerMessages
-    : [
-        { id: 'default-welcome', className: 'ticker-item ticker-item-info', text: `Welcome to Mock Testing Suite v${appVersion}.` },
-        { id: 'default-basics', className: 'ticker-item ticker-item-info', text: 'Complete The Basics before beginning call review.' },
-        { id: 'default-headset', className: 'ticker-item ticker-item-info', text: 'Review headset requirements before certification begins.' },
-        { id: 'default-discord', className: 'ticker-item ticker-item-info', text: 'Use Discord copy templates when posting session updates.' },
-        { id: 'default-vpn', className: 'ticker-item ticker-item-warning', text: 'Confirm VPN/proxy checks manually when automated coverage is limited.' },
-        { id: 'default-readiness', className: 'ticker-item ticker-item-info', text: 'Remember to review final readiness before submitting results.' },
-        { id: 'default-fallback', className: 'ticker-item ticker-item-warning', text: 'If Google Sheets is unavailable, continue using local fallback guidance.' },
-        { id: 'default-tip', className: 'ticker-item ticker-item-info', text: 'Tip: Use the Discord Post button to quickly copy common messages.' },
-      ];
 
   return (
     <>
@@ -1362,18 +1315,7 @@ function AppShell() {
       ) : null}
 
       <div className="app-root" data-testid="app-root">
-        <div className="ticker-bar" style={{ '--ticker-duration': `${tickerDurationSeconds}s` }}>
-          <div className="ticker-track">
-            <span className="ticker-content">
-              {tickerContent.map((item, index) => (
-                <React.Fragment key={item.id || `ticker-${index}`}>
-                  {index > 0 ? <span className="ticker-separator" aria-hidden="true">{' \u25C6 '}</span> : null}
-                  <span className={item.className}>{item.text}</span>
-                </React.Fragment>
-              ))}
-            </span>
-          </div>
-        </div>
+        <MtsTickerBar notificationGroups={notificationGroups} settings={settings} appVersion={appVersion} />
         <div className="app-shell">
           <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : 'expanded'}`} data-testid="sidebar">
             <div className="sidebar-brand">

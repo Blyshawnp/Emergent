@@ -57,8 +57,9 @@ The current product requirement is a USB headset with a noise-cancelling microph
 
 ### VPN and Browser Checklist
 
-- Complete the VPN questions and use **VPN / Proxy Check** as decision support.
-- The tester always makes the final decision. A limited or stale signal requires manual verification.
+- Answer **Has VPN?** and, when it is Yes, answer **Can turn off?**.
+- When a manual IP check is needed, expand **VPN / Proxy Lookup Sites**. Choose **Copy Link** for IP2Location, IPinfo, or ip.teoh.io, open the site separately, and enter the candidate IP there.
+- The external sites are reference tools only. MTS does not automatically verify VPN/proxy status, fill either answer, or determine pass/fail.
 - Complete **Default browser?**, **Extensions disabled?**, and **Pop-ups allowed?**
 - If a readiness item cannot be corrected, follow the confirmation path to Review instead of forcing Continue.
 

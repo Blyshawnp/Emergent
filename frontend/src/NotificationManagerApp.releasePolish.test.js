@@ -6,11 +6,52 @@ const { createRoot } = require('react-dom/client');
 const PendingRequestAlert = require('./components/PendingRequestAlert').default;
 const {
   buildCandidateInformationChanges,
+  applyCandidateInformationUpdate,
+  applyPendingRequestDecision,
+  candidateCertificationMeta,
   getCandidateUpdateErrorMessage,
   getHeadsetReviewDisplayTitle,
   getPendingRequestSchedules,
   getVisiblePendingRequests,
 } = require('./NotificationManagerApp');
+
+test('candidate status keeps failed final attempt authoritative over passed mock calls', () => {
+  const meta = candidateCertificationMeta({
+    status: 'Pass',
+    final_attempt: true,
+    call_1_result: 'Pass',
+    call_2_result: 'Pass',
+    sup_transfer_1_result: 'Fail',
+    sup_transfer_2_result: 'Fail',
+  });
+  expect(meta.label).toBe('Fail – Final Attempt');
+  expect(meta.tone).toBe('denied');
+});
+
+test('authorized admin status override has highest display precedence', () => {
+  const meta = candidateCertificationMeta({
+    status: 'FAIL-Final Attempt',
+    final_attempt: true,
+    readiness_override_applied: true,
+    readiness_override_result: 'Pass',
+    sup_transfer_1_result: 'Fail',
+    sup_transfer_2_result: 'Fail',
+  });
+  expect(meta.label).toBe('Pass');
+});
+
+test('pending Newbie Shift approval keeps the optional shift number as text', () => {
+  const data = {
+    requests: [{ request_id: 'request-1', category: 'newbie_reschedule', raw_status: 'pending' }],
+    counts: { reschedules: 1, workflowRequests: 1, actionableTotal: 1, unresolved: 1 },
+  };
+  const updated = applyPendingRequestDecision(data, {
+    request_id: 'request-1', category: 'newbie_reschedule', decision: 'approved',
+    newbie_shift_number: '001842', actor: 'Admin',
+  }, { decision_at: '2026-07-30T12:00:00Z' });
+  expect(updated.requests[0].newbie_shift_number).toBe('001842');
+  expect(updated.requests[0].raw_status).toBe('approved');
+});
 const {
   MAX_PENDING_REQUEST_SUPPRESSIONS,
   PENDING_REQUEST_SUPPRESSION_MS,
@@ -146,6 +187,59 @@ test('SAM decisions prevent duplicate submissions, retain failed denial context,
   expect(appSource).toContain('setDenialRequest(null)');
   expect(appSource).not.toContain('<strong>Admin targeting</strong>');
   expect(appSource).not.toContain('Required Admin Targeting');
+});
+
+test('SAM decision success updates only the exact request before background refresh', () => {
+  const current = {
+    requests: [
+      { request_id: 'request-1', category: 'candidate_correction', raw_status: 'pending' },
+      { request_id: 'request-2', category: 'candidate_correction', raw_status: 'pending' },
+    ],
+    counts: { candidateCorrections: 2, workflowRequests: 2, actionableTotal: 2, unresolved: 2 },
+  };
+  const next = applyPendingRequestDecision(current, {
+    request_id: 'request-1', category: 'candidate_correction', decision: 'approved', actor: 'Synthetic Admin',
+  }, { decision_at: '2026-07-28T00:00:00Z' });
+  expect(next.requests[0]).toEqual(expect.objectContaining({ request_id: 'request-1', raw_status: 'approved' }));
+  expect(next.requests[1]).toBe(current.requests[1]);
+  expect(next.counts).toEqual(expect.objectContaining({ candidateCorrections: 1, workflowRequests: 1 }));
+  expect(appSource).toContain('void loadSamSnapshot({ silent: true, force: true })');
+  expect(appSource).not.toContain('await loadSamSnapshot({ silent: true, force: true });\n      return result;');
+});
+
+test('SAM direct edit targets stable session identity and preserves certification fields', () => {
+  const first = { session_id: 'session-1', candidate_name: 'Same Name', headset_brand: 'Old', status: 'PASS', attempt_count: 2 };
+  const second = { session_id: 'session-2', candidate_name: 'Same Name', headset_brand: 'Other', status: 'FAIL', attempt_count: 3 };
+  const next = applyCandidateInformationUpdate({ candidates: [first, second], views: { allActive: [first, second] } }, {
+    action: 'edit_candidate_information', session_id: 'session-1',
+    changes: [
+      { field: 'candidate_name', requested_value: 'Same Name Updated' },
+      { field: 'headset_model', requested_value: 'New Headset' },
+    ],
+  });
+  expect(next.candidates[0]).toEqual(expect.objectContaining({ candidate_name: 'Same Name Updated', headset_brand: 'New Headset', status: 'PASS', attempt_count: 2 }));
+  expect(next.candidates[1]).toBe(second);
+  expect(next.views.allActive[0].candidate_name).toBe('Same Name Updated');
+  expect(next.views.allActive[1]).toBe(second);
+  expect(appSource).toContain('void loadCandidateTracking({ silent: true, force: true })');
+});
+
+test('SAM applies separate headset brand and model corrections without duplicating the display brand', () => {
+  const current = { session_id: 'session-1', candidate_name: 'Synthetic', headset_brand: 'Logitech', headset_model: 'H390', status: 'PASS', attempt_count: 2 };
+  const brandOnly = applyCandidateInformationUpdate({ candidates: [current] }, {
+    session_id: 'session-1', changes: [{ field: 'headset_brand', requested_value: 'LOGITECH' }],
+  });
+  expect(brandOnly.candidates[0]).toEqual(expect.objectContaining({
+    headset_brand: 'LOGITECH', headset_model: 'H390', headset_label: 'LOGITECH H390', status: 'PASS', attempt_count: 2,
+  }));
+  const modelOnly = applyCandidateInformationUpdate({ candidates: [current] }, {
+    session_id: 'session-1', changes: [{ field: 'headset_model', requested_value: 'Logitech H390 USB' }],
+  });
+  expect(modelOnly.candidates[0].headset_label).toBe('Logitech H390 USB');
+  expect(buildCandidateInformationChanges(
+    { candidate_name: 'Synthetic', headset_brand: 'Logitech', headset_model: 'H390' },
+    { candidate_name: 'Synthetic', headset_brand: 'Logitech', headset_model: 'H390 USB' },
+  )).toEqual([expect.objectContaining({ field: 'headset_model', requested_value: 'H390 USB' })]);
 });
 
 test('SAM transient shared-data errors use calm retry language without exposing transport details', () => {
@@ -600,6 +694,17 @@ test('SAM headset startup notice is a non-modal status update', () => {
   expect(appSource).toContain('showPendingNotice: true');
   expect(appSource).not.toContain('New headsets are ready to review.');
   expect(appSource).not.toContain('setHeadsetReviewNoticeOpen');
+});
+
+test('Approved Headsets uses stable identities and geometry-safe hover styles', () => {
+  expect(appSource).toContain('key={headsetRowIdentity(item, kind)}');
+  expect(appSource).toContain('catalog_identity: item.catalog_identity');
+  expect(appSource).not.toContain('key={`${kind}-${item.brand}-${item.model}-${index}`}');
+  expect(samPolishCss).toContain('.nm-headset-table tbody tr:hover');
+  expect(samPolishCss).toContain('transform: none;');
+  expect(samPolishCss).toContain('scrollbar-gutter: stable both-edges;');
+  expect(samPolishCss).toContain('overflow-x: hidden;');
+  expect(samPolishCss).toContain('grid-template-columns: repeat(3, minmax(0, 1fr));');
 });
 
 test('MTS and SAM post-setup Quick Start is one-time, skippable, and replayable from Help', () => {

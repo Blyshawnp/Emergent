@@ -4,6 +4,8 @@ Target length: 60 to 90 seconds
 
 Tone: relaxed and quick. This can be used as an optional tutorial intro or replacement video. Users can skip it.
 
+Recording impact: narration-only replacement for the Basics sentence; the existing Basics visual may remain only if it shows the manual-only VPN section.
+
 ## Script
 
 Say:
@@ -17,13 +19,14 @@ Show:
 
 Say:
 
-"Start New Session takes you through Basics, Calls, Supervisor Transfer, and Review. Basics checks readiness first, including headset, VPN, and browser setup."
+"Start New Session takes you through Basics, Calls, Supervisor Transfer, and Review. Basics checks headset, VPN, and browser readiness. VPN lookup is manual: copy one of the three website links, open it separately, and enter the candidate IP there. MTS does not automatically verify VPN status or determine pass or fail."
 
 Show:
 
 - Basics
 - Headset field
 - VPN/browser questions
+- Three manual VPN lookup links
 
 Say:
 
@@ -56,10 +59,11 @@ Show:
 
 Say:
 
-"You can replay the tutorial from Help any time. If you already know the flow, you can skip this intro and start working."
+"You can open Tutorial Videos or Replay Guided Walkthrough from Help any time. If you already know the flow, you can skip this intro and start working."
 
 Show:
 
 - Help
-- Replay Tutorial
+- Tutorial Videos
+- Replay Guided Walkthrough
 

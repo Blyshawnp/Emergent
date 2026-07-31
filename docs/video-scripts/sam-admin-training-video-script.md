@@ -108,6 +108,34 @@ Show:
 - Candidate, tester, date, call results
 - Safe move or remove action only if using test data
 
+## Pending Requests
+
+Say:
+
+"Pending Requests is a review and decision queue for Newbie Shift requests, reschedules, candidate corrections, and candidate deletion requests. For corrections, compare Previous Value with Requested Value and read the Correction Reason. Approval updates the exact linked session. Denial keeps the original value. Use the immediate feedback or Refresh instead of submitting a duplicate decision."
+
+Show:
+
+- Pending Requests
+- Previous Value and Requested Value
+- Correction Reason
+- Approve and Deny Request on separate synthetic examples
+
+## Headset Review
+
+Say:
+
+"In Headset Review, use Look Up when evidence is needed. Before approval, Edit Headset can correct spelling, spacing, capitalization, or the Brand and Model split. Save Headset keeps the same review Pending. Approval then uses those corrected current values and adds or updates one matching Approved Headsets entry. Review Later keeps the item Pending. Archive retains a completed review, while Delete is only for an exact mistaken review."
+
+Show:
+
+- A synthetic Pending review
+- Look Up
+- Edit Headset and Save Headset
+- Corrected review still Pending
+- One matching entry under Approved Headsets
+- Deny, Review Later, Archive, and Delete without completing destructive cleanup
+
 ## Candidate Actions
 
 Say:
@@ -149,7 +177,7 @@ Show:
 
 Say:
 
-"SAM Help includes the local settings that are safe to change from this screen: sounds, banner duration, default candidate filter, archived search default, and tutorial video behavior."
+"SAM Help includes searchable topics, Tutorial Videos, Quick Start Choices, Replay Guided Walkthrough, and the local preferences available there. Tutorial topics and tutorial text are not edited in Settings."
 
 Show:
 
@@ -159,8 +187,9 @@ Show:
 - Banner duration
 - Default candidate filter
 - Include archived default
-- Tutorial video mode
-- Replay Tutorial
+- Tutorial Videos
+- Quick Start Choices
+- Replay Guided Walkthrough
 
 ## Sounds
 

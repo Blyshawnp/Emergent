@@ -45,3 +45,38 @@ test('quota failure enters bounded backoff and keeps stale successful sections v
   expect(fetchSnapshot).toHaveBeenCalledTimes(2);
   expect(failed.backoffUntil).toBe(60011);
 });
+
+test('forced post-mutation refresh supersedes an older in-flight response', async () => {
+  const resolvers = [];
+  const fetchSnapshot = jest.fn(() => new Promise((resolve) => resolvers.push(resolve)));
+  const coordinator = createSamSnapshotCoordinator(fetchSnapshot);
+
+  const staleLoad = coordinator.load();
+  const freshLoad = coordinator.load({ force: true });
+  expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+
+  resolvers[1]({ ok: true, headsetReviews: { ok: true, approved: [] } });
+  const fresh = await freshLoad;
+  resolvers[0]({ ok: true, headsetReviews: { ok: true, approved: [{ catalog_identity: 'deleted-row' }] } });
+  await staleLoad;
+
+  expect(fresh.headsetReviews.approved).toEqual([]);
+  expect((await coordinator.load()).headsetReviews.approved).toEqual([]);
+});
+
+test('invalidate prevents a pending response from repopulating the cache', async () => {
+  let resolveStale;
+  const fetchSnapshot = jest.fn()
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+    .mockResolvedValueOnce({ ok: true, headsetReviews: { ok: true, approved: [] } });
+  const coordinator = createSamSnapshotCoordinator(fetchSnapshot);
+
+  const staleLoad = coordinator.load();
+  coordinator.invalidate();
+  const fresh = await coordinator.load({ force: true });
+  resolveStale({ ok: true, headsetReviews: { ok: true, approved: [{ catalog_identity: 'deleted-row' }] } });
+  await staleLoad;
+
+  expect(fresh.headsetReviews.approved).toEqual([]);
+  expect((await coordinator.load()).headsetReviews.approved).toEqual([]);
+});

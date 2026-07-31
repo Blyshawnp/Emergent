@@ -25,8 +25,14 @@ function hasSavedSupTransferResult(transfer) {
   return Boolean(transfer && transfer.result);
 }
 
-function canResumeForSupTransfer(entry, testerNames) {
+function logicalResumeSourceId(entry = {}) {
+  return String(entry.resume_source_history_id || entry.source_session_id || entry.history_id || entry.session_id || '').trim();
+}
+
+export function canResumeForSupTransfer(entry, testerNames) {
   const status = entry.status || entry.final_status || '';
+  const requestType = String(entry.newbie_shift_request_type || entry.request_type || '').trim().toLowerCase();
+  const sessionType = String(entry.session_type || entry.workflow_type || '').trim().toLowerCase();
   const storedTesterName = normalizeName(entry.tester_name);
   const matchesTester = testerNames.some((name) => storedTesterName && storedTesterName === normalizeName(name));
   const hasMockCalls = [entry.call_1, entry.call_2, entry.call_3].some(hasSavedCallResult);
@@ -34,8 +40,33 @@ function canResumeForSupTransfer(entry, testerNames) {
   const isMockCallSession = !entry.supervisor_only;
   const isResumedIncompleteSupTransfer = Boolean(entry.resumed_sup_transfer_only && entry.supervisor_only && status === 'Incomplete');
   const finalized = ['Pass', 'RESUMED-PASS', 'Fail', 'FAIL-Final Attempt', 'NC/NS'].includes(status);
+  const scheduleOnly = Boolean(
+    entry.schedule_only
+    || entry.scheduling_only
+    || requestType === 'reschedule'
+    || requestType === 'newbie_shift_reschedule'
+    || sessionType.includes('newbie shift')
+    || sessionType.includes('schedule')
+    || (entry.newbie_shift_rescheduled_at && !hasMockCalls)
+  );
+  const consumedContinuation = Boolean(entry.supervisor_transfer_completed || entry.sup_transfer_completed || entry.resume_consumed_at);
 
-  return matchesTester && (isMockCallSession || isResumedIncompleteSupTransfer) && hasMockCalls && !hasPassedSupTransfer && !finalized;
+  return matchesTester && !scheduleOnly && !consumedContinuation
+    && (isMockCallSession || isResumedIncompleteSupTransfer)
+    && hasMockCalls && !hasPassedSupTransfer && !finalized;
+}
+
+export function canonicalResumableHistory(history, testerNames) {
+  const eligible = (history || [])
+    .filter((entry) => canResumeForSupTransfer(entry, testerNames))
+    .sort((a, b) => String(b.timestamp_iso || b.timestamp || '').localeCompare(String(a.timestamp_iso || a.timestamp || '')));
+  const seen = new Set();
+  return eligible.filter((entry) => {
+    const identity = logicalResumeSourceId(entry);
+    if (!identity || seen.has(identity)) return !identity;
+    seen.add(identity);
+    return true;
+  });
 }
 
 function isMissingBasicsValue(value) {
@@ -99,6 +130,8 @@ export function buildResumedSession(entry) {
     current_session_tech_issue: false,
     headset_usb: entry.headset_usb ?? null,
     headset_brand: entry.headset_brand || '',
+    headset_review_id: entry.headset_review_id || '',
+    headset_review_status: entry.headset_review_status || '',
     noise_cancel: entry.noise_cancel ?? null,
     vpn_on: entry.vpn_on ?? null,
     vpn_off: entry.vpn_off ?? null,
@@ -161,6 +194,8 @@ function buildSharedPendingSession(entry, testerName, basicsSource = null) {
     historical_tech_issues_log: [],
     headset_usb: null,
     headset_brand: '',
+    headset_review_id: entry.headset_review_id || '',
+    headset_review_status: entry.headset_review_status || '',
     noise_cancel: null,
     vpn_on: null,
     vpn_off: null,
@@ -215,9 +250,7 @@ export default function HomePage({ onNavigate, settings: initialSettings, histor
   const testerName = settings.tester_name || '';
   const testerNames = [settings.tester_name, settings.display_name].filter(Boolean);
   const resumableHistory = useMemo(
-    () => history
-      .filter((entry) => canResumeForSupTransfer(entry, testerNames))
-      .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')),
+    () => canonicalResumableHistory(history, testerNames),
     [history, testerNames]
   );
 

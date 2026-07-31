@@ -614,7 +614,7 @@ const FAQ_FALLBACK = [
   },
   {
     question: 'How do I check a candidate IP address?',
-    blocks: [{ type: 'paragraph', text: 'On Basics, expand VPN / Proxy Check, enter the public IP address, and click Check IP. If no provider is available, use manual verification.' }],
+    blocks: [{ type: 'paragraph', text: 'On Basics, answer Has VPN and, when applicable, Can turn off. For a manual IP check, expand VPN / Proxy Lookup Sites, copy one of the three website links, open it separately, and enter the candidate IP there. MTS does not automatically verify or score the result.' }],
   },
   {
     question: 'What if the candidate stops responding?',
@@ -638,7 +638,7 @@ const FAQ_FALLBACK = [
   },
   {
     question: 'How do I manually look up a candidate\'s VPN/proxy status?',
-    blocks: [{ type: 'paragraph', text: 'On the Basics screen, expand VPN / Proxy Check. If the integrated checker is unavailable, use the manual lookup links provided to verify the candidate\'s IP address and VPN/proxy status yourself.' }],
+    blocks: [{ type: 'paragraph', text: 'On Basics, expand VPN / Proxy Lookup Sites. Copy a website link, open it separately, and enter the candidate IP on that external site. The sites are reference tools only and do not fill answers or determine pass/fail.' }],
   },
   {
     question: 'What happens if shared session data is temporarily unavailable?',

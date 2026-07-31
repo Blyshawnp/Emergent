@@ -682,6 +682,30 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         ])
         self.assertEqual(server._normalize_denied_headsets(rows)[0]["model"], "Test Headset")
 
+    def test_headset_catalog_status_matrix_is_generic(self):
+        rows = [
+            {"Brand": "Alpha", "Model": "Approved One", "Status": " APPROVED "},
+            {"Brand": "Beta", "Model": "Denied One", "Status": "Denied"},
+            {"Brand": "Gamma", "Model": "Archived One", "Status": "archived"},
+            {"Brand": "Delta", "Model": "Deleted One", "Status": "deleted"},
+            {"Brand": "USB", "Model": "TEST HEADSET", "Status": "approved"},
+            {"Brand": "USB", "Model": "TESTER HEADSET", "Status": "denied", "Note": "Headset does not connect via USB"},
+        ]
+        approved = server._normalize_approved_headsets(rows)
+        denied = server._normalize_denied_headsets(rows)
+        self.assertEqual(approved, [
+            {"brand": "Alpha", "models": ["Approved One"]},
+            {"brand": "USB", "models": ["TEST HEADSET"]},
+        ])
+        self.assertEqual([(row["brand"], row["model"]) for row in denied], [
+            ("Beta", "Denied One"), ("USB", "TESTER HEADSET"),
+        ])
+        self.assertEqual(denied[1]["note"], "Headset does not connect via USB")
+
+    def test_blank_headset_status_is_only_approved_in_legacy_mode(self):
+        self.assertEqual(server._normalize_headset_catalog_status(""), "unknown")
+        self.assertEqual(server._normalize_headset_catalog_status("", legacy_blank_approved=True), "approved")
+
     def test_forced_headset_refresh_preserves_last_success_on_failure(self):
         previous_cache = dict(server._headset_cache)
         server._headset_cache.update({
@@ -1080,6 +1104,7 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             "expected_status": "pending",
             "decision_by": "AdminTester",
             "denial_reason": "",
+            "newbie_shift_number": "",
         })
         self.assertTrue(response["ok"])
         self.assertEqual(response["decision"], "approve")
@@ -1112,6 +1137,7 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
             "expected_status": "pending",
             "decision_by": "AdminTester",
             "denial_reason": "No capacity",
+            "newbie_shift_number": "",
         })
         self.assertTrue(response["ok"])
         self.assertEqual(response["decision"], "deny")
@@ -1258,6 +1284,140 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertTrue(state["terminal"])
         self.assertFalse(state["retry_allowed"])
         self.assertEqual(state["reason"], "final_attempt_exhausted")
+
+    def test_extra_attempt_uses_candidate_wide_sequence_four_of_four(self):
+        rows = [{
+            "session_id": "attempt-3",
+            "candidate_name": "Taylor Example",
+            "attempt_number": 3,
+            "status": "FAIL-Final Attempt",
+            "final_attempt": True,
+            "sup_transfer_1_result": "Fail",
+            "sup_transfer_2_result": "Fail",
+            "extra_attempt_granted": True,
+            "extra_attempts_granted": 1,
+            "allowed_attempt_count": 4,
+        }]
+        state = server.calculate_candidate_attempt_state(rows)
+        self.assertEqual(state["counted_attempts"], 3)
+        self.assertEqual(state["current_attempt"], 4)
+        self.assertEqual(state["max_attempts"], 4)
+        self.assertTrue(state["final_attempt"])
+        self.assertTrue(state["retry_allowed"])
+        self.assertFalse(state["terminal"])
+
+    def test_failed_required_supervisor_transfer_wins_over_mock_call_passes(self):
+        row = {
+            "status": "Pass",
+            "final_attempt": True,
+            "call_1_result": "Pass",
+            "call_2_result": "Pass",
+            "sup_transfer_1_result": "Fail",
+            "sup_transfer_2_result": "Fail",
+        }
+        self.assertEqual(server._candidate_authoritative_status(row), "FAIL-Final Attempt")
+
+    def test_authorized_status_override_preserves_precedence(self):
+        row = {
+            "status": "FAIL-Final Attempt",
+            "final_attempt": True,
+            "readiness_override_applied": True,
+            "readiness_override_result": "Pass",
+            "sup_transfer_1_result": "Fail",
+            "sup_transfer_2_result": "Fail",
+        }
+        self.assertEqual(server._candidate_authoritative_status(row), "Pass")
+
+    def test_newbie_shift_number_preserves_leading_zeroes_and_can_clear(self):
+        self.assertEqual(server._normalize_newbie_shift_number(" 001842 "), "001842")
+        local = {
+            "history_id": "session-1", "newbie_shift_request_id": "request-1",
+            "newbie_shift_request_status": "pending", "newbie_shift_number": "001842",
+        }
+        remote = {
+            "request_id": "request-1", "source_session_id": "session-1", "status": "approved",
+            "decision_at": "2026-07-30T12:00:00+00:00", "newbie_shift_number": "",
+        }
+        updated, changed, _reason = server._reconcile_local_newbie_request_record(local, remote)
+        self.assertTrue(changed)
+        self.assertEqual(updated["newbie_shift_number"], "")
+
+    def test_exact_session_mark_failed_retains_calculated_result_and_audit(self):
+        candidate = {
+            "_row_number": 2, "session_id": "session-1", "candidate_name": "Taylor Example",
+            "status": "Pass", "calculated_result": "Pass", "final_attempt": True,
+        }
+        service = mock.MagicMock()
+        service.spreadsheets.return_value = mock.MagicMock()
+
+        def rows_for(_sheets, _sheet_id, tab, _headers):
+            if tab == server.SHARED_CANDIDATE_SESSIONS_TAB:
+                return [candidate]
+            return []
+
+        with mock.patch.object(server, "_shared_sheet_context", return_value={"ok": True, "service": service, "sheet_id": "sheet"}), \
+                mock.patch.object(server, "_shared_read_rows", side_effect=rows_for), \
+                mock.patch.object(server, "_shared_update_existing_row") as update:
+            result = server._shared_admin_candidate_action({
+                "action": "mark_failed", "session_id": "session-1",
+                "candidate_name": "Taylor Example", "reason": "Required transfer failed", "actor": "Admin",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(candidate["calculated_result"], "Pass")
+        self.assertEqual(candidate["status"], "FAIL-Final Attempt")
+        self.assertEqual(candidate["readiness_override_result"], "FAIL-Final Attempt")
+        self.assertEqual(candidate["readiness_override_reason"], "Required transfer failed")
+        self.assertEqual(candidate["readiness_override_by"], "Admin")
+        self.assertTrue(candidate["readiness_override_at"])
+        update.assert_called_once()
+
+    def test_extra_attempt_expected_count_prevents_double_increment(self):
+        candidate = {
+            "_row_number": 2, "session_id": "session-1", "candidate_name": "Taylor Example",
+            "status": "FAIL-Final Attempt", "extra_attempt_granted": True,
+            "extra_attempts_granted": 1, "allowed_attempt_count": 4,
+        }
+        service = mock.MagicMock()
+        service.spreadsheets.return_value = mock.MagicMock()
+
+        def rows_for(_sheets, _sheet_id, tab, _headers):
+            return [candidate] if tab == server.SHARED_CANDIDATE_SESSIONS_TAB else []
+
+        with mock.patch.object(server, "_shared_sheet_context", return_value={"ok": True, "service": service, "sheet_id": "sheet"}), \
+                mock.patch.object(server, "_shared_read_rows", side_effect=rows_for), \
+                mock.patch.object(server, "_shared_update_existing_row") as update:
+            result = server._shared_admin_candidate_action({
+                "action": "grant_extra_attempt", "session_id": "session-1",
+                "candidate_name": "Taylor Example", "expected_extra_attempts_granted": 0,
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["already_applied"])
+        self.assertEqual(candidate["extra_attempts_granted"], 1)
+        self.assertEqual(candidate["allowed_attempt_count"], 4)
+        update.assert_not_called()
+
+    def test_newbie_approval_persists_optional_number_by_exact_request(self):
+        request_row = {
+            "_row_number": 2, "request_id": "request-1", "session_id": "session-1",
+            "request_status": "pending", "resulting_attempt": 1,
+        }
+        service = mock.MagicMock()
+        service.spreadsheets.return_value = mock.MagicMock()
+        with mock.patch.object(server, "_shared_sheet_context", return_value={"ok": True, "service": service, "sheet_id": "sheet"}), \
+                mock.patch.object(server, "_shared_read_rows", return_value=[request_row]), \
+                mock.patch.object(server, "_shared_update_existing_row") as update, \
+                mock.patch.object(server, "_update_candidate_request_fields", return_value=1) as update_candidate:
+            result = server._shared_pending_request_action({
+                "request_id": "request-1", "category": "newbie_initial", "decision": "approved",
+                "expected_status": "pending", "actor": "Admin", "newbie_shift_number": " 001842 ",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(request_row["newbie_shift_number"], "001842")
+        update.assert_called_once()
+        self.assertEqual(update_candidate.call_args.kwargs["newbie_shift_number"], "001842")
 
     def test_supervisor_pass_forces_newbie_shift_form_value_to_na(self):
         for workflow_flags in (

@@ -23,14 +23,17 @@ export function createSamSnapshotCoordinator(fetchSnapshot, options = {}) {
   let inFlight = null;
   let failures = 0;
   let backoffUntil = 0;
+  let requestGeneration = 0;
 
   const load = ({ force = false } = {}) => {
     const requestedAt = now();
     if (!force && cached && requestedAt - cachedAt < cacheMs) return Promise.resolve(cached);
-    if (inFlight) return inFlight;
+    if (inFlight && !force) return inFlight;
     if (!force && requestedAt < backoffUntil) {
       return Promise.resolve(cached ? { ...cached, stale: true, backoffUntil } : { ok: false, stale: true, backoffUntil });
     }
+
+    const generation = ++requestGeneration;
 
     let fetchResult;
     try {
@@ -38,8 +41,9 @@ export function createSamSnapshotCoordinator(fetchSnapshot, options = {}) {
     } catch (error) {
       fetchResult = Promise.reject(error);
     }
-    inFlight = Promise.resolve(fetchResult)
+    const request = Promise.resolve(fetchResult)
       .then((incoming) => {
+        if (generation !== requestGeneration) return cached || incoming || { ok: false, stale: true };
         const next = mergeSnapshot(cached, incoming || { ok: false });
         if (incoming?.ok !== false) {
           failures = 0;
@@ -54,16 +58,27 @@ export function createSamSnapshotCoordinator(fetchSnapshot, options = {}) {
         return { ...next, stale: Boolean(cached), backoffUntil };
       })
       .catch((error) => {
+        if (generation !== requestGeneration) return cached || { ok: false, stale: true };
         failures += 1;
         backoffUntil = now() + Math.min(maxBackoffMs, baseBackoffMs * (2 ** Math.max(0, failures - 1)));
         if (cached) return { ...cached, ok: false, stale: true, backoffUntil, coordinatorError: error };
         throw error;
       })
       .finally(() => {
-        inFlight = null;
+        if (inFlight === request) inFlight = null;
       });
+    inFlight = request;
     return inFlight;
   };
 
-  return { load };
+  const invalidate = () => {
+    requestGeneration += 1;
+    cached = null;
+    cachedAt = 0;
+    failures = 0;
+    backoffUntil = 0;
+    inFlight = null;
+  };
+
+  return { load, invalidate };
 }

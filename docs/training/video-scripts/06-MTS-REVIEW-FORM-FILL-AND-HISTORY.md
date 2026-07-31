@@ -14,6 +14,7 @@
 - Validate final status and summaries.
 - Interpret Form Fill success, failure, skip, legacy, and partial success.
 - Use History actions without duplicating or deleting the wrong record.
+- Request a candidate or headset spelling correction without changing unrelated session facts.
 
 ## Prerequisites
 
@@ -39,9 +40,10 @@ Prepare one incomplete record with failed-call detail in Coaching Summary and Fa
 | 3:00-4:05 | Fill Form | “Select Fill Form, wait for MTS to fill the Microsoft Form, then review every populated field. Form Filled means MTS filled the form. It does not mean the trainer submitted it.” | Run isolated fill or show approved fixture; stop before Submit. | `Filled != submitted` | Freeze browser before any Submit control. |
 | 4:05-5:00 | Partial success | “Form Filled - Status Warning means the form was filled but MTS could not fully save the status metadata. Do not run Form Fill again. Refresh History or contact support.” | Show exact warning fixture and close it. | `Do not refill` | Hold warning four seconds. |
 | 5:00-5:45 | Finish | “Save and Finish Session stores the record. If Form Fill has not run, MTS asks whether to skip or Fill Form. Choose deliberately.” | Select Save & Finish in isolated demo; show **No** and **Fill Form** choice, cancel. | `Choose skip or fill` | Hold buttons. |
-| 5:45-7:00 | History statuses | “History separates Session Status, Follow-Up, and Form Status. Form labels are Form Filled, Form Skipped, Not Yet Filled, Fill Failed, and Not Recorded. None of those labels alone proves a form was submitted.” | Open History and point to all three columns with synthetic rows. | `Three independent statuses` | Zoom on chips. |
+| 5:45-7:00 | History statuses | “History separates the authoritative overall Session Status, Follow-Up, and Form Status. A failed required Supervisor Transfer keeps the overall result failed even if mock calls passed. A numbered follow-up shows Shift number when present, and a fourth authorized final attempt displays Attempt four of four.” | Open History and point to failed-final, numbered-shift, and attempt-four synthetic rows. | `One authoritative result` | Zoom on chips and banner. |
 | 7:00-8:10 | History actions | “View opens details. Open in Review is read-only. Reschedule appears only for eligible incomplete follow-up. Delete asks about local History and a candidate-list request. Local deletion does not itself delete the admin record.” | Open View; point to Open in Review, Reschedule, Delete; cancel deletion. | `Read before action` | Hold deletion choices if safe. |
-| 8:10-8:45 | Refill | “A record already marked filled shows Refill Cert Form and a Form Already Filled warning. Continue only when duplicate form work is intentional and authorized.” | Select **Refill Cert Form**, show warning, cancel. | `Refill can duplicate work` | Freeze warning. |
+| 8:10-9:10 | Correct Candidate Information | “At the bottom of session details, select Correct Candidate Information to request a candidate-name or headset-spelling correction. Enter the corrected value and a reason. While the request is Pending, the current value stays authoritative. SAM approval updates this exact session; denial preserves the original. The correction does not change results, attempts, headset approval, USB, or Noise Cancelling Mic, and it does not create a Headset Review by itself.” | Open **View**, scroll to the detail footer, select **Correct Candidate Information**, enter synthetic corrected text and reason, and stop before submitting. Show prepared Pending, Approved, and Denied examples. | `Correction is not a result change` | Hold the footer location and status examples. |
+| 9:10-9:45 | Refill | “A record already marked filled shows Refill Cert Form and a Form Already Filled warning. Continue only when duplicate form work is intentional and authorized.” | Select **Refill Cert Form**, show warning, cancel. | `Refill can duplicate work` | Freeze warning. |
 
 ## Mistakes to emphasize
 
@@ -50,6 +52,8 @@ Prepare one incomplete record with failed-call detail in Coaching Summary and Fa
 - Calling Form Filled submitted.
 - Refilling after partial success.
 - Assuming local Delete removes shared candidate history.
+- Expecting a Pending correction to replace the current value immediately.
+- Using candidate correction to change results, attempts, headset approval, USB, or Noise Cancelling Mic.
 
 ## Closing summary
 
@@ -75,3 +79,5 @@ Use isolated labeled records for Pass, Incomplete, and Fail. Never make a single
 - [ ] All five form labels exact.
 - [ ] Partial success says do not refill.
 - [ ] No real submission or candidate data.
+- [ ] Correct Candidate Information is shown in the session-detail footer with a required reason.
+- [ ] Pending, approval, and denial authority are described correctly.

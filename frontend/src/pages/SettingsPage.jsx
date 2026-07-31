@@ -3,7 +3,6 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import geminiSettingsGraphic from '../assets/images/Gemini.png';
 import { getPaymentOptionsFromSettings, syncLegacyPaymentFields } from '../utils/paymentOptions';
-import { VPN_PROXY_CHECK_MODES, normalizeVpnProxyCheckMode } from '../components/CandidateIpIntelligence';
 import {
   DISCORD_CATEGORY_SHORTCUTS,
   DISCORD_FAVORITE_SHORTCUT_DEFAULTS,
@@ -450,23 +449,7 @@ function GeneralTab({ s, set }) {
           <option value="edge">Edge</option>
         </select>
       </SettingsRow>
-      <SettingsRow label="VPN / Proxy Check">
-        <div>
-          <select
-            value={normalizeVpnProxyCheckMode(s.vpnProxyCheckMode)}
-            onChange={e => set('vpnProxyCheckMode', e.target.value)}
-            style={{ maxWidth: 260 }}
-            data-testid="settings-vpn-proxy-mode"
-          >
-            <option value={VPN_PROXY_CHECK_MODES.CHECKER}>Automatic lookup</option>
-            <option value={VPN_PROXY_CHECK_MODES.LINKS}>Manual lookup links</option>
-            <option value={VPN_PROXY_CHECK_MODES.DISABLED}>Disabled message only</option>
-          </select>
-          <div className="text-muted text-xs" style={{ marginTop: 6, maxWidth: 620 }}>
-            Automatic lookup is the default. Manual lookup links remain available and are shown whenever provider coverage is limited.
-          </div>
-        </div>
-      </SettingsRow>
+
       <SettingsRow label="Welcome voice">
         <select
           value={s.welcome_voice || 'male'}

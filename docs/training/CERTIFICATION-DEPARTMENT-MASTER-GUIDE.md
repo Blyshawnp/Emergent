@@ -166,7 +166,7 @@ Department confirmation required: acceptable research sources, reviewer role, re
 1. Start New Session.
 2. Search candidate and confirm the correct shared record, or explicitly use the typed name.
 3. Review eligibility/final-attempt warnings.
-4. Complete headset, VPN decision support, and Browser Checklist.
+4. Complete the headset requirements, answer **Has VPN?** and **Can turn off?** when applicable, and finish the Browser Checklist. For a manual IP check, copy one of the three **VPN / Proxy Lookup Sites** links, open it separately, and enter the IP on that site; MTS does not verify or score the result automatically.
 5. Use NC/NS, Same Day Drop, Not Ready, Stopped Responding, or Tech Issue only for the matching situation.
 
 ### Evaluation
@@ -251,7 +251,7 @@ Department confirmation required: retention period, report/export destinations, 
 
 - [ ] Correct candidate or intentional typed-name path selected.
 - [ ] Eligibility/final-attempt warning reviewed.
-- [ ] Headset, VPN decision support, and Browser Checklist completed.
+- [ ] Headset requirements, VPN answers/manual reference lookup when needed, and Browser Checklist completed.
 - [ ] Call results, coaching, and fail reasons match what occurred.
 - [ ] NC/NS, Same Day Drop, Stopped Responding, and Tech Issue used only for their defined cases.
 - [ ] Supervisor Transfer and Smart Resume path is correct.

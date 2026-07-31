@@ -21,6 +21,7 @@ jest.mock('../api', () => ({
   default: {
     getHistory: jest.fn(),
     getHistoryStats: jest.fn(),
+    reconcileHistory: jest.fn(),
     startSession: jest.fn(),
     fillForm: jest.fn(),
     deleteHistorySession: jest.fn(),
@@ -38,7 +39,7 @@ function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function renderPage(history) {
+async function renderPage(history, reconciliation = null) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -53,9 +54,14 @@ async function renderPage(history) {
     incomplete: 1,
     pass_rate: 50,
   });
+  api.reconcileHistory.mockReturnValue(reconciliation || Promise.resolve({
+      ok: true,
+      history,
+      stats: { total: history.length, passes: 1, fails: 1, ncns: 0, incomplete: 1, pass_rate: 50 },
+    }));
 
   await act(async () => {
-    root.render(<HistoryPage onNavigate={onNavigate} />);
+    root.render(<HistoryPage onNavigate={onNavigate} history={history} historyStats={{ total: history.length }} />);
     await flushPromises();
   });
 
@@ -131,16 +137,16 @@ test('history renders responsive grid rows with required regions and reachable a
   expect(view.container.querySelector('.hist-grid')).not.toBeNull();
   expect(view.container.querySelector('.history-list-card')).not.toBeNull();
   expect(view.container.querySelector('table.hist-table')).toBeNull();
-  expect(view.container.querySelector('[role="columnheader"]').textContent).toBe('Date');
+  expect(view.container.querySelector('[role="columnheader"]').textContent).toBe('Date / Follow-Up');
   const row = view.container.querySelector('[data-testid="history-row-1"]');
-  expect(row.querySelector('[data-label="Date"]').textContent).toContain('07/13/2026');
+  expect(row.querySelector('[data-label="Date / Follow-Up"]').textContent).toContain('07/13/2026');
+  expect(row.querySelector('[data-label="Date / Follow-Up"]').textContent).toContain('07/14/2026, 10:30 PM');
+  expect(row.querySelector('[data-label="Date / Follow-Up"]').textContent).toContain('Eastern');
   expect(row.querySelector('[data-label="Candidate"]').textContent).toContain('Jordan Example');
-  expect(row.querySelector('[data-label="Tester"]').textContent).toContain('Tester Two');
+  expect(row.querySelector('[data-label="Tester / Form Status"]').textContent).toContain('Tester Two');
+  expect(row.querySelector('[data-label="Tester / Form Status"]').textContent).toContain('Not Yet Filled');
   expect(row.querySelector('[data-label="Session Status"]').textContent).toContain('Incomplete');
-  expect(row.querySelector('[data-label="Follow-Up"]').textContent).toContain('07/14/2026, 10:30 PM');
-  expect(row.querySelector('[data-label="Follow-Up"]').textContent).toContain('Eastern');
-  expect(row.querySelector('[data-label="Follow-Up"]').textContent).not.toContain('EST (Eastern)');
-  expect(row.querySelector('[data-label="Form Status"]').textContent).toContain('Not Yet Filled');
+  expect(row.querySelector('[data-label="Date / Follow-Up"]').textContent).not.toContain('EST (Eastern)');
   expect(row.querySelector('[data-testid="history-view-1"]')).not.toBeNull();
   expect(row.querySelector('[data-testid="history-reschedule-1"]')).not.toBeNull();
   expect(row.querySelector('[data-testid="history-delete-1"]')).not.toBeNull();
@@ -196,13 +202,14 @@ test('session details show one persistent Final Attempt banner and saved attempt
   await view.unmount();
 });
 
-test('history CSS switches from seven columns to container-based compact and card layouts', () => {
+test('history CSS uses one shared five-area template with intentional compact and card layouts', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'App.css'), 'utf8');
   expect(css).toContain('container-name: history-list');
   expect(css).toContain('max-width: 1180px');
   expect(css).toContain('@container history-list (max-width: 1100px)');
-  expect(css).toContain('"date candidate tester status"');
-  expect(css).toContain('"followup followup form actions"');
+  expect(css).toContain('"date candidate tester status actions"');
+  expect(css).toContain('"date candidate status"');
+  expect(css).toContain('"tester tester actions"');
   expect(css).toContain('@container history-list (max-width: 680px)');
   expect(css).toContain('overflow-x: clip');
   expect(css).not.toContain('.status-chip::before');
@@ -225,6 +232,7 @@ test('history displays reconciled approved and denied statuses and keeps denial 
       history_id: 'approved-request',
       newbie_shift_request_id: 'request-approved',
       newbie_shift_request_status: 'approved',
+      newbie_shift_number: '001842',
       form_fill_status: 'filled',
     },
     {
@@ -239,8 +247,20 @@ test('history displays reconciled approved and denied statuses and keeps denial 
   const view = await renderPage(reconciledRows);
 
   expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Newbie Shift Scheduled');
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Shift #001842');
   expect(view.container.querySelector('[data-testid="history-row-1"]').textContent).toContain('Newbie Shift Denied');
   expect(view.container.querySelector('[data-testid="history-row-1"]').textContent).toContain('Form Filled');
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(view.container.textContent).toContain('Newbie Shift Number: Shift #001842');
+  await act(async () => {
+    view.container.querySelector('.modal-close').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
 
   await act(async () => {
     view.container.querySelector('[data-testid="history-view-1"]')
@@ -498,9 +518,81 @@ test('History correction preview omits unchanged whitespace and keeps capitaliza
   })).toEqual([]);
 });
 
+test('History correction supports independent brand-only and model-only changes', () => {
+  const record = { candidate_name: 'Taylor Example', headset_brand: 'Logitech', headset_model: 'H390' };
+  expect(buildHistoryCorrectionChanges(record, {
+    candidateName: 'Taylor Example', headsetBrand: 'LOGITECH', headsetModel: 'H390',
+  })).toEqual([expect.objectContaining({
+    field: 'headset_brand', previous_value: 'Logitech', requested_value: 'LOGITECH',
+  })]);
+  expect(buildHistoryCorrectionChanges(record, {
+    candidateName: 'Taylor Example', headsetBrand: 'Logitech', headsetModel: 'H390 USB',
+  })).toEqual([expect.objectContaining({
+    field: 'headset_model', previous_value: 'H390', requested_value: 'H390 USB',
+  })]);
+});
+
+test('History detail derives one combined headset label from separate brand and model fields', async () => {
+  const view = await renderPage([{ ...historyRows[0], headset_brand: 'Logitech', headset_model: 'H390' }]);
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  const detail = view.container.querySelector('[data-testid="history-detail-modal"]');
+  expect(detail.textContent).toContain('Headset: Logitech H390');
+  expect(detail.textContent).not.toContain('Logitech Logitech H390');
+  await view.unmount();
+});
+
 test('History correction dialog stacks above the session detail dialog', () => {
   const source = fs.readFileSync(path.join(__dirname, 'HistoryPage.jsx'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, '..', 'App.css'), 'utf8');
   expect(source).toMatch(/\{correctionDraft && \(\s*<div className="modal-overlay open correction-request-overlay">/);
   expect(css).toMatch(/\.correction-request-overlay\s*\{\s*z-index:\s*1100;/);
+});
+
+test('candidate correction action is in the responsive footer and absent from the detail body', async () => {
+  const view = await renderPage([historyRows[0]]);
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  const detail = view.container.querySelector('[data-testid="history-detail-modal"]');
+  const footer = detail.querySelector('[data-testid="history-detail-footer"]');
+  expect(footer.querySelector('[data-testid="history-correction-action"]')).not.toBeNull();
+  expect(detail.querySelector('.modal-body [data-testid="history-correction-action"]')).toBeNull();
+  expect(footer.querySelector('[data-testid="history-correction-action"]').getAttribute('aria-label')).toBe('Correct Candidate Information');
+  expect(Array.from(footer.querySelectorAll('button')).map((button) => button.textContent.trim())).toEqual([
+    'Close', 'Correct Candidate Info', 'Delete Session', 'Refill Cert Form', 'Open in Review',
+  ]);
+  await view.unmount();
+});
+
+test('local History remains visible while one background reconciliation is unresolved', async () => {
+  let resolveReconciliation;
+  const pending = new Promise((resolve) => { resolveReconciliation = resolve; });
+  const view = await renderPage([historyRows[0]], pending);
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Taylor Example');
+  expect(view.container.querySelector('[data-testid="history-syncing"]')).not.toBeNull();
+  expect(api.reconcileHistory).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    resolveReconciliation({ history: [{ ...historyRows[0], candidate: 'Taylor Updated' }], stats: { total: 1 } });
+    await flushPromises();
+  });
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Taylor Updated');
+  await view.unmount();
+});
+
+test('remote reconciliation failure preserves local History and offers retry', async () => {
+  let rejectReconciliation;
+  const pending = new Promise((_resolve, reject) => { rejectReconciliation = reject; });
+  const view = await renderPage([historyRows[0]], pending);
+  await act(async () => {
+    rejectReconciliation(new Error('offline'));
+    await flushPromises();
+  });
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Taylor Example');
+  expect(view.container.querySelector('[role="alert"]').textContent).toContain('Local History is still available');
+  expect(Array.from(view.container.querySelectorAll('button')).some((button) => button.textContent === 'Retry')).toBe(true);
+  await view.unmount();
 });
