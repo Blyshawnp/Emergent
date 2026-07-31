@@ -17,6 +17,13 @@ const {
   classifyBackendListenerOwnership,
   createOwnedProcessRegistry,
 } = require('./processOwnership');
+const {
+  applyUserDataProfile,
+  buildBackendStorageEnvironment,
+} = require('./profileIsolation');
+const {
+  createApplicationQuitController,
+} = require('./applicationQuit');
 let desktopPackage = {};
 let electronAutoUpdater = null;
 
@@ -55,7 +62,22 @@ const SAM_NOTIFICATION_BACKEND_RETRY_MAX_DELAY_MS = 12000;
 const ADMIN_TOKEN_HEADER = 'X-MTS-Admin-Token';
 
 app.setName(APP_DISPLAY_NAME);
-app.setPath('userData', path.join(app.getPath('appData'), APP_STORAGE_DIR_NAME));
+let userDataProfile;
+try {
+  userDataProfile = applyUserDataProfile({
+    app,
+    env: process.env,
+    role: APP_PROCESS_OWNER,
+    productionDirectoryName: APP_STORAGE_DIR_NAME,
+  });
+} catch (error) {
+  console.error(`[APP] Test-profile isolation failed safely: ${error?.message || 'invalid configuration'}`);
+  app.exit(1);
+  throw error;
+}
+if (userDataProfile.active) {
+  console.log(`[APP] Test-profile isolation is active for ${APP_PROCESS_OWNER.toUpperCase()}.`);
+}
 
 const store = new Store({
   name: isNotificationManagerMode ? 'sam-config' : 'mock-testing-suite-config',
@@ -71,7 +93,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock({
 
 if (!hasSingleInstanceLock) {
   console.log(`[APP] ${SINGLE_INSTANCE_MESSAGE}`);
-  app.quit();
+  app.exit(0);
 } else {
   app.on('second-instance', () => {
     console.log(`[APP] ${SINGLE_INSTANCE_MESSAGE}`);
@@ -105,8 +127,7 @@ let githubUpdaterConfigured = false;
 let githubUpdateCheckInFlight = false;
 let manualUpdateOpenInFlight = false;
 let ownedProcessCleanupPromise = null;
-let ownedProcessCleanupComplete = false;
-let isRelaunchingAfterCleanup = false;
+let applicationQuitController = null;
 
 const STORE_PENDING_UPDATE_KEY = 'updater.pendingUpdate';
 const STORE_LAST_INSTALLED_UPDATE_KEY = 'updater.lastInstalledUpdate';
@@ -168,7 +189,7 @@ function getBackendLogDir() {
 }
 
 function getSharedAppDataPath(subpath = '') {
-  return path.join(app.getPath('appData'), APP_STORAGE_DIR_NAME, subpath);
+  return path.join(app.getPath('userData'), subpath);
 }
 
 function getSharedAdminToken() {
@@ -579,14 +600,17 @@ function startBackend() {
     console.log(`[BACKEND] defaultsDir: ${backendDefaultsDir}`);
     console.log(`[BACKEND] appsScriptApiConfig: ${fs.existsSync(appsScriptApiConfigPath) ? appsScriptApiConfigPath : 'not bundled; local defaults will be used'}`);
 
+    const backendStorageEnvironment = buildBackendStorageEnvironment({
+      env: process.env,
+      userDataPath: app.getPath('userData'),
+    });
+
     try {
       backendProcess = spawn(backendPath, [], {
         cwd: backendCwd,
         env: {
-          ...process.env,
+          ...backendStorageEnvironment,
           BACKEND_PORT: String(BACKEND_PORT),
-          SQLITE_DB_PATH: getSqliteDbPath(),
-          APP_DATA_DIR: app.getPath('userData'),
           BACKEND_LOG_DIR: packagedBackendLogDir || getBackendLogDir(),
           BACKEND_RUNTIME_CONFIG_FILE: backendRuntimeConfigPath,
           BROWSER_DRIVER_DIR: driverDir,
@@ -679,6 +703,11 @@ function startBackend() {
   backendLogTail = [];
   backendCommandLabel = `${launcher.label} -m uvicorn server:app --host 127.0.0.1 --port ${BACKEND_PORT}`;
 
+  const backendStorageEnvironment = buildBackendStorageEnvironment({
+    env: process.env,
+    userDataPath: app.getPath('userData'),
+  });
+
   backendProcess = spawn(pythonCmd, [
     ...pythonArgs,
     '-m', 'uvicorn', 'server:app',
@@ -688,8 +717,7 @@ function startBackend() {
   ], {
     cwd: backendDir,
     env: {
-      ...process.env,
-      SQLITE_DB_PATH: getSqliteDbPath(),
+      ...backendStorageEnvironment,
       APP_VERSION,
       MTS_ADMIN_TOKEN: getSharedAdminToken(),
       MTS_DEV_MODE: '1',
@@ -803,7 +831,6 @@ async function cleanupOwnedProcesses(reason = 'cleanup') {
     clearHeartbeat();
     await stopBackend(reason);
     closeBackendLogStreams();
-    ownedProcessCleanupComplete = true;
     console.log('[APP] Owned-process cleanup complete.');
   })().finally(() => {
     ownedProcessCleanupPromise = null;
@@ -829,7 +856,46 @@ function cleanupOwnedProcessesSync(reason = 'emergency-cleanup') {
   backendProcess = null;
   backendStartedByThisApp = false;
   closeBackendLogStreams();
-  ownedProcessCleanupComplete = true;
+}
+
+function stopRuntimeActivityForQuit() {
+  clearNotificationBackendRetryTimer();
+  clearHeartbeat();
+  quitConfirmationResolver = null;
+  isHandlingCloseConfirmation = false;
+  allowWindowClose = true;
+  if (tray && !tray.isDestroyed?.()) {
+    tray.destroy();
+  }
+  tray = null;
+}
+
+function closeAllApplicationWindows() {
+  allowWindowClose = true;
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.destroy();
+    }
+  }
+  mainWindow = null;
+}
+
+function getApplicationQuitController() {
+  if (!applicationQuitController) {
+    applicationQuitController = createApplicationQuitController({
+      app,
+      cleanupOwnedProcesses,
+      forceCleanupOwnedProcessesSync: cleanupOwnedProcessesSync,
+      stopRuntimeActivity: stopRuntimeActivityForQuit,
+      closeApplicationWindows: closeAllApplicationWindows,
+      logger: console,
+    });
+  }
+  return applicationQuitController;
+}
+
+function requestApplicationQuit(reason = 'requested-quit', exitCode = 0) {
+  return getApplicationQuitController().requestApplicationQuit(reason, exitCode);
 }
 
 function sleep(ms) {
@@ -945,6 +1011,10 @@ function inspectBackendListenerOwnership(listeningPids = getTcpPortListeningPids
   });
 }
 
+function backendPortConflictMessage() {
+  return `${APP_DISPLAY_NAME} could not start because port ${BACKEND_PORT} is occupied by an unverified local process. Close that process and retry.`;
+}
+
 function killStaleOwnedBackend(ownership = inspectBackendListenerOwnership()) {
   const killPid = (pid) => {
     try {
@@ -1038,8 +1108,8 @@ function ensureBackendAvailable() {
           if (isTcpPortListening(BACKEND_PORT)) {
             throw new Error(`Port ${BACKEND_PORT} is still in use after stopping the stale backend. Please retry.`);
           }
-        } else if (ownership.classification === 'unmanaged' && !isDev) {
-          throw new Error(`Port ${BACKEND_PORT} is already in use by an unverified local process. Close the conflicting process and retry.`);
+        } else if (ownership.classification === 'unmanaged') {
+          throw new Error(backendPortConflictMessage());
         } else {
           usingExternalBackend = true;
           backendStartedByThisApp = false;
@@ -1056,7 +1126,7 @@ function ensureBackendAvailable() {
         killStaleOwnedBackend();
         await sleep(1000);
         if (isTcpPortListening(BACKEND_PORT)) {
-          throw new Error(`Port ${BACKEND_PORT} is still in use after checking the stale backend owner. Please stop the conflicting process and retry.`);
+          throw new Error(backendPortConflictMessage());
         }
       }
     }
@@ -1349,11 +1419,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
       return false;
     }
 
-    tray = null;
-    app.isQuitting = true;
-    allowWindowClose = true;
-    await cleanupOwnedProcesses('confirmed-quit');
-    app.quit();
+    await requestApplicationQuit('confirmed-quit');
     return true;
   } finally {
     isHandlingCloseConfirmation = false;
@@ -2301,9 +2367,8 @@ app.whenReady().then(async () => {
       setBackendConnectionStatus('retrying', err.message);
       scheduleNotificationBackendRetry(err.message);
     } else {
-      await cleanupOwnedProcesses('startup-failure');
       dialog.showErrorBox('Startup Error', err.message);
-      app.quit();
+      await requestApplicationQuit('startup-failure', 1);
       return;
     }
   }
@@ -2316,30 +2381,17 @@ app.whenReady().then(async () => {
 }
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.isQuitting = true;
-    cleanupOwnedProcesses('window-all-closed').finally(() => {
-      app.quit();
-    });
+  if (process.platform !== 'darwin' && !app.isQuitting) {
+    void requestApplicationQuit('window-all-closed');
   }
 });
 
 app.on('activate', () => {
+  if (app.isQuitting) return;
   if (mainWindow === null) createMainWindow();
   else mainWindow.show();
 });
 
 app.on('before-quit', (event) => {
-  app.isQuitting = true;
-  tray = null;
-  if (!ownedProcessCleanupComplete && !isRelaunchingAfterCleanup) {
-    event.preventDefault();
-    cleanupOwnedProcesses('before-quit').finally(() => {
-      isRelaunchingAfterCleanup = true;
-      app.quit();
-      setImmediate(() => {
-        isRelaunchingAfterCleanup = false;
-      });
-    });
-  }
+  getApplicationQuitController().handleBeforeQuit(event);
 });

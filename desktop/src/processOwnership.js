@@ -232,7 +232,7 @@ function createOwnedProcessRegistry(options = {}) {
   function forceStopAllOwnedProcessesSync(processOwner = owner, reason = 'emergency-cleanup') {
     const results = [];
     for (const record of listOwnedProcesses(processOwner)) {
-      if (record.exited || record.cleanupRequested) continue;
+      if (record.exited) continue;
       record.cleanupRequested = true;
       try {
         terminatePidTreeSync(record.pid);

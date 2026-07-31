@@ -135,6 +135,19 @@ async function run() {
   registry.forceStopAllOwnedProcessesSync('mts', 'emergency-test');
   assert.deepStrictEqual(forced, [1111, 4444, 'sync:3333']);
 
+  const inFlightChild = createMockChild(5555);
+  registry.registerOwnedProcess({
+    id: 'in-flight-backend',
+    name: 'backend',
+    role: 'fastapi-backend',
+    childProcess: inFlightChild,
+  });
+  const inFlightCleanup = registry.stopOwnedProcess('in-flight-backend', 'bounded-cleanup');
+  registry.forceStopAllOwnedProcessesSync('mts', 'bounded-fallback');
+  inFlightChild.exitNow(0);
+  await inFlightCleanup;
+  assert.equal(forced.includes('sync:5555'), true);
+
   assert.strictEqual(logs.some(([, message]) => /backend\.exe|node\.exe|python\.exe|electron\.exe/i.test(message)), false);
 
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
@@ -143,7 +156,9 @@ async function run() {
   assert.match(mainSource, /buttons:\s*\['No', 'Yes'\]/);
   assert.match(mainSource, /\$\{mode\}\.backend-owner\.json/);
   assert.match(mainSource, /ownership\.classification === 'stale-owned'/);
-  assert.match(mainSource, /ownership\.classification === 'unmanaged' && !isDev/);
+  assert.match(mainSource, /ownership\.classification === 'unmanaged'/);
+  assert.doesNotMatch(mainSource, /ownership\.classification === 'unmanaged' && !isDev/);
+  assert.match(mainSource, /Smart Alert Manager.*port \$\{BACKEND_PORT\} is occupied|APP_DISPLAY_NAME.*port \$\{BACKEND_PORT\} is occupied/);
   assert.doesNotMatch(mainSource, /taskkill\s+\/IM/i);
   assert.doesNotMatch(mainSource, /wmic/i);
 }
