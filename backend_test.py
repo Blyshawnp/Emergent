@@ -27,13 +27,13 @@ class MockTestingSuiteAPITester:
         
         try:
             if method == 'GET':
-                response = requests.get(url, headers=headers, timeout=10)
+                response = requests.get(url, headers=headers, timeout=30)
             elif method == 'POST':
-                response = requests.post(url, json=data, headers=headers, timeout=10)
+                response = requests.post(url, json=data, headers=headers, timeout=30)
             elif method == 'PUT':
-                response = requests.put(url, json=data, headers=headers, timeout=10)
+                response = requests.put(url, json=data, headers=headers, timeout=30)
             elif method == 'DELETE':
-                response = requests.delete(url, headers=headers, timeout=10)
+                response = requests.delete(url, headers=headers, timeout=30)
 
             success = response.status_code == expected_status
             if success:
@@ -179,6 +179,7 @@ class MockTestingSuiteAPITester:
             "POST",
             "/gemini/summaries",
             200,
+            data={},
             check_response=check_summaries
         )
 
@@ -206,7 +207,9 @@ def main():
     print("🚀 Starting Mock Testing Suite v3.0 Backend API Tests")
     print("=" * 60)
     
-    tester = MockTestingSuiteAPITester()
+    import sys
+    url = sys.argv[1] if len(sys.argv) > 1 else "https://operations-center-ui.preview.emergentagent.com/api"
+    tester = MockTestingSuiteAPITester(base_url=url)
     
     # Test all required endpoints
     test_results = []

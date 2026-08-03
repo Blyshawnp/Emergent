@@ -40,6 +40,7 @@ class SupabaseDataProvider(DataProvider):
         }
         if body is not None:
             headers["Content-Type"] = "application/json"
+        if method in ("POST", "PATCH", "DELETE") or body is not None:
             headers["Content-Profile"] = "mts_sam"
         if prefer:
             headers["Prefer"] = prefer
@@ -50,31 +51,76 @@ class SupabaseDataProvider(DataProvider):
                 with urlopen(request, timeout=self._timeout) as response:
                     return json.loads(response.read().decode("utf-8-sig"))
             except HTTPError as exc:
+                try:
+                    err_body = exc.read().decode("utf-8-sig")
+                except Exception:
+                    err_body = "Unable to read error body"
                 if exc.code < 500 or attempt >= self._retries:
-                    raise SupabaseProviderError(f"Supabase request failed with HTTP {exc.code}") from exc
+                    raise SupabaseProviderError(f"Supabase request failed with HTTP {exc.code}: {err_body}") from exc
             except (TimeoutError, URLError) as exc:
                 if attempt >= self._retries:
                     raise SupabaseProviderError("Supabase request timed out or was unavailable") from exc
             time.sleep(0.15 * (2**attempt))
         raise SupabaseProviderError("Supabase request failed")
 
-    def upsert_rows(self, table: str, rows, *, on_conflict: str):
-        if table not in set(RESOURCE_TABLES.values()) | {
-            "import_batches", "import_staging_rows", "import_row_results", "reconciliation_results"
-        }:
-            raise ValueError("Unsupported Supabase write table")
+    def upsert_rows(self, table: str, rows, *, on_conflict: str, resolution: str = "merge-duplicates"):
+        ALLOWED_WRITE_TABLES = {
+            "import_batches", "import_staging_rows", "import_row_results", "reconciliation_results",
+            "app_users", "app_roles", "user_role_assignments", "application_settings", "sync_state",
+            "audit_events", "data_source_lineage", "candidates", "candidate_sessions", "session_attempts",
+            "candidate_status_actions", "candidate_corrections", "extra_attempt_grants", "supervisor_transfers",
+            "newbie_shift_requests", "newbie_shift_reschedules", "headset_catalog", "headset_reviews",
+            "headset_review_actions", "pending_requests", "notifications", "notification_deliveries",
+            "activity_events", "synchronization_events"
+        }
+        if table not in ALLOWED_WRITE_TABLES:
+            raise ValueError(f"Unsupported Supabase write table: {table}")
         if not rows:
             return []
+        if table == "data_source_lineage":
+            resolution = "ignore-duplicates"
         result = self._request(
             table,
             query={"on_conflict": on_conflict},
             method="POST",
             body=list(rows),
-            prefer="resolution=merge-duplicates,return=representation",
+            prefer=f"resolution={resolution},return=representation",
         )
         if not isinstance(result, list):
             raise SupabaseProviderError("Supabase returned an invalid upsert response")
         return result
+
+    def delete_rows(self, table: str, query_params: Mapping[str, Any], *, max_expected: int | None = None) -> int:
+        ALLOWED_DELETE_TABLES = {
+            "import_batches", "import_staging_rows", "import_row_results", "reconciliation_results",
+            "app_users", "app_roles", "user_role_assignments", "application_settings", "sync_state",
+            "audit_events", "data_source_lineage", "candidates", "candidate_sessions", "session_attempts",
+            "candidate_status_actions", "candidate_corrections", "extra_attempt_grants", "supervisor_transfers",
+            "newbie_shift_requests", "newbie_shift_reschedules", "headset_catalog", "headset_reviews",
+            "headset_review_actions", "pending_requests", "notifications", "notification_deliveries",
+            "activity_events", "synchronization_events"
+        }
+        if table not in ALLOWED_DELETE_TABLES:
+            raise ValueError(f"Unsupported Supabase delete table: {table}")
+        if not query_params:
+            raise ValueError("Empty delete query filters are rejected to prevent broad deletions")
+        try:
+            result = self._request(
+                table,
+                query=query_params,
+                method="DELETE",
+                prefer="return=representation"
+            )
+        except Exception as exc:
+            raise SupabaseProviderError(f"Supabase delete failed on {table}: {exc}") from exc
+        if not isinstance(result, list):
+            raise SupabaseProviderError(f"Supabase delete returned invalid response format for {table}")
+        deleted_count = len(result)
+        if max_expected is not None and deleted_count > max_expected:
+            raise SupabaseProviderError(
+                f"Delete safety check failed: deleted {deleted_count} rows, which exceeds max expected of {max_expected}"
+            )
+        return deleted_count
 
     def health(self) -> ProviderHealth:
         try:
