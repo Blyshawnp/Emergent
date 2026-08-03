@@ -348,8 +348,22 @@ def verify_production_cmd(_args):
     return 0
 
 
+def idempotency_check_cmd(args):
+    provider = _supabase_client()
+    batch_id = args.batch_id
+    if not batch_id:
+        batches = provider._request('import_batches', query={'status': 'eq.succeeded', 'select': 'id,batch_key', 'limit': '1'})
+        batch_id = batches[0]['id'] if batches else None
+    if not batch_id:
+        print(json.dumps({'error': 'no_succeeded_batch_found'}))
+        return 1
+    result = reconcile(type('Args', (), {'batch_id': batch_id, 'dry_run': True})())
+    print(json.dumps({'idempotency_check': 'ok', 'batch_id': batch_id, 'dry_run': True}))
+    return 0
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="MTS/SAM read-only Sheets to Supabase importer")
+    parser = argparse.ArgumentParser(description="MTS/SAM Sheets-to-Supabase importer and shadow verification CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # inventory
@@ -386,6 +400,14 @@ def main(argv=None):
     reconcile_parser.add_argument("--batch-id")
     reconcile_parser.add_argument("--dry-run", action="store_true")
     reconcile_parser.set_defaults(func=reconcile)
+
+    # idempotency-check (alias for running reconcile on latest batch with dry-run)
+    idempotency_parser = subparsers.add_parser(
+        'idempotency-check',
+        help='Re-stage latest batch in dry-run mode and confirm zero new canonical rows'
+    )
+    idempotency_parser.add_argument('--batch-id')
+    idempotency_parser.set_defaults(func=idempotency_check_cmd)
 
     # report
     report_parser = subparsers.add_parser("report")

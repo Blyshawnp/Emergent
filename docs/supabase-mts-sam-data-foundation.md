@@ -107,4 +107,40 @@ Apps Script retirement and Google Sheet deletion are outside this phase.
 
 ## Deployment state at checkpoint
 
-The repository is linked to the intended hosted project and the five active migrations have passed non-persistent validation. This source checkpoint intentionally stops before `supabase db push`, import, shadow mode, dual writes, or provider cutover. No hosted objects were applied and no production data was imported. The provider default remains Sheets.
+The repository is linked to the intended hosted project `xyfhikikddcqcmzbdvbj` (MTS-SAM, East US).
+
+Five approved migrations were applied as of the previous checkpoint. A sixth forward migration
+(`20260803000000_mts_sam_lineage_rpc.sql`) was added in this checkpoint to provide a
+transactional, race-safe lineage RPC. Local and remote migration history agree.
+The archived migration `20260614083525` was not applied and is not in the active chain.
+
+Shadow data was imported in two production runs (idempotency confirmed, zero duplicate canonical rows)
+and one synthetic rollback batch. Google Sheets remains the active authoritative data provider.
+No shadow mode, dual writes, or provider cutover was activated.
+
+Verified canonical counts:
+- candidates: 54
+- candidate_sessions: 69
+- session_attempts: 137
+- headset_catalog: 96
+- headset_reviews: 11 (10 historical standalone, 1 with unresolved `source_session_id` link)
+- supervisor_transfers: 14
+- newbie_shift_requests: 9 (13 staged, 4 exact duplicates deduplicated)
+- candidate_corrections: 7
+- notifications: 4
+
+Source accounting (batch 1, 358 rows): 220 valid + 128 unresolved + 4 duplicate + 6 rejected = 358.
+
+Nine required configuration tabs remain staging-only (66 rows total, not 100 as incorrectly
+stated in earlier reports). These block full data-provider cutover but do not block
+mapped-domain shadow reads. See `docs/supabase-shadow-read-readiness.md` for full details.
+
+Six `sam-authorized-users` rows were rejected per import batch (auth UUID mismatch with
+Supabase Auth). SAM authorization cutover remains blocked until a user-mapping process is
+implemented.
+
+Current test totals: 236 backend unit + 300 frontend + 33 Apps Script + 11 desktop = 580,
+plus new tests added in this checkpoint.
+
+For complete shadow-read readiness details, deployment audit, and activation criteria
+see `docs/supabase-shadow-read-readiness.md`.
