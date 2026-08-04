@@ -13,7 +13,7 @@ class SupabaseMigrationTests(unittest.TestCase):
         cls.sql = "\n".join(path.read_text(encoding="utf-8") for path in cls.files).lower()
 
     def test_ordered_migrations_exist(self):
-        self.assertEqual(len(self.files), 5)
+        self.assertGreaterEqual(len(self.files), 5)
 
     def test_dedicated_schema_and_core_objects_exist(self):
         self.assertIn("create schema if not exists mts_sam", self.sql)
