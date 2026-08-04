@@ -8,8 +8,14 @@ Run from the backend/ directory:
 from __future__ import annotations
 
 import os
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch, call
+
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 from tools.supabase_import.core import (
     verify_production_health,
@@ -324,7 +330,7 @@ class CompareShadowProviderTests(unittest.TestCase):
         cat = result["categories"]["candidate_sessions"]
         self.assertGreater(cat["error_count"], 0)
         # Other domains should still be present in categories
-        self.assertIn("candidates", result["categories"])
+        self.assertIn("headset_catalog", result["categories"])
 
     def test_quota_error_captured(self):
         """A 429/quota error from sheets → domain errors contain quota message."""
