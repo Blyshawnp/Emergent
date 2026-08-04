@@ -247,8 +247,8 @@ const HELP_TOPICS = [
     summary: 'Coaching checkboxes record what coaching was actually given on each call.',
     bullets: [
       'Check only the items you actually coached during the call.',
-      'Search name for every call and Do not volunteer information are available when those coaching topics were covered.',
-      'Search name for every call and Do not volunteer information appear before Other, which stays last for custom notes.',
+      'Call 1, Call 2, and Call 3 include active listening, avoiding interruptions, and warm professional tone coaching options.',
+      'Select Other Coaching Notes beside its heading to enable and save custom coaching notes.',
       'Helper text appears below coaching items when extra guidance is configured, and child checkboxes stay disabled until their parent item is checked.',
       'Coaching selections feed the Coaching Summary on the Review screen.',
       'Use Other notes only when no existing checkbox describes the coaching clearly.',

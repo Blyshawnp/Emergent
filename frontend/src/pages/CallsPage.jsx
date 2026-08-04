@@ -7,6 +7,24 @@ import FailReasonGrid from '../components/FailReasonGrid';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import { formatDonationAmountLabel, getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 import { mergeAndOrderFailReasons } from '../utils/failReasons';
+const REQUIRED_CALL_COACHING = [
+  {
+    id: 'active_listening_no_repeat',
+    storageKey: 'active_listening_no_repeat',
+    label: 'Use active listening and avoid repeating questions the caller has already answered.',
+  },
+  {
+    id: 'avoid_interrupting_caller',
+    storageKey: 'avoid_interrupting_caller',
+    label: 'Avoid interrupting or speaking over the caller.',
+  },
+  {
+    id: 'warm_professional_tone_language',
+    storageKey: 'warm_professional_tone_language',
+    label: 'Maintain a warm, professional tone and use clear, professional language.',
+  },
+];
+
 const DEFAULT_CALL_COACHING = [
   { id: 'c-show-app', label: 'Show appreciation', children: ['For Current/Existing Donors', 'After donation amount is given'] },
   { id: 'c-dontask', label: "Don't Ask, Just Verify Address and Phone Number", helper: 'Existing member already provided address and phone number' },
@@ -19,6 +37,7 @@ const DEFAULT_CALL_COACHING = [
   { id: 'c-nav', label: 'Use effective script navigation', children: ['Scroll down to avoid missing parts of the script', 'Use the Back and Next buttons and not the Icons'] },
   { id: 'c-search-name', label: 'Search name for every call', helper: "Search the caller's name on every call to avoid duplicate member records." },
   { id: 'c-no-volunteer', label: 'Do not volunteer information', helper: 'Do not verify details the member has not provided, such as an email address.' },
+  ...REQUIRED_CALL_COACHING,
   { id: 'c-other', label: 'Other' },
 ];
 
@@ -78,6 +97,19 @@ function getCallCoachingForDisplay(items = []) {
         ? item.children.filter((child) => !/phonetics/i.test(String(child || '')))
         : item.children,
     });
+  });
+
+  const requiredByLabel = new Map(REQUIRED_CALL_COACHING.map((item) => [item.label.toLowerCase(), item]));
+  normalized.forEach((item) => {
+    const required = requiredByLabel.get(String(item.label || '').trim().toLowerCase());
+    if (required) {
+      item.id = item.id || required.id;
+      item.storageKey = required.storageKey;
+    }
+  });
+  const existingLabels = new Set(normalized.map((item) => String(item.label || '').trim().toLowerCase()));
+  REQUIRED_CALL_COACHING.forEach((item) => {
+    if (!existingLabels.has(item.label.toLowerCase())) normalized.push({ ...item });
   });
 
   return moveOtherCoachingLast(normalized);
@@ -710,16 +742,26 @@ export default function CallsPage({ onNavigate, navigationState, settings: initi
           <h3>Coaching Given</h3>
         </div>
         <p className="text-muted text-sm" style={{ marginBottom: 16 }}>One or more may be selected</p>
-        <CoachingGrid items={callCoaching} checked={coaching} onChange={setCoaching} />
-        <div style={{ marginTop: 16 }}>
-          <label className="text-sm font-bold">Other Coaching Notes</label>
+        <CoachingGrid items={callCoaching.filter((item) => !OTHER_COACHING_RE.test(String(item.label || '').trim()))} checked={coaching} onChange={setCoaching} />
+        <div className="other-coaching-notes">
+          <label className="checkbox-label other-coaching-control" htmlFor="call-other-coaching">
+            <input
+              id="call-other-coaching"
+              type="checkbox"
+              checked={!!coaching.Other}
+              onChange={() => setCoaching((previous) => ({ ...previous, Other: !previous.Other }))}
+              data-testid="call-other-coaching"
+            />
+            <span>Other Coaching Notes</span>
+          </label>
           <textarea
+            id="call-other-coaching-notes"
             rows={2}
             value={coachNotes}
             onChange={e => setCoachNotes(e.target.value)}
             disabled={!coaching['Other']}
-            placeholder="Select Other above to enter custom coaching notes."
-            style={{ marginTop: 4 }}
+            placeholder="Select this option to enter custom coaching notes."
+            aria-label="Other Coaching Notes"
             data-testid="call-coach-notes"
           />
         </div>
@@ -847,17 +889,18 @@ function CoachingGrid({ items, checked, onChange }) {
 }
 
 function CoachingItem({ item, checked, onToggle }) {
-  const parentChecked = !!checked[item.label];
+  const storageKey = item.storageKey || item.label;
+  const parentChecked = !!checked[storageKey];
   return (
     <div className="coaching-group">
       <label className="checkbox-label">
-        <input type="checkbox" checked={parentChecked} onChange={() => onToggle(item.label)} />
+        <input type="checkbox" checked={parentChecked} onChange={() => onToggle(storageKey)} />
         <span>{item.label}</span>
       </label>
       {item.helper && <div className="helper-text">{item.helper}</div>}
       {item.children && item.children.map(child => (
         <label key={child} className={`checkbox-label sub-item ${!parentChecked ? 'disabled' : ''}`}>
-          <input type="checkbox" disabled={!parentChecked} checked={!!checked[`${item.label}_${child}`]} onChange={() => onToggle(`${item.label}_${child}`)} />
+          <input type="checkbox" disabled={!parentChecked} checked={!!checked[`${storageKey}_${child}`]} onChange={() => onToggle(`${storageKey}_${child}`)} />
           <span>{child}</span>
         </label>
       ))}

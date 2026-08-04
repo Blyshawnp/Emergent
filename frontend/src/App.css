@@ -1430,6 +1430,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .coaching-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg) var(--space-2xl); }
 .coaching-group { display: flex; flex-direction: column; gap: var(--space-xs); }
 .coaching-group .helper-text { font-size: var(--font-size-xs); color: var(--text-tertiary); margin-left: 26px; margin-top: -2px; }
+.other-coaching-notes { margin-top: var(--space-lg); }
+.other-coaching-control { align-items: center; margin-bottom: var(--space-xs); font-weight: 700; }
+.other-coaching-control input[type="checkbox"] { margin-top: 0; }
+.other-coaching-notes textarea { margin-top: 0; width: 100%; }
+@media (max-width: 700px) {
+  .coaching-grid { grid-template-columns: 1fr; gap: var(--space-md); }
+}
 .fail-reason-grid { gap: var(--space-md) var(--space-2xl); }
 .fail-reason-item { display: flex; flex-direction: column; gap: var(--space-xs); margin-bottom: var(--space-sm); }
 .fail-reason-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); min-height: 24px; }

@@ -1092,8 +1092,8 @@ test('calls and supervisor coaching render backfilled default reasons and helper
   expect(callsView.container.textContent).toContain("Search the caller's name on every call to avoid duplicate member records.");
   expect(callsView.container.textContent).toContain('Do not verify details the member has not provided, such as an email address.');
   const callsLabels = Array.from(callsView.container.querySelectorAll('.coaching-group label')).map((label) => label.textContent.trim());
-  expect(callsLabels.indexOf('Search name for every call')).toBeLessThan(callsLabels.indexOf('Other'));
-  expect(callsLabels.indexOf('Do not volunteer information')).toBeLessThan(callsLabels.indexOf('Other'));
+  expect(callsLabels).not.toContain('Other');
+  expect(callsView.container.querySelector('.other-coaching-control')?.textContent).toContain('Other Coaching Notes');
   await callsView.unmount();
 
   const supView = await renderComponent(<SupTransferPage onNavigate={jest.fn()} />);

@@ -998,6 +998,61 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
         self.assertIn("Coaching was provided using the standard screenshots and Discord chat.", coaching)
         self.assertIn("Paraphrased the Monthly Sustaining Terms section of the script.", fail)
 
+    def test_new_call_coaching_options_feed_fallback_and_gemini_context(self):
+        session = {
+            "candidate_name": "Candidate",
+            "call_1": {
+                "result": "Pass",
+                "coaching": {
+                    "active_listening_no_repeat": True,
+                    "avoid_interrupting_caller": True,
+                    "warm_professional_tone_language": True,
+                    "Other": True,
+                },
+                "coach_notes": "Use the caller's details as the conversation progresses.",
+            },
+        }
+
+        fallback = server.generate_summaries(session, settings={"enable_gemini": False})
+        self.assertIn("using active listening", fallback["coaching"])
+        self.assertIn("avoiding interruptions or speaking over the caller", fallback["coaching"])
+        self.assertIn("warm, professional tone", fallback["coaching"])
+        self.assertIn("Use the caller's details as the conversation progresses", fallback["coaching"])
+
+        with mock.patch.object(server, "_generate_gemini_summary_with_timeout", return_value="Gemini coaching") as generate:
+            generated = server.generate_summaries(
+                session,
+                api_key="test-key",
+                settings={"enable_gemini": True},
+                summary_type="coaching",
+            )
+
+        self.assertEqual(generated["coaching"], "Gemini coaching")
+        gemini_context = generate.call_args.args[0]
+        self.assertIn("using active listening", gemini_context)
+        self.assertIn("avoiding interruptions or speaking over the caller", gemini_context)
+        self.assertIn("warm, professional tone", gemini_context)
+        self.assertIn("Use the caller's details as the conversation progresses", gemini_context)
+
+    def test_other_coaching_notes_require_selection_and_nonblank_text(self):
+        unchecked = {
+            "call_1": {
+                "result": "Pass",
+                "coaching": {"Other": False},
+                "coach_notes": "Stale note must not be included.",
+            },
+        }
+        blank = {
+            "call_1": {
+                "result": "Pass",
+                "coaching": {"Other": True},
+                "coach_notes": "   ",
+            },
+        }
+
+        self.assertNotIn("Stale note", server.build_clean_coaching(unchecked))
+        self.assertNotIn("Coaching notes:", server.build_clean_coaching(blank))
+
     def test_pending_supervisor_transfers_exclude_terminal_latest_candidate_rows(self):
         pending_rows = [
             {

@@ -38,6 +38,18 @@ const defaults = {
   donors_new: [['Jamie', 'Caller', '1 Main St', '', 'Town', 'NC', '555-0100', 'jamie@example.test']],
 };
 
+const newCoachingOptions = [
+  ['Use active listening and avoid repeating questions the caller has already answered.', 'active_listening_no_repeat'],
+  ['Avoid interrupting or speaking over the caller.', 'avoid_interrupting_caller'],
+  ['Maintain a warm, professional tone and use clear, professional language.', 'warm_professional_tone_language'],
+];
+
+function findCoachingInput(container, labelText) {
+  const label = Array.from(container.querySelectorAll('.coaching-grid .checkbox-label'))
+    .find((item) => item.textContent.trim() === labelText);
+  return label?.querySelector('input') || null;
+}
+
 function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -92,6 +104,128 @@ async function renderPage(callNum, sessionOverrides = {}, pageDefaults = default
     },
   };
 }
+
+test.each([1, 2, 3])('Call %i renders the shared new coaching options and moved Other control', async (callNum) => {
+  const view = await renderPage(callNum);
+
+  newCoachingOptions.forEach(([label]) => {
+    expect(findCoachingInput(view.container, label)).not.toBeNull();
+  });
+  expect(Array.from(view.container.querySelectorAll('.coaching-grid .checkbox-label'))
+    .some((label) => label.textContent.trim() === 'Other')).toBe(false);
+  expect(view.container.querySelector('[data-testid="call-other-coaching"]')).not.toBeNull();
+  expect(view.container.querySelector('.other-coaching-control').textContent).toContain('Other Coaching Notes');
+
+  await view.unmount();
+});
+
+test.each(newCoachingOptions)('%s persists under stable key %s for only the active call', async (label, storageKey) => {
+  const remoteOptionsWithoutStorageKeys = newCoachingOptions.map(([remoteLabel, id]) => ({ id, label: remoteLabel }));
+  const view = await renderPage(
+    2,
+    { call_1: { result: 'Pass' } },
+    defaults,
+    { call_coaching: [...remoteOptionsWithoutStorageKeys, { id: 'c-other', label: 'Other' }] },
+  );
+  const checkbox = findCoachingInput(view.container, label);
+
+  await act(async () => {
+    checkbox.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(checkbox.checked).toBe(true);
+  await view.unmount();
+
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    current_call_num: 2,
+    call_drafts: expect.objectContaining({
+      2: expect.objectContaining({
+        coaching: expect.objectContaining({ [storageKey]: true }),
+      }),
+    }),
+  }));
+  const savedDraftPayload = api.updateSession.mock.calls
+    .map(([payload]) => payload)
+    .find((payload) => payload?.call_drafts?.[2]?.coaching?.[storageKey]);
+  expect(savedDraftPayload.call_drafts[1]).toBeUndefined();
+});
+
+test('existing Other notes restore, remain call-specific, and require the moved checkbox', async () => {
+  const view = await renderPage(3, {
+    call_1: { result: 'Pass' },
+    call_2: { result: 'Fail' },
+    call_drafts: {
+      3: {
+        call_num: 3,
+        coaching: { Other: true },
+        coach_notes: 'Keep this custom coaching note.',
+      },
+    },
+  });
+  const otherCheckbox = view.container.querySelector('[data-testid="call-other-coaching"]');
+  const notes = view.container.querySelector('[data-testid="call-coach-notes"]');
+
+  expect(otherCheckbox.checked).toBe(true);
+  expect(notes.disabled).toBe(false);
+  expect(notes.value).toBe('Keep this custom coaching note.');
+
+  await act(async () => {
+    otherCheckbox.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(notes.disabled).toBe(true);
+  expect(notes.value).toBe('Keep this custom coaching note.');
+
+  await act(async () => {
+    otherCheckbox.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(notes.disabled).toBe(false);
+  expect(otherCheckbox.id).toBe('call-other-coaching');
+  expect(view.container.querySelector('label[for="call-other-coaching"]')).not.toBeNull();
+  expect(notes.getAttribute('aria-label')).toBe('Other Coaching Notes');
+
+  await view.unmount();
+});
+
+test('new Other coaching text is retained and persisted only while explicitly selected', async () => {
+  const view = await renderPage(1);
+  const otherCheckbox = view.container.querySelector('[data-testid="call-other-coaching"]');
+  const notes = view.container.querySelector('[data-testid="call-coach-notes"]');
+
+  expect(notes.disabled).toBe(true);
+  await act(async () => {
+    otherCheckbox.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(notes, 'Custom coaching entered for this call.');
+    notes.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(notes.disabled).toBe(false);
+  expect(notes.value).toBe('Custom coaching entered for this call.');
+
+  await view.unmount();
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    call_drafts: expect.objectContaining({
+      1: expect.objectContaining({
+        coaching: expect.objectContaining({ Other: true }),
+        coach_notes: 'Custom coaching entered for this call.',
+      }),
+    }),
+  }));
+});
+
+test('stale remote call coaching is backfilled without adding options to another component', async () => {
+  const pageSettings = { call_coaching: [{ id: 'custom', label: 'Custom Coaching' }, { id: 'c-other', label: 'Other' }] };
+  const view = await renderPage(1, {}, defaults, pageSettings);
+
+  newCoachingOptions.forEach(([label]) => {
+    expect(findCoachingInput(view.container, label)).not.toBeNull();
+  });
+  expect(view.container.textContent).toContain('Custom Coaching');
+
+  await view.unmount();
+});
 
 test('shows Caller Demographics before Payment Simulation', async () => {
   const view = await renderPage(1);

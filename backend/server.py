@@ -2581,6 +2581,9 @@ CALL_COACHING = [
     {"id": "c-nav", "label": "Use effective script navigation", "children": ["Scroll down to avoid missing parts of the script", "Use the Back and Next buttons and not the Icons"]},
     {"id": "c-search-name", "label": "Search name for every call", "helper": "Search the caller's name on every call to avoid duplicate member records."},
     {"id": "c-no-volunteer", "label": "Do not volunteer information", "helper": "Do not verify details the member has not provided, such as an email address."},
+    {"id": "active_listening_no_repeat", "label": "Use active listening and avoid repeating questions the caller has already answered."},
+    {"id": "avoid_interrupting_caller", "label": "Avoid interrupting or speaking over the caller."},
+    {"id": "warm_professional_tone_language", "label": "Maintain a warm, professional tone and use clear, professional language."},
     {"id": "c-other", "label": "Other"},
 ]
 
@@ -2613,6 +2616,9 @@ REQUIRED_COACHING_DEFAULT_LABELS = {
     "call_coaching": {
         "search name for every call",
         "do not volunteer information",
+        "use active listening and avoid repeating questions the caller has already answered.",
+        "avoid interrupting or speaking over the caller.",
+        "maintain a warm, professional tone and use clear, professional language.",
     },
     "sup_coaching": {
         "search name for every call",
@@ -9688,7 +9694,7 @@ def _get_coaching_items(data):
             if label:
                 items.append(label)
     notes = data.get("coach_notes", "")
-    if notes:
+    if coaching.get("Other") and str(notes or "").strip():
         items.append(notes)
     return items
 
@@ -9802,7 +9808,7 @@ def _has_discord_screenshot_coaching(data):
             return True
 
     notes = data.get("coach_notes", "")
-    return bool(_looks_like_discord_screenshot_coaching(notes))
+    return bool(coaching.get("Other") and _looks_like_discord_screenshot_coaching(notes))
 
 
 def _dedupe_preserve_order(items):
@@ -9851,6 +9857,18 @@ SPECIAL_COACHING_GUIDANCE = (
         "do not volunteer information",
         "Coaching was given on avoiding verification of information the member has not yet provided, such as an email address.",
     ),
+    (
+        "use active listening and avoid repeating questions",
+        "Coaching was provided on using active listening throughout the call and avoiding repeated questions the caller had already answered.",
+    ),
+    (
+        "avoid interrupting or speaking over the caller",
+        "Coaching was provided on allowing the caller to finish before responding and avoiding interruptions or speaking over the caller.",
+    ),
+    (
+        "maintain a warm professional tone and use clear professional language",
+        "Coaching was provided on maintaining a warm, professional tone and using clear, professional language throughout the call.",
+    ),
 )
 
 
@@ -9872,9 +9890,21 @@ def _get_special_coaching_guidance(item):
 def _extract_coaching_summary_parts(section):
     coaching = (section or {}).get("coaching", {}) or {}
     grouped = {}
+    stable_top_level_keys = {
+        "active_listening_no_repeat",
+        "avoid_interrupting_caller",
+        "warm_professional_tone_language",
+    }
 
     for key, checked in coaching.items():
         if not checked or not key:
+            continue
+        if key == "Other":
+            continue
+        if key in stable_top_level_keys:
+            parent = _summary_parent_label(key)
+            if parent:
+                grouped.setdefault(parent, [])
             continue
         if "_" in key:
             parent, child = key.split("_", 1)

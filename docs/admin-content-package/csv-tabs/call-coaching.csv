@@ -6,4 +6,7 @@ c-verbatim,Read script verbatim,No adlibbing or skipping sections,
 c-nav,Use effective script navigation,,Scroll down to avoid missing parts of the script|Use the Back and Next buttons and not the Icons
 c-search-name,Search name for every call,Search the caller's name on every call to avoid duplicate member records.,
 c-no-volunteer,Do not volunteer information,"Do not verify details the member has not provided, such as an email address.",
+active_listening_no_repeat,Use active listening and avoid repeating questions the caller has already answered.,,
+avoid_interrupting_caller,Avoid interrupting or speaking over the caller.,,
+warm_professional_tone_language,"Maintain a warm, professional tone and use clear, professional language.",,
 c-other,Other,,

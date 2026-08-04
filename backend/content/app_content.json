@@ -488,6 +488,18 @@
       "helper": "Do not verify details the member has not provided, such as an email address."
     },
     {
+      "id": "active_listening_no_repeat",
+      "label": "Use active listening and avoid repeating questions the caller has already answered."
+    },
+    {
+      "id": "avoid_interrupting_caller",
+      "label": "Avoid interrupting or speaking over the caller."
+    },
+    {
+      "id": "warm_professional_tone_language",
+      "label": "Maintain a warm, professional tone and use clear, professional language."
+    },
+    {
       "id": "c-other",
       "label": "Other"
     }

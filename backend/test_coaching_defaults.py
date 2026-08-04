@@ -22,6 +22,9 @@ class CoachingDefaultsBackfillTests(unittest.TestCase):
         self.assertEqual(labels.count("Custom Coaching"), 1)
         self.assertEqual(labels.count("Search name for every call"), 1)
         self.assertEqual(labels.count("Do not volunteer information"), 1)
+        self.assertEqual(labels.count("Use active listening and avoid repeating questions the caller has already answered."), 1)
+        self.assertEqual(labels.count("Avoid interrupting or speaking over the caller."), 1)
+        self.assertEqual(labels.count("Maintain a warm, professional tone and use clear, professional language."), 1)
         search_item = next(item for item in merged if item.get("label") == "Search name for every call")
         volunteer_item = next(item for item in merged if item.get("label") == "Do not volunteer information")
         self.assertEqual(
@@ -50,6 +53,9 @@ class CoachingDefaultsBackfillTests(unittest.TestCase):
         self.assertEqual(labels.count("Custom Supervisor Coaching"), 1)
         self.assertEqual(labels.count("Search name for every call"), 1)
         self.assertEqual(labels.count("Do not volunteer information"), 1)
+        self.assertNotIn("Use active listening and avoid repeating questions the caller has already answered.", labels)
+        self.assertNotIn("Avoid interrupting or speaking over the caller.", labels)
+        self.assertNotIn("Maintain a warm, professional tone and use clear, professional language.", labels)
 
 
 if __name__ == "__main__":
