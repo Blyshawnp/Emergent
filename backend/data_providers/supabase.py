@@ -22,6 +22,7 @@ class SupabaseDataProvider(DataProvider):
         self._key = str(service_role_key or "")
         self._timeout = max(1.0, float(timeout))
         self._retries = max(0, int(retries))
+        self._comparison_cache = {}
         if not self._url.startswith("https://") or not self._key:
             raise ValueError("Supabase backend configuration is incomplete")
 
@@ -29,7 +30,8 @@ class SupabaseDataProvider(DataProvider):
         return "SupabaseDataProvider(configured=True)"
 
     def _request(self, path: str, *, query: Mapping[str, Any] | None = None, method="GET", body=None, prefer=None):
-        url = f"{self._url}/rest/v1/{quote(path, safe='')}"
+        encoded_path = "/".join(quote(segment, safe="") for segment in str(path).split("/"))
+        url = f"{self._url}/rest/v1/{encoded_path}"
         if query:
             url += "?" + urlencode({str(k): str(v) for k, v in query.items()})
         headers = {
@@ -62,6 +64,33 @@ class SupabaseDataProvider(DataProvider):
                     raise SupabaseProviderError("Supabase request timed out or was unavailable") from exc
             time.sleep(0.15 * (2**attempt))
         raise SupabaseProviderError("Supabase request failed")
+
+    def insert_lineage_if_absent(self, row: Mapping[str, Any]):
+        """Call the sole trusted lineage RPC in the private mts_sam schema."""
+        required = (
+            "entity_type", "entity_id", "source_system", "source_tab",
+            "source_row_key", "source_checksum", "import_batch_id",
+        )
+        missing = [key for key in required if row.get(key) in (None, "")]
+        if missing:
+            raise ValueError(f"Lineage RPC payload is incomplete: {','.join(missing)}")
+        result = self._request(
+            "rpc/insert_lineage_if_absent",
+            method="POST",
+            body={
+                "p_entity_type": row["entity_type"],
+                "p_entity_id": row["entity_id"],
+                "p_source_system": row["source_system"],
+                "p_source_tab": row["source_tab"],
+                "p_source_row_key": row["source_row_key"],
+                "p_source_checksum": row["source_checksum"],
+                "p_import_batch_id": row["import_batch_id"],
+                "p_metadata": dict(row.get("metadata") or {}),
+            },
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("result"), str):
+            raise SupabaseProviderError("Supabase lineage RPC returned a malformed response")
+        return result
 
     def upsert_rows(self, table: str, rows, *, on_conflict: str, resolution: str = "merge-duplicates"):
         ALLOWED_WRITE_TABLES = {
@@ -130,6 +159,8 @@ class SupabaseDataProvider(DataProvider):
             return ProviderHealth(False, self.name, str(exc))
 
     def list_resource(self, resource, *, filters=None, limit=1000, offset=0):
+        if str(resource) == "candidates" and not filters:
+            return self._list_candidate_projection(limit=limit, offset=offset)
         table = RESOURCE_TABLES.get(str(resource))
         if not table:
             raise ValueError(f"Unsupported canonical resource: {resource}")
@@ -143,4 +174,76 @@ class SupabaseDataProvider(DataProvider):
         result = self._request(table, query=query)
         if not isinstance(result, list):
             raise SupabaseProviderError("Supabase returned an invalid resource response")
+        if str(resource) == "headset_catalog":
+            result = [{
+                **row,
+                "selectable": row.get("status") == "approved" and not row.get("archived_at") and not row.get("deleted_at"),
+                "archived": bool(row.get("archived_at")) or row.get("status") == "archived",
+                "deleted": bool(row.get("deleted_at")) or row.get("status") == "deleted",
+            } for row in result]
+        elif str(resource) == "history":
+            statuses = self._cached_read("current_candidate_status_view", {"select": "*", "limit": 5000})
+            status_by_session = {str(row.get("session_id") or ""): row.get("authoritative_status") for row in statuses}
+            result = [{**row, "authoritative_status": status_by_session.get(str(row.get("session_id") or ""))} for row in result]
+        elif str(resource) == "candidate_tracking":
+            result = [{**row, "category": self._tracking_category(row)} for row in result]
         return result
+
+    @staticmethod
+    def _tracking_category(row):
+        if row.get("archived"):
+            return "archived"
+        if row.get("needs_sup_transfer"):
+            return "pending_supervisor_transfer"
+        if str(row.get("newbie_shift_request_status") or "").strip().casefold() == "pending":
+            return "newbie_shift"
+        status = str(row.get("authoritative_status") or "").strip().casefold().replace("_", "-")
+        if "final" in status and "fail" in status:
+            return "failed_final_attempt"
+        if status in {"fail", "failed"}:
+            return "failed_not_final"
+        if status in {"pass", "passed", "resumed-pass"}:
+            return "passed"
+        if "withdrew" in status or "withdrawn" in status:
+            return "withdrawn"
+        return "incomplete"
+
+    def _cached_read(self, table, query):
+        key = (table, tuple(sorted((str(k), str(v)) for k, v in query.items())))
+        if key not in self._comparison_cache:
+            result = self._request(table, query=query)
+            if not isinstance(result, list):
+                raise SupabaseProviderError(f"Supabase returned invalid comparison rows for {table}")
+            self._comparison_cache[key] = result
+        return self._comparison_cache[key]
+
+    def _list_candidate_projection(self, *, limit, offset):
+        candidates = self._cached_read("candidates", {"select": "*", "limit": 5000})
+        history = self._cached_read("candidate_history_view", {"select": "*", "limit": 5000})
+        lineage = self._cached_read(
+            "data_source_lineage",
+            {"select": "entity_id,source_row_key", "entity_type": "eq.candidates", "limit": 5000},
+        )
+        latest_by_candidate = {}
+        for row in history:
+            candidate_id = str(row.get("candidate_id") or "")
+            stamp = str(row.get("completed_at") or row.get("updated_at") or "")
+            current = latest_by_candidate.get(candidate_id)
+            if current is None or stamp >= current[0]:
+                latest_by_candidate[candidate_id] = (stamp, row)
+        lineage_by_candidate = {
+            str(row.get("entity_id") or ""): str(row.get("source_row_key") or "")
+            for row in lineage
+        }
+        projected = []
+        for candidate in candidates:
+            candidate_id = str(candidate.get("id") or "")
+            latest = latest_by_candidate.get(candidate_id, ("", {}))[1]
+            projected.append({
+                **candidate,
+                "latest_session_id": latest.get("session_id"),
+                "authoritative_status": latest.get("authoritative_status"),
+                "archived": latest.get("archived"),
+                "lineage_identity": lineage_by_candidate.get(candidate_id, ""),
+            })
+        return projected[offset:offset + limit]

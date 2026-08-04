@@ -1,7 +1,20 @@
 # MTS/SAM Supabase shadow-read readiness
 
-Status: shadow data imported, shadow mode **NOT** yet activated.
+Status: corrective shadow-read checkpoint in progress; shadow mode **NOT** activated.
 Google Sheets remains the authoritative data provider.
+
+## Failed-audit finding and correction
+
+The implementation at `5f614af`, followed by test corrections `b9ee7b5` and
+`c927a8b`, incorrectly reported mapped-domain readiness. The final read-only audit
+proved that the lineage RPC existed but the importer bypassed it, and that only 6
+of the 14 required logical comparison domains were implemented. That readiness
+result was invalid.
+
+This corrective checkpoint makes the RPC the only normal lineage insertion path,
+implements an explicit comparison contract for all 14 domains, and refuses mapped
+readiness without a current same-process comparison. Live parity and the corrective
+migration deployment must still be recorded before this document may claim readiness.
 
 ---
 
@@ -30,6 +43,7 @@ Google Sheets remains the authoritative data provider.
 | `20260731080701` | `mts_sam_import_reconciliation.sql` | Applied ✓ |
 | `20260731080702` | `mts_sam_functions_views_security.sql` | Applied ✓ |
 | `20260803000000` | `mts_sam_lineage_rpc.sql` | Added this checkpoint — apply before next import |
+| `20260804015610` | `harden_mts_sam_lineage_rpc_outcomes.sql` | Forward correction; deployment pending validation |
 | `20260614083525` | *(archived, not in active chain)* | NOT APPLIED ✓ |
 
 ---
@@ -92,16 +106,19 @@ New reviews created via the SAM UI after cutover will have explicit `session_id`
 
 ## Lineage concurrency hardening
 
-`safe_upsert_lineage` now uses `resolution='ignore-duplicates'`
-(PostgreSQL `ON CONFLICT DO NOTHING`). The previous `merge-duplicates` (`DO UPDATE`) was
-a race condition under parallel imports.
+`safe_upsert_lineage` now calls the narrow backend provider method
+`insert_lineage_if_absent()`, which invokes the fixed PostgREST route
+`/rest/v1/rpc/insert_lineage_if_absent` in schema `mts_sam`. Direct table upsert is
+not a normal lineage path and there is no client-side precheck correctness gate.
 
-A new transactional RPC `mts_sam.insert_lineage_if_absent()` is available in the
-`20260803000000` migration for future parallel import automation. The RPC:
+The original `20260803000000` RPC could emit an extra race outcome or surface an
+entity-side unique violation. Forward migration `20260804015610` replaces the
+function without rewriting migration history and makes both unique identities
+database-authoritative. The corrected RPC:
 
 - Is atomic (single transaction)
 - Uses `SECURITY DEFINER` with `SET search_path = ''`
-- Is restricted to `service_role` only (revoked from public and anon)
+- Is restricted to `service_role` only (revoked from public, anon, and authenticated)
 
 The RPC returns one of:
 
@@ -111,7 +128,6 @@ The RPC returns one of:
 | `already_exists_same_mapping` | Exact duplicate, safe to ignore |
 | `conflict_source_maps_to_different_entity` | Source key already maps to a different entity |
 | `conflict_entity_maps_to_different_source` | Entity already maps to a different source key |
-| `conflict_race_skipped` | Concurrent writer won the race; `DO NOTHING` skipped this row |
 
 ---
 
@@ -180,7 +196,9 @@ now checks the following invariants:
 | `headset_review_links` | WARNING | Unresolved `source_session_id` links |
 | `env_provider` | ERROR | `MTS_DATA_PROVIDER=sheets` |
 | `env_dual_write` | ERROR | `MTS_DUAL_WRITE_ENABLED` not true |
-| `env_shadow_mode` | WARNING | `MTS_SHADOW_COMPARE` controlled |
+| `env_shadow_mode` | ERROR | `MTS_SHADOW_COMPARE` remains disabled |
+| `lineage_rpc_provider_method` | ERROR | Trusted RPC-only importer path is present |
+| `shadow_comparison_current` | ERROR | Same-process comparison completed for all 14 domains with zero unexplained differences |
 | `service_key_in_frontend` | ERROR | Service key not in frontend source |
 | `unmapped_tabs` | WARNING | 9 config tabs still staging-only |
 | `sam_authorized_users_rejected` | WARNING | 6 auth rows rejected per batch |
@@ -215,29 +233,31 @@ The `compare-shadow` CLI command
 - Compares **all mapped operational domains** with identity-level and relationship-level
   comparison
 - **Never silently swallows** per-domain exceptions — all errors captured in domain result
-- Reports unmapped domains as `NOT_IMPLEMENTED` (not as passed)
+- Exits nonzero for any missing domain, domain error, incomplete run, quota exhaustion,
+  or unexplained required-domain difference
 
-### Mapped domains
+### Required logical domains
 
-| Domain | Identity key | Status field | Relationship check |
-|---|---|---|---|
-| `candidate_sessions` | `session_id` | `final_result` | candidate linkage |
-| `headset_catalog` | `brand` + `model` | `status` | — |
-| `headset_reviews` | `review_id` | — | session linkage |
-| `notifications` | `notification_id` | `enabled` | — |
-| `pending_requests` | `id` | — | — |
-| `recent_activity` | `event_key` | — | — |
+| Domain | Sheets projection | Supabase projection |
+|---|---|---|
+| `candidates` | Latest candidate grouped from Candidate Sessions | candidates + latest candidate history + lineage |
+| `candidate_sessions` | Candidate Sessions | candidate_sessions |
+| `session_attempts` | Nonblank call result slots | session_attempts |
+| `authoritative_candidate_status` | MTS/SAM authority rule | current_candidate_status_view |
+| `candidate_tracking` | Tracking category projection | candidate_history_view category projection |
+| `history` | Candidate Sessions history projection | candidate_sessions + current status |
+| `headset_catalog` | headsets | headset_catalog |
+| `headset_reviews` | headset-review-log | headset_reviews |
+| `supervisor_transfers` | Pending Sup Transfers | supervisor_transfers |
+| `newbie_shift_requests` | newbie-shift request projection | newbie_shift_requests |
+| `candidate_corrections` | correction request projection | candidate_corrections |
+| `pending_requests` | aggregate request projection | pending_requests_view |
+| `recent_activity` | deterministic request activity projection | recent_activity_view |
+| `notifications` | sam-notifications | notifications |
 
-### Not yet implemented (requires dedicated Apps Script endpoints or direct Sheets tab read)
-
-- `candidates`
-- `supervisor_transfers`
-- `newbie_shift_requests`
-- `candidate_corrections`
-- `session_attempts`
-- `authoritative_candidate_status`
-- `candidate_tracking`
-- `history`
+Every domain emits identity, value, status, relationship, attempt, duplicate,
+expected-difference, unexplained-difference, error, and readiness counts. A category
+that does not apply to a domain is reported as zero rather than omitted.
 
 ### Return structure
 
@@ -255,27 +275,22 @@ The `compare-shadow` CLI command
       "readiness": "ready"
     }
   },
-  "not_implemented": ["session_attempts", ...],
+  "not_implemented": [],
+  "completed": true,
   "overall_readiness": "ready"
 }
 ```
 
-`overall_readiness` values: `ready`, `not_ready`, `partial`, `blocked_by_quota`, `error`.
+`overall_readiness` values: `ready`, `not_ready`, `incomplete`, `blocked_by_quota`, `error`.
 
 ---
 
 ## Current test totals
 
-| Suite | File | Count |
-|---|---|---|
-| Backend unit | `python -m unittest discover -s backend` | 236 baseline + new (this checkpoint) |
-| Frontend | `npm test` | 300 |
-| Apps Script auth | `node --test` | 33 |
-| Desktop | `node --test` (4 files) | 11 |
-
-New tests added this checkpoint:
-- `backend/test_supabase_verify_shadow.py` — 32 tests across 4 test classes
-- `backend/test_supabase_import_core.py` — 3 additional lineage concurrency tests
+Exact totals are recorded from the final validation run; prior copied totals are not
+readiness evidence. Focused tests cover RPC routing/outcomes/fail-closed behavior,
+the exact 14-domain contract, mismatch categories, snapshot cache reuse, quota
+handling, current-comparison readiness, and CLI exit codes.
 
 ---
 
@@ -283,13 +298,13 @@ New tests added this checkpoint:
 
 Before activating mapped-domain shadow reads, all of the following must be true:
 
-- [x] `verify-production` returns `ok=true` with zero ERRORs
-- [x] `compare-shadow` returns `overall_readiness='ready'` (zero unexplained differences)
+- [ ] `verify-production` returns `ok=true` with zero ERRORs in the current run
+- [ ] `compare-shadow` returns `overall_readiness='ready'` for all 14 domains in the current run
 - [ ] Google Sheets quota demonstrated sufficient for regular comparison runs
 - [x] Shadow mode disabled in production environment (`MTS_SHADOW_COMPARE` not set or false)
 - [x] Dual writes disabled (`MTS_DUAL_WRITE_ENABLED` not set or false)
 - [x] Provider remains `sheets` (`MTS_DATA_PROVIDER=sheets`)
-- [x] New migration (`20260803000000`) applied to hosted project
+- [ ] Forward correction migration (`20260804015610`) applied and local/remote parity verified
 
 **A separate explicit prompt is required to activate shadow reads** after this checkpoint
 is reviewed and the above criteria are verified live.

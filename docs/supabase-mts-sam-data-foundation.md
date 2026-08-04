@@ -109,9 +109,16 @@ Apps Script retirement and Google Sheet deletion are outside this phase.
 
 The repository is linked to the intended hosted project `xyfhikikddcqcmzbdvbj` (MTS-SAM, East US).
 
-Five approved migrations were applied as of the previous checkpoint. A sixth forward migration
-(`20260803000000_mts_sam_lineage_rpc.sql`) was added in this checkpoint to provide a
-transactional, race-safe lineage RPC. Local and remote migration history agree.
+The failed shadow-read audit found that the importer bypassed the RPC added by
+`20260803000000_mts_sam_lineage_rpc.sql`, only 6 of 14 required logical domains were
+compared, and readiness could therefore return a false positive. The corrective
+checkpoint routes every normal lineage insertion through that RPC, implements all
+14 comparison contracts, and requires current comparison evidence for readiness.
+
+Forward migration `20260804015610_harden_mts_sam_lineage_rpc_outcomes.sql` corrects
+the original RPC's concurrent outcome ambiguity without rewriting the applied
+migration. Its hosted deployment and local/remote parity must be recorded after
+focused validation.
 The archived migration `20260614083525` was not applied and is not in the active chain.
 
 Shadow data was imported in two production runs (idempotency confirmed, zero duplicate canonical rows)
@@ -132,15 +139,16 @@ Verified canonical counts:
 Source accounting (batch 1, 358 rows): 220 valid + 128 unresolved + 4 duplicate + 6 rejected = 358.
 
 Nine required configuration tabs remain staging-only (66 rows total, not 100 as incorrectly
-stated in earlier reports). These block full data-provider cutover but do not block
-mapped-domain shadow reads. See `docs/supabase-shadow-read-readiness.md` for full details.
+stated in earlier reports). These block full data-provider cutover. They are warnings
+for a complete 14-domain shadow comparison but do not permit readiness when any
+required comparison is missing, errored, incomplete, or unexplained.
 
 Six `sam-authorized-users` rows were rejected per import batch (auth UUID mismatch with
 Supabase Auth). SAM authorization cutover remains blocked until a user-mapping process is
 implemented.
 
-Current test totals: 236 backend unit + 300 frontend + 33 Apps Script + 11 desktop = 580,
-plus new tests added in this checkpoint.
+Exact current test totals are recorded only from the final validation run; previous
+copied totals are not treated as current evidence.
 
 For complete shadow-read readiness details, deployment audit, and activation criteria
 see `docs/supabase-shadow-read-readiness.md`.

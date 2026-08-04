@@ -22,7 +22,11 @@ from tools.supabase_import.core import (
     compare_shadow_provider,
     _fetch_with_retry,
     safe_upsert_lineage,
+    REQUIRED_SHADOW_DOMAINS,
+    SHADOW_DOMAIN_SPECS,
 )
+from data_providers.sheets import SheetsDataProvider, SNAPSHOT_TABS
+from tools.supabase_import import cli as import_cli
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +82,60 @@ def _healthy_provider():
     return p
 
 
+def _healthy_comparison():
+    categories = {}
+    for domain in REQUIRED_SHADOW_DOMAINS:
+        categories[domain] = {
+            "error_count": 0,
+            "unexplained_difference_count": 0,
+            "readiness": "ready",
+        }
+    return {
+        "categories": categories,
+        "not_implemented": [],
+        "completed": True,
+        "overall_readiness": "ready",
+        "error_count": 0,
+        "total_unexplained": 0,
+        "sheets_snapshot_timestamp": "2026-08-04T00:00:00+00:00",
+        "sheets_snapshot_checksum": "safe-checksum",
+    }
+
+
+def _domain_row(domain, suffix="1"):
+    spec = SHADOW_DOMAIN_SPECS[domain]
+    row = {}
+    boolean_fields = {
+        "enabled", "show_ticker", "show_popup", "show_banner", "persistent",
+        "archived", "deleted", "withdrawn", "final_attempt", "counts_as_attempt",
+    }
+    integer_fields = {
+        "attempt_number", "current_attempt_number", "allowed_attempt_count",
+        "current_attempt", "resulting_attempt",
+    }
+    timestamp_fields = {
+        "completed_at", "created_at", "occurred_at", "scheduled_at",
+        "rescheduled_at", "original_scheduled_at", "decision_at",
+        "starts_at", "ends_at",
+    }
+    for group in (spec.identity, spec.values, spec.statuses, spec.relationships, spec.attempts):
+        for aliases in group:
+            field = aliases[0]
+            if field in row:
+                continue
+            if field in boolean_fields:
+                row[field] = False
+            elif field in integer_fields:
+                row[field] = 1
+            elif field in timestamp_fields:
+                row[field] = "2026-08-03T12:00:00Z"
+            elif field in {"status", "raw_status", "request_status", "completed_status"}:
+                row[field] = "pending"
+            else:
+                row[field] = f"{field}-{suffix}"
+    return row
+
+
 # ---------------------------------------------------------------------------
 # VerifyProductionHealthTests
 # ---------------------------------------------------------------------------
@@ -87,7 +145,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
     def test_correct_project_reference(self):
         """Correct project URL produces no project_ref error."""
         p = _healthy_provider()
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         ref_check = next((c for c in result["checks"] if c["name"] == "project_ref"), None)
         self.assertIsNotNone(ref_check, "project_ref check must be present")
         self.assertTrue(ref_check["passed"], f"project_ref should pass; detail: {ref_check['detail']}")
@@ -97,7 +155,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
         """Wrong project URL adds project_ref to errors, sets ok=False."""
         p = _make_provider(url="https://wrongproject.supabase.co")
         p._request.return_value = []
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["ok"])
         self.assertIn("project_ref", result["errors"])
 
@@ -114,7 +172,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
             return original_side_effect(path, query=query)
 
         p._request.side_effect = side_effect_with_missing
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["ok"])
         self.assertIn("table_candidates", result["errors"])
 
@@ -136,7 +194,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
             return []
 
         p._request.side_effect = side_effect
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["ok"])
         self.assertIn("no_failed_batches", result["errors"])
 
@@ -144,7 +202,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
         """MTS_DATA_PROVIDER != 'sheets' is an ERROR."""
         p = _healthy_provider()
         with patch.dict(os.environ, {"MTS_DATA_PROVIDER": "supabase"}):
-            result = verify_production_health(p)
+            result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["ok"])
         self.assertIn("env_provider", result["errors"])
 
@@ -152,7 +210,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
         """MTS_DUAL_WRITE_ENABLED=true is an ERROR."""
         p = _healthy_provider()
         with patch.dict(os.environ, {"MTS_DUAL_WRITE_ENABLED": "true"}):
-            result = verify_production_health(p)
+            result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["ok"])
         self.assertIn("env_dual_write", result["errors"])
 
@@ -175,7 +233,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
             return []
 
         p._request.side_effect = side_effect
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["ok"])
         self.assertIn("recon_totals", result["errors"])
 
@@ -196,7 +254,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
             return original(path, query=query)
 
         p._request.side_effect = side_effect_with_warning
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         # unmapped_tabs and sam_authorized_users_rejected are always warnings
         # headset_review_links is a warning
         # ok should still be True if only warnings
@@ -205,15 +263,28 @@ class VerifyProductionHealthTests(unittest.TestCase):
     def test_full_cutover_always_false(self):
         """full_cutover_ready must always be False."""
         p = _healthy_provider()
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["full_cutover_ready"])
 
     def test_shadow_read_ready_when_no_errors(self):
         """No errors → shadow_read_mapped_domains_ready=True."""
         p = _healthy_provider()
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         if not result["errors"]:
             self.assertTrue(result["shadow_read_mapped_domains_ready"])
+
+    def test_compare_not_run_cannot_claim_readiness(self):
+        result = verify_production_health(_healthy_provider(), comparison_result=None)
+        self.assertFalse(result["shadow_read_mapped_domains_ready"])
+        self.assertFalse(result["ok"])
+        self.assertIn("shadow_comparison_current", result["errors"])
+
+    def test_one_missing_domain_cannot_claim_readiness(self):
+        comparison = _healthy_comparison()
+        comparison["categories"].pop("history")
+        result = verify_production_health(_healthy_provider(), comparison_result=comparison)
+        self.assertFalse(result["shadow_read_mapped_domains_ready"])
+        self.assertIn("shadow_comparison_current", result["errors"])
 
     def test_unresolved_headset_link_is_warning(self):
         """1 review with source_session_id but no session_id → WARNING, ok still True."""
@@ -230,7 +301,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
             return original(path, query=query)
 
         p._request.side_effect = side_effect_with_unresolved
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         # headset_review_links should be in warnings
         self.assertIn("headset_review_links", result["warnings"])
         # Should not be an ERROR
@@ -239,7 +310,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
     def test_no_errors_on_all_healthy(self):
         """Happy path: all tables, batches, accounting correct → ok=True."""
         p = _healthy_provider()
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertIsInstance(result, dict)
         self.assertIn("ok", result)
         self.assertIn("checks", result)
@@ -254,7 +325,7 @@ class VerifyProductionHealthTests(unittest.TestCase):
         p = _make_provider()
         p._request.side_effect = RuntimeError("total connectivity failure")
         # Should not raise
-        result = verify_production_health(p)
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertIsInstance(result, dict)
         self.assertIn("ok", result)
 
@@ -343,15 +414,12 @@ class CompareShadowProviderTests(unittest.TestCase):
             self.assertGreater(cat["error_count"], 0)
         self.assertIn(result["overall_readiness"], ("blocked_by_quota", "error"))
 
-    def test_not_implemented_domains_listed(self):
-        """session_attempts and other complex domains are in not_implemented."""
+    def test_all_required_domains_are_implemented(self):
         sheets = self._make_sheets()
         sup = self._make_supabase()
         result = compare_shadow_provider(sheets, sup)
-        self.assertIn("session_attempts", result["not_implemented"])
-        self.assertIn("authoritative_candidate_status", result["not_implemented"])
-        self.assertIn("candidate_tracking", result["not_implemented"])
-        self.assertIn("history", result["not_implemented"])
+        self.assertEqual(result["not_implemented"], [])
+        self.assertEqual(set(result["categories"]), set(REQUIRED_SHADOW_DOMAINS))
 
     def test_aggregate_mismatch_count(self):
         """mismatch_count aggregates across all domains."""
@@ -398,6 +466,22 @@ class CompareShadowProviderTests(unittest.TestCase):
         cat = result["categories"]["headset_reviews"]
         self.assertGreaterEqual(cat["expected_difference_count"], 0)  # expected >= 0
 
+    def test_unresolved_headset_session_is_visible_expected_relationship_mismatch(self):
+        review = {
+            "review_id": "r-unresolved",
+            "session_id": None,
+            "source_session_id": "source-session-without-lineage",
+        }
+        result = compare_shadow_provider(
+            self._make_sheets({"headset_reviews": [review]}),
+            self._make_supabase({"headset_reviews": [review]}),
+        )
+        cat = result["categories"]["headset_reviews"]
+        self.assertEqual(cat["relationship_mismatch_count"], 1)
+        self.assertEqual(cat["expected_difference_count"], 1)
+        self.assertEqual(cat["unexplained_difference_count"], 0)
+        self.assertEqual(cat["readiness"], "ready")
+
     def test_result_has_required_keys(self):
         """Result always contains required top-level keys."""
         sheets = self._make_sheets()
@@ -407,6 +491,87 @@ class CompareShadowProviderTests(unittest.TestCase):
                     "sheets_snapshot_timestamp", "categories", "not_implemented",
                     "overall_readiness"):
             self.assertIn(key, result, f"Missing key: {key}")
+
+    def test_all_fourteen_domains_exact_match_and_contract_fields(self):
+        rows = {domain: [_domain_row(domain)] for domain in REQUIRED_SHADOW_DOMAINS}
+        result = compare_shadow_provider(self._make_sheets(rows), self._make_supabase(rows))
+        self.assertEqual(result["overall_readiness"], "ready")
+        for domain in REQUIRED_SHADOW_DOMAINS:
+            with self.subTest(domain=domain):
+                item = result["categories"][domain]
+                self.assertEqual(item["exact_match_count"], 1)
+                for field in (
+                    "sheets_count", "supabase_count", "exact_match_count",
+                    "missing_in_supabase_count", "missing_in_sheets_count",
+                    "identity_mismatch_count", "value_mismatch_count",
+                    "status_mismatch_count", "relationship_mismatch_count",
+                    "attempt_mismatch_count", "duplicate_identity_count",
+                    "expected_difference_count", "unexplained_difference_count",
+                    "error_count", "readiness",
+                ):
+                    self.assertIn(field, item)
+
+    def test_each_domain_missing_and_duplicate_fail_closed(self):
+        for domain in REQUIRED_SHADOW_DOMAINS:
+            with self.subTest(domain=domain):
+                row = _domain_row(domain)
+                sheets_rows = {name: [] for name in REQUIRED_SHADOW_DOMAINS}
+                supabase_rows = {name: [] for name in REQUIRED_SHADOW_DOMAINS}
+                sheets_rows[domain] = [row, dict(row)]
+                result = compare_shadow_provider(self._make_sheets(sheets_rows), self._make_supabase(supabase_rows))
+                item = result["categories"][domain]
+                self.assertEqual(item["missing_in_supabase_count"], 1)
+                self.assertEqual(item["duplicate_identity_count"], 1)
+                if domain != "newbie_shift_requests":
+                    self.assertEqual(item["readiness"], "not_ready")
+
+    def test_each_applicable_mismatch_group_is_counted(self):
+        group_expectations = (
+            ("values", "value_mismatch_count"),
+            ("statuses", "status_mismatch_count"),
+            ("relationships", "relationship_mismatch_count"),
+            ("attempts", "attempt_mismatch_count"),
+        )
+        for domain in REQUIRED_SHADOW_DOMAINS:
+            spec = SHADOW_DOMAIN_SPECS[domain]
+            for group_name, result_field in group_expectations:
+                fields = getattr(spec, group_name)
+                if not fields:
+                    continue
+                with self.subTest(domain=domain, group=group_name):
+                    left = _domain_row(domain)
+                    right = dict(left)
+                    identity_aliases = {alias for aliases in spec.identity for alias in aliases}
+                    comparable_group = next(
+                        (aliases for aliases in fields if aliases[0] not in identity_aliases),
+                        fields[0],
+                    )
+                    field = comparable_group[0]
+                    if field in identity_aliases:
+                        continue
+                    right[field] = not right[field] if isinstance(right[field], bool) else f"different-{field}"
+                    rows = {name: [] for name in REQUIRED_SHADOW_DOMAINS}
+                    sup_rows = {name: [] for name in REQUIRED_SHADOW_DOMAINS}
+                    rows[domain] = [left]
+                    sup_rows[domain] = [right]
+                    result = compare_shadow_provider(self._make_sheets(rows), self._make_supabase(sup_rows))
+                    self.assertEqual(result["categories"][domain][result_field], 1)
+                    self.assertEqual(result["categories"][domain]["readiness"], "not_ready")
+
+    def test_each_domain_error_is_structured_and_nonready(self):
+        for failing_domain in REQUIRED_SHADOW_DOMAINS:
+            with self.subTest(domain=failing_domain):
+                sheets = MagicMock()
+                sheets.list_resource.side_effect = lambda resource, limit=5000: (
+                    (_ for _ in ()).throw(RuntimeError("private failure detail"))
+                    if resource == failing_domain else []
+                )
+                result = compare_shadow_provider(sheets, self._make_supabase())
+                item = result["categories"][failing_domain]
+                self.assertEqual(item["error_count"], 1)
+                self.assertEqual(item["errors"], ["unexpected_exception"])
+                self.assertEqual(item["readiness"], "error")
+                self.assertNotEqual(result["overall_readiness"], "ready")
 
 
 # ---------------------------------------------------------------------------
@@ -478,105 +643,108 @@ class SheetsRetryTests(unittest.TestCase):
         self.assertEqual(call_count[0], 4, f"Expected 4 calls (1 + 3 retries), got {call_count[0]}")
 
 
+class SheetsSnapshotProviderTests(unittest.TestCase):
+
+    @staticmethod
+    def _payload(action):
+        if action != "batchGetSheetRanges":
+            raise AssertionError(f"unexpected snapshot action: {action}")
+        return {"valueRanges": [
+            {"range": f"'{title}'!A:ZZ", "values": []}
+            for title in SNAPSHOT_TABS
+        ]}
+
+    def test_one_cached_fetch_sequence_serves_all_fourteen_domains(self):
+        client = MagicMock()
+        client.get.side_effect = lambda action, _params=None: self._payload(action)
+        provider = SheetsDataProvider(client, base_delay=0)
+        for domain in REQUIRED_SHADOW_DOMAINS:
+            provider.list_resource(domain, limit=5000)
+        self.assertEqual(client.get.call_count, 1)
+        self.assertEqual(provider.snapshot_metadata["fetch_count"], 1)
+        self.assertEqual(provider.snapshot_metadata["retry_count"], 0)
+        self.assertRegex(provider.snapshot_metadata["checksum"], r"^[0-9a-f]{64}$")
+
+    def test_transient_quota_retry_is_bounded_and_counted(self):
+        client = MagicMock()
+        attempts = {"batchGetSheetRanges": 0}
+        def side_effect(action, _params=None):
+            if action == "batchGetSheetRanges":
+                attempts[action] += 1
+                if attempts[action] == 1:
+                    raise RuntimeError("429 quota exceeded")
+            return self._payload(action)
+        client.get.side_effect = side_effect
+        provider = SheetsDataProvider(client, max_retries=2, base_delay=0)
+        provider.list_resource("candidate_sessions", limit=5000)
+        self.assertEqual(attempts["batchGetSheetRanges"], 2)
+        self.assertEqual(provider.snapshot_metadata["retry_count"], 1)
+
+    def test_quota_exhaustion_does_not_become_empty_success(self):
+        client = MagicMock()
+        client.get.side_effect = lambda action, _params=None: (
+            (_ for _ in ()).throw(RuntimeError("429 quota exceeded"))
+            if action == "batchGetSheetRanges" else self._payload(action)
+        )
+        provider = SheetsDataProvider(client, max_retries=1, base_delay=0)
+        with self.assertRaisesRegex(RuntimeError, "sheets_quota_exhausted"):
+            provider.list_resource("candidate_sessions", limit=5000)
+
+
+class CliExitCodeTests(unittest.TestCase):
+
+    @patch("builtins.print")
+    def test_compare_shadow_nonready_is_nonzero(self, _print):
+        with patch.object(import_cli, "_sheets_client", return_value=MagicMock()), \
+             patch.object(import_cli, "_supabase_client", return_value=MagicMock()), \
+             patch.object(import_cli, "compare_shadow_provider", return_value={"overall_readiness": "not_ready", "completed": True}):
+            self.assertEqual(import_cli.compare_shadow_cmd(MagicMock(diagnostic=False)), 1)
+
+    @patch("builtins.print")
+    def test_verify_production_requires_honest_mapped_readiness(self, _print):
+        provider = MagicMock()
+        comparison = {"overall_readiness": "ready", "completed": True}
+        with patch.object(import_cli, "_sheets_client", return_value=MagicMock()), \
+             patch.object(import_cli, "_supabase_client", return_value=provider), \
+             patch.object(import_cli, "compare_shadow_provider", return_value=comparison), \
+             patch.object(import_cli, "verify_production_health", return_value={"ok": True, "shadow_read_mapped_domains_ready": False}):
+            self.assertEqual(import_cli.verify_production_cmd(MagicMock()), 1)
+
+
 # ---------------------------------------------------------------------------
-# LineageConcurrencyTests — verify safe_upsert_lineage hardening
+# Lineage RPC outcome handling (mocked; not a hosted concurrency claim)
 # ---------------------------------------------------------------------------
 
-class LineageConcurrencyTests(unittest.TestCase):
+class LineageRpcOutcomeTests(unittest.TestCase):
 
     SAMPLE_ROW = {
-        "entity_type": "candidates",
-        "entity_id": "uuid-1111-1111-1111",
-        "source_system": "google_sheets",
-        "source_tab": "Candidate Sessions",
-        "source_row_key": "session_id:s-1",
-        "source_checksum": "abc123",
-        "import_batch_id": "batch-abc",
-        "metadata": {},
+        "entity_type": "candidates", "entity_id": "uuid-1111-1111-1111",
+        "source_system": "google_sheets", "source_tab": "Candidate Sessions",
+        "source_row_key": "candidate:example", "source_checksum": "abc123",
+        "import_batch_id": "batch-abc", "metadata": {},
     }
 
-    def test_identical_inserts_uses_ignore_duplicates(self):
-        """upsert_rows must be called with resolution='ignore-duplicates'."""
+    def test_mixed_batch_is_deterministically_accounted(self):
         provider = MagicMock()
-        provider._request.return_value = []  # no existing lineage
-        safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW)])
-        call_args = provider.upsert_rows.call_args
-        resolution = (
-            call_args.kwargs.get("resolution")
-            or (call_args[1].get("resolution") if len(call_args) > 1 else None)
-        )
-        self.assertEqual(resolution, "ignore-duplicates")
-
-    def test_empty_lineage_returns_immediately(self):
-        """Empty list → upsert_rows never called, result dict returned."""
-        provider = MagicMock()
-        result = safe_upsert_lineage(provider, [])
+        provider.insert_lineage_if_absent.side_effect = [
+            {"result": "inserted"},
+            {"result": "already_exists_same_mapping"},
+            {"result": "conflict_source_maps_to_different_entity"},
+            {"result": "conflict_entity_maps_to_different_source"},
+        ]
+        result = safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW) for _ in range(4)])
+        self.assertEqual(result["processed"], 4)
+        self.assertEqual(result["inserted"], 1)
+        self.assertEqual(result["already_exists_same_mapping"], 1)
+        self.assertEqual(len(result["conflicts"]), 2)
         provider.upsert_rows.assert_not_called()
-        self.assertIsInstance(result, dict)
-        self.assertEqual(result["inserted"], 0)
-        self.assertEqual(result["filtered_client_side"], 0)
 
-    def test_client_side_filter_removes_known_duplicates(self):
-        """Pre-query returns existing row → filtered out, upsert not called."""
+    def test_rpc_error_has_no_direct_table_fallback(self):
         provider = MagicMock()
-        existing = [{
-            "source_system": "google_sheets",
-            "source_tab": "Candidate Sessions",
-            "source_row_key": "session_id:s-1",
-            "entity_type": "candidates",
-            "entity_id": "uuid-1111-1111-1111",
-        }]
-        provider._request.return_value = existing
-        result = safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW)])
+        provider.insert_lineage_if_absent.side_effect = TimeoutError("uncertain transport outcome")
+        with self.assertRaises(TimeoutError):
+            safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW)])
         provider.upsert_rows.assert_not_called()
-        self.assertGreater(result["filtered_client_side"], 0)
-
-    def test_pre_query_failure_gracefully_degrades(self):
-        """Pre-query raises → seen_keys empty, upsert still called with ignore-duplicates."""
-        provider = MagicMock()
-        provider._request.side_effect = RuntimeError("DB unavailable")
-        provider.upsert_rows.return_value = []
-        result = safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW)])
-        provider.upsert_rows.assert_called_once()
-        call_args = provider.upsert_rows.call_args
-        resolution = (
-            call_args.kwargs.get("resolution")
-            or (call_args[1].get("resolution") if len(call_args) > 1 else None)
-        )
-        self.assertEqual(resolution, "ignore-duplicates")
-
-    def test_returns_structured_result(self):
-        """Result is dict with 'inserted', 'already_exists', 'filtered_client_side'."""
-        provider = MagicMock()
-        provider._request.return_value = []
-        result = safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW)])
-        for key in ("inserted", "already_exists", "filtered_client_side"):
-            self.assertIn(key, result, f"Missing key: {key}")
-
-    def test_mixed_new_and_existing(self):
-        """Some rows filtered, some new → upsert called with only new rows."""
-        provider = MagicMock()
-        existing_row = {
-            "source_system": "google_sheets",
-            "source_tab": "Candidate Sessions",
-            "source_row_key": "session_id:s-1",
-            "entity_type": "candidates",
-            "entity_id": "uuid-1111-1111-1111",
-        }
-        provider._request.return_value = [existing_row]
-        provider.upsert_rows.return_value = []
-
-        new_row = dict(self.SAMPLE_ROW)
-        new_row["source_row_key"] = "session_id:s-new"
-        new_row["entity_id"] = "uuid-2222-2222-2222"
-
-        result = safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW), new_row])
-        # Only new_row should have passed through
-        provider.upsert_rows.assert_called_once()
-        upsert_rows_arg = provider.upsert_rows.call_args[0][1]  # second positional arg
-        self.assertEqual(len(upsert_rows_arg), 1)
-        self.assertEqual(upsert_rows_arg[0]["source_row_key"], "session_id:s-new")
-        self.assertEqual(result["filtered_client_side"], 1)
 
 
 if __name__ == "__main__":

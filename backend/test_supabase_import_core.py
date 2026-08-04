@@ -52,11 +52,10 @@ class SupabaseImportCoreTests(unittest.TestCase):
         self.assertIsNone(reason)
 
 
-    def test_safe_upsert_lineage_uses_ignore_duplicates(self):
-        """safe_upsert_lineage must use resolution='ignore-duplicates' for DB-level race safety."""
+    def test_safe_upsert_lineage_uses_rpc_not_table_upsert(self):
         from tools.supabase_import.core import safe_upsert_lineage
         provider = MagicMock()
-        provider._request.return_value = []  # no existing lineage
+        provider.insert_lineage_if_absent.return_value = {"result": "inserted"}
         lineage_rows = [{
             'entity_type': 'candidates', 'entity_id': 'uuid-1',
             'source_system': 'google_sheets', 'source_tab': 'Candidate Sessions',
@@ -64,12 +63,9 @@ class SupabaseImportCoreTests(unittest.TestCase):
             'import_batch_id': 'batch-1', 'metadata': {}
         }]
         result = safe_upsert_lineage(provider, lineage_rows)
-        call_args = provider.upsert_rows.call_args
-        resolution = (
-            call_args.kwargs.get('resolution')
-            or (call_args[1].get('resolution') if len(call_args) > 1 else None)
-        )
-        self.assertEqual(resolution, 'ignore-duplicates')
+        provider.insert_lineage_if_absent.assert_called_once_with(lineage_rows[0])
+        provider.upsert_rows.assert_not_called()
+        self.assertEqual(result["inserted"], 1)
 
     def test_safe_upsert_lineage_empty_returns_zero_dict(self):
         """Empty lineage_rows returns early with all-zero result dict."""
@@ -79,24 +75,50 @@ class SupabaseImportCoreTests(unittest.TestCase):
         self.assertIsInstance(result, dict)
         provider.upsert_rows.assert_not_called()
 
-    def test_safe_upsert_lineage_filters_known_duplicates(self):
-        """Rows already in lineage are filtered client-side before upsert."""
+    def test_safe_upsert_lineage_preserves_all_semantic_outcomes(self):
         from tools.supabase_import.core import safe_upsert_lineage
         provider = MagicMock()
-        existing = [{
-            'source_system': 'google_sheets', 'source_tab': 'Candidate Sessions',
-            'source_row_key': 'session_id:s-1', 'entity_type': 'candidates', 'entity_id': 'uuid-1'
-        }]
-        provider._request.return_value = existing
-        lineage_rows = [{
+        lineage_row = {
             'entity_type': 'candidates', 'entity_id': 'uuid-1',
             'source_system': 'google_sheets', 'source_tab': 'Candidate Sessions',
             'source_row_key': 'session_id:s-1', 'source_checksum': 'abc',
             'import_batch_id': 'b1', 'metadata': {}
-        }]
-        result = safe_upsert_lineage(provider, lineage_rows)
+        }
+        outcomes = [
+            "inserted",
+            "already_exists_same_mapping",
+            "conflict_source_maps_to_different_entity",
+            "conflict_entity_maps_to_different_source",
+        ]
+        provider.insert_lineage_if_absent.side_effect = [{"result": outcome} for outcome in outcomes]
+        result = safe_upsert_lineage(provider, [dict(lineage_row) for _ in outcomes])
+        for outcome in outcomes:
+            self.assertEqual(result[outcome], 1)
+        self.assertEqual(result["processed"], 4)
+        self.assertEqual(len(result["conflicts"]), 2)
+        self.assertNotIn("source_row_key", result["conflicts"][0])
         provider.upsert_rows.assert_not_called()
-        self.assertGreater(result.get('filtered_client_side', 0), 0)
+
+    def test_safe_upsert_lineage_malformed_response_fails_closed(self):
+        from tools.supabase_import.core import safe_upsert_lineage
+        provider = MagicMock()
+        provider.insert_lineage_if_absent.return_value = {"unexpected": "shape"}
+        with self.assertRaisesRegex(RuntimeError, "lineage_rpc_malformed_response"):
+            safe_upsert_lineage(provider, [{
+                'entity_type': 'candidates', 'entity_id': 'uuid-1',
+                'source_system': 'google_sheets', 'source_tab': 'Candidate Sessions',
+                'source_row_key': 'session_id:s-1', 'source_checksum': 'abc',
+                'import_batch_id': 'b1', 'metadata': {}
+            }])
+        provider.upsert_rows.assert_not_called()
+
+    def test_safe_upsert_lineage_without_rpc_fails_closed(self):
+        from tools.supabase_import.core import safe_upsert_lineage
+        class ProviderWithoutRpc:
+            def upsert_rows(self, *_args, **_kwargs):
+                raise AssertionError("unsafe fallback")
+        with self.assertRaisesRegex(RuntimeError, "lineage_rpc_unavailable"):
+            safe_upsert_lineage(ProviderWithoutRpc(), [])
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ class SupabaseMigrationTests(unittest.TestCase):
         cls.sql = "\n".join(path.read_text(encoding="utf-8") for path in cls.files).lower()
 
     def test_ordered_migrations_exist(self):
-        self.assertGreaterEqual(len(self.files), 5)
+        self.assertGreaterEqual(len(self.files), 6)
 
     def test_dedicated_schema_and_core_objects_exist(self):
         self.assertIn("create schema if not exists mts_sam", self.sql)
@@ -33,6 +33,22 @@ class SupabaseMigrationTests(unittest.TestCase):
     def test_no_embedded_secret_shapes(self):
         self.assertNotIn("service_role_key", self.sql)
         self.assertNotRegex(self.sql, r"eyj[a-za-z0-9_-]{20,}")
+
+    def test_lineage_rpc_has_four_deterministic_outcomes_and_narrow_grant(self):
+        correction = next(path for path in self.files if "harden_mts_sam_lineage_rpc_outcomes" in path.name)
+        sql = correction.read_text(encoding="utf-8").lower()
+        for outcome in (
+            "inserted",
+            "already_exists_same_mapping",
+            "conflict_source_maps_to_different_entity",
+            "conflict_entity_maps_to_different_source",
+        ):
+            self.assertIn(outcome, sql)
+        self.assertNotIn("conflict_race_skipped", sql)
+        self.assertIn("set search_path = ''", sql)
+        self.assertIn("from public, anon, authenticated", sql)
+        self.assertIn("to service_role", sql)
+        self.assertIn("lock table mts_sam.data_source_lineage", sql)
 
 
 if __name__ == "__main__":

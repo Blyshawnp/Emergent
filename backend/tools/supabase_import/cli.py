@@ -338,14 +338,15 @@ def compare_shadow_cmd(args):
     sup = _supabase_client()
     res = compare_shadow_provider(sheets, sup, diagnostic_mode=args.diagnostic)
     print(json.dumps(res, indent=2))
-    return 0
+    return 0 if res.get("overall_readiness") == "ready" and res.get("completed") else 1
 
 
 def verify_production_cmd(_args):
     provider = _supabase_client()
-    res = verify_production_health(provider)
+    comparison = compare_shadow_provider(SheetsDataProvider(_sheets_client()), provider)
+    res = verify_production_health(provider, comparison_result=comparison)
     print(json.dumps(res, indent=2))
-    return 0
+    return 0 if res.get("ok") and res.get("shadow_read_mapped_domains_ready") else 1
 
 
 def idempotency_check_cmd(args):
@@ -431,7 +432,10 @@ def main(argv=None):
     compare_parser.set_defaults(func=compare_shadow_cmd)
 
     # verify-production
-    subparsers.add_parser("verify-production").set_defaults(func=verify_production_cmd)
+    subparsers.add_parser(
+        "verify-production",
+        help="Run a fresh all-domain comparison and fail closed unless current mapped readiness is proven",
+    ).set_defaults(func=verify_production_cmd)
 
     args = parser.parse_args(argv)
     return args.func(args)

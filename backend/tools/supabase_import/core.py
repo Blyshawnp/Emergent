@@ -143,46 +143,71 @@ def stage_rows(tab: str, headers: Sequence[str], rows: Iterable[Mapping[str, Any
     return staged
 
 
-def safe_upsert_lineage(provider, lineage_rows) -> dict[str, int]:
-    if not lineage_rows:
-        return {"inserted": 0, "already_exists": 0, "filtered_client_side": 0}
-    try:
-        existing = provider._request("data_source_lineage", query={"select": "source_system,source_tab,source_row_key,entity_type,entity_id"})
-        seen_keys = {(l["source_system"], l["source_tab"], l["source_row_key"]) for l in existing}
-        seen_entities = {(l["entity_type"], l["entity_id"], l["source_system"], l["source_tab"]) for l in existing}
-    except Exception:
-        seen_keys = set()
-        seen_entities = set()
-    filtered = []
-    for l in lineage_rows:
-        k = (l["source_system"], l["source_tab"], l["source_row_key"])
-        ent = (l["entity_type"], l["entity_id"], l["source_system"], l["source_tab"])
-        if k not in seen_keys and ent not in seen_entities:
-            filtered.append(l)
-    
-    client_filtered_count = len(lineage_rows) - len(filtered)
-    
-    if filtered:
-        unique_payload = {}
-        for l in filtered:
-            key = (l["source_system"], l["source_tab"], l["source_row_key"])
-            unique_payload[key] = l
-        
-        provider.upsert_rows(
-            "data_source_lineage",
-            list(unique_payload.values()),
-            on_conflict="source_system,source_tab,source_row_key",
-            resolution="ignore-duplicates"
-        )
-        inserted_count = len(unique_payload)
-    else:
-        inserted_count = 0
-        
-    return {
-        "inserted": inserted_count,
-        "already_exists": client_filtered_count,
-        "filtered_client_side": client_filtered_count
+LINEAGE_RPC_OUTCOMES = {
+    "inserted",
+    "already_exists_same_mapping",
+    "conflict_source_maps_to_different_entity",
+    "conflict_entity_maps_to_different_source",
+}
+
+
+def safe_upsert_lineage(provider, lineage_rows) -> dict[str, Any]:
+    """Insert lineage exclusively through the database-authoritative RPC."""
+    rpc = getattr(provider, "insert_lineage_if_absent", None)
+    if not callable(rpc):
+        raise RuntimeError("lineage_rpc_unavailable")
+
+    result: dict[str, Any] = {
+        "processed": 0,
+        "inserted": 0,
+        "already_exists": 0,
+        "already_exists_same_mapping": 0,
+        "conflict_source_maps_to_different_entity": 0,
+        "conflict_entity_maps_to_different_source": 0,
+        "conflicts": [],
     }
+    for row in lineage_rows:
+        response = rpc(row)
+        outcome = response.get("result") if isinstance(response, Mapping) else None
+        if outcome not in LINEAGE_RPC_OUTCOMES:
+            raise RuntimeError("lineage_rpc_malformed_response")
+        result["processed"] += 1
+        result[outcome] += 1
+        if outcome == "already_exists_same_mapping":
+            result["already_exists"] += 1
+        elif outcome.startswith("conflict_"):
+            safe_reference = stable_checksum({
+                "source_system": row.get("source_system"),
+                "source_tab": row.get("source_tab"),
+                "source_row_key": row.get("source_row_key"),
+                "entity_type": row.get("entity_type"),
+                "entity_id": row.get("entity_id"),
+            })
+            result["conflicts"].append({
+                "result": outcome,
+                "import_batch_id": row.get("import_batch_id"),
+                "entity_type": row.get("entity_type"),
+                "safe_reference": safe_reference,
+            })
+    return result
+
+
+def _merge_lineage_result(load_result: dict[str, Any], lineage_result: Mapping[str, Any]):
+    summary = load_result.setdefault("lineage", {
+        "processed": 0,
+        "inserted": 0,
+        "already_exists_same_mapping": 0,
+        "conflict_source_maps_to_different_entity": 0,
+        "conflict_entity_maps_to_different_source": 0,
+        "conflicts": [],
+    })
+    for key in (
+        "processed", "inserted", "already_exists_same_mapping",
+        "conflict_source_maps_to_different_entity",
+        "conflict_entity_maps_to_different_source",
+    ):
+        summary[key] += int(lineage_result.get(key, 0))
+    summary["conflicts"].extend(lineage_result.get("conflicts") or [])
 
 
 def catalog_display(brand: Any, model: Any) -> str:
@@ -350,7 +375,7 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
     if users_payload and not dry_run:
         provider.upsert_rows("app_users", users_payload, on_conflict="source_system,source_user_id")
         provider.upsert_rows("user_role_assignments", assignments_payload, on_conflict="user_id,role_key")
-        safe_upsert_lineage(provider, user_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, user_lineage))
         results["inserted"] += len(users_payload)
 
     # 2. candidates & headset catalog
@@ -413,11 +438,11 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
     if cand_payload and not dry_run:
         unique_cand = {c["id"]: c for c in cand_payload}.values()
         provider.upsert_rows("candidates", unique_cand, on_conflict="source_system,source_candidate_id")
-        safe_upsert_lineage(provider, list({l["entity_id"]: l for l in cand_lineage}.values()))
+        _merge_lineage_result(results, safe_upsert_lineage(provider, list({l["entity_id"]: l for l in cand_lineage}.values())))
         results["inserted"] += len(unique_cand)
     if headset_payload and not dry_run:
         provider.upsert_rows("headset_catalog", headset_payload, on_conflict="brand,model")
-        safe_upsert_lineage(provider, headset_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, headset_lineage))
         results["inserted"] += len(headset_payload)
 
     # 3. candidate sessions & attempts
@@ -561,7 +586,7 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
 
     if sessions_payload and not dry_run:
         provider.upsert_rows("candidate_sessions", sessions_payload, on_conflict="session_id")
-        safe_upsert_lineage(provider, sessions_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, sessions_lineage))
         results["inserted"] += len(sessions_payload)
     if attempts_payload and not dry_run:
         provider.upsert_rows("session_attempts", attempts_payload, on_conflict="session_id,attempt_number,attempt_type")
@@ -637,7 +662,7 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
 
     if reviews_payload and not dry_run:
         provider.upsert_rows("headset_reviews", reviews_payload, on_conflict="review_id")
-        safe_upsert_lineage(provider, reviews_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, reviews_lineage))
         results["inserted"] += len(reviews_payload)
 
     # 5. supervisor transfers
@@ -686,7 +711,7 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
 
     if transfers_payload and not dry_run:
         provider.upsert_rows("supervisor_transfers", transfers_payload, on_conflict="transfer_id")
-        safe_upsert_lineage(provider, transfers_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, transfers_lineage))
         results["inserted"] += len(transfers_payload)
 
     # 6. newbie shift requests
@@ -761,7 +786,7 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
 
     if shifts_payload and not dry_run:
         provider.upsert_rows("newbie_shift_requests", shifts_payload, on_conflict="request_id")
-        safe_upsert_lineage(provider, shifts_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, shifts_lineage))
         results["inserted"] += len(shifts_payload)
     if reschedules_payload and not dry_run:
         provider.upsert_rows("newbie_shift_reschedules", reschedules_payload, on_conflict="reschedule_id", resolution="ignore-duplicates")
@@ -825,7 +850,7 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
 
     if corrections_payload and not dry_run:
         provider.upsert_rows("candidate_corrections", corrections_payload, on_conflict="request_id")
-        safe_upsert_lineage(provider, corrections_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, corrections_lineage))
         results["inserted"] += len(corrections_payload)
 
     # 8. notifications
@@ -872,7 +897,7 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
 
     if notif_payload and not dry_run:
         provider.upsert_rows("notifications", notif_payload, on_conflict="notification_id")
-        safe_upsert_lineage(provider, notif_lineage)
+        _merge_lineage_result(results, safe_upsert_lineage(provider, notif_lineage))
         results["inserted"] += len(notif_payload)
 
     staging_results = []
@@ -1062,93 +1087,338 @@ def _empty_domain_result():
         'readiness': 'unknown',
     }
 
-def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=False) -> dict[str, Any]:
-    import datetime
-    logger.info("Comparing Sheets vs Supabase (diagnostic_mode=%s)", diagnostic_mode)
-    
-    result = {
-        'mismatch_count': 0,
-        'total_unexplained': 0,
-        'error_count': 0, 
-        'sheets_snapshot_timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        'categories': {},
-        'not_implemented': [
-            'candidates', 'supervisor_transfers', 'newbie_shift_requests', 'candidate_corrections',
-            'session_attempts', 'authoritative_candidate_status', 'candidate_tracking', 'history'
-        ],
-        'overall_readiness': 'unknown',
-    }
+REQUIRED_SHADOW_DOMAINS = (
+    "candidates", "candidate_sessions", "session_attempts",
+    "authoritative_candidate_status", "candidate_tracking", "history",
+    "headset_catalog", "headset_reviews", "supervisor_transfers",
+    "newbie_shift_requests", "candidate_corrections", "pending_requests",
+    "recent_activity", "notifications",
+)
 
-    mapped_domains = {
-        "candidate_sessions": lambda r: str(r.get("session_id", "")).strip(),
-        "headset_catalog": lambda r: (str(r.get("brand", "")) + " " + str(r.get("model", ""))).strip(),
-        "headset_reviews": lambda r: str(r.get("review_id", "")).strip(),
-        "notifications": lambda r: str(r.get("notification_id", "")).strip(),
-        "pending_requests": lambda r: str(r.get("id", "")).strip(),
-        "recent_activity": lambda r: str(r.get("event_key", "")).strip()
-    }
-    
-    # Actually just a simplistic structural implementation as per instructions 
-    # to avoid blowing up token limits, adhering strictly to signature
-    
-    for domain, id_func in mapped_domains.items():
-        domain_res = _empty_domain_result()
+
+@dataclass(frozen=True)
+class ShadowDomainSpec:
+    identity: tuple[tuple[str, ...], ...]
+    values: tuple[tuple[str, ...], ...] = ()
+    statuses: tuple[tuple[str, ...], ...] = ()
+    relationships: tuple[tuple[str, ...], ...] = ()
+    attempts: tuple[tuple[str, ...], ...] = ()
+
+
+SHADOW_DOMAIN_SPECS = {
+    "candidates": ShadowDomainSpec(
+        identity=(("source_candidate_id", "display_name", "candidate_name"),),
+        values=(("display_name", "candidate_name"), ("first_name", "candidate_first_name"), ("last_initial", "candidate_last_initial"), ("lineage_identity",)),
+        statuses=(("authoritative_status",), ("archived",)),
+        relationships=(("latest_session_id",),),
+    ),
+    "candidate_sessions": ShadowDomainSpec(
+        identity=(("session_id",),),
+        values=(("candidate_name",), ("tester_name",), ("session_type",), ("completed_at",), ("headset_brand",), ("headset_model",), ("newbie_shift_number",)),
+        statuses=(("raw_status", "status"), ("calculated_result",), ("final_result",), ("archived",), ("withdrawn",)),
+        relationships=(("candidate_id",), ("pending_sup_transfer_id",)),
+        attempts=(("attempt_number",), ("current_attempt_number",), ("allowed_attempt_count",), ("final_attempt",)),
+    ),
+    "session_attempts": ShadowDomainSpec(
+        identity=(("source_action_id", "attempt_key"),),
+        values=(("result",), ("attempt_type",)),
+        relationships=(("session_id", "source_session_uuid"),),
+        attempts=(("attempt_number",),),
+    ),
+    "authoritative_candidate_status": ShadowDomainSpec(
+        identity=(("session_id",),),
+        statuses=(("authoritative_status",), ("archived",)),
+        relationships=(("determining_session_id", "session_id"),),
+        attempts=(("final_attempt",),),
+    ),
+    "candidate_tracking": ShadowDomainSpec(
+        identity=(("session_id",),),
+        values=(("candidate_name",), ("category",), ("newbie_shift_number",)),
+        statuses=(("authoritative_status",), ("archived",)),
+        relationships=(("candidate_id",),),
+        attempts=(("current_attempt_number",), ("allowed_attempt_count",), ("final_attempt",)),
+    ),
+    "history": ShadowDomainSpec(
+        identity=(("session_id",),),
+        values=(("candidate_name",), ("tester_name",), ("completed_at",), ("newbie_shift_number",)),
+        statuses=(("authoritative_status", "final_result"), ("archived",)),
+        relationships=(("candidate_id",),),
+        attempts=(("attempt_number",), ("current_attempt_number",), ("allowed_attempt_count",)),
+    ),
+    "headset_catalog": ShadowDomainSpec(
+        identity=(("brand", "Brand"), ("model", "Model")),
+        values=(("brand", "Brand"), ("model", "Model"), ("note", "Note"), ("selectable",)),
+        statuses=(("status", "Status"), ("archived",), ("deleted",)),
+    ),
+    "headset_reviews": ShadowDomainSpec(
+        identity=(("review_id",),),
+        values=(("brand", "Brand"), ("model", "Model"), ("note", "Note"), ("normalization_status",)),
+        statuses=(("status", "Status"),),
+        relationships=(("source_session_id",), ("session_id", "canonical_session_id")),
+    ),
+    "supervisor_transfers": ShadowDomainSpec(
+        identity=(("transfer_id", "pending_id"),),
+        values=(("candidate_name",), ("original_tester_name",), ("completed_by",), ("completed_at",)),
+        statuses=(("status",), ("completed_status",), ("final_attempt",)),
+        relationships=(("source_session_id", "original_session_id"), ("session_id", "source_session_uuid")),
+    ),
+    "newbie_shift_requests": ShadowDomainSpec(
+        identity=(("request_id",),),
+        values=(("request_type",), ("newbie_shift_number",), ("scheduled_at", "requested_scheduled_at"), ("original_scheduled_at",), ("rescheduled_at",), ("timezone",), ("decision_by",), ("decision_at",)),
+        statuses=(("request_status", "status"),),
+        relationships=(("source_session_id",), ("canonical_session_id", "session_id")),
+        attempts=(("current_attempt",), ("resulting_attempt",), ("final_attempt",), ("counts_as_attempt",)),
+    ),
+    "candidate_corrections": ShadowDomainSpec(
+        identity=(("request_id",),),
+        values=(("request_type",), ("changes", "changes_json"), ("decision_by", "decided_by"), ("decision_at",)),
+        statuses=(("status",),),
+        relationships=(("source_session_id",), ("canonical_session_id", "session_id"), ("candidate_id",)),
+    ),
+    "pending_requests": ShadowDomainSpec(
+        identity=(("request_id", "id"),),
+        values=(("request_type",), ("category", "source_tab"), ("created_at",)),
+        statuses=(("status", "request_status"),),
+        relationships=(("source_session_id", "session_id"),),
+    ),
+    "recent_activity": ShadowDomainSpec(
+        identity=(("event_id", "event_key", "request_id"),),
+        values=(("event_type", "request_type"), ("occurred_at", "updated_at", "created_at")),
+        statuses=(("status", "request_status"),),
+        relationships=(("source_entity_id", "source_session_id"),),
+    ),
+    "notifications": ShadowDomainSpec(
+        identity=(("notification_id", "ID"),),
+        values=(("notification_type", "Type"), ("title", "Title"), ("message", "Message"), ("starts_at", "StartDate"), ("ends_at", "EndDate"), ("action_text", "ActionText"), ("action_url", "ActionURL")),
+        statuses=(("enabled", "Enabled"), ("show_ticker", "ShowTicker"), ("show_popup", "ShowPopup"), ("show_banner", "ShowBanner"), ("persistent", "Persistent")),
+    ),
+}
+
+
+def _first_value(row, aliases):
+    for alias in aliases:
+        if alias in row:
+            return row.get(alias)
+    return None
+
+
+def _normalized_compare_value(field, value):
+    if value is None or str(value).strip() == "":
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    if field == "changes" and isinstance(value, str):
         try:
-            s_rows, s_err = _fetch_with_retry(lambda: sheets_provider.list_resource(domain, limit=5000), domain)
-            if s_err: raise Exception(s_err['message'])
-            
-            sup_rows, sup_err = _fetch_with_retry(lambda: supabase_provider.list_resource(domain, limit=5000), domain)
-            if sup_err: raise Exception(sup_err['message'])
-            
-            s_rows = s_rows or []
-            sup_rows = sup_rows or []
-            domain_res['sheets_count'] = len(s_rows)
-            domain_res['supabase_count'] = len(sup_rows)
-            
-            s_keys = {id_func(r) for r in s_rows if id_func(r)}
-            sup_keys = {id_func(r) for r in sup_rows if id_func(r)}
-            
-            missing_in_sup = s_keys - sup_keys
-            missing_in_sheets = sup_keys - s_keys
-            
-            domain_res['missing_in_supabase_count'] = len(missing_in_sup)
-            domain_res['missing_in_sheets_count'] = len(missing_in_sheets)
-            
-            mismatches = len(missing_in_sup) + len(missing_in_sheets)
-            domain_res['unexplained_difference_count'] = mismatches
-            
-            if domain == "headset_reviews":
-                unresolved = [r for r in sup_rows if r.get("normalization_status") == "unresolved_legacy_brand" or (r.get("source_session_id") and not r.get("session_id"))]
-                domain_res['expected_difference_count'] = len(unresolved)
-                if len(unresolved) > 0:
-                    domain_res['errors'].append("WARNING: unresolved source_session_id")
-            
-            domain_res['readiness'] = 'ready' if mismatches == 0 else 'not_ready'
-            result['mismatch_count'] += mismatches
-            result['total_unexplained'] += mismatches
-            
-        except Exception as exc:
-            domain_res['error_count'] += 1
-            domain_res['errors'].append(str(exc))
-            domain_res['readiness'] = 'error'
-            result['error_count'] += 1
-            
-        result['categories'][domain] = domain_res
+            parsed = json.loads(value)
+            return json.dumps(parsed, sort_keys=True, separators=(",", ":"), default=str)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return re.sub(r"\s+", " ", value.strip())
+    if field in {"enabled", "show_ticker", "show_popup", "show_banner", "persistent", "archived", "deleted", "withdrawn", "final_attempt", "counts_as_attempt"}:
+        try:
+            return bool(parse_boolean(value))
+        except ValueError:
+            return normalized_text(value)
+    if field.endswith("_at") or field in {"completed_at", "created_at", "occurred_at", "scheduled_at", "rescheduled_at", "original_scheduled_at"}:
+        text = str(value).strip()
+        try:
+            parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(datetime.timezone.utc)
+            return parsed.isoformat()
+        except ValueError:
+            return parse_date(value) or normalized_text(value)
+    if field in {"status", "raw_status", "calculated_result", "final_result", "authoritative_status", "request_status", "completed_status", "normalization_status", "notification_type", "request_type", "event_type", "category", "attempt_type"}:
+        return normalized_text(value).replace("failed final attempt", "fail final attempt").replace("passed", "pass")
+    if field in {"brand", "model", "headset_brand", "headset_model", "selectable"}:
+        return normalized_text(value)
+    return re.sub(r"\s+", " ", str(value).strip())
 
-    if result['error_count'] > 0:
-        if any('quota' in str(e).lower() for cat in result['categories'].values() for e in cat['errors']):
-            result['overall_readiness'] = 'blocked_by_quota'
+
+def _identity_key(spec, row):
+    parts = []
+    for aliases in spec.identity:
+        field = aliases[0]
+        value = _first_value(row, aliases)
+        normalized = _normalized_compare_value(field, value)
+        if normalized == "":
+            return ""
+        parts.append(str(normalized).casefold())
+    return "|".join(parts)
+
+
+def _group_mismatch(spec_fields, sheets_row, supabase_row):
+    return bool(_mismatched_fields(spec_fields, sheets_row, supabase_row))
+
+
+def _mismatched_fields(spec_fields, sheets_row, supabase_row):
+    mismatches = []
+    for aliases in spec_fields:
+        field = aliases[0]
+        left = _normalized_compare_value(field, _first_value(sheets_row, aliases))
+        right = _normalized_compare_value(field, _first_value(supabase_row, aliases))
+        if left != right:
+            mismatches.append(field)
+    return mismatches
+
+
+def _comparison_index(spec, rows):
+    index = {}
+    duplicates = 0
+    for row in rows:
+        key = _identity_key(spec, row)
+        if not key:
+            duplicates += 1
+            continue
+        if key in index:
+            duplicates += 1
         else:
-            result['overall_readiness'] = 'error'
-    elif result['total_unexplained'] > 0:
-        result['overall_readiness'] = 'not_ready'
+            index[key] = row
+    return index, duplicates
+
+
+def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=False) -> dict[str, Any]:
+    logger.info("Comparing all required Sheets and Supabase domains (diagnostic_mode=%s)", diagnostic_mode)
+    result = {
+        "mismatch_count": 0,
+        "total_unexplained": 0,
+        "error_count": 0,
+        "sheets_snapshot_timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "sheets_snapshot_checksum": None,
+        "sheets_fetch_count": None,
+        "sheets_retry_count": None,
+        "required_domains": list(REQUIRED_SHADOW_DOMAINS),
+        "categories": {},
+        "not_implemented": [],
+        "overall_readiness": "unknown",
+        "completed": False,
+    }
+
+    for domain in REQUIRED_SHADOW_DOMAINS:
+        spec = SHADOW_DOMAIN_SPECS[domain]
+        domain_result = _empty_domain_result()
+        domain_result["error_codes"] = []
+        if diagnostic_mode:
+            domain_result["field_mismatch_counts"] = {}
+        try:
+            sheets_rows, sheets_error = _fetch_with_retry(
+                lambda: sheets_provider.list_resource(domain, limit=5000), domain, max_retries=0
+            )
+            if sheets_error:
+                raise RuntimeError(sheets_error["code"])
+            supabase_rows, supabase_error = _fetch_with_retry(
+                lambda: supabase_provider.list_resource(domain, limit=5000), domain, max_retries=0
+            )
+            if supabase_error:
+                raise RuntimeError("supabase_query_error")
+            sheets_rows = list(sheets_rows or [])
+            supabase_rows = list(supabase_rows or [])
+            domain_result["sheets_count"] = len(sheets_rows)
+            domain_result["supabase_count"] = len(supabase_rows)
+            sheets_index, sheets_duplicates = _comparison_index(spec, sheets_rows)
+            supabase_index, supabase_duplicates = _comparison_index(spec, supabase_rows)
+            domain_result["duplicate_identity_count"] = sheets_duplicates + supabase_duplicates
+            missing_supabase = set(sheets_index) - set(supabase_index)
+            missing_sheets = set(supabase_index) - set(sheets_index)
+            domain_result["missing_in_supabase_count"] = len(missing_supabase)
+            domain_result["missing_in_sheets_count"] = len(missing_sheets)
+
+            for key in set(sheets_index) & set(supabase_index):
+                sheets_row = sheets_index[key]
+                supabase_row = supabase_index[key]
+                identity_mismatch = _group_mismatch(spec.identity, sheets_row, supabase_row)
+                value_mismatch = _group_mismatch(spec.values, sheets_row, supabase_row)
+                status_mismatch = _group_mismatch(spec.statuses, sheets_row, supabase_row)
+                relationship_mismatch = _group_mismatch(spec.relationships, sheets_row, supabase_row)
+                attempt_mismatch = _group_mismatch(spec.attempts, sheets_row, supabase_row)
+                domain_result["identity_mismatch_count"] += int(identity_mismatch)
+                domain_result["value_mismatch_count"] += int(value_mismatch)
+                domain_result["status_mismatch_count"] += int(status_mismatch)
+                domain_result["relationship_mismatch_count"] += int(relationship_mismatch)
+                domain_result["attempt_mismatch_count"] += int(attempt_mismatch)
+                if diagnostic_mode:
+                    for fields in (spec.identity, spec.values, spec.statuses, spec.relationships, spec.attempts):
+                        for field in _mismatched_fields(fields, sheets_row, supabase_row):
+                            domain_result["field_mismatch_counts"][field] = domain_result["field_mismatch_counts"].get(field, 0) + 1
+                if not any((identity_mismatch, value_mismatch, status_mismatch, relationship_mismatch, attempt_mismatch)):
+                    domain_result["exact_match_count"] += 1
+
+            expected = 0
+            expected_offset = 0
+            if domain == "newbie_shift_requests":
+                expected += sheets_duplicates
+                expected_offset += sheets_duplicates
+            if domain == "headset_reviews":
+                standalone = sum(
+                    1 for row in supabase_rows
+                    if not row.get("source_session_id") and not row.get("session_id")
+                )
+                unresolved_link = sum(
+                    1 for row in supabase_rows
+                    if row.get("source_session_id") and not row.get("session_id")
+                )
+                expected += standalone + unresolved_link
+                expected_offset += unresolved_link
+                if unresolved_link:
+                    # Keep the known unresolved source-session link visible as a
+                    # relationship mismatch while classifying it as an expected
+                    # historical exception for readiness accounting.
+                    domain_result["relationship_mismatch_count"] += unresolved_link
+                    domain_result["exact_match_count"] = max(
+                        0, domain_result["exact_match_count"] - unresolved_link
+                    )
+                    domain_result["error_codes"].append("expected_unresolved_headset_session_relationship")
+            domain_result["expected_difference_count"] = expected
+            mismatch_total = sum(domain_result[key] for key in (
+                "missing_in_supabase_count", "missing_in_sheets_count",
+                "identity_mismatch_count", "value_mismatch_count",
+                "status_mismatch_count", "relationship_mismatch_count",
+                "attempt_mismatch_count", "duplicate_identity_count",
+            ))
+            domain_result["unexplained_difference_count"] = max(0, mismatch_total - min(expected_offset, mismatch_total))
+            domain_result["readiness"] = "ready" if domain_result["unexplained_difference_count"] == 0 else "not_ready"
+            result["mismatch_count"] += mismatch_total
+            result["total_unexplained"] += domain_result["unexplained_difference_count"]
+        except Exception as exc:
+            safe_code = str(exc)
+            if safe_code not in {
+                "quota_exhausted", "sheets_quota_exhausted", "sheets_network_error",
+                "supabase_query_error", "schema_mismatch", "normalization_error",
+            }:
+                safe_code = "unexpected_exception"
+            domain_result["error_count"] = 1
+            domain_result["errors"] = [safe_code]
+            domain_result["error_codes"] = [safe_code]
+            domain_result["readiness"] = "error"
+            result["error_count"] += 1
+        result["categories"][domain] = domain_result
+
+    metadata = getattr(sheets_provider, "snapshot_metadata", {}) or {}
+    result["sheets_snapshot_timestamp"] = metadata.get("timestamp", result["sheets_snapshot_timestamp"])
+    result["sheets_snapshot_checksum"] = metadata.get("checksum")
+    result["sheets_fetch_count"] = metadata.get("fetch_count")
+    result["sheets_retry_count"] = metadata.get("retry_count")
+    result["completed"] = (
+        set(result["categories"]) == set(REQUIRED_SHADOW_DOMAINS)
+        and not result["not_implemented"]
+        and all(item["readiness"] != "unknown" for item in result["categories"].values())
+    )
+    if result["error_count"]:
+        quota_blocked = any(
+            "quota" in code
+            for item in result["categories"].values()
+            for code in item.get("error_codes", [])
+        )
+        result["overall_readiness"] = "blocked_by_quota" if quota_blocked else "error"
+    elif not result["completed"]:
+        result["overall_readiness"] = "incomplete"
+    elif result["total_unexplained"]:
+        result["overall_readiness"] = "not_ready"
     else:
-        result['overall_readiness'] = 'ready'
-        
+        result["overall_readiness"] = "ready"
     return result
 
 
-def verify_production_health(provider) -> dict[str, Any]:
+def verify_production_health(provider, comparison_result=None) -> dict[str, Any]:
     import re, os, glob
     logger.info("Verifying production environment health")
     
@@ -1161,6 +1431,7 @@ def verify_production_health(provider) -> dict[str, Any]:
         "warnings": [],
         "info": [],
         "counts": {},
+        "comparison": None,
     }
     
     def add_check(name, severity, passed, detail):
@@ -1258,7 +1529,41 @@ def verify_production_health(provider) -> dict[str, Any]:
         
         add_check('env_provider', 'ERROR', provider_val == 'sheets', 'Must be sheets')
         add_check('env_dual_write', 'ERROR', dual_write not in ('true', '1'), 'Must not be true')
-        add_check('env_shadow_mode', 'WARNING', shadow_mode not in ('true', '1'), 'Should be controlled')
+        add_check('env_shadow_mode', 'ERROR', shadow_mode not in ('true', '1'), 'Must remain disabled')
+
+        lineage_rpc_active = callable(getattr(provider, 'insert_lineage_if_absent', None))
+        add_check('lineage_rpc_provider_method', 'ERROR', lineage_rpc_active, 'Trusted lineage RPC method must be active')
+
+        comparison_domains = set((comparison_result or {}).get('categories') or {})
+        comparison_ready = bool(
+            comparison_result
+            and comparison_result.get('completed')
+            and comparison_result.get('overall_readiness') == 'ready'
+            and comparison_domains == set(REQUIRED_SHADOW_DOMAINS)
+            and not comparison_result.get('not_implemented')
+            and not comparison_result.get('error_count')
+            and not comparison_result.get('total_unexplained')
+            and all(
+                item.get('error_count') == 0
+                and item.get('unexplained_difference_count') == 0
+                and item.get('readiness') == 'ready'
+                for item in (comparison_result.get('categories') or {}).values()
+            )
+        )
+        add_check(
+            'shadow_comparison_current', 'ERROR', comparison_ready,
+            'Current same-process comparison covers all 14 required domains and is ready'
+            if comparison_ready else 'A current successful all-domain comparison is required',
+        )
+        if comparison_result:
+            result['comparison'] = {
+                'snapshot_timestamp': comparison_result.get('sheets_snapshot_timestamp'),
+                'snapshot_checksum': comparison_result.get('sheets_snapshot_checksum'),
+                'required_domain_count': len(comparison_domains),
+                'overall_readiness': comparison_result.get('overall_readiness'),
+                'error_count': comparison_result.get('error_count'),
+                'total_unexplained': comparison_result.get('total_unexplained'),
+            }
         
         # Secret safety
         frontend_src = glob.glob('frontend/src/**/*.js', recursive=True) + glob.glob('frontend/src/**/*.jsx', recursive=True)
@@ -1277,7 +1582,7 @@ def verify_production_health(provider) -> dict[str, Any]:
                     pass
             add_check('service_key_in_frontend', 'ERROR', not found_key, 'Check frontend source for service key')
             
-        add_check('unmapped_tabs', 'WARNING', False, 'Unmapped tabs exist (66 rows)')
+        add_check('unmapped_tabs', 'WARNING', False, '9 required configuration tabs remain unmapped (66 rows)')
         add_check('sam_authorized_users_rejected', 'WARNING', False, '6 sam-authorized-users rows rejected')
         
     except Exception as e:
@@ -1285,7 +1590,7 @@ def verify_production_health(provider) -> dict[str, Any]:
         
     has_errors = len(result['errors']) > 0
     result['ok'] = not has_errors
-    result['shadow_read_mapped_domains_ready'] = not has_errors
+    result['shadow_read_mapped_domains_ready'] = not has_errors and bool(comparison_result)
     result['full_cutover_ready'] = False
     
     return result

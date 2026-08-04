@@ -6,18 +6,22 @@ from typing import Any, Mapping, Sequence
 
 
 RESOURCE_TABLES = {
+    "candidates": "candidates",
     "candidate_sessions": "candidate_sessions",
+    "session_attempts": "session_attempts",
+    "authoritative_candidate_status": "current_candidate_status_view",
     "candidate_tracking": "candidate_history_view",
-    "headset_catalog": "current_headset_catalog_view",
+    "headset_catalog": "headset_catalog",
     "headset_reviews": "headset_reviews",
     "pending_requests": "pending_requests_view",
     "supervisor_transfers": "supervisor_transfers",
+    "newbie_shift_requests": "newbie_shift_requests",
     "newbie_shifts": "newbie_shift_requests",
     "candidate_corrections": "candidate_corrections",
     "status_actions": "candidate_status_actions",
     "extra_attempts": "extra_attempt_grants",
     "notifications": "notifications",
-    "history": "candidate_history_view",
+    "history": "candidate_sessions",
     "recent_activity": "recent_activity_view",
 }
 
