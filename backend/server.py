@@ -2494,7 +2494,7 @@ SHOWS = [
 
 # [First, Last, Address, City, State, Zip, Phone, Email]
 NEW_DONORS = [
-    ["Sam", "Smith", "400 N Broad St", "Philadelphia", "PA", "19103", "215-515-1212", "ssmith@test.com"],
+    ["Sam", "Smith", "400 N Broad St", "Philadelphia", "PA", "19130", "215-515-1212", "ssmith@test.com"],
     ["Harold", "Smith", "3686 Village Dr Apt. D", "Franklin", "OH", "45005", "858-555-1212", "sally@test.com"],
     ["Harry", "Smith", "P.O. Box 6", "Atlasburg", "PA", "15004", "602-515-1212", "testentry@test.com"],
     ["Mark", "Jackson", "1020 Holland Ave", "Port Huron", "MI", "48060", "310-515-1212", "mjtest@test.com"],

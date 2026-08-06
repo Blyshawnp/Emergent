@@ -15,8 +15,8 @@ Column order:
 
 | First | Last | Address | City | State | Zip | Phone | Email |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Sam | Smith | 400 N Broad St | Philadelphia | PA | 19103 | 215-515-1212 | ssmith@test.com |
-| Susan | Miller-Smith | 400 N Broad St | Philadelphia | PA | 19103 | 215-515-1212 | smiller@test.com |
+| Sam | Smith | 400 N Broad St | Philadelphia | PA | 19130 | 215-515-1212 | ssmith@test.com |
+| Susan | Miller-Smith | 400 N Broad St | Philadelphia | PA | 19130 | 215-515-1212 | smiller@test.com |
 | Harry | Smith | P.O. Box 6 | Atlasburg | PA | 15004 | 602-515-1212 | testentry@test.com |
 | Harriette J. | Smith | P.O. Box 6 | Atlasburg | PA | 15004 | 602-515-1212 | testentry@test.com |
 | Mike | Jackson | 1020 Holland Ave | Port Huron | MI | 48060 | 310-515-1212 | mjtest@test.com |

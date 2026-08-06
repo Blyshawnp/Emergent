@@ -143,6 +143,23 @@ stated in earlier reports). These block full data-provider cutover. They are war
 for a complete 14-domain shadow comparison but do not permit readiness when any
 required comparison is missing, errored, incomplete, or unexplained.
 
+### Caller ZIP correction overlay
+
+The authoritative `callers` Sheet already contains ZIP `19130` for the unique Sam Smith
+and Susan Miller-Smith rows. Repository caller defaults and admin-content templates use
+the same corrected ZIP. Because callers remain a staging-only configuration domain with
+no durable caller identity or canonical caller table, the hosted current representation
+uses the `caller_roster_zip_corrections_v1` application setting as an exact-row overlay.
+Each entry records the latest successful import batch, staging-row UUID, physical source
+row, source-row key, verified caller name, prior ZIP, and corrected ZIP. The matching
+audit event is immutable and idempotent.
+
+Historical `import_staging_rows`, checksums, import batches, reconciliation results, and
+lineage remain unchanged. The overlay changes only the current ZIP view; it does not
+rewrite an import snapshot, infer identity from a name alone, map the caller domain,
+enable shadow reads or dual writes, change `MTS_DATA_PROVIDER=sheets`, retire Apps Script,
+or authorize a provider cutover.
+
 Six `sam-authorized-users` rows were rejected per import batch (auth UUID mismatch with
 Supabase Auth). SAM authorization cutover remains blocked until a user-mapping process is
 implemented.

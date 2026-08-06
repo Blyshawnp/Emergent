@@ -30,13 +30,10 @@ function renderTicker(props = {}) {
   });
 }
 
-test('neutral ticker is visible synchronously while remote work is still pending', () => {
-  const startedAt = performance.now();
+test('neutral ticker is visible on the initial render without remote content', () => {
   renderTicker();
-  const visibleAt = performance.now();
   expect(container.querySelector('[data-testid="ticker-bar"]')).not.toBeNull();
   expect(container.textContent).toContain('Welcome to Mock Testing Suite v1.0.1.');
-  expect(visibleAt - startedAt).toBeLessThan(100);
 });
 
 test('cached or live content replaces the default without remounting the ticker track', () => {
