@@ -233,6 +233,9 @@ test('history displays reconciled approved and denied statuses and keeps denial 
       newbie_shift_request_id: 'request-approved',
       newbie_shift_request_status: 'approved',
       newbie_shift_number: '001842',
+      newbie_shift_data: null,
+      newbie_shift_scheduled_at: '2026-07-16T14:00:00-04:00',
+      newbie_shift_timezone: 'EST (Eastern)',
       form_fill_status: 'filled',
     },
     {
@@ -248,6 +251,8 @@ test('history displays reconciled approved and denied statuses and keeps denial 
 
   expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Newbie Shift Scheduled');
   expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Shift #001842');
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).not.toContain('Not scheduled');
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('EST (Eastern)');
   expect(view.container.querySelector('[data-testid="history-row-1"]').textContent).toContain('Newbie Shift Denied');
   expect(view.container.querySelector('[data-testid="history-row-1"]').textContent).toContain('Form Filled');
 
@@ -257,6 +262,7 @@ test('history displays reconciled approved and denied statuses and keeps denial 
     await flushPromises();
   });
   expect(view.container.textContent).toContain('Newbie Shift Number: Shift #001842');
+  expect(view.container.textContent).not.toContain('Newbie Shift: Not scheduled');
   await act(async () => {
     view.container.querySelector('.modal-close').dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushPromises();
@@ -593,6 +599,20 @@ test('remote reconciliation failure preserves local History and offers retry', a
   });
   expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Taylor Example');
   expect(view.container.querySelector('[role="alert"]').textContent).toContain('Local History is still available');
+  expect(Array.from(view.container.querySelectorAll('button')).some((button) => button.textContent === 'Retry')).toBe(true);
+  await view.unmount();
+});
+
+test('optional reconciliation warning keeps candidate History usable and offers retry', async () => {
+  const view = await renderPage([historyRows[0]], Promise.resolve({
+    ok: false,
+    history: [historyRows[0]],
+    stats: { total: 1 },
+    warnings: ['newbie_shift_history_entry_unavailable'],
+  }));
+  await act(async () => { await flushPromises(); });
+  expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Taylor Example');
+  expect(view.container.querySelector('[role="alert"]').textContent).toContain('Some candidate updates could not be refreshed');
   expect(Array.from(view.container.querySelectorAll('button')).some((button) => button.textContent === 'Retry')).toBe(true);
   await view.unmount();
 });

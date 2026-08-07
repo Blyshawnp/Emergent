@@ -299,6 +299,74 @@ class PendingRequestReconciliationTests(unittest.TestCase):
         self.assertEqual(result["action"], "updated")
         sync_request.assert_called_once()
 
+    def test_history_reconcile_bypasses_fresh_cross_process_request_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "history-refresh.sqlite3"
+            local_store = server.SQLiteDocumentStore(database_path)
+            asyncio.run(local_store.history.insert_one(local_record()))
+            original_cache = server.SQLiteCollection.clone(server._remote_newbie_request_cache)
+            with server._remote_newbie_request_cache_lock:
+                server._remote_newbie_request_cache.update({
+                    "requests": [remote_request(status="pending")],
+                    "last_success": server.time.monotonic(),
+                    "last_failure": 0.0,
+                    "in_flight": False,
+                })
+            try:
+                with mock.patch.object(server, "db", local_store), \
+                     mock.patch.object(server, "_fetch_remote_newbie_requests", return_value=[
+                         remote_request(status="approved", newbie_shift_number="2")
+                     ]) as fetch_requests, \
+                     mock.patch.object(server, "_reconcile_remote_corrections_into_local_history", return_value={
+                         "ok": True, "historyUpdated": 0,
+                     }), \
+                     mock.patch.object(server, "_reconcile_remote_candidate_information_into_local_history", return_value={
+                         "ok": True, "historyUpdated": 0, "ambiguousSessionIds": 0,
+                     }):
+                    result = asyncio.run(server.reconcile_history())
+            finally:
+                with server._remote_newbie_request_cache_lock:
+                    server._remote_newbie_request_cache.clear()
+                    server._remote_newbie_request_cache.update(original_cache)
+                local_store.close()
+
+        fetch_requests.assert_called_once_with()
+        self.assertEqual(result["history"][0]["history_id"], "session-1")
+        self.assertEqual(result["history"][0]["newbie_shift_request_id"], "request-1")
+        self.assertEqual(result["history"][0]["newbie_shift_request_status"], "approved")
+        self.assertEqual(result["history"][0]["newbie_shift_number"], "2")
+        self.assertEqual(result["history"][0]["newbie_shift_scheduled_at"], "2026-07-16T14:00:00-04:00")
+        self.assertEqual(result["warnings"], [])
+
+    def test_optional_newbie_history_failure_preserves_candidate_and_returns_warning(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "history-warning.sqlite3"
+            local_store = server.SQLiteDocumentStore(database_path)
+            asyncio.run(local_store.history.insert_one(local_record()))
+            with mock.patch.object(server, "db", local_store), \
+                 mock.patch.object(
+                     server,
+                     "_reconcile_remote_newbie_requests_into_local_state",
+                     side_effect=ValueError("synthetic malformed optional request"),
+                 ), \
+                 mock.patch.object(server, "_reconcile_remote_corrections_into_local_history", return_value={
+                     "ok": False, "historyUpdated": 0, "error_code": "correction_transport_unavailable",
+                 }), \
+                 mock.patch.object(server, "_reconcile_remote_candidate_information_into_local_history", return_value={
+                     "ok": False, "historyUpdated": 0, "error_code": "candidate_information_transport_unavailable",
+                 }):
+                result = asyncio.run(server.reconcile_history())
+            local_store.close()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["history"][0]["history_id"], "session-1")
+        self.assertEqual(result["history"][0]["candidate_name"], "Taylor Example")
+        self.assertIn("newbie_shift_history_entry_unavailable", result["warnings"])
+        self.assertEqual(
+            result["reconciliation"]["newbieRequests"]["error_code"],
+            "newbie_shift_history_entry_unavailable",
+        )
+
     def test_terminal_candidate_suppresses_only_obsolete_pending_newbie_work(self):
         pending = server._public_newbie_request({
             "request_id": "request-1", "session_id": "session-1", "request_status": "pending",

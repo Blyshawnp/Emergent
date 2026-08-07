@@ -163,6 +163,7 @@ const api = {
   discardSession: () => savedRequest('POST', '/session/discard'),
   getHistory: (timeout) => request('GET', '/history', null, timeout),
   getHistoryStats: (timeout) => request('GET', '/history/stats', null, timeout),
+  reconcileHistory: (timeout) => request('POST', '/history/reconcile', null, timeout),
   clearHistory: () => request('DELETE', '/history'),
   deleteHistorySession: (historyId) => request('DELETE', `/history/session/${encodeURIComponent(historyId)}`),
   requestHistorySessionDeletion: (historyId, reason) => request('POST', `/history/session/${encodeURIComponent(historyId)}/deletion-request`, { reason }),

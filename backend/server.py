@@ -7123,7 +7123,13 @@ def _reconcile_candidate_tracking_with_requests(candidate_tracking, pending_requ
 def _reconcile_remote_newbie_requests_into_local_state(force=False):
     snapshot = _remote_newbie_request_snapshot(force=force)
     if not snapshot.get("ok"):
-        return {"ok": False, "historyUpdated": 0, "activeSessionUpdated": False, "source": snapshot.get("source")}
+        return {
+            "ok": False,
+            "historyUpdated": 0,
+            "activeSessionUpdated": False,
+            "source": snapshot.get("source"),
+            "error_code": "newbie_shift_history_entry_unavailable",
+        }
 
     requests = snapshot.get("requests") or []
     history_updated = 0
@@ -7174,6 +7180,18 @@ def _reconcile_remote_newbie_requests_into_local_state(force=False):
         "activeSessionUpdated": active_updated,
         "source": snapshot.get("source"),
     }
+
+
+def _safe_history_reconciliation(reconcile, error_code, *args, **kwargs):
+    try:
+        return reconcile(*args, **kwargs)
+    except Exception as exc:
+        logger.warning(
+            "[HISTORY RECONCILIATION] Optional refresh unavailable source=%s error_type=%s; local History preserved",
+            error_code,
+            type(exc).__name__,
+        )
+        return {"ok": False, "historyUpdated": 0, "error_code": error_code}
 
 
 def _fetch_remote_correction_requests():
@@ -13435,16 +13453,35 @@ async def get_history():
 async def reconcile_history():
     started_at = time.perf_counter()
     newbie_result, correction_result, candidate_result = await asyncio.gather(
-        asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state),
-        asyncio.to_thread(_reconcile_remote_corrections_into_local_history),
-        asyncio.to_thread(_reconcile_remote_candidate_information_into_local_history),
+        asyncio.to_thread(
+            _safe_history_reconciliation,
+            _reconcile_remote_newbie_requests_into_local_state,
+            "newbie_shift_history_entry_unavailable",
+            True,
+        ),
+        asyncio.to_thread(
+            _safe_history_reconciliation,
+            _reconcile_remote_corrections_into_local_history,
+            "correction_history_entry_unavailable",
+        ),
+        asyncio.to_thread(
+            _safe_history_reconciliation,
+            _reconcile_remote_candidate_information_into_local_history,
+            "candidate_information_history_entry_unavailable",
+        ),
     )
     docs = await get_history()
     stats = await get_history_stats()
+    warnings = [
+        result.get("error_code")
+        for result in (newbie_result, correction_result, candidate_result)
+        if result.get("error_code")
+    ]
     return {
         "ok": any(result.get("ok") for result in (newbie_result, correction_result, candidate_result)),
         "history": docs,
         "stats": stats,
+        "warnings": warnings,
         "reconciliation": {
             "newbieRequests": newbie_result,
             "corrections": correction_result,

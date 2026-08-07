@@ -70,11 +70,27 @@ function applyFormRecoveryMarker(record) {
 
 function formatFollowUpParts(record) {
   const parts = formatNewbieScheduleParts(record?.newbie_shift_data || {});
-  const dateTime = [parts.date, parts.time].filter(Boolean).join(parts.date && parts.time ? ', ' : '');
+  let dateTime = [parts.date, parts.time].filter(Boolean).join(parts.date && parts.time ? ', ' : '');
+  if (!dateTime) {
+    const scheduledAt = String(record?.newbie_shift_scheduled_at || record?.newbie_shift_rescheduled_at || '').trim();
+    if (scheduledAt) {
+      const parsed = new Date(scheduledAt);
+      dateTime = Number.isNaN(parsed.getTime())
+        ? scheduledAt
+        : parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    }
+  }
   return {
     dateTime: dateTime || 'Not scheduled',
-    timezone: parts.timezone || '',
+    timezone: parts.timezone || String(record?.newbie_shift_timezone || '').trim(),
   };
+}
+
+function formatHistoryNewbieSchedule(record) {
+  const nestedSchedule = formatNewbieSchedule(record?.newbie_shift_data || {});
+  if (nestedSchedule !== 'Not scheduled') return nestedSchedule;
+  const parts = formatFollowUpParts(record);
+  return [parts.dateTime, parts.timezone].filter(Boolean).join(' · ');
 }
 
 export function buildHistoryCorrectionChanges(record = {}, draft = {}) {
@@ -142,7 +158,12 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       if (!mountedRef.current) return;
       setHistory((Array.isArray(result?.history) ? result.history : []).map(applyFormRecoveryMarker));
       if (result?.stats) setStats(result.stats);
-      setSyncState({ syncing: false, error: '' });
+      setSyncState({
+        syncing: false,
+        error: Array.isArray(result?.warnings) && result.warnings.length
+          ? 'Some candidate updates could not be refreshed. Local History is still available.'
+          : '',
+      });
     } catch (_error) {
       if (mountedRef.current) {
         setSyncState({ syncing: false, error: 'Candidate updates could not be synchronized. Local History is still available.' });
@@ -487,7 +508,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                         const meta = newbieShiftStatusMeta(s);
                         return (
                           <>
-                            <span className="hist-followup-date" title={formatNewbieSchedule(s.newbie_shift_data)}>{followUp.dateTime}</span>
+                            <span className="hist-followup-date" title={formatHistoryNewbieSchedule(s)}>{followUp.dateTime}</span>
                             {followUp.timezone && <span className="hist-followup-tz">{followUp.timezone}</span>}
                             {meta ? <StatusChip meta={meta} /> : null}
                             {s.newbie_shift_number ? <span className="hist-followup-tz">Shift #{s.newbie_shift_number}</span> : null}
@@ -689,7 +710,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 );
               })}
               {(getNewbieShiftEligibility(detail).active || getNewbieShiftEligibility(detail).denied) && (
-                <><br /><strong>Newbie Shift:</strong> {formatNewbieSchedule(detail.newbie_shift_data || {})}{detail.newbie_shift_number && <><br /><strong>Newbie Shift Number:</strong> Shift #{detail.newbie_shift_number}</>}<br /><strong>Approval Status:</strong> <StatusChip meta={newbieShiftStatusMeta(detail)} />{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}{detail.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && detail.newbie_shift_denial_reason && <><br /><strong>Denial Reason:</strong> {detail.newbie_shift_denial_reason}</>}</>
+                <><br /><strong>Newbie Shift:</strong> {formatHistoryNewbieSchedule(detail)}{detail.newbie_shift_number && <><br /><strong>Newbie Shift Number:</strong> Shift #{detail.newbie_shift_number}</>}<br /><strong>Approval Status:</strong> <StatusChip meta={newbieShiftStatusMeta(detail)} />{detail.newbie_shift_original_scheduled_at && <><br /><strong>Original Scheduled At:</strong> {detail.newbie_shift_original_scheduled_at}</>}{detail.newbie_shift_request_status === NEWBIE_REQUEST_STATUS.DENIED && detail.newbie_shift_denial_reason && <><br /><strong>Denial Reason:</strong> {detail.newbie_shift_denial_reason}</>}</>
               )}
               <div style={{ marginTop: 16 }}>
                 <div className="text-sm font-bold">Coaching Summary</div>
