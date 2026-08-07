@@ -358,18 +358,25 @@ class SheetsDataProvider(DataProvider):
                 if _text(row.get("source_session_id")) in valid_sessions else "",
             } for row in rows] if isinstance(rows, list) else []
         if resource == "newbie_shift_requests":
+            valid_sessions = {_text(row.get("session_id")) for row in self._candidate_rows()}
             return [{
                 **row,
                 "canonical_session_id": _deterministic_uuid("session", row.get("source_session_id", ""))
-                if _text(row.get("source_session_id")) else "",
+                if _text(row.get("source_session_id")) in valid_sessions else "",
             } for row in self._request_rows() if row.get("source_tab") == "newbie-shift-requests"]
         if resource == "candidate_corrections":
+            candidate_rows = self._candidate_rows()
+            valid_sessions = {_text(row.get("session_id")) for row in candidate_rows}
+            valid_candidates = {
+                _text(row.get("candidate_name")).casefold()
+                for row in candidate_rows if _text(row.get("candidate_name"))
+            }
             return [{
                 **row,
                 "canonical_session_id": _deterministic_uuid("session", row.get("source_session_id", ""))
-                if _text(row.get("source_session_id")) else "",
+                if _text(row.get("source_session_id")) in valid_sessions else "",
                 "candidate_id": _deterministic_uuid("candidate", row.get("candidate", ""))
-                if _text(row.get("candidate")) else "",
+                if _text(row.get("candidate")).casefold() in valid_candidates else "",
             } for row in self._request_rows() if row.get("source_tab") == "candidate-information-correction-requests"]
         if resource == "pending_requests":
             return self._request_rows()

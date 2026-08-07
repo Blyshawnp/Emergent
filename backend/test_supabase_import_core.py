@@ -8,6 +8,7 @@ from tools.supabase_import.core import (
     missing_candidate_headers,
     normalize_headset_review,
     stage_rows,
+    transform_and_load_batch,
 )
 
 
@@ -35,8 +36,57 @@ class SupabaseImportCoreTests(unittest.TestCase):
         ])
         self.assertEqual(rows[0].raw_row["newbie_shift_number"], "0012")
 
+    def test_request_tabs_use_request_id_before_session_id(self):
+        rows = stage_rows("newbie-shift-requests", ["request_id", "session_id"], [
+            {"request_id": "request-1", "session_id": "session-shared"},
+            {"request_id": "request-2", "session_id": "session-shared"},
+        ])
+        self.assertEqual(
+            [row.source_row_key for row in rows],
+            ["request_id:request-1", "request_id:request-2"],
+        )
+        self.assertTrue(all(row.fallback_reason is None for row in rows))
+
+    def test_exact_duplicate_request_id_is_still_classified_duplicate(self):
+        rows = stage_rows("newbie-shift-requests", ["request_id", "session_id"], [
+            {"request_id": "request-1", "session_id": "session-1"},
+            {"request_id": "request-1", "session_id": "session-2"},
+        ])
+        self.assertEqual(rows[1].fallback_reason, "duplicate_identity_in_source_tab")
+
     def test_missing_lazy_headers_are_not_corruption(self):
         self.assertIn("newbie_shift_number", missing_candidate_headers(["session_id"]))
+
+    def test_candidate_deletion_requests_load_into_generic_request_table(self):
+        provider = MagicMock()
+        provider._request.side_effect = [
+            [{
+                "id": "stage-1",
+                "source_tab": "candidate-deletion-requests",
+                "source_row_key": "request_id:delete-1",
+                "source_checksum": "checksum-1",
+                "normalization_status": "valid",
+                "raw_row": {
+                    "request_id": "delete-1",
+                    "request_status": "approved",
+                    "candidate_name": "Candidate",
+                },
+            }],
+            [],
+            [],
+        ]
+        provider.insert_lineage_if_absent.return_value = {"result": "inserted"}
+
+        transform_and_load_batch(provider, "batch-1")
+
+        pending_call = next(
+            call for call in provider.upsert_rows.call_args_list
+            if call.args[0] == "pending_requests"
+        )
+        self.assertEqual(pending_call.args[1][0]["request_id"], "delete-1")
+        self.assertEqual(pending_call.args[1][0]["request_type"], "candidate_deletion")
+        self.assertEqual(pending_call.kwargs["on_conflict"], "request_id")
+        provider.insert_lineage_if_absent.assert_called_once()
 
     def test_every_source_row_stages_and_key_is_stable(self):
         rows = [{"session_id": "s-1"}, {"candidate_name": "not-an-identity"}]

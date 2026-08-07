@@ -65,7 +65,7 @@ def test_regular_ncns_auto_fail_payload_and_summaries():
     assert payload["sup_complete"] == "No"
     assert payload["all_complete"] == "No"
     assert payload["coaching"] == "N/A"
-    assert payload["fail_reason"] == "Taylor Example was a NC/NS."
+    assert payload["fail_reason"] == "Taylor Example was a No Call No Show."
 
 
 def test_regular_not_ready_auto_fail_payload_and_summaries():
@@ -117,7 +117,7 @@ def test_supervisor_only_ncns_auto_fail_payload_and_summaries():
     assert payload["sup_complete"] == "No"
     assert payload["all_complete"] == "No"
     assert payload["coaching"] == "N/A"
-    assert payload["fail_reason"] == "Taylor Example was a NC/NS."
+    assert payload["fail_reason"] == "Taylor Example was a No Call No Show for the supervisor transfer."
 
 
 def test_supervisor_only_not_ready_auto_fail_payload_and_summaries():
@@ -148,7 +148,7 @@ def test_stopped_responding_uses_prior_coaching_when_available():
     payload = build_form_fill_payload(session, _settings(), summaries["coaching"], summaries["fail"])
 
     assert "Call 1 - Pass" in payload["coaching"]
-    assert "Show appreciation" in payload["coaching"]
+    assert "Show Appreciation" in payload["coaching"]
     assert payload["fail_reason"] == "Taylor Example stopped responding."
 
 
@@ -190,10 +190,10 @@ def test_coaching_summary_uses_selected_items_and_other_notes_only():
 
     summaries = generate_summaries(session)
 
-    assert "Show appreciation" in summaries["coaching"]
-    assert "Verification (Email)" in summaries["coaching"]
+    assert "Show Appreciation" in summaries["coaching"]
+    assert "Verification: Verification Email" in summaries["coaching"]
     assert "Reviewed donation confirmation wording" in summaries["coaching"]
-    assert "Read script verbatim" in summaries["coaching"]
+    assert "Read Script Verbatim" in summaries["coaching"]
     assert "This unselected note should not appear" not in summaries["coaching"]
     assert "Coaching was provided using the standard screenshots and Discord chat." in summaries["coaching"]
     assert "Logitech" not in summaries["coaching"]
@@ -226,10 +226,10 @@ def test_fail_summary_uses_failed_mock_calls_only():
     summaries = generate_summaries(session)
 
     assert "Call 1 - Fail" in summaries["fail"]
-    assert "Skipped parts of script" in summaries["fail"]
+    assert "Skipped parts of the script" in summaries["fail"]
     assert "Missed required closing language" in summaries["fail"]
     assert "Call 2 - Fail" in summaries["fail"]
-    assert "Wrong donation" in summaries["fail"]
+    assert "Wrong Donation" in summaries["fail"]
     assert "This unselected fail note should not appear" not in summaries["fail"]
     assert "Sup Transfer" not in summaries["fail"]
     assert "Transferred to wrong queue" not in summaries["fail"]
@@ -252,9 +252,9 @@ def test_supervisor_transfer_fail_after_mock_pass_has_fail_summary():
     summaries = generate_summaries(session)
 
     assert "Sup Transfer 1 - Fail" in summaries["coaching"]
-    assert "Discord permission" in summaries["coaching"]
-    assert "Sup Transfer 1 - Fail" in summaries["fail"]
-    assert "Transferred to wrong queue" in summaries["fail"]
+    assert "Discord Permission" in summaries["coaching"]
+    assert "Transferred to the wrong queue" in summaries["coaching"]
+    assert summaries["fail"] == "N/A"
 
 
 def test_resumed_supervisor_transfer_pass_status_is_resumed_pass():
@@ -342,14 +342,14 @@ def test_resumed_supervisor_transfer_summaries_ignore_prior_mock_call_data():
 
     assert "Sup Transfer 1 - Fail" in summaries["coaching"]
     assert "Sup Transfer 2 - Fail" in summaries["coaching"]
-    assert "Discord permission" in summaries["coaching"]
+    assert "Discord Permission" in summaries["coaching"]
     assert "Old mock call coaching should not appear" not in summaries["coaching"]
     assert "Show appreciation" not in summaries["coaching"]
-    assert "Sup Transfer 1 - Fail" in summaries["fail"]
-    assert "Transferred to wrong queue" in summaries["fail"]
-    assert "Queue was not changed" in summaries["fail"]
-    assert "Old mock call fail reason should not appear" not in summaries["fail"]
-    assert "Skipped parts of script" not in summaries["fail"]
+    assert "Transferred to the wrong queue" in summaries["coaching"]
+    assert "Queue was not changed" in summaries["coaching"]
+    assert summaries["fail"] == "N/A"
+    assert "Old mock call fail reason should not appear" not in summaries["coaching"]
+    assert "Skipped parts of script" not in summaries["coaching"]
 
 
 def test_headset_like_selection_data_is_rejected_from_summaries():
@@ -378,7 +378,7 @@ def test_headset_like_selection_data_is_rejected_from_summaries():
     assert "Jabra" not in summaries["coaching"]
     assert "Plantronics" not in summaries["fail"]
     assert "Poly" not in summaries["fail"]
-    assert "Skipped parts of script" in summaries["fail"]
+    assert "Skipped parts of the script" in summaries["fail"]
 
 
 def test_readiness_override_fail_summary_and_form_completion_flags():

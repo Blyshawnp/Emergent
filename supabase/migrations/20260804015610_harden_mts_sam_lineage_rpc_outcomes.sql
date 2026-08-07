@@ -98,9 +98,6 @@ as
 select
   s.id,
   s.session_id,
-  s.candidate_id,
-  s.final_attempt,
-  s.archived,
   case
     when s.readiness_override_applied and lower(coalesce(s.readiness_override_result, '')) in ('pass','passed') then 'Pass'
     when s.readiness_override_applied and lower(coalesce(s.readiness_override_result, '')) in ('fail-final attempt','failed final attempt') then 'FAIL-Final Attempt'
@@ -125,7 +122,10 @@ select
     when lower(coalesce(s.raw_status, '')) in ('withdrew from certification','withdrawn') then 'WITHDREW FROM CERTIFICATION'
     when lower(coalesce(s.raw_status, '')) in ('incomplete','pending','in progress') then 'INCOMPLETE'
     else coalesce(nullif(s.raw_status, ''), nullif(s.calculated_result, ''), 'INCOMPLETE')
-  end as authoritative_status
+  end as authoritative_status,
+  s.candidate_id,
+  s.final_attempt,
+  s.archived
 from mts_sam.candidate_sessions s;
 
 create or replace view mts_sam.candidate_history_view
@@ -133,11 +133,12 @@ with (security_invoker = true)
 as
 select
   s.id, s.session_id, s.candidate_id, s.candidate_name, s.tester_name,
-  s.attempt_number, s.current_attempt_number, s.allowed_attempt_count, s.final_attempt,
-  cs.authoritative_status, s.raw_status, s.calculated_result, s.final_result,
-  s.completed_at, concat_ws(' ', nullif(s.headset_brand, ''), s.headset_model) as headset_display,
+  s.attempt_number, s.current_attempt_number, s.allowed_attempt_count,
+  cs.authoritative_status, s.completed_at,
+  concat_ws(' ', nullif(s.headset_brand, ''), s.headset_model) as headset_display,
+  s.archived, s.updated_at,
+  s.final_attempt, s.raw_status, s.calculated_result, s.final_result,
   s.newbie_shift_number, s.source_payload->>'newbie_shift_request_status' as newbie_shift_request_status,
-  s.needs_sup_transfer, s.pending_sup_transfer_id,
-  s.archived, s.updated_at
+  s.needs_sup_transfer, s.pending_sup_transfer_id
 from mts_sam.candidate_sessions s
 join mts_sam.current_candidate_status_view cs on cs.id = s.id;

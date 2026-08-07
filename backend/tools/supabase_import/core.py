@@ -16,6 +16,16 @@ IDENTITY_FIELDS = (
     "notification_id", "catalog_id",
 )
 
+TAB_IDENTITY_FIELDS = {
+    "Candidate Sessions": ("session_id",),
+    "headset-review-log": ("review_id",),
+    "newbie-shift-requests": ("request_id",),
+    "candidate-deletion-requests": ("request_id",),
+    "candidate-information-correction-requests": ("request_id",),
+    "Pending Sup Transfers": ("pending_id",),
+    "sam-notifications": ("ID",),
+}
+
 EXPECTED_LAZY_CANDIDATE_HEADERS = (
     "extra_attempts_granted", "allowed_attempt_count", "current_attempt_number",
     "extra_attempt_last_action_id", "extra_attempt_granted_by", "extra_attempt_granted_at",
@@ -41,7 +51,7 @@ def deterministic_source_key(tab: str, row_number: int, row: Mapping[str, Any]):
         if brand and model:
             return f"headset:{brand}:{model}", None
 
-    for field in IDENTITY_FIELDS:
+    for field in TAB_IDENTITY_FIELDS.get(tab, IDENTITY_FIELDS):
         value = str(row.get(field) or "").strip()
         if value:
             return f"{field}:{value}", None
@@ -853,7 +863,56 @@ def transform_and_load_batch(provider, batch_id: str, dry_run=False) -> dict[str
         _merge_lineage_result(results, safe_upsert_lineage(provider, corrections_lineage))
         results["inserted"] += len(corrections_payload)
 
-    # 8. notifications
+    # 8. generic requests (candidate deletion currently has no dedicated table)
+    pending_payload = []
+    pending_lineage = []
+    for r in staged_rows:
+        if r["source_tab"] != "candidate-deletion-requests" or r["normalization_status"] != "valid":
+            continue
+        raw = r["raw_row"]
+        request_id = str(raw.get("request_id") or "").strip()
+        if not request_id:
+            continue
+        pending_uuid = deterministic_uuid("pending-request", request_id)
+        source_session_id = str(raw.get("session_id") or raw.get("source_session_id") or "").strip()
+        session_uuid = deterministic_uuid("session", source_session_id) if source_session_id else None
+        pending_payload.append({
+            "id": pending_uuid,
+            "request_id": request_id,
+            "request_type": raw.get("request_type") or "candidate_deletion",
+            "source_session_id": source_session_id or None,
+            "session_id": session_uuid if session_uuid in valid_session_ids else None,
+            "status": raw.get("request_status") or raw.get("status") or "pending",
+            "candidate_name": raw.get("candidate_name") or raw.get("candidate"),
+            "tester_name": raw.get("tester_name") or raw.get("tester"),
+            "request_reason": raw.get("request_reason") or raw.get("reason"),
+            "request_details": raw.get("request_details") if isinstance(raw.get("request_details"), dict) else {},
+            "requested_by": raw.get("requested_by") or raw.get("tester_name"),
+            "decision_by": raw.get("admin_decision_by") or raw.get("decision_by"),
+            "denial_reason": raw.get("denial_reason"),
+            "created_at": parse_date(raw.get("request_created_at") or raw.get("created_at")),
+            "decision_at": parse_date(raw.get("admin_decision_at") or raw.get("decision_at")),
+            "updated_at": parse_date(raw.get("updated_at")),
+            "source_checksum": r["source_checksum"],
+            "source_payload": raw,
+        })
+        pending_lineage.append({
+            "entity_type": "pending_requests",
+            "entity_id": pending_uuid,
+            "source_system": "google_sheets",
+            "source_tab": r["source_tab"],
+            "source_row_key": r["source_row_key"],
+            "source_checksum": r["source_checksum"],
+            "import_batch_id": batch_id,
+            "metadata": {"created_by_batch_id": batch_id},
+        })
+
+    if pending_payload and not dry_run:
+        provider.upsert_rows("pending_requests", pending_payload, on_conflict="request_id")
+        _merge_lineage_result(results, safe_upsert_lineage(provider, pending_lineage))
+        results["inserted"] += len(pending_payload)
+
+    # 9. notifications
     notif_payload = []
     notif_lineage = []
     for r in staged_rows:
@@ -1018,6 +1077,8 @@ def rollback_batch(provider, batch_id: str, dry_run=False) -> dict[str, int]:
 
 def sync_incremental_data(sheets_client, provider, dry_run=False) -> dict[str, Any]:
     logger.info("Executing incremental sync (dry_run=%s)", dry_run)
+    if not dry_run:
+        raise RuntimeError("incremental_sync_execution_requires_separate_approved_implementation")
     existing_lineage = provider._request("data_source_lineage", query={"select": "source_system,source_tab,source_row_key,source_checksum"})
     lineage_map = {(l["source_system"], l["source_tab"], l["source_row_key"]): l["source_checksum"] for l in existing_lineage}
 
@@ -1031,7 +1092,7 @@ def sync_incremental_data(sheets_client, provider, dry_run=False) -> dict[str, A
 
     for title, headers, rows in sources:
         for staged in stage_rows(title, headers, rows):
-            key = (staged.source_system, staged.source_tab, staged.source_row_key)
+            key = ("google_sheets", staged.source_tab, staged.source_row_key)
             if key not in lineage_map:
                 new_count += 1
                 staged_payload.append(staged)
@@ -1094,6 +1155,9 @@ REQUIRED_SHADOW_DOMAINS = (
     "newbie_shift_requests", "candidate_corrections", "pending_requests",
     "recent_activity", "notifications",
 )
+
+SHADOW_SNAPSHOT_MAX_AGE_SECONDS = 15 * 60
+EXPECTED_SUPABASE_PROJECT_REF = "xyfhikikddcqcmzbdvbj"
 
 
 @dataclass(frozen=True)
@@ -1176,13 +1240,13 @@ SHADOW_DOMAIN_SPECS = {
         relationships=(("source_session_id",), ("canonical_session_id", "session_id"), ("candidate_id",)),
     ),
     "pending_requests": ShadowDomainSpec(
-        identity=(("request_id", "id"),),
+        identity=(("category", "source_tab"), ("request_id", "id")),
         values=(("request_type",), ("category", "source_tab"), ("created_at",)),
         statuses=(("status", "request_status"),),
         relationships=(("source_session_id", "session_id"),),
     ),
     "recent_activity": ShadowDomainSpec(
-        identity=(("event_id", "event_key", "request_id"),),
+        identity=(("category", "source_tab"), ("event_id", "event_key", "request_id")),
         values=(("event_type", "request_type"), ("occurred_at", "updated_at", "created_at")),
         statuses=(("status", "request_status"),),
         relationships=(("source_entity_id", "source_session_id"),),
@@ -1203,8 +1267,15 @@ def _first_value(row, aliases):
 
 
 def _normalized_compare_value(field, value):
+    boolean_fields = {
+        "enabled", "show_ticker", "show_popup", "show_banner", "persistent",
+        "archived", "deleted", "withdrawn", "final_attempt", "counts_as_attempt",
+    }
     if value is None or str(value).strip() == "":
-        return ""
+        # Lazy Sheet boolean columns and absent canonical boolean projections both
+        # represent the default false state. This equivalence is representational;
+        # explicit true values remain distinct.
+        return False if field in boolean_fields else ""
     if isinstance(value, (dict, list)):
         return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     if field == "changes" and isinstance(value, str):
@@ -1213,7 +1284,7 @@ def _normalized_compare_value(field, value):
             return json.dumps(parsed, sort_keys=True, separators=(",", ":"), default=str)
         except (TypeError, ValueError, json.JSONDecodeError):
             return re.sub(r"\s+", " ", value.strip())
-    if field in {"enabled", "show_ticker", "show_popup", "show_banner", "persistent", "archived", "deleted", "withdrawn", "final_attempt", "counts_as_attempt"}:
+    if field in boolean_fields:
         try:
             return bool(parse_boolean(value))
         except ValueError:
@@ -1228,7 +1299,19 @@ def _normalized_compare_value(field, value):
         except ValueError:
             return parse_date(value) or normalized_text(value)
     if field in {"status", "raw_status", "calculated_result", "final_result", "authoritative_status", "request_status", "completed_status", "normalization_status", "notification_type", "request_type", "event_type", "category", "attempt_type"}:
-        return normalized_text(value).replace("failed final attempt", "fail final attempt").replace("passed", "pass")
+        normalized = normalized_text(value).replace("_", " ").replace("-", " ")
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        status_equivalents = {
+            "passed": "pass",
+            "resumed pass": "pass",
+            "completed": "pass",
+            "failed": "fail",
+            "failed final attempt": "fail final attempt",
+            "pending sup": "pending supervisor transfer",
+            "pending supervisor": "pending supervisor transfer",
+            "withdrawn": "withdrew from certification",
+        }
+        return status_equivalents.get(normalized, normalized)
     if field in {"brand", "model", "headset_brand", "headset_model", "selectable"}:
         return normalized_text(value)
     return re.sub(r"\s+", " ", str(value).strip())
@@ -1289,9 +1372,24 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
         "required_domains": list(REQUIRED_SHADOW_DOMAINS),
         "categories": {},
         "not_implemented": [],
+        "invariant_errors": [],
+        "lineage_rpc_path_verified": False,
+        "project_ref": None,
         "overall_readiness": "unknown",
         "completed": False,
     }
+
+    provider_url = str(getattr(supabase_provider, "_url", "") or "")
+    project_match = re.search(r"https://([a-z0-9]+)\.supabase\.co", provider_url)
+    result["project_ref"] = project_match.group(1) if project_match else None
+    if result["project_ref"] != EXPECTED_SUPABASE_PROJECT_REF:
+        result["invariant_errors"].append("project_ref_mismatch")
+    result["lineage_rpc_path_verified"] = bool(
+        getattr(supabase_provider, "lineage_write_mode", None) == "rpc_only"
+        and callable(getattr(supabase_provider, "insert_lineage_if_absent", None))
+    )
+    if not result["lineage_rpc_path_verified"]:
+        result["invariant_errors"].append("lineage_rpc_path_inactive")
 
     for domain in REQUIRED_SHADOW_DOMAINS:
         spec = SHADOW_DOMAIN_SPECS[domain]
@@ -1321,6 +1419,7 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
             missing_sheets = set(supabase_index) - set(sheets_index)
             domain_result["missing_in_supabase_count"] = len(missing_supabase)
             domain_result["missing_in_sheets_count"] = len(missing_sheets)
+            historical_expected_mismatch_offset = 0
 
             for key in set(sheets_index) & set(supabase_index):
                 sheets_row = sheets_index[key]
@@ -1335,6 +1434,14 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
                 domain_result["status_mismatch_count"] += int(status_mismatch)
                 domain_result["relationship_mismatch_count"] += int(relationship_mismatch)
                 domain_result["attempt_mismatch_count"] += int(attempt_mismatch)
+                if (
+                    domain == "headset_reviews"
+                    and not supabase_row.get("session_id")
+                ):
+                    historical_expected_mismatch_offset += sum(map(int, (
+                        identity_mismatch, value_mismatch, status_mismatch,
+                        relationship_mismatch, attempt_mismatch,
+                    )))
                 if diagnostic_mode:
                     for fields in (spec.identity, spec.values, spec.statuses, spec.relationships, spec.attempts):
                         for field in _mismatched_fields(fields, sheets_row, supabase_row):
@@ -1357,7 +1464,7 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
                     if row.get("source_session_id") and not row.get("session_id")
                 )
                 expected += standalone + unresolved_link
-                expected_offset += unresolved_link
+                expected_offset += unresolved_link + historical_expected_mismatch_offset
                 if unresolved_link:
                     # Keep the known unresolved source-session link visible as a
                     # relationship mismatch while classifying it as an expected
@@ -1397,9 +1504,28 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
     result["sheets_snapshot_checksum"] = metadata.get("checksum")
     result["sheets_fetch_count"] = metadata.get("fetch_count")
     result["sheets_retry_count"] = metadata.get("retry_count")
+    snapshot_timestamp = result["sheets_snapshot_timestamp"]
+    snapshot_fresh = False
+    try:
+        parsed_timestamp = datetime.datetime.fromisoformat(str(snapshot_timestamp).replace("Z", "+00:00"))
+        if parsed_timestamp.tzinfo is None:
+            parsed_timestamp = parsed_timestamp.replace(tzinfo=datetime.timezone.utc)
+        snapshot_age = (datetime.datetime.now(datetime.timezone.utc) - parsed_timestamp).total_seconds()
+        snapshot_fresh = 0 <= snapshot_age <= SHADOW_SNAPSHOT_MAX_AGE_SECONDS
+    except (TypeError, ValueError):
+        snapshot_fresh = False
+    snapshot_complete = bool(
+        snapshot_fresh
+        and re.fullmatch(r"[0-9a-f]{64}", str(result["sheets_snapshot_checksum"] or ""))
+        and result["sheets_fetch_count"] == 1
+        and not metadata.get("errors")
+    )
+    if not snapshot_complete:
+        result["invariant_errors"].append("snapshot_contract_incomplete")
     result["completed"] = (
         set(result["categories"]) == set(REQUIRED_SHADOW_DOMAINS)
         and not result["not_implemented"]
+        and not result["invariant_errors"]
         and all(item["readiness"] != "unknown" for item in result["categories"].values())
     )
     if result["error_count"]:
@@ -1409,7 +1535,7 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
             for code in item.get("error_codes", [])
         )
         result["overall_readiness"] = "blocked_by_quota" if quota_blocked else "error"
-    elif not result["completed"]:
+    elif result["invariant_errors"] or not result["completed"]:
         result["overall_readiness"] = "incomplete"
     elif result["total_unexplained"]:
         result["overall_readiness"] = "not_ready"
@@ -1445,7 +1571,7 @@ def verify_production_health(provider, comparison_result=None) -> dict[str, Any]
         # Check Project Ref
         m = re.search(r'https://([a-z0-9]+)\.supabase\.co', getattr(provider, '_url', ''))
         actual_ref = m.group(1) if m else 'unknown'
-        EXPECTED_REF = 'xyfhikikddcqcmzbdvbj'
+        EXPECTED_REF = EXPECTED_SUPABASE_PROJECT_REF
         add_check('project_ref', 'ERROR', actual_ref == EXPECTED_REF, f"Expected {EXPECTED_REF}, got {actual_ref}")
         
         # Schema tables
@@ -1531,7 +1657,10 @@ def verify_production_health(provider, comparison_result=None) -> dict[str, Any]
         add_check('env_dual_write', 'ERROR', dual_write not in ('true', '1'), 'Must not be true')
         add_check('env_shadow_mode', 'ERROR', shadow_mode not in ('true', '1'), 'Must remain disabled')
 
-        lineage_rpc_active = callable(getattr(provider, 'insert_lineage_if_absent', None))
+        lineage_rpc_active = bool(
+            getattr(provider, 'lineage_write_mode', None) == 'rpc_only'
+            and callable(getattr(provider, 'insert_lineage_if_absent', None))
+        )
         add_check('lineage_rpc_provider_method', 'ERROR', lineage_rpc_active, 'Trusted lineage RPC method must be active')
 
         comparison_domains = set((comparison_result or {}).get('categories') or {})

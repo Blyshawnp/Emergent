@@ -81,6 +81,15 @@ class ProviderTests(unittest.TestCase):
             })
         provider.upsert_rows.assert_not_called()
 
+    def test_direct_lineage_table_upsert_is_forbidden(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "secret-key")
+        provider._request = MagicMock()
+        with self.assertRaisesRegex(ValueError, "Direct lineage table writes are forbidden"):
+            provider.upsert_rows(
+                "data_source_lineage", [{}], on_conflict="source_system,source_tab,source_row_key"
+            )
+        provider._request.assert_not_called()
+
     def test_uncertain_commit_retry_can_return_idempotent_reuse(self):
         class Response:
             def __enter__(self):
@@ -101,6 +110,59 @@ class ProviderTests(unittest.TestCase):
             result = provider.insert_lineage_if_absent(row)
         self.assertEqual(result["result"], "already_exists_same_mapping")
         self.assertEqual(mocked.call_count, 2)
+
+    def test_pending_requests_projects_canonical_request_tables(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "secret-key")
+        responses = {
+            "pending_requests": [],
+            "newbie_shift_requests": [{
+                "request_id": "newbie-1", "request_type": "initial_newbie_shift",
+                "request_status": "pending", "source_session_id": "session-1",
+            }],
+            "candidate_corrections": [{
+                "request_id": "correction-1", "request_type": "candidate_information_correction",
+                "status": "approved", "source_session_id": "session-2",
+            }],
+        }
+        provider._request = MagicMock(side_effect=lambda path, **_kwargs: responses[path])
+        rows = provider.list_resource("pending_requests")
+        self.assertEqual({row["request_id"] for row in rows}, {"newbie-1", "correction-1"})
+        self.assertEqual({row["status"] for row in rows}, {"pending", "approved"})
+
+    def test_recent_activity_derives_from_canonical_requests(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "secret-key")
+        responses = {
+            "pending_requests": [],
+            "newbie_shift_requests": [{
+                "request_id": "newbie-1", "request_type": "initial_newbie_shift",
+                "request_status": "approved", "source_session_id": "session-1",
+                "updated_at": "2026-08-01T00:00:00Z",
+            }],
+            "candidate_corrections": [],
+        }
+        provider._request = MagicMock(side_effect=lambda path, **_kwargs: responses[path])
+        rows = provider.list_resource("recent_activity")
+        self.assertEqual(rows[0]["event_id"], "newbie-1")
+        self.assertEqual(rows[0]["source_entity_id"], "session-1")
+
+    def test_request_ids_are_scoped_to_request_category(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "secret-key")
+        responses = {
+            "pending_requests": [],
+            "newbie_shift_requests": [{
+                "id": "newbie-id", "request_id": "shared", "request_status": "pending",
+            }],
+            "candidate_corrections": [{
+                "id": "correction-id", "request_id": "shared", "status": "approved",
+            }],
+        }
+        provider._request = MagicMock(side_effect=lambda path, **_kwargs: responses[path])
+        rows = provider.list_resource("pending_requests")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            {row["category"] for row in rows},
+            {"newbie-shift-requests", "candidate-information-correction-requests"},
+        )
 
 
 if __name__ == "__main__":

@@ -113,12 +113,17 @@ The failed shadow-read audit found that the importer bypassed the RPC added by
 `20260803000000_mts_sam_lineage_rpc.sql`, only 6 of 14 required logical domains were
 compared, and readiness could therefore return a false positive. The corrective
 checkpoint routes every normal lineage insertion through that RPC, implements all
-14 comparison contracts, and requires current comparison evidence for readiness.
+14 comparison contracts, rejects direct lineage table upserts in the provider, and
+requires current comparison evidence for readiness. Current evidence must identify the
+expected project, use the RPC-only lineage capability, and carry a fresh complete
+single-fetch Sheets snapshot contract.
 
 Forward migration `20260804015610_harden_mts_sam_lineage_rpc_outcomes.sql` corrects
-the original RPC's concurrent outcome ambiguity without rewriting the applied
-migration. Its hosted deployment and local/remote parity must be recorded after
-focused validation.
+the original RPC's concurrent outcome ambiguity without rewriting prior migrations.
+It is applied to the linked MTS-SAM project, local/remote history agrees, the hosted
+RPC returns one of the four documented outcomes, and the pre/post lineage count is
+264. The same forward migration replaces the two status/history views while
+preserving their existing column prefixes for PostgreSQL compatibility.
 The archived migration `20260614083525` was not applied and is not in the active chain.
 
 Shadow data was imported in two production runs (idempotency confirmed, zero duplicate canonical rows)
@@ -132,7 +137,8 @@ Verified canonical counts:
 - headset_catalog: 96
 - headset_reviews: 11 (10 historical standalone, 1 with unresolved `source_session_id` link)
 - supervisor_transfers: 14
-- newbie_shift_requests: 9 (13 staged, 4 exact duplicates deduplicated)
+- newbie_shift_requests: 9 (14 current source rows; four distinct requests were
+  historically misclassified as duplicates and one additional row postdates import)
 - candidate_corrections: 7
 - notifications: 4
 
@@ -166,6 +172,14 @@ implemented.
 
 Exact current test totals are recorded only from the final validation run; previous
 copied totals are not treated as current evidence.
+
+The current importer now keys request tabs by `request_id`, projects candidate and
+session relationships only when the referenced canonical entity exists, and routes
+candidate-deletion requests into the existing generic `pending_requests` table.
+No synchronization was executed at this checkpoint. The aggregate incremental dry
+run is planning-only and fails closed for execution until exact target accounting,
+lineage reconciliation, and deterministic rollback are implemented and separately
+approved.
 
 For complete shadow-read readiness details, deployment audit, and activation criteria
 see `docs/supabase-shadow-read-readiness.md`.

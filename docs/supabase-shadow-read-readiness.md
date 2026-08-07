@@ -109,7 +109,9 @@ New reviews created via the SAM UI after cutover will have explicit `session_id`
 `safe_upsert_lineage` now calls the narrow backend provider method
 `insert_lineage_if_absent()`, which invokes the fixed PostgREST route
 `/rest/v1/rpc/insert_lineage_if_absent` in schema `mts_sam`. Direct table upsert is
-not a normal lineage path and there is no client-side precheck correctness gate.
+rejected by the provider, is not a normal lineage path, and there is no client-side
+precheck correctness gate. The provider advertises the explicit `rpc_only` lineage
+capability; comparison and production verification both fail closed without it.
 
 The original `20260803000000` RPC could emit an extra race outcome or surface an
 entity-side unique violation. Forward migration `20260804015610` replaces the
@@ -235,6 +237,9 @@ The `compare-shadow` CLI command
 - **Never silently swallows** per-domain exceptions — all errors captured in domain result
 - Exits nonzero for any missing domain, domain error, incomplete run, quota exhaustion,
   or unexplained required-domain difference
+- Requires the expected hosted project reference, the RPC-only lineage capability, and
+  a same-process snapshot timestamp no more than 15 minutes old with a 64-character
+  aggregate checksum, exactly one batch fetch, and no snapshot errors
 
 ### Required logical domains
 
@@ -251,8 +256,8 @@ The `compare-shadow` CLI command
 | `supervisor_transfers` | Pending Sup Transfers | supervisor_transfers |
 | `newbie_shift_requests` | newbie-shift request projection | newbie_shift_requests |
 | `candidate_corrections` | correction request projection | candidate_corrections |
-| `pending_requests` | aggregate request projection | pending_requests_view |
-| `recent_activity` | deterministic request activity projection | recent_activity_view |
+| `pending_requests` | aggregate request projection | logical union of generic, Newbie Shift, and correction request tables |
+| `recent_activity` | deterministic request activity projection | activity derived from the same canonical request union |
 | `notifications` | sam-notifications | notifications |
 
 Every domain emits identity, value, status, relationship, attempt, duplicate,
@@ -304,7 +309,35 @@ Before activating mapped-domain shadow reads, all of the following must be true:
 - [x] Shadow mode disabled in production environment (`MTS_SHADOW_COMPARE` not set or false)
 - [x] Dual writes disabled (`MTS_DUAL_WRITE_ENABLED` not set or false)
 - [x] Provider remains `sheets` (`MTS_DATA_PROVIDER=sheets`)
-- [ ] Forward correction migration (`20260804015610`) applied and local/remote parity verified
+- [x] Forward correction migration (`20260804015610`) applied and local/remote parity verified
+
+### 2026-08-06 live correction checkpoint
+
+The linked project is `xyfhikikddcqcmzbdvbj`; local and remote migration history
+agree through `20260804015610`. Deployment preserved all 264 lineage rows, and an
+existing exact mapping returned `already_exists_same_mapping` through the hosted
+RPC. The corrected status/history views removed all final-attempt mismatches and
+reduced unexplained differences from 296 to 67.
+
+The fresh single-fetch Sheet snapshot had no fetch errors or retries. Readiness
+remains `not_ready`: source changes after the last import include four candidate
+sessions (and their eight projected attempts), four candidates, one supervisor
+transfer, one headset review, one Newbie Shift request, and two status changes.
+Five Newbie Shift requests are absent canonically because four distinct requests
+were previously misclassified as duplicates and one is new. Two headset catalog
+rows lack canonical lineage and timestamps, so their age remains unresolved.
+Candidate-correction relationships now match all seven canonical rows. Request
+identity is scoped by source tab, so the one cross-tab request-ID collision remains
+two distinct records; all 16 canonical pending/activity records match exactly.
+Canonical synchronization is still required for eight missing Newbie Shift and
+candidate-deletion request records.
+
+The aggregate-only incremental dry run considered 367 rows and reported 262 new,
+84 changed, and 21 unchanged. That broad delta is not approved for execution: the
+identity correction changes historical lineage keys, and the existing command does
+not yet provide deterministic per-target accounting and rollback. Its non-dry-run
+path fails closed. A separate, reviewed synchronization plan and explicit approval
+are required.
 
 **A separate explicit prompt is required to activate shadow reads** after this checkpoint
 is reviewed and the above criteria are verified live.

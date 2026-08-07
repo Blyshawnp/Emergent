@@ -7,6 +7,7 @@ Run from the backend/ directory:
 """
 from __future__ import annotations
 
+import datetime
 import os
 import sys
 import unittest
@@ -38,6 +39,7 @@ def _make_provider(url="https://xyfhikikddcqcmzbdvbj.supabase.co"):
     p = MagicMock()
     p._url = url
     p._key = "test-service-role-key-longer-than-20-chars"
+    p.lineage_write_mode = "rpc_only"
     # Default: every _request returns an empty list (table exists, no rows)
     p._request.return_value = []
     return p
@@ -214,6 +216,20 @@ class VerifyProductionHealthTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("env_dual_write", result["errors"])
 
+    def test_shadow_mode_enabled(self):
+        p = _healthy_provider()
+        with patch.dict(os.environ, {"MTS_SHADOW_COMPARE": "true"}):
+            result = verify_production_health(p, comparison_result=_healthy_comparison())
+        self.assertFalse(result["shadow_read_mapped_domains_ready"])
+        self.assertIn("env_shadow_mode", result["errors"])
+
+    def test_rpc_method_without_rpc_only_provider_contract_is_rejected(self):
+        p = _healthy_provider()
+        p.lineage_write_mode = "table_upsert"
+        result = verify_production_health(p, comparison_result=_healthy_comparison())
+        self.assertFalse(result["shadow_read_mapped_domains_ready"])
+        self.assertIn("lineage_rpc_provider_method", result["errors"])
+
     def test_source_accounting_mismatch(self):
         """Reconciliation parts don't sum to source count → ERROR."""
         p = _make_provider()
@@ -338,12 +354,21 @@ class CompareShadowProviderTests(unittest.TestCase):
 
     def _make_sheets(self, rows_by_resource=None):
         sheets = MagicMock()
+        sheets.snapshot_metadata = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "checksum": "a" * 64,
+            "fetch_count": 1,
+            "retry_count": 0,
+            "errors": {},
+        }
         rows_by_resource = rows_by_resource or {}
         sheets.list_resource.side_effect = lambda resource, limit=5000: rows_by_resource.get(resource, [])
         return sheets
 
     def _make_supabase(self, rows_by_resource=None):
         sup = MagicMock()
+        sup._url = "https://xyfhikikddcqcmzbdvbj.supabase.co"
+        sup.lineage_write_mode = "rpc_only"
         rows_by_resource = rows_by_resource or {}
         sup.list_resource.side_effect = lambda resource, limit=5000: rows_by_resource.get(resource, [])
         return sup
@@ -444,6 +469,51 @@ class CompareShadowProviderTests(unittest.TestCase):
         result = compare_shadow_provider(sheets, sup)
         self.assertEqual(result["overall_readiness"], "ready")
 
+    def test_rpc_method_without_rpc_only_contract_cannot_return_ready(self):
+        sheets = self._make_sheets()
+        sup = self._make_supabase()
+        sup.lineage_write_mode = "table_upsert"
+        result = compare_shadow_provider(sheets, sup)
+        self.assertFalse(result["lineage_rpc_path_verified"])
+        self.assertIn("lineage_rpc_path_inactive", result["invariant_errors"])
+        self.assertNotEqual(result["overall_readiness"], "ready")
+
+    def test_stale_snapshot_cannot_return_ready(self):
+        sheets = self._make_sheets()
+        sheets.snapshot_metadata["timestamp"] = "2020-01-01T00:00:00+00:00"
+        result = compare_shadow_provider(sheets, self._make_supabase())
+        self.assertIn("snapshot_contract_incomplete", result["invariant_errors"])
+        self.assertFalse(result["completed"])
+        self.assertNotEqual(result["overall_readiness"], "ready")
+
+    def test_absent_lazy_boolean_matches_explicit_false(self):
+        left = _domain_row("authoritative_candidate_status")
+        right = dict(left)
+        left.pop("archived")
+        left.pop("final_attempt")
+        right["archived"] = False
+        right["final_attempt"] = False
+        rows = {"authoritative_candidate_status": [left]}
+        sup_rows = {"authoritative_candidate_status": [right]}
+        result = compare_shadow_provider(self._make_sheets(rows), self._make_supabase(sup_rows))
+        item = result["categories"]["authoritative_candidate_status"]
+        self.assertEqual(item["status_mismatch_count"], 0)
+        self.assertEqual(item["attempt_mismatch_count"], 0)
+
+    def test_status_normalization_only_collapses_equivalent_business_labels(self):
+        rows = {"authoritative_candidate_status": [{
+            "session_id": "s-1", "authoritative_status": "Pass",
+        }]}
+        sup_rows = {"authoritative_candidate_status": [{
+            "session_id": "s-1", "authoritative_status": "RESUMED-PASS",
+        }]}
+        result = compare_shadow_provider(self._make_sheets(rows), self._make_supabase(sup_rows))
+        self.assertEqual(result["categories"]["authoritative_candidate_status"]["status_mismatch_count"], 0)
+
+        sup_rows["authoritative_candidate_status"][0]["authoritative_status"] = "NC/NS"
+        result = compare_shadow_provider(self._make_sheets(rows), self._make_supabase(sup_rows))
+        self.assertEqual(result["categories"]["authoritative_candidate_status"]["status_mismatch_count"], 1)
+
     def test_overall_readiness_not_ready(self):
         """At least one unexplained difference → overall_readiness == 'not_ready'."""
         sheets_rows = [{"session_id": "s-1"}, {"session_id": "s-2"}]
@@ -464,7 +534,26 @@ class CompareShadowProviderTests(unittest.TestCase):
         sup = self._make_supabase({"headset_reviews": sup_reviews})
         result = compare_shadow_provider(sheets, sup)
         cat = result["categories"]["headset_reviews"]
-        self.assertGreaterEqual(cat["expected_difference_count"], 0)  # expected >= 0
+        self.assertEqual(cat["expected_difference_count"], 1)
+        self.assertEqual(cat["unexplained_difference_count"], 0)
+
+    def test_historical_standalone_headset_status_mismatch_is_expected(self):
+        sheets_review = {
+            "review_id": "r-standalone", "status": "pending",
+            "session_id": None, "source_session_id": None,
+        }
+        supabase_review = {
+            **sheets_review, "status": "approved",
+        }
+        result = compare_shadow_provider(
+            self._make_sheets({"headset_reviews": [sheets_review]}),
+            self._make_supabase({"headset_reviews": [supabase_review]}),
+        )
+        cat = result["categories"]["headset_reviews"]
+        self.assertEqual(cat["status_mismatch_count"], 1)
+        self.assertEqual(cat["expected_difference_count"], 1)
+        self.assertEqual(cat["unexplained_difference_count"], 0)
+        self.assertEqual(cat["readiness"], "ready")
 
     def test_unresolved_headset_session_is_visible_expected_relationship_mismatch(self):
         review = {
@@ -481,6 +570,22 @@ class CompareShadowProviderTests(unittest.TestCase):
         self.assertEqual(cat["expected_difference_count"], 1)
         self.assertEqual(cat["unexplained_difference_count"], 0)
         self.assertEqual(cat["readiness"], "ready")
+
+    def test_unresolved_headset_status_mismatch_is_also_historical(self):
+        sheets_review = {
+            "review_id": "r-unresolved", "status": "pending",
+            "session_id": None, "source_session_id": "missing-session",
+        }
+        supabase_review = {**sheets_review, "status": "approved"}
+        result = compare_shadow_provider(
+            self._make_sheets({"headset_reviews": [sheets_review]}),
+            self._make_supabase({"headset_reviews": [supabase_review]}),
+        )
+        cat = result["categories"]["headset_reviews"]
+        self.assertEqual(cat["status_mismatch_count"], 1)
+        self.assertEqual(cat["relationship_mismatch_count"], 1)
+        self.assertEqual(cat["expected_difference_count"], 1)
+        self.assertEqual(cat["unexplained_difference_count"], 0)
 
     def test_result_has_required_keys(self):
         """Result always contains required top-level keys."""
@@ -689,6 +794,24 @@ class SheetsSnapshotProviderTests(unittest.TestCase):
         provider = SheetsDataProvider(client, max_retries=1, base_delay=0)
         with self.assertRaisesRegex(RuntimeError, "sheets_quota_exhausted"):
             provider.list_resource("candidate_sessions", limit=5000)
+
+    def test_correction_relationships_only_project_existing_canonical_targets(self):
+        provider = SheetsDataProvider(MagicMock())
+        provider._snapshot = {}
+        provider._tabs = {
+            "Candidate Sessions": [{"session_id": "session-1", "candidate_name": "Candidate One"}],
+            "newbie-shift-requests": [],
+            "candidate-deletion-requests": [],
+            "candidate-information-correction-requests": [
+                {"request_id": "r-1", "source_session_id": "session-1", "candidate_name": "Candidate One"},
+                {"request_id": "r-2", "source_session_id": "missing", "candidate_name": "Missing Candidate"},
+            ],
+        }
+        rows = provider.list_resource("candidate_corrections", limit=5000)
+        self.assertTrue(rows[0]["canonical_session_id"])
+        self.assertTrue(rows[0]["candidate_id"])
+        self.assertEqual(rows[1]["canonical_session_id"], "")
+        self.assertEqual(rows[1]["candidate_id"], "")
 
 
 class CliExitCodeTests(unittest.TestCase):

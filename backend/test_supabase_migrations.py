@@ -50,6 +50,18 @@ class SupabaseMigrationTests(unittest.TestCase):
         self.assertIn("to service_role", sql)
         self.assertIn("lock table mts_sam.data_source_lineage", sql)
 
+    def test_forward_view_replacements_preserve_existing_column_order(self):
+        correction = next(path for path in self.files if "harden_mts_sam_lineage_rpc_outcomes" in path.name)
+        sql = re.sub(r"\s+", " ", correction.read_text(encoding="utf-8").lower())
+        self.assertIn(
+            "select s.id, s.session_id, case ",
+            sql,
+        )
+        self.assertIn(
+            "s.attempt_number, s.current_attempt_number, s.allowed_attempt_count, cs.authoritative_status, s.completed_at,",
+            sql,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

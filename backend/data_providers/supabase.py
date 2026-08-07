@@ -16,6 +16,7 @@ class SupabaseProviderError(RuntimeError):
 
 class SupabaseDataProvider(DataProvider):
     name = "supabase"
+    lineage_write_mode = "rpc_only"
 
     def __init__(self, url: str, service_role_key: str, *, timeout: float = 10.0, retries: int = 2):
         self._url = str(url or "").rstrip("/")
@@ -93,10 +94,12 @@ class SupabaseDataProvider(DataProvider):
         return result
 
     def upsert_rows(self, table: str, rows, *, on_conflict: str, resolution: str = "merge-duplicates"):
+        if table == "data_source_lineage":
+            raise ValueError("Direct lineage table writes are forbidden; use insert_lineage_if_absent")
         ALLOWED_WRITE_TABLES = {
             "import_batches", "import_staging_rows", "import_row_results", "reconciliation_results",
             "app_users", "app_roles", "user_role_assignments", "application_settings", "sync_state",
-            "audit_events", "data_source_lineage", "candidates", "candidate_sessions", "session_attempts",
+            "audit_events", "candidates", "candidate_sessions", "session_attempts",
             "candidate_status_actions", "candidate_corrections", "extra_attempt_grants", "supervisor_transfers",
             "newbie_shift_requests", "newbie_shift_reschedules", "headset_catalog", "headset_reviews",
             "headset_review_actions", "pending_requests", "notifications", "notification_deliveries",
@@ -106,8 +109,6 @@ class SupabaseDataProvider(DataProvider):
             raise ValueError(f"Unsupported Supabase write table: {table}")
         if not rows:
             return []
-        if table == "data_source_lineage":
-            resolution = "ignore-duplicates"
         result = self._request(
             table,
             query={"on_conflict": on_conflict},
@@ -161,6 +162,20 @@ class SupabaseDataProvider(DataProvider):
     def list_resource(self, resource, *, filters=None, limit=1000, offset=0):
         if str(resource) == "candidates" and not filters:
             return self._list_candidate_projection(limit=limit, offset=offset)
+        if str(resource) == "pending_requests" and not filters:
+            return self._list_request_projection(limit=limit, offset=offset)
+        if str(resource) == "recent_activity" and not filters:
+            requests = self._list_request_projection(limit=5000, offset=0)
+            projected = [{
+                **row,
+                "event_id": row.get("request_id"),
+                "event_key": row.get("request_id"),
+                "event_type": row.get("request_type"),
+                "occurred_at": row.get("updated_at") or row.get("created_at"),
+                "source_entity_id": row.get("source_session_id"),
+            } for row in requests]
+            projected.sort(key=lambda row: str(row.get("occurred_at") or ""), reverse=True)
+            return projected[offset:offset + limit]
         table = RESOURCE_TABLES.get(str(resource))
         if not table:
             raise ValueError(f"Unsupported canonical resource: {resource}")
@@ -247,3 +262,50 @@ class SupabaseDataProvider(DataProvider):
                 "lineage_identity": lineage_by_candidate.get(candidate_id, ""),
             })
         return projected[offset:offset + limit]
+
+    def _list_request_projection(self, *, limit, offset):
+        generic = self._cached_read("pending_requests", {"select": "*", "limit": 5000})
+        newbie = self._cached_read("newbie_shift_requests", {"select": "*", "limit": 5000})
+        corrections = self._cached_read("candidate_corrections", {"select": "*", "limit": 5000})
+        projected = []
+        for row in generic:
+            request_type = row.get("request_type") or "candidate_deletion"
+            category = row.get("category")
+            if not category:
+                category = {
+                    "candidate_deletion": "candidate-deletion-requests",
+                    "candidate_information_correction": "candidate-information-correction-requests",
+                    "initial_newbie_shift": "newbie-shift-requests",
+                }.get(str(request_type).strip().casefold(), request_type)
+            projected.append({
+                **row,
+                "request_type": request_type,
+                "category": category,
+                "request_status": row.get("status"),
+            })
+        for row in newbie:
+            projected.append({
+                **row,
+                "request_type": row.get("request_type") or "initial_newbie_shift",
+                "category": "newbie-shift-requests",
+                "status": row.get("request_status"),
+            })
+        for row in corrections:
+            projected.append({
+                **row,
+                "request_type": row.get("request_type") or "candidate_information_correction",
+                "category": "candidate-information-correction-requests",
+                "request_status": row.get("status"),
+            })
+        by_request = {}
+        for row in projected:
+            request_id = str(row.get("request_id") or "").strip()
+            category = str(row.get("category") or "").strip()
+            if request_id and category:
+                by_request[(category, request_id)] = row
+        ordered = sorted(
+            by_request.values(),
+            key=lambda row: str(row.get("updated_at") or row.get("decision_at") or row.get("created_at") or ""),
+            reverse=True,
+        )
+        return ordered[offset:offset + limit]
