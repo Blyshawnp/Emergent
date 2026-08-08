@@ -181,5 +181,21 @@ run is planning-only and fails closed for execution until exact target accountin
 lineage reconciliation, and deterministic rollback are implemented and separately
 approved.
 
+### 2026-08-07 incremental reconciliation planning checkpoint
+
+`sync-incremental` now defaults to a one-snapshot, aggregate-only, zero-write plan.
+The former 367-row `262 new / 84 changed / 21 unchanged` lineage counter is retired
+from the CLI because it broadly reinterpreted historical source keys and could not
+prove target ownership or rollback.
+
+The fresh run still found 67 logical comparison differences, but the canonical plan
+is narrow: 22 inserts and one allowlisted session update. Four candidate identities,
+their dependent sessions, and two timestamp-less catalog rows remain blocked. The run
+created no import batch or lineage and verified all hosted counts unchanged.
+
+Unapplied forward migration `20260807000000_mts_sam_incremental_reconciliation.sql`
+adds private batch, plan-item, and narrow before-image accounting required before any
+future execution approval. See `docs/supabase-incremental-reconciliation-plan.md`.
+
 For complete shadow-read readiness details, deployment audit, and activation criteria
 see `docs/supabase-shadow-read-readiness.md`.

@@ -217,6 +217,8 @@ class SheetsDataProvider(DataProvider):
             ).hexdigest(),
             "fetch_count": len(SNAPSHOT_ACTIONS),
             "retry_count": retry_count,
+            "tab_counts": {title: details["row_count"] for title, details in safe_manifest.items()},
+            "source_row_count": sum(details["row_count"] for details in safe_manifest.values()),
             "errors": dict(self._snapshot_errors),
         }
 

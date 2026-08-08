@@ -342,6 +342,26 @@ are required.
 **A separate explicit prompt is required to activate shadow reads** after this checkpoint
 is reviewed and the above criteria are verified live.
 
+### 2026-08-07 reconciliation-planner checkpoint
+
+A fresh one-fetch, zero-retry comparison reproduced the same 67 unexplained logical
+differences. The replacement incremental planner reduced those differences to 22
+canonical inserts and one narrow session update, while separately reporting derived
+effects. It blocked four candidates because no approved non-name candidate identity is
+available, blocked their dependent sessions, and kept both timestamp-less headset rows
+ambiguous. Ten historical standalone reviews and one historical unresolved review
+relationship remain untouched.
+
+Before/after hosted counts were identical, including 3 import batches and 264 lineage
+rows. No synchronization, batch creation, lineage mutation, status write, shadow
+activation, dual write, provider switch, or migration application occurred.
+
+Exact rollback accounting requires unapplied forward migration
+`20260807000000_mts_sam_incremental_reconciliation.sql`. Until it is separately
+reviewed and deployed—and the identity/provenance blockers are resolved—the execution
+path remains hard-disabled. Details are in
+`docs/supabase-incremental-reconciliation-plan.md`.
+
 ---
 
 ## Full cutover criteria (future work)

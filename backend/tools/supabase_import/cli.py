@@ -31,9 +31,14 @@ from tools.supabase_import.core import (  # noqa: E402
     transform_and_load_batch,
     reconcile_batch,
     rollback_batch,
-    sync_incremental_data,
     compare_shadow_provider,
     verify_production_health,
+)
+from tools.supabase_import.reconciliation import (  # noqa: E402
+    generate_reconciliation_plan,
+    hosted_count_snapshot,
+    public_plan,
+    validate_execution_request,
 )
 
 
@@ -326,11 +331,50 @@ def rollback_batch_cmd(args):
 
 
 def sync_incremental_cmd(args):
-    sheets = _sheets_client()
+    sheets = SheetsDataProvider(_sheets_client())
     provider = _supabase_client()
-    res = sync_incremental_data(sheets, provider, dry_run=args.dry_run)
-    print(json.dumps(res, indent=2))
-    return 0
+    if args.execute:
+        if not args.plan_file:
+            print(json.dumps({"status": "blocked", "errors": ["plan_file_required"]}, indent=2))
+            return 2
+        plan_path = Path(args.plan_file).resolve()
+        try:
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            print(json.dumps({"status": "blocked", "errors": ["plan_file_invalid"]}, indent=2))
+            return 2
+        errors = validate_execution_request(
+            plan,
+            project_ref=args.project_ref,
+            plan_checksum=args.plan_checksum,
+            confirmation=args.confirmation,
+        )
+        # No write implementation is reachable in this checkpoint. The forward
+        # reconciliation schema is intentionally unapplied and is a hard guard.
+        print(json.dumps({"status": "blocked", "mode": "execute", "errors": errors}, indent=2))
+        return 2
+
+    counts_before = hosted_count_snapshot(provider)
+    comparison = compare_shadow_provider(sheets, provider, diagnostic_mode=False)
+    plan = generate_reconciliation_plan(
+        sheets, provider, comparison_result=comparison,
+    )
+    counts_after = hosted_count_snapshot(provider)
+    if counts_before != counts_after:
+        raise RuntimeError("critical_no_write_verification_failed")
+    output = public_plan(plan, diagnostic=args.diagnostic)
+    output["dry_run"] = True
+    output["hosted_counts_before"] = counts_before
+    output["hosted_counts_after"] = counts_after
+    output["hosted_counts_unchanged"] = True
+    if args.output_plan:
+        safe_plan = public_plan(plan, diagnostic=True)
+        Path(args.output_plan).write_text(
+            json.dumps(safe_plan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        output["safe_plan_written"] = True
+    print(json.dumps(output, indent=2))
+    return 1 if plan.get("blockers") else 0
 
 
 def compare_shadow_cmd(args):
@@ -422,8 +466,19 @@ def main(argv=None):
     rollback_parser.set_defaults(func=rollback_batch_cmd)
 
     # sync-incremental
-    sync_parser = subparsers.add_parser("sync-incremental")
-    sync_parser.add_argument("--dry-run", action="store_true")
+    sync_parser = subparsers.add_parser(
+        "sync-incremental",
+        help="Build a one-snapshot exact reconciliation plan; defaults to zero-write dry-run",
+    )
+    mode = sync_parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--execute", action="store_true")
+    sync_parser.add_argument("--diagnostic", action="store_true")
+    sync_parser.add_argument("--output-plan")
+    sync_parser.add_argument("--plan-file")
+    sync_parser.add_argument("--project-ref")
+    sync_parser.add_argument("--plan-checksum")
+    sync_parser.add_argument("--confirmation")
     sync_parser.set_defaults(func=sync_incremental_cmd)
 
     # compare-shadow
