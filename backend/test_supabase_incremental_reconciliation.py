@@ -10,7 +10,6 @@ if str(BACKEND_DIR) not in sys.path:
 from tools.supabase_import.reconciliation import (
     EXECUTION_ACK_ENV,
     EXECUTION_ACK_VALUE,
-    EXECUTION_UNAVAILABLE_ERROR,
     EXPECTED_SUPABASE_PROJECT_REF,
     generate_reconciliation_plan,
     hosted_count_snapshot,
@@ -436,7 +435,7 @@ class ReconciliationPlannerTests(unittest.TestCase):
         self.assertEqual(public["blocker_counts"]["candidates:durable_uuid_history_identity_unavailable"], 1)
 
     def test_hosted_count_snapshot_is_read_only(self):
-        provider = FakeSupabase(count_rows={"candidates": 2, "import_batches": 3})
+        provider = FakeSupabase(count_rows={"candidates": 2, "import_batches": 3}, infrastructure_ready=True)
         counts = hosted_count_snapshot(provider)
         self.assertEqual(counts["candidates"], 2)
         self.assertEqual(counts["import_batches"], 3)
@@ -445,10 +444,8 @@ class ReconciliationPlannerTests(unittest.TestCase):
     def test_applied_reconciliation_infrastructure_clears_migration_guard(self):
         plan = build_plan(infrastructure_ready=True)
         self.assertFalse(plan["rollback"]["migration_required"])
-        self.assertEqual(plan["status"], "blocked")
-        self.assertEqual(
-            plan["blockers"][-1]["reason"], EXECUTION_UNAVAILABLE_ERROR,
-        )
+        self.assertEqual(plan["status"], "ready")
+        self.assertTrue(plan["execution_engine_implemented"])
 
 
 class ExecutionGuardTests(unittest.TestCase):
@@ -474,7 +471,7 @@ class ExecutionGuardTests(unittest.TestCase):
         return validate_execution_request(
             plan, project_ref=EXPECTED_SUPABASE_PROJECT_REF,
             plan_checksum=plan["plan_checksum"],
-            confirmation=f"EXECUTE:{EXPECTED_SUPABASE_PROJECT_REF}:{plan['plan_checksum']}",
+            snapshot_checksum=plan["source_snapshot_checksum"], acknowledged=True,
             environ=env or {EXECUTION_ACK_ENV: EXECUTION_ACK_VALUE, "MTS_DATA_PROVIDER": "sheets"},
             now=NOW,
         )
@@ -482,13 +479,12 @@ class ExecutionGuardTests(unittest.TestCase):
     def test_execution_is_blocked_until_forward_migration_is_applied(self):
         self.assertEqual(self.valid_args(self.ready_plan()), [
             "reconciliation_migration_not_applied",
-            EXECUTION_UNAVAILABLE_ERROR,
         ])
 
-    def test_execution_remains_blocked_after_forward_migration_is_applied(self):
+    def test_execution_guards_clear_after_forward_migration_is_applied(self):
         plan = self.ready_plan()
         plan["rollback"]["migration_required"] = False
-        self.assertEqual(self.valid_args(plan), [EXECUTION_UNAVAILABLE_ERROR])
+        self.assertEqual(self.valid_args(plan), [])
 
     def test_expired_plan_is_rejected(self):
         plan = self.ready_plan()
@@ -499,7 +495,7 @@ class ExecutionGuardTests(unittest.TestCase):
         plan = self.ready_plan()
         errors = validate_execution_request(
             plan, project_ref=EXPECTED_SUPABASE_PROJECT_REF, plan_checksum="wrong",
-            confirmation="wrong", environ={}, now=NOW,
+            snapshot_checksum="wrong", acknowledged=False, environ={}, now=NOW,
         )
         self.assertIn("plan_checksum_mismatch", errors)
 
@@ -510,7 +506,8 @@ class ExecutionGuardTests(unittest.TestCase):
     def test_wrong_project_is_rejected(self):
         plan = self.ready_plan()
         errors = validate_execution_request(
-            plan, project_ref="wrong", plan_checksum=plan["plan_checksum"], confirmation="wrong",
+            plan, project_ref="wrong", plan_checksum=plan["plan_checksum"],
+            snapshot_checksum=plan["source_snapshot_checksum"], acknowledged=True,
             environ={EXECUTION_ACK_ENV: EXECUTION_ACK_VALUE}, now=NOW,
         )
         self.assertIn("project_ref_mismatch", errors)

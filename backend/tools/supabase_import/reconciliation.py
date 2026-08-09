@@ -20,7 +20,7 @@ from .core import (
 PLAN_TTL_SECONDS = 15 * 60
 EXECUTION_ACK_ENV = "MTS_SUPABASE_RECONCILIATION_EXECUTION_ACK"
 EXECUTION_ACK_VALUE = "I_UNDERSTAND_THIS_WRITES_HOSTED_DATA"
-EXECUTION_UNAVAILABLE_ERROR = "incremental_execution_not_implemented"
+EXECUTION_ENGINE_IMPLEMENTED = True
 
 CLASSIFICATIONS = {
     "insert_new", "update_existing", "already_current", "expected_historical",
@@ -42,7 +42,8 @@ HOSTED_COUNT_TABLES = (
     "import_batches", "candidates", "candidate_sessions", "session_attempts",
     "data_source_lineage", "headset_catalog", "headset_reviews",
     "supervisor_transfers", "newbie_shift_requests", "candidate_corrections",
-    "pending_requests",
+    "pending_requests", "reconciliation_batches", "reconciliation_plan_items",
+    "reconciliation_before_images",
 )
 
 RECONCILIATION_TABLES = (
@@ -247,6 +248,24 @@ def reconciliation_infrastructure_ready(provider) -> bool:
     try:
         for table in RECONCILIATION_TABLES:
             rows = provider._request(table, query={"select": "id", "limit": 1})
+            if not isinstance(rows, list):
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def reconciliation_execution_runtime_ready(provider) -> bool:
+    """Read-only probe for the forward execution migration contract."""
+    try:
+        probes = (
+            ("reconciliation_batches", "id,planned_lineage_count,expected_ending_counts,actor_metadata"),
+            ("reconciliation_plan_items", "id,canonical_entity_id,lineage_required,started_at,completed_at"),
+            ("candidates", "id,created_by_reconciliation_batch_id"),
+            ("data_source_lineage", "id,reconciliation_batch_id,reconciliation_plan_item_id"),
+        )
+        for table, fields in probes:
+            rows = provider._request(table, query={"select": fields, "limit": 1})
             if not isinstance(rows, list):
                 return False
     except Exception:
@@ -499,6 +518,11 @@ def _candidate_items(source_rows, target_rows, target_sessions, by_source, by_en
                 1 for attempt in source_attempts
                 if str(attempt.get("source_session_id") or "") == session_id
             ),
+            "canonical_entity_id": canonical_id or None,
+            "source_tab": "Candidate Sessions",
+            "source_row_key": _candidate_lineage_source_key(session_id),
+            "operation": "insert" if classification == "insert_new" else "none",
+            "lineage_required": classification == "insert_new",
         })
     return items, resolutions
 
@@ -557,6 +581,14 @@ def generate_reconciliation_plan(
         supabase_provider, source_by_domain["headset_catalog"],
     )
     private_before_images = []
+    private_source_rows = {}
+    private_target_preconditions = {}
+    for source_session in source_by_domain["candidate_sessions"]:
+        session_id = str(source_session.get("session_id") or "").strip()
+        resolution = candidate_resolutions.get(session_id) or {}
+        safe_hash = resolution.get("safe_identity_hash")
+        if safe_hash:
+            private_source_rows[safe_hash] = dict(source_session)
 
     for domain in CANONICAL_DOMAINS:
         if domain == "candidates":
@@ -577,6 +609,7 @@ def generate_reconciliation_plan(
         for identity in sorted(source_index):
             source = source_index[identity]
             safe_hash = _safe_identity_hash(domain, identity)
+            private_source_rows[safe_hash] = dict(source)
             dependencies = []
             parent = str(_first(source, rule.parent_identity_aliases) or "").strip()
             if parent:
@@ -642,6 +675,11 @@ def generate_reconciliation_plan(
                     "changed_fields": [], "dependencies": dependencies,
                     "lineage_outcome": lineage_outcome, "blocking_reason": blocking_reason,
                     "derived_effects": list(rule.derived_effects),
+                    "canonical_entity_id": entity_id,
+                    "source_tab": rule.source_tab,
+                    "source_row_key": _source_row_key(domain, identity),
+                    "operation": "insert" if classification == "insert_new" else "none",
+                    "lineage_required": classification == "insert_new" and rule.lineage,
                 }
                 if domain == "headset_catalog":
                     item["provenance_classification"] = (
@@ -700,6 +738,11 @@ def generate_reconciliation_plan(
                 classification = "conflict"
                 blocking_reason = lineage_outcome
             if classification == "update_existing":
+                private_target_preconditions[safe_hash] = {
+                    key: target.get(key) for key in (
+                        "id", "session_id", "candidate_id", *RULES["candidate_sessions"].update_fields,
+                    )
+                }
                 private_before_images.append({
                     "entity_type": domain,
                     "safe_identity_hash": safe_hash,
@@ -714,6 +757,11 @@ def generate_reconciliation_plan(
                 "changed_fields": mismatches, "dependencies": dependencies,
                 "lineage_outcome": lineage_outcome, "blocking_reason": blocking_reason,
                 "derived_effects": list(rule.derived_effects),
+                "canonical_entity_id": entity_id,
+                "source_tab": rule.source_tab,
+                "source_row_key": _source_row_key(domain, identity),
+                "operation": "update" if classification == "update_existing" else "none",
+                "lineage_required": False,
             }
             if domain == "headset_catalog":
                 item["provenance_classification"] = (
@@ -782,14 +830,13 @@ def generate_reconciliation_plan(
         elif outcome == "unresolved":
             lineage_counts["unresolved"] += 1
 
-    # This checkpoint implements deterministic planning and rollback guards, but
-    # it does not yet contain a plan-bound writer. Never advertise a plan as
-    # executable until that separately reviewed engine exists.
-    blockers.append({
-        "entity_type": "execution",
-        "safe_identity_hash": "0" * 64,
-        "reason": EXECUTION_UNAVAILABLE_ERROR,
-    })
+    runtime_ready = reconciliation_execution_runtime_ready(supabase_provider)
+    if not runtime_ready:
+        blockers.append({
+            "entity_type": "execution",
+            "safe_identity_hash": "0" * 64,
+            "reason": "reconciliation_execution_migration_not_applied",
+        })
 
     safe_items = sorted(items, key=lambda item: (
         item["entity_type"], item["safe_identity_hash"], item["classification"]
@@ -817,6 +864,9 @@ def generate_reconciliation_plan(
         "version": 1,
         "mode": "dry_run",
         "status": "blocked" if blockers else "ready",
+        "execution_engine_implemented": EXECUTION_ENGINE_IMPLEMENTED,
+        "execution_runtime_ready": runtime_ready,
+        "execution_task_guard_enabled": os.environ.get(EXECUTION_ACK_ENV) == EXECUTION_ACK_VALUE,
         "project_ref": project_ref,
         "generated_at": generated.isoformat(),
         "expires_at": expires.isoformat(),
@@ -843,7 +893,7 @@ def generate_reconciliation_plan(
         "created_entity_count": canonical_inserts,
         "rollback": {
             "eligible": not blockers,
-            "migration_required": not reconciliation_infrastructure_ready(supabase_provider),
+            "migration_required": not runtime_ready,
             "delete_order": [
                 "newbie_shift_reschedules", "session_attempts", "supervisor_transfers",
                 "headset_reviews", "newbie_shift_requests", "candidate_corrections",
@@ -854,6 +904,8 @@ def generate_reconciliation_plan(
         "comparison": comparison_summary,
         "items": safe_items,
         "_private_before_images": private_before_images,
+        "_private_source_rows": private_source_rows,
+        "_private_target_preconditions": private_target_preconditions,
     }
 
 
@@ -875,7 +927,8 @@ def public_plan(plan: Mapping[str, Any], *, diagnostic: bool = False) -> dict[st
 
 def validate_execution_request(
     plan: Mapping[str, Any], *, project_ref: str | None, plan_checksum: str | None,
-    confirmation: str | None, environ: Mapping[str, str] | None = None,
+    snapshot_checksum: str | None, acknowledged: bool,
+    environ: Mapping[str, str] | None = None,
     now: datetime.datetime | None = None,
 ) -> list[str]:
     env = environ if environ is not None else os.environ
@@ -891,9 +944,10 @@ def validate_execution_request(
     }) if "items" in plan else None
     if recomputed is None or recomputed != plan.get("plan_checksum"):
         errors.append("plan_content_checksum_mismatch")
-    expected_confirmation = f"EXECUTE:{project_ref}:{plan_checksum}"
-    if confirmation != expected_confirmation:
-        errors.append("confirmation_token_invalid")
+    if not snapshot_checksum or plan.get("source_snapshot_checksum") != snapshot_checksum:
+        errors.append("snapshot_checksum_mismatch")
+    if not acknowledged:
+        errors.append("live_reconciliation_ack_missing")
     if env.get(EXECUTION_ACK_ENV) != EXECUTION_ACK_VALUE:
         errors.append("task_level_execution_ack_missing")
     if env.get("MTS_DATA_PROVIDER", "sheets").strip().casefold() != "sheets":
@@ -916,7 +970,6 @@ def validate_execution_request(
         errors.append("lineage_conflict")
     if (plan.get("rollback") or {}).get("migration_required", True):
         errors.append("reconciliation_migration_not_applied")
-    errors.append(EXECUTION_UNAVAILABLE_ERROR)
     return errors
 
 

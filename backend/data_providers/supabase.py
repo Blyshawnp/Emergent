@@ -87,11 +87,61 @@ class SupabaseDataProvider(DataProvider):
                 "p_source_checksum": row["source_checksum"],
                 "p_import_batch_id": row["import_batch_id"],
                 "p_metadata": dict(row.get("metadata") or {}),
+                "p_reconciliation_batch_id": row.get("reconciliation_batch_id"),
+                "p_reconciliation_plan_item_id": row.get("reconciliation_plan_item_id"),
             },
         )
         if not isinstance(result, dict) or not isinstance(result.get("result"), str):
             raise SupabaseProviderError("Supabase lineage RPC returned a malformed response")
         return result
+
+    def _reconciliation_rpc(self, name: str, body: Mapping[str, Any]):
+        result = self._request(f"rpc/{name}", method="POST", body=dict(body))
+        if not isinstance(result, dict) or not isinstance(result.get("result"), str):
+            raise SupabaseProviderError(f"Supabase {name} RPC returned a malformed response")
+        return result
+
+    def begin_reconciliation_execution(self, plan, items):
+        counts = plan.get("canonical_operations") or {}
+        accounted = {"candidates", "candidate_sessions", "session_attempts", "headset_catalog", "headset_reviews",
+                     "supervisor_transfers", "newbie_shift_requests", "pending_requests"}
+        ending = {name: values.get("expected_ending_count") for name, values in (plan.get("entity_counts") or {}).items()
+                  if name in accounted}
+        return self._reconciliation_rpc("begin_reconciliation_execution", {
+            "p_project_ref": plan["project_ref"], "p_source_snapshot_at": plan.get("source_snapshot_timestamp") or plan["generated_at"],
+            "p_source_snapshot_checksum": plan["source_snapshot_checksum"], "p_plan_checksum": plan["plan_checksum"],
+            "p_plan_expires_at": plan["expires_at"], "p_provider_state": plan["provider_state"],
+            "p_source_rows": plan.get("source_rows_considered") or 0, "p_inserts": counts.get("inserts") or 0,
+            "p_updates": counts.get("updates") or 0, "p_lineage": (plan.get("lineage_operations") or {}).get("expected_new") or 0,
+            "p_expected_ending_counts": ending, "p_actor_metadata": {"client": "supabase_import_cli", "plan_bound": True},
+            "p_items": list(items),
+        })
+
+    def execute_reconciliation_insert(self, batch_id, item_id, payload, expected, lineage):
+        return self._reconciliation_rpc("execute_reconciliation_insert", {
+            "p_batch_id": batch_id, "p_plan_item_id": item_id, "p_payload": dict(payload),
+            "p_expected_values": dict(expected), "p_lineage": dict(lineage),
+        })
+
+    def execute_reconciliation_candidate_session_update(self, batch_id, item_id, precondition, changes, expected):
+        return self._reconciliation_rpc("execute_reconciliation_candidate_session_update", {
+            "p_batch_id": batch_id, "p_plan_item_id": item_id, "p_precondition": dict(precondition),
+            "p_changes": dict(changes), "p_expected_values": dict(expected),
+        })
+
+    def fail_reconciliation_batch(self, batch_id, item_id, error_code):
+        return self._reconciliation_rpc("fail_reconciliation_batch", {
+            "p_batch_id": batch_id, "p_plan_item_id": item_id, "p_error_code": str(error_code)[:120],
+        })
+
+    def finalize_reconciliation_batch(self, batch_id):
+        return self._reconciliation_rpc("finalize_reconciliation_batch", {"p_batch_id": batch_id})
+
+    def preview_reconciliation_rollback(self, batch_id):
+        return self._reconciliation_rpc("preview_reconciliation_rollback", {"p_batch_id": batch_id})
+
+    def rollback_reconciliation_batch(self, batch_id):
+        return self._reconciliation_rpc("rollback_reconciliation_batch", {"p_batch_id": batch_id})
 
     def upsert_rows(self, table: str, rows, *, on_conflict: str, resolution: str = "merge-duplicates"):
         if table == "data_source_lineage":

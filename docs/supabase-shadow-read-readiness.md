@@ -3,6 +3,21 @@
 Status: corrective shadow-read checkpoint in progress; shadow mode **NOT** activated.
 Google Sheets remains the authoritative data provider.
 
+## 2026-08-08 execution-framework checkpoint
+
+The backend now has a plan-bound reconciliation and exact rollback framework, but
+`20260809025333_reconciliation_execution_engine.sql` is intentionally unapplied.
+The runtime probe therefore blocks execution. The CLI ignores serialized payloads and
+reconstructs one fresh Sheets snapshot before checking the exact project, snapshot and
+plan checksums, expiry, provider flags, zero-conflict state, approved 28-insert/one-update
+shape, explicit acknowledgement, and task-level guard.
+
+The migration contains only fixed entity RPC handlers, database locking, exact ownership,
+lineage attribution, before-images, terminal accounting, rollback preview, and child-first
+exact rollback. No hosted reconciliation, rollback, shadow activation, migration push, or
+provider cutover occurred in this checkpoint. Local validation is readiness evidence only;
+hosted transaction behavior remains unverified until the migration is separately applied.
+
 ## Failed-audit finding and correction
 
 The implementation at `5f614af`, followed by test corrections `b9ee7b5` and
@@ -42,8 +57,10 @@ migration deployment must still be recorded before this document may claim readi
 | `20260731080700` | `mts_sam_headset_requests_activity.sql` | Applied ✓ |
 | `20260731080701` | `mts_sam_import_reconciliation.sql` | Applied ✓ |
 | `20260731080702` | `mts_sam_functions_views_security.sql` | Applied ✓ |
-| `20260803000000` | `mts_sam_lineage_rpc.sql` | Added this checkpoint — apply before next import |
-| `20260804015610` | `harden_mts_sam_lineage_rpc_outcomes.sql` | Forward correction; deployment pending validation |
+| `20260803000000` | `mts_sam_lineage_rpc.sql` | Applied |
+| `20260804015610` | `harden_mts_sam_lineage_rpc_outcomes.sql` | Applied and verified |
+| `20260807000000` | `mts_sam_incremental_reconciliation.sql` | Applied planning/audit foundation |
+| `20260809025333` | `reconciliation_execution_engine.sql` | Local forward migration; **NOT APPLIED** |
 | `20260614083525` | *(archived, not in active chain)* | NOT APPLIED ✓ |
 
 ---

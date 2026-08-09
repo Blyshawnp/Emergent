@@ -176,10 +176,19 @@ copied totals are not treated as current evidence.
 The current importer now keys request tabs by `request_id`, projects candidate and
 session relationships only when the referenced canonical entity exists, and routes
 candidate-deletion requests into the existing generic `pending_requests` table.
-No synchronization was executed at this checkpoint. The aggregate incremental dry
-run is planning-only and fails closed for execution until exact target accounting,
-lineage reconciliation, and deterministic rollback are implemented and separately
-approved.
+No synchronization was executed at this checkpoint. Exact target accounting, fixed
+insert/update handlers, lineage attribution, database locking, and deterministic rollback
+are implemented in local forward migration
+`20260809025333_reconciliation_execution_engine.sql`. That migration is intentionally
+unapplied, so execution still fails closed and remains separately approval-gated.
+
+The engine adds exact batch ownership to the eight approved canonical targets, extends
+the sole lineage RPC with reconciliation attribution, and exposes fixed service-role RPCs
+for begin, per-item transactional insert/update, failure/finalization, rollback preview,
+and exact rollback. The CLI never trusts a saved payload: it refetches one Sheets snapshot
+and reproduces the approved plan. Partial batches retain exact ownership and can be
+previewed and rolled back without deleting pre-existing rows or lineage. Hosted behavior
+is not claimed until the migration is applied and integration-tested in a later task.
 
 ### 2026-08-07 incremental reconciliation planning checkpoint
 

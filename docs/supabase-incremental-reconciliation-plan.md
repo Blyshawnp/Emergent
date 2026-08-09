@@ -1,42 +1,14 @@
 # MTS/SAM incremental reconciliation plan
 
-Status: migration-deployed planning checkpoint only. No hosted reconciliation has been executed.
+Status: execution framework implemented; forward execution migration is **not applied**; no hosted reconciliation has run.
 
-Google Sheets remains authoritative. `MTS_DATA_PROVIDER=sheets`,
-`MTS_SHADOW_COMPARE=false`, and `MTS_DUAL_WRITE_ENABLED=false` remain required.
-Apps Script remains active. Shadow-read activation and provider cutover remain blocked.
+Google Sheets remains authoritative. `MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, and `MTS_DUAL_WRITE_ENABLED=false` are mandatory. Shadow-read activation, provider cutover, and Apps Script retirement remain blocked.
 
-## Why the prior incremental counter was unsafe
+## Approved plan shape
 
-The former `sync-incremental` dry run scanned all current Sheet rows and compared
-their `(source_system, source_tab, source_row_key)` lineage checksums. It reported
-367 source rows as 262 new, 84 changed, and 21 unchanged. That was historical
-lineage reinterpretation, not a safe current-drift plan: request identity rules had
-changed, historical staging rows were not bounded by one approved snapshot, and the
-command had no target identity/checksum preconditions, field allowlists, before-images,
-dependency graph, created-by-batch evidence, or update-capable rollback. Its execution
-path already failed closed; it remains unauthorized.
+The approved read-only plan contains exactly 28 inserts, one narrow `candidate_sessions` update, and 28 new lineage mappings:
 
-The replacement planner starts from one cached eight-tab Sheets snapshot, reads the
-current hosted canonical state, and builds operations by canonical domain. It never
-promotes historical staging rows. Derived domains are effects, not separate writes.
-
-## Fresh read-only evidence
-
-The final 2026-08-08 ET read-only run (snapshot `2026-08-09T00:33:40.386615+00:00`)
-used one Sheet batch fetch with zero retries and
-snapshot checksum `ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`.
-Its deterministic plan checksum is
-`c1822d525ee5a724669b469b212a430abb2296a8e13abcbb4b209a0b76b36857`.
-The snapshot contained 226 physical rows across the eight mapped tabs. All 14
-comparisons completed and still reported 67 unexplained differences. Hosted
-counts were identical before and after the run: import batches 3, candidates 54,
-candidate sessions 69, attempts 137, lineage 264, catalog 96, reviews 11, transfers
-14, Newbie Shift requests 9, corrections 7, and generic pending requests 0.
-
-The exact planning projection is:
-
-| Canonical target | Start | Planned inserts | Planned updates | Safe projected end |
+| Canonical target | Start | Insert | Update | Expected end |
 |---|---:|---:|---:|---:|
 | candidates | 54 | 4 | 0 | 58 |
 | candidate_sessions | 69 | 4 | 1 | 73 |
@@ -45,128 +17,74 @@ The exact planning projection is:
 | headset_reviews | 11 | 1 | 0 | 12 |
 | supervisor_transfers | 14 | 1 | 0 | 15 |
 | newbie_shift_requests | 9 | 5 | 0 | 14 |
-| candidate_corrections | 7 | 0 | 0 | 7 |
 | pending_requests (candidate deletion only) | 0 | 3 | 0 | 3 |
-| notifications | 4 | 0 | 0 | 4 |
 
-The plan has 28 canonical inserts and one narrow session update. The original four
-candidate blockers resolve through deterministic, tab-aware UUIDv5 identities derived
-only from each singleton source history UUID. Every source history UUID is unique, each
-candidate grouping is singleton, and the resulting IDs have no canonical or lineage
-collision. Names are used only to reject a possible multi-session grouping; they never
-enter the identity input. The four sessions and their eight attempts retain explicit
-parent dependencies.
+The execution gate rejects any different entity/count shape. Candidate corrections, notifications, and derived projections are not direct writes in this batch.
 
-The two timestamp-less catalog rows classify as `safe_new_insert`. Both normalized
-brand/model identities are unique, absent from both successful staging histories,
-absent from canonical data and lineage, and occur after an exact 96-row historical
-prefix in the current 98-row catalog. Source ordering is corroboration, not the sole
-evidence. The final plan has zero ambiguous, unresolved, or conflicting items.
+## Identity and plan binding
 
-The one canonical session update represents the source status change; its candidate
-status, tracking, and history differences are derived effects. The five Newbie Shift
-inserts preserve five distinct request IDs, including repeated-session relationships.
-They are not collapsed by session ID. Pending requests and recent activity are derived
-from those five canonical rows. The three candidate-deletion requests are the only
-direct `pending_requests` inserts.
+Candidate names are never identities. Candidates resolve through an existing canonical session, existing lineage, a persisted UUID, or a tab-aware UUIDv5 derived from a unique singleton history session UUID. Other identities are the source session ID, source action ID, normalized unique brand/model, review ID, transfer ID, or request ID (scoped by source tab where needed). Physical row numbers are not mutation identities.
 
-## Stable identity contract
+`sync-incremental --execute` never accepts or trusts a serialized plan. It performs one fresh Sheets fetch, rereads current canonical and lineage state, reconstructs private payloads in memory, and recomputes both checksums. Execution requires:
 
-| Entity | Identity |
-|---|---|
-| candidate | linked canonical session, existing lineage, persisted UUID, or tab-aware singleton history UUIDv5; never a name |
-| candidate session | source session ID |
-| attempt | source session ID plus actual nonblank call slot/source action ID |
-| headset catalog | normalized brand + model only when unique and provenance is safe |
-| headset review | review ID |
-| supervisor transfer | transfer/pending request ID |
-| Newbie Shift request | request ID; session ID is a relationship only |
-| correction | request ID |
-| generic pending request | source tab + request ID |
-| recent activity | derived canonical request/event identity |
+- exact project `xyfhikikddcqcmzbdvbj`;
+- the supplied fresh plan and snapshot checksums;
+- an unexpired plan with zero ambiguous, unresolved, conflicting, or blocked items;
+- exactly the approved 28-insert/one-update/28-lineage shape;
+- Sheets primary, shadow false, dual-write false;
+- the explicit CLI acknowledgement and task-level `MTS_SUPABASE_RECONCILIATION_EXECUTION_ACK` guard;
+- the execution migration runtime probe and no active execution/rollback batch.
 
-Physical Sheet row numbers are never primary identities. Default output contains
-only aggregate counts and blocker categories. `--diagnostic` adds SHA-256 identity
-references and stable checksums, but never names, contact fields, notes, or raw Sheet rows.
+```powershell
+.venv\Scripts\python.exe -m backend.tools.supabase_import.cli sync-incremental --execute `
+  --project-ref xyfhikikddcqcmzbdvbj `
+  --plan-checksum <sha256> `
+  --snapshot-checksum <sha256> `
+  --acknowledge-live-reconciliation
+```
 
-## Plan and staleness contract
+Do not run it until the forward migration is separately reviewed, applied, and its runtime contract is verified. The task-level acknowledgement is intentionally not enabled by this checkpoint.
 
-Every safe plan records its project ref, snapshot timestamp/checksum, 15-minute
-expiration, plan checksum, provider state, source checksum, expected target checksum,
-proposed checksum, dependencies, changed-field allowlist, lineage expectation, and
-blocking reason. Execution must reproduce the plan checksum, current source snapshot,
-every per-item source checksum, and every target before checksum. A missing insert
-precondition, changed target, expired plan, duplicate identity, unresolved dependency,
-or lineage conflict blocks the batch rather than overwriting newer data.
+## Transaction and accounting contract
 
-The execution CLI requires `--execute`, the exact project ref, a safe plan file, the
-exact plan checksum, an exact confirmation token, and the separate
-`MTS_SUPABASE_RECONCILIATION_EXECUTION_ACK` environment acknowledgement. That
-acknowledgement was not set in this checkpoint. The migration is deployed, but the CLI
-still contains no reachable write implementation and this task did not use `--execute`.
+Unapplied forward migration `20260809025333_reconciliation_execution_engine.sql` adds a narrow RPC engine. It uses a project-scoped PostgreSQL advisory transaction lock plus a unique active-batch index. The eight fixed insert handlers allowlist fields for candidates, sessions, attempts, catalog rows, reviews, transfers, Newbie Shift requests, and candidate-deletion pending requests. The only update handler is for the existing session allowlist.
 
-## Batch, lineage, and rollback contract
+Each insert RPC transaction performs the canonical insert, calls `mts_sam.insert_lineage_if_absent()`, records its deterministic outcome, records batch ownership, and stores the post-write checksum before returning. The update RPC locks the exact target row, checks expected values, stores a narrow before-image, applies only the planned changed fields, verifies the result, and records the post-write checksum atomically. No caller-controlled table name or dynamic SQL is accepted.
 
-Forward migration `20260807000000_mts_sam_incremental_reconciliation.sql` defines
-private `reconciliation_batches`, `reconciliation_plan_items`, and
-`reconciliation_before_images` tables. It is applied to project
-`xyfhikikddcqcmzbdvbj`. The tables provide exact
-plan/batch state, operation ordering, immutable narrow before-values, created-by-batch
-evidence, post-write checksums, and rollback status. RLS is enabled and forced; public,
-anon, and authenticated access is revoked; only the trusted service role receives the
-required narrow privileges. Invoker-mode trigger functions with an empty search path
-enforce batch status transitions, plan immutability after execution starts,
-created-by-batch proof, batch-scoped before-images, and immutable audit evidence.
+Finalization verifies exact inserted/updated/before-image/lineage totals and expected canonical ending counts. A failed item leaves the batch `failed` or `partially_failed`; committed items retain exact ownership and remain rollback-eligible. Audit tables are private, forced-RLS evidence; public, anon, and authenticated execution is revoked. Service-role access is confined to the trusted backend and fixed RPCs.
 
-Future lineage creation must call `mts_sam.insert_lineage_if_absent()` and accept only:
-`inserted`, `already_exists_same_mapping`,
-`conflict_source_maps_to_different_entity`, or
-`conflict_entity_maps_to_different_source`. Existing canonical rows are not replayed
-merely to rewrite old lineage keys.
+## Rollback contract
 
-Rollback is batch-exact. It first verifies batch eligibility, later dependencies, and
-every current post-sync checksum. It restores only allowlisted fields from private
-before-images, deletes only entities proven created by that batch, uses child-before-
-parent FK order, preserves audit evidence, marks the batch rolled back, and reruns the
-read-only comparison. The final dry run predicts 28 new mappings, 155 exact reuses,
-zero source/entity conflicts, and zero unresolved mappings. It never deletes by timestamp, deletes rows merely absent from
-Sheets, removes pre-existing lineage, or overwrites newer changes.
+Preview is read-only:
 
-## Derived-domain accounting
+```powershell
+.venv\Scripts\python.exe -m backend.tools.supabase_import.cli sync-incremental rollback-preview --batch-id <uuid>
+```
 
-`authoritative_candidate_status`, `candidate_tracking`, `history`, and
-`recent_activity` are projections. `pending_requests` is a projection union except for
-the generic candidate-deletion table. A canonical request/session operation may improve
-several projections, but remains one canonical operation. This prevents the 67 logical
-comparison differences from being misreported as 67 independent writes.
+Exact rollback requires both acknowledgements:
 
-## Commands
+```powershell
+.venv\Scripts\python.exe -m backend.tools.supabase_import.cli sync-incremental rollback --batch-id <uuid> --acknowledge-rollback
+```
 
-Default zero-write dry run:
+Preview and rollback reject missing/ineligible batches, later active/successful batch dependencies, changed post-sync checksums, missing batch ownership, external dependencies, or missing before-images. Rollback restores only recorded session fields, removes lineage attributed to that reconciliation batch, and deletes only rows carrying that exact batch UUID in child-before-parent order. It supports successful and partially failed batches, verifies no attributed artifacts remain, preserves all batch/item/before-image audit records, and records `rolled_back` or `rollback_failed`.
+
+It never deletes by timestamp, by name, by Brand/Model, or merely because a row is absent from Sheets.
+
+## Safe dry run
 
 ```powershell
 .venv\Scripts\python.exe -m backend.tools.supabase_import.cli sync-incremental --dry-run
 ```
 
-Aggregate output includes the snapshot and plan checksums, expiration, classifications,
-canonical/lineage/derived counts, blockers, projected counts, and identical hosted
-before/after counts. A blocked plan exits nonzero by design.
+The dry run records aggregate-only plan evidence and compares hosted counts before and after. With the new migration unapplied, status must be `blocked` only by `reconciliation_execution_migration_not_applied`; that blocker is expected and proves execution is disabled. No reconciliation batch, plan item, before-image, lineage, or canonical mutation is created.
 
-Future execution shape (not authorized; a separate prompt and implementation review are required):
+The 2026-08-08 ET post-implementation run used one Sheets fetch with zero retries at
+`2026-08-09T03:22:51.437643+00:00`. Snapshot checksum was
+`ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7` and plan
+checksum was `f017f69b61e7f6fb06c7cb0468a7dc8d4eeb1bdaea2752c974ddd72ae0a62cd2`.
+It reproduced 28 inserts, one update, 28 new and 155 reused lineage mappings, zero
+ambiguity/unresolved/conflicts, and the sole expected unapplied-migration blocker. All
+canonical, lineage, import, and reconciliation-audit counts were checked unchanged.
 
-```powershell
-.venv\Scripts\python.exe -m backend.tools.supabase_import.cli sync-incremental --execute `
-  --plan-file <safe-plan.json> `
-  --project-ref xyfhikikddcqcmzbdvbj `
-  --plan-checksum <sha256> `
-  --confirmation EXECUTE:xyfhikikddcqcmzbdvbj:<sha256>
-```
-
-## Post-sync verification required after future approval
-
-Immediately after any future batch: require `succeeded`, unchanged source checksum,
-all expected inserts and narrow updates, valid lineage outcomes, no orphans or duplicate
-identities, exact expected canonical counts, no unrelated changes, and a fresh 14-domain
-comparison. `verify-production` must remain fail-closed. Provider stays Sheets; shadow
-and dual writes stay disabled. Synchronization does not authorize shadow activation or
-full cutover.
+After a later authorized execution, require a succeeded batch, exact expected counts, 28 acceptable lineage outcomes, one before-image, no orphans/duplicate identities, and a fresh 14-domain comparison. Sheets remains primary until a separate cutover decision.

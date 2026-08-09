@@ -35,11 +35,14 @@ from tools.supabase_import.core import (  # noqa: E402
     verify_production_health,
 )
 from tools.supabase_import.reconciliation import (  # noqa: E402
+    EXECUTION_ACK_ENV,
+    EXECUTION_ACK_VALUE,
     generate_reconciliation_plan,
     hosted_count_snapshot,
     public_plan,
     validate_execution_request,
 )
+from tools.supabase_import.execution import approved_plan_errors, execute_plan  # noqa: E402
 
 
 def _sheets_client():
@@ -331,28 +334,45 @@ def rollback_batch_cmd(args):
 
 
 def sync_incremental_cmd(args):
-    sheets = SheetsDataProvider(_sheets_client())
     provider = _supabase_client()
+    if args.action in {"rollback-preview", "rollback"}:
+        if not args.batch_id:
+            print(json.dumps({"status": "blocked", "errors": ["batch_id_required"]}, indent=2))
+            return 2
+        if args.action == "rollback-preview":
+            print(json.dumps(provider.preview_reconciliation_rollback(args.batch_id), indent=2))
+            return 0
+        errors = []
+        if not args.acknowledge_rollback:
+            errors.append("rollback_ack_missing")
+        if os.environ.get(EXECUTION_ACK_ENV) != EXECUTION_ACK_VALUE:
+            errors.append("task_level_execution_ack_missing")
+        if errors:
+            print(json.dumps({"status": "blocked", "errors": errors}, indent=2))
+            return 2
+        print(json.dumps(provider.rollback_reconciliation_batch(args.batch_id), indent=2))
+        return 0
+
+    sheets = SheetsDataProvider(_sheets_client())
     if args.execute:
-        if not args.plan_file:
-            print(json.dumps({"status": "blocked", "errors": ["plan_file_required"]}, indent=2))
-            return 2
-        plan_path = Path(args.plan_file).resolve()
-        try:
-            plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            print(json.dumps({"status": "blocked", "errors": ["plan_file_invalid"]}, indent=2))
-            return 2
+        # Never execute a serialized plan. This fresh provider instance fetches
+        # exactly one new Sheets snapshot and reconstructs all private payloads.
+        comparison = compare_shadow_provider(sheets, provider, diagnostic_mode=False)
+        plan = generate_reconciliation_plan(sheets, provider, comparison_result=comparison)
         errors = validate_execution_request(
             plan,
             project_ref=args.project_ref,
             plan_checksum=args.plan_checksum,
-            confirmation=args.confirmation,
+            snapshot_checksum=args.snapshot_checksum,
+            acknowledged=args.acknowledge_live_reconciliation,
         )
-        # A plan-bound writer is intentionally unreachable until its payload,
-        # checksum, exact-mutation, audit, and rollback contract is reviewed.
-        print(json.dumps({"status": "blocked", "mode": "execute", "errors": errors}, indent=2))
-        return 2
+        errors.extend(approved_plan_errors(plan))
+        if errors:
+            print(json.dumps({"status": "blocked", "mode": "execute", "errors": sorted(set(errors))}, indent=2))
+            return 2
+        result = execute_plan(provider, plan)
+        print(json.dumps({"status": "completed", "mode": "execute", **result}, indent=2))
+        return 0
 
     counts_before = hosted_count_snapshot(provider)
     comparison = compare_shadow_provider(sheets, provider, diagnostic_mode=False)
@@ -470,15 +490,18 @@ def main(argv=None):
         "sync-incremental",
         help="Build a one-snapshot exact reconciliation plan; defaults to zero-write dry-run",
     )
+    sync_parser.add_argument("action", nargs="?", choices=("rollback-preview", "rollback"))
     mode = sync_parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--execute", action="store_true")
     sync_parser.add_argument("--diagnostic", action="store_true")
     sync_parser.add_argument("--output-plan")
-    sync_parser.add_argument("--plan-file")
     sync_parser.add_argument("--project-ref")
     sync_parser.add_argument("--plan-checksum")
-    sync_parser.add_argument("--confirmation")
+    sync_parser.add_argument("--snapshot-checksum")
+    sync_parser.add_argument("--acknowledge-live-reconciliation", action="store_true")
+    sync_parser.add_argument("--batch-id")
+    sync_parser.add_argument("--acknowledge-rollback", action="store_true")
     sync_parser.set_defaults(func=sync_incremental_cmd)
 
     # compare-shadow
