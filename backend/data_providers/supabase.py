@@ -17,6 +17,12 @@ class SupabaseProviderError(RuntimeError):
 class SupabaseDataProvider(DataProvider):
     name = "supabase"
     lineage_write_mode = "rpc_only"
+    _RECONCILIATION_RPCS = frozenset({
+        "begin_reconciliation_execution", "execute_reconciliation_insert",
+        "execute_reconciliation_candidate_session_update", "fail_reconciliation_batch",
+        "finalize_reconciliation_batch", "preview_reconciliation_rollback",
+        "rollback_reconciliation_batch",
+    })
 
     def __init__(self, url: str, service_role_key: str, *, timeout: float = 10.0, retries: int = 2):
         self._url = str(url or "").rstrip("/")
@@ -96,6 +102,8 @@ class SupabaseDataProvider(DataProvider):
         return result
 
     def _reconciliation_rpc(self, name: str, body: Mapping[str, Any]):
+        if name not in self._RECONCILIATION_RPCS:
+            raise ValueError("Unsupported reconciliation RPC")
         result = self._request(f"rpc/{name}", method="POST", body=dict(body))
         if not isinstance(result, dict) or not isinstance(result.get("result"), str):
             raise SupabaseProviderError(f"Supabase {name} RPC returned a malformed response")

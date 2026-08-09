@@ -752,7 +752,8 @@ language plpgsql
 security invoker
 set search_path = ''
 as $$
-declare v_preview jsonb; v_image record; v_item record; v_session mts_sam.candidate_sessions%rowtype; v_count integer;
+declare v_preview jsonb; v_image record; v_item record; v_session mts_sam.candidate_sessions%rowtype;
+  v_count integer; v_actual_counts jsonb; v_key text;
 begin
   perform pg_advisory_xact_lock(hashtextextended('mts_sam:reconciliation:xyfhikikddcqcmzbdvbj',0));
   if exists(select 1 from mts_sam.reconciliation_batches where id=p_batch_id and status='rolled_back') then
@@ -796,6 +797,21 @@ begin
        or exists(select 1 from mts_sam.newbie_shift_requests where created_by_reconciliation_batch_id=p_batch_id)
        or exists(select 1 from mts_sam.pending_requests where created_by_reconciliation_batch_id=p_batch_id)
     then raise exception 'rollback_batch_artifacts_remain'; end if;
+    v_actual_counts:=jsonb_build_object(
+      'candidates',(select count(*) from mts_sam.candidates),
+      'candidate_sessions',(select count(*) from mts_sam.candidate_sessions),
+      'session_attempts',(select count(*) from mts_sam.session_attempts),
+      'headset_catalog',(select count(*) from mts_sam.headset_catalog),
+      'headset_reviews',(select count(*) from mts_sam.headset_reviews),
+      'supervisor_transfers',(select count(*) from mts_sam.supervisor_transfers),
+      'newbie_shift_requests',(select count(*) from mts_sam.newbie_shift_requests),
+      'pending_requests',(select count(*) from mts_sam.pending_requests)
+    );
+    for v_key in select jsonb_object_keys(v_preview->'expected_post_rollback_counts') loop
+      if (v_actual_counts->>v_key)::integer<>(v_preview->'expected_post_rollback_counts'->>v_key)::integer then
+        raise exception 'rollback_ending_count_mismatch:%',v_key;
+      end if;
+    end loop;
     for v_item in select * from mts_sam.reconciliation_plan_items
       where reconciliation_batch_id=p_batch_id and result_status in ('inserted','updated') loop
       update mts_sam.reconciliation_plan_items set result_status='rolled_back',result_code='exact_batch_rollback',
@@ -803,7 +819,8 @@ begin
     end loop;
     update mts_sam.reconciliation_batches set status='rolled_back',rollback_status='succeeded',
       completed_at=statement_timestamp(),rollback_eligible=false where id=p_batch_id;
-    return jsonb_build_object('result','rolled_back','batch_id',p_batch_id,'audit_preserved',true);
+    return jsonb_build_object('result','rolled_back','batch_id',p_batch_id,'audit_preserved',true,
+      'ending_counts',v_actual_counts);
   exception when others then
     update mts_sam.reconciliation_batches set status='rollback_failed',rollback_status='failed',
       completed_at=statement_timestamp(),verification_result=jsonb_build_object('rollback_error_code',sqlstate)

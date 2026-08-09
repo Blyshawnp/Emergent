@@ -9,6 +9,7 @@ if str(BACKEND_DIR) not in sys.path:
 from tools.supabase_import.execution import (  # noqa: E402
     APPROVED_INSERT_COUNTS, APPROVED_UPDATE_COUNTS, _payload, approved_plan_errors, execute_plan,
 )
+from data_providers.supabase import SupabaseDataProvider  # noqa: E402
 
 
 class PayloadHandlerTests(unittest.TestCase):
@@ -62,6 +63,12 @@ class FakeExecutionProvider:
     def fail_reconciliation_batch(self, *_args): self.calls.append("fail"); return {"result": "failed"}
 
 
+class FailingExecutionProvider(FakeExecutionProvider):
+    def execute_reconciliation_insert(self, *_args):
+        self.calls.append("insert")
+        raise RuntimeError("synthetic_write_failure")
+
+
 class OrchestrationTests(unittest.TestCase):
     def test_insert_then_update_then_finalize(self):
         insert = {"entity_type": "candidates", "classification": "insert_new", "operation": "insert",
@@ -81,6 +88,63 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(result["completed"], 2)
         self.assertEqual(provider.calls, ["begin", "insert", "update", "finalize"])
 
+    @staticmethod
+    def approved_synthetic_plan():
+        raw_by_entity = {
+            "candidates": {"session_id": "22222222-2222-4222-8222-222222222222", "candidate_name": "Synthetic"},
+            "candidate_sessions": {"session_id": "synthetic-session", "candidate_id": "22222222-2222-4222-8222-222222222222"},
+            "session_attempts": {"source_session_id": "synthetic-session", "attempt_number": 1, "source_action_id": "synthetic-action"},
+            "headset_catalog": {"Brand": "Synthetic", "Model": "Model"},
+            "headset_reviews": {"review_id": "synthetic-review"},
+            "supervisor_transfers": {"pending_id": "synthetic-transfer", "original_session_id": "synthetic-session"},
+            "newbie_shift_requests": {"request_id": "synthetic-shift", "source_session_id": "synthetic-session"},
+            "pending_requests": {"request_id": "synthetic-delete", "source_tab": "candidate-deletion-requests"},
+        }
+        items = []
+        sources = {}
+        sequence = 0
+        for entity, count in APPROVED_INSERT_COUNTS.items():
+            for _ in range(count):
+                sequence += 1
+                safe_hash = f"{sequence:064x}"
+                item = {"entity_type": entity, "classification": "insert_new", "operation": "insert",
+                        "safe_identity_hash": safe_hash, "canonical_entity_id": f"00000000-0000-4000-8000-{sequence:012d}",
+                        "source_checksum": "a" * 64, "source_tab": "synthetic", "source_row_key": f"synthetic:{sequence}",
+                        "changed_fields": [], "dependencies": [], "lineage_outcome": "inserted", "lineage_required": True}
+                items.append(item); sources[safe_hash] = dict(raw_by_entity[entity])
+        sequence += 1
+        update_hash = f"{sequence:064x}"
+        update = {"entity_type": "candidate_sessions", "classification": "update_existing", "operation": "update",
+                  "safe_identity_hash": update_hash, "canonical_entity_id": f"00000000-0000-4000-8000-{sequence:012d}",
+                  "source_checksum": "b" * 64, "source_tab": "synthetic", "source_row_key": "synthetic:update",
+                  "changed_fields": ["raw_status"], "dependencies": [], "lineage_outcome": "not_required", "lineage_required": False}
+        items.append(update); sources[update_hash] = {"status": "Pass"}
+        return {"items": items, "_private_source_rows": sources,
+                "_private_before_images": [{"safe_identity_hash": update_hash, "fields": {"raw_status": "Fail"}}],
+                "_private_target_preconditions": {update_hash: {"id": update["canonical_entity_id"], "raw_status": "Fail"}}}
+
+    def test_complete_28_plus_1_synthetic_scenario(self):
+        provider = FakeExecutionProvider()
+        result = execute_plan(provider, self.approved_synthetic_plan())
+        self.assertEqual(result["completed"], 29)
+        self.assertEqual(provider.calls.count("insert"), 28)
+        self.assertEqual(provider.calls.count("update"), 1)
+        self.assertEqual(provider.calls[-1], "finalize")
+
+    def test_partial_failure_is_accounted_and_never_finalized(self):
+        provider = FailingExecutionProvider()
+        with self.assertRaisesRegex(RuntimeError, "synthetic_write_failure"):
+            execute_plan(provider, self.approved_synthetic_plan())
+        self.assertIn("fail", provider.calls)
+        self.assertNotIn("finalize", provider.calls)
+
+
+class ProviderSafetyTests(unittest.TestCase):
+    def test_arbitrary_reconciliation_rpc_name_is_rejected_before_transport(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "synthetic-key")
+        with self.assertRaisesRegex(ValueError, "Unsupported reconciliation RPC"):
+            provider._reconciliation_rpc("caller_controlled_rpc", {})
+
 
 class ForwardMigrationContractTests(unittest.TestCase):
     def test_execution_migration_is_narrow_locked_and_private(self):
@@ -89,13 +153,21 @@ class ForwardMigrationContractTests(unittest.TestCase):
         for token in ("pg_advisory_xact_lock", "execute_reconciliation_insert", "execute_reconciliation_candidate_session_update",
                       "preview_reconciliation_rollback", "rollback_reconciliation_batch", "created_by_reconciliation_batch_id",
                       "ending_count_mismatch", "planned_lineage_count", "already_started", "already_committed",
-                      "rollback_batch_artifacts_remain"):
+                      "rollback_batch_artifacts_remain", "rollback_ending_count_mismatch"):
             self.assertIn(token, sql)
         for entity in APPROVED_INSERT_COUNTS:
             self.assertIn(f"when '{entity}'", sql)
         self.assertIn("set search_path = ''", sql)
         self.assertIn("from public,anon,authenticated", sql)
         self.assertNotIn("execute format", sql)
+        self.assertGreaterEqual(sql.count("assert_reconciliation_json_keys"), 10)
+        self.assertIn("array['raw_status','calculated_result','final_result','archived','withdrawn','final_attempt'", sql)
+        self.assertNotIn("delete from mts_sam.candidates where created_at", sql)
+        delete_positions = [sql.index(f"delete from mts_sam.{entity}") for entity in (
+            "pending_requests", "newbie_shift_requests", "supervisor_transfers", "headset_reviews",
+            "session_attempts", "candidate_sessions", "headset_catalog", "candidates",
+        )]
+        self.assertEqual(delete_positions, sorted(delete_positions))
 
 
 if __name__ == "__main__":
