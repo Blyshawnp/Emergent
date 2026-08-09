@@ -360,6 +360,27 @@ are required.
 **A separate explicit prompt is required to activate shadow reads** after this checkpoint
 is reviewed and the above criteria are verified live.
 
+### 2026-08-09 post-reconciliation rollback checkpoint
+
+Controlled batch `4be01417-b08f-4002-b0ef-8371ce73a876` was rolled back after the
+new headset-review insert failed its canonical parent-session guard. All 18 committed
+canonical rows and 18 attributed lineage mappings were removed exactly; baseline counts
+returned to 54 candidates, 69 sessions, 137 attempts, 96 catalog rows, 11 reviews, and
+264 lineage mappings. No batch-owned canonical or lineage artifact remains.
+
+The post-rollback 14-domain comparison completed with no fetch errors, snapshot checksum
+`ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`, 69 total
+mismatches, 67 unexplained differences, and `overall_readiness=not_ready`. Candidate
+corrections and notifications are ready; the other mapped domains remain not ready. The
+headset-review domain retains 11 classified historical exceptions plus one missing
+current row whose parent session is unresolved.
+
+`verify-production` returned `ok=false`,
+`shadow_read_mapped_domains_ready=false`, and `full_cutover_ready=false`. Its current
+error is `shadow_comparison_current`; warnings remain for the unresolved headset link,
+nine unmapped configuration tabs (66 rows), and six rejected authorization rows. Shadow
+reads, dual writes, provider cutover, and Auth migration remain blocked.
+
 ### 2026-08-07 reconciliation-planner checkpoint
 
 A fresh one-fetch, zero-retry comparison reproduced the same 67 unexplained logical

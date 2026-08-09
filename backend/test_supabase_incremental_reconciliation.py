@@ -244,7 +244,8 @@ class ReconciliationPlannerTests(unittest.TestCase):
             {"request_id": "r-1", "source_session_id": "s-1"},
             {"request_id": "r-2", "source_session_id": "s-1"},
         ])
-        plan = build_plan(source)
+        target = resources(candidate_sessions=[{"id": "session", "session_id": "s-1"}])
+        plan = build_plan(source, target)
         requests = [item for item in plan["items"] if item["entity_type"] == "newbie_shift_requests"]
         self.assertEqual(len(requests), 2)
         self.assertTrue(all(item["classification"] == "insert_new" for item in requests))
@@ -257,7 +258,8 @@ class ReconciliationPlannerTests(unittest.TestCase):
                 "source_tab": "candidate-deletion-requests",
             }],
         )
-        plan = build_plan(source)
+        target = resources(candidate_sessions=[{"id": "session", "session_id": "s-1"}])
+        plan = build_plan(source, target)
         inserts = [item for item in plan["items"] if item["classification"] == "insert_new"]
         self.assertEqual({item["entity_type"] for item in inserts}, {"newbie_shift_requests", "pending_requests"})
 
@@ -269,7 +271,8 @@ class ReconciliationPlannerTests(unittest.TestCase):
                 "source_tab": "newbie-shift-requests",
             }],
         )
-        plan = build_plan(source)
+        target = resources(candidate_sessions=[{"id": "session", "session_id": "s-1"}])
+        plan = build_plan(source, target)
         self.assertEqual(plan["entity_counts"]["newbie_shift_requests"]["inserts"], 1)
         self.assertNotIn("pending_requests", plan["entity_counts"])
         self.assertEqual(plan["derived_domain_effects"]["pending_requests"], 1)
@@ -279,7 +282,8 @@ class ReconciliationPlannerTests(unittest.TestCase):
             "source_action_id": "google_sheets:attempt:s-1:2", "source_session_id": "s-1",
             "attempt_number": 2, "attempt_type": "mock_call", "result": "Pass",
         }])
-        plan = build_plan(source)
+        target = resources(candidate_sessions=[{"id": "session", "session_id": "s-1"}])
+        plan = build_plan(source, target)
         item = next(item for item in plan["items"] if item["entity_type"] == "session_attempts")
         self.assertEqual(item["classification"], "insert_new")
         self.assertEqual(item["dependencies"][0]["entity_type"], "candidate_sessions")
@@ -359,9 +363,19 @@ class ReconciliationPlannerTests(unittest.TestCase):
         item = next(item for item in plan["items"] if item["entity_type"] == "headset_catalog")
         self.assertEqual(item["classification"], "conflict")
 
-    def test_missing_review_with_stable_id_is_planned(self):
+    def test_missing_review_with_unresolved_parent_is_blocked(self):
         plan = build_plan(resources(headset_reviews=[{"review_id": "review-1", "source_session_id": "s-1"}]))
         item = next(item for item in plan["items"] if item["entity_type"] == "headset_reviews")
+        self.assertEqual(item["classification"], "ambiguous")
+        self.assertEqual(item["blocking_reason"], "parent_session_identity_unresolved")
+
+    def test_missing_review_with_existing_parent_is_planned(self):
+        source = resources(headset_reviews=[{"review_id": "review-1", "source_session_id": "s-1"}])
+        target = resources(candidate_sessions=[{"id": "session", "session_id": "s-1"}])
+        item = next(
+            item for item in build_plan(source, target)["items"]
+            if item["entity_type"] == "headset_reviews"
+        )
         self.assertEqual(item["classification"], "insert_new")
 
     def test_historical_standalone_review_is_preserved(self):
@@ -375,6 +389,8 @@ class ReconciliationPlannerTests(unittest.TestCase):
         plan = build_plan(source)
         item = next(item for item in plan["items"] if item["entity_type"] == "supervisor_transfers")
         self.assertEqual(item["dependencies"][0]["entity_type"], "candidate_sessions")
+        self.assertEqual(item["classification"], "ambiguous")
+        self.assertEqual(item["blocking_reason"], "parent_session_identity_unresolved")
 
     def test_same_lineage_mapping_is_reused(self):
         source = resources(newbie_shift_requests=[{"request_id": "r-1"}])

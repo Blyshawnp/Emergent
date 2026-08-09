@@ -583,6 +583,9 @@ def generate_reconciliation_plan(
     private_before_images = []
     private_source_rows = {}
     private_target_preconditions = {}
+    target_session_index, _, _ = _index_rows(
+        "candidate_sessions", target_by_domain["candidate_sessions"]
+    )
     for source_session in source_by_domain["candidate_sessions"]:
         session_id = str(source_session.get("session_id") or "").strip()
         resolution = candidate_resolutions.get(session_id) or {}
@@ -646,9 +649,26 @@ def generate_reconciliation_plan(
                         "safe_identity_hash": resolution.get("safe_identity_hash")
                         or _safe_identity_hash("candidate-session-fallback", identity),
                     })
-                elif parent and (candidate_resolutions.get(parent) or {}).get("blocking_reason"):
-                    classification = "ambiguous"
-                    blocking_reason = "parent_session_identity_unresolved"
+                elif parent:
+                    dependency_hash = _safe_identity_hash("candidate_sessions", parent)
+                    planned_parent = next(
+                        (
+                            candidate
+                            for candidate in items
+                            if candidate.get("entity_type") == "candidate_sessions"
+                            and candidate.get("safe_identity_hash") == dependency_hash
+                        ),
+                        None,
+                    )
+                    parent_is_available = parent in target_session_index or bool(
+                        planned_parent
+                        and planned_parent.get("classification")
+                        in {"insert_new", "already_current", "update_existing"}
+                        and not planned_parent.get("blocking_reason")
+                    )
+                    if not parent_is_available:
+                        classification = "ambiguous"
+                        blocking_reason = "parent_session_identity_unresolved"
                 if domain == "headset_catalog":
                     timestamp = _first(source, ("created_at", "updated_at", "CreatedAt", "UpdatedAt"))
                     if identity in headset_provenance.get("safe_new", set()):

@@ -1,10 +1,12 @@
 # MTS/SAM incremental reconciliation plan
 
-Status: execution framework deployed and synthetically verified; no production reconciliation has run.
+Status: execution framework deployed and synthetically verified; the first controlled
+production reconciliation attempt was rolled back exactly. Retry is blocked pending
+resolution of a newly proven headset-review parent-session gap and a new approval cycle.
 
 Google Sheets remains authoritative. `MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, and `MTS_DUAL_WRITE_ENABLED=false` are mandatory. Shadow-read activation, provider cutover, and Apps Script retirement remain blocked.
 
-## Approved plan shape
+## Previously approved plan shape (now blocked)
 
 The approved read-only plan contains exactly 28 inserts, one narrow `candidate_sessions` update, and 28 new lineage mappings:
 
@@ -20,6 +22,14 @@ The approved read-only plan contains exactly 28 inserts, one narrow `candidate_s
 | pending_requests (candidate deletion only) | 0 | 3 | 0 | 3 |
 
 The execution gate rejects any different entity/count shape. Candidate corrections, notifications, and derived projections are not direct writes in this batch.
+
+The 2026-08-09 live attempt proved that the earlier planner classified one new headset
+review as executable even though its referenced session was absent from both the source
+session plan and hosted canonical sessions. The executor correctly rejected the row with
+`parent_session_missing`, but only after 18 earlier inserts had committed. Exact rollback
+removed those rows and their lineage. The repaired planner now classifies that review as
+ambiguous with `parent_session_identity_unresolved`, producing a blocked 27+1 plan. The
+28+1 shape above is historical approval evidence, not current execution authorization.
 
 ## Identity and plan binding
 
@@ -125,4 +135,38 @@ reproduced the approved 28 inserts, one update, 28 new and 155 reused lineage ma
 and zero ambiguity, unresolved identities, or conflicts. Runtime readiness is true; the
 task execution guard remains false; hosted before/after counts were identical.
 
-After a later authorized execution, require a succeeded batch, exact expected counts, 28 acceptable lineage outcomes, one before-image, no orphans/duplicate identities, and a fresh 14-domain comparison. Sheets remains primary until a separate cutover decision.
+## 2026-08-09 controlled production attempt and rollback
+
+The authorized execution used a fresh one-fetch, zero-retry source snapshot at
+`2026-08-09T10:48:24.579773+00:00`, snapshot checksum
+`ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`, and plan
+checksum `f017f69b61e7f6fb06c7cb0468a7dc8d4eeb1bdaea2752c974ddd72ae0a62cd2`.
+Batch `4be01417-b08f-4002-b0ef-8371ce73a876` committed 4 candidates, 2 headset
+catalog rows, 4 sessions, 8 attempts, and 18 attributed lineage mappings before the
+headset-review insert failed with `parent_session_missing`. The batch became
+`partially_failed`; no session update or before-image occurred.
+
+Rollback preview reported `eligible=true`, zero blockers, no later batch, and exact
+restoration targets. The batch-scoped rollback succeeded at
+`2026-08-09T10:49:24.654206+00:00`. It restored candidates/sessions/attempts/catalog to
+`54 / 69 / 137 / 96`, lineage to 264, and left zero canonical rows or lineage mappings
+owned by the batch. Immutable audit evidence remains: 6 reconciliation batches, 39 plan
+items, and 1 prior synthetic before-image.
+
+The planner defect was corrected to require every child insert's session dependency to
+resolve either to an existing hosted session or to a non-blocked planned session. A
+post-fix zero-write run at `2026-08-09T10:53:39.304292+00:00` reported 27 inserts, one
+update, 27 new and 155 reused lineage mappings, one unresolved/ambiguous headset-review
+parent, `status=blocked`, and unchanged hosted counts. No retry occurred. A corrected
+source relationship or an explicitly reviewed alternative is required before a new
+execution approval cycle.
+
+Post-rollback validation passed backend compilation, 387 backend unittest tests, 408
+pytest tests plus 103 subtests, 150 focused Supabase tests, 32 frontend suites with 311
+tests, the frontend production build, the backend executable build, 33 Apps Script
+authorization tests plus syntax validation, and 11 desktop lifecycle/package tests plus
+main/preload syntax checks. Local/remote migration parity still matches through
+`20260809025333`; database lint retains only the pre-existing unused `v_count` warning
+in `rollback_reconciliation_batch`.
+
+Sheets remains primary until a separate cutover decision.

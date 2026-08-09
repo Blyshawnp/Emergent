@@ -206,6 +206,23 @@ is `f017f69b61e7f6fb06c7cb0468a7dc8d4eeb1bdaea2752c974ddd72ae0a62cd2`.
 Google Sheets remains authoritative, Apps Script remains active, and shadow reads and
 dual writes remain disabled.
 
+### 2026-08-09 controlled reconciliation rollback
+
+The first authorized production reconciliation batch,
+`4be01417-b08f-4002-b0ef-8371ce73a876`, stopped on the new headset-review insert because
+its source session did not resolve to a canonical parent. Eighteen earlier inserts and
+their 18 lineage mappings were batch-owned and therefore eligible for exact rollback.
+The preview had zero blockers and the rollback succeeded, restoring the canonical and
+lineage baseline with no batch-owned artifacts remaining.
+
+The planner now rejects child inserts whose session dependency is absent from both the
+hosted canonical sessions and a non-blocked planned session. A fresh post-fix dry run
+fails closed with 27 inserts, one update, one ambiguous/unresolved headset-review parent,
+and no hosted writes. The current source relationship must be corrected or separately
+reviewed before any new live reconciliation approval. Google Sheets and Apps Script
+remain authoritative; provider `sheets`, shadow disabled, and dual writes disabled are
+unchanged.
+
 ### 2026-08-07 incremental reconciliation planning checkpoint
 
 `sync-incremental` now defaults to a one-snapshot, aggregate-only, zero-write plan.
