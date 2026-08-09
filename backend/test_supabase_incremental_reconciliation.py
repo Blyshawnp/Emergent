@@ -10,6 +10,7 @@ if str(BACKEND_DIR) not in sys.path:
 from tools.supabase_import.reconciliation import (
     EXECUTION_ACK_ENV,
     EXECUTION_ACK_VALUE,
+    EXECUTION_UNAVAILABLE_ERROR,
     EXPECTED_SUPABASE_PROJECT_REF,
     generate_reconciliation_plan,
     hosted_count_snapshot,
@@ -444,6 +445,10 @@ class ReconciliationPlannerTests(unittest.TestCase):
     def test_applied_reconciliation_infrastructure_clears_migration_guard(self):
         plan = build_plan(infrastructure_ready=True)
         self.assertFalse(plan["rollback"]["migration_required"])
+        self.assertEqual(plan["status"], "blocked")
+        self.assertEqual(
+            plan["blockers"][-1]["reason"], EXECUTION_UNAVAILABLE_ERROR,
+        )
 
 
 class ExecutionGuardTests(unittest.TestCase):
@@ -475,7 +480,15 @@ class ExecutionGuardTests(unittest.TestCase):
         )
 
     def test_execution_is_blocked_until_forward_migration_is_applied(self):
-        self.assertEqual(self.valid_args(self.ready_plan()), ["reconciliation_migration_not_applied"])
+        self.assertEqual(self.valid_args(self.ready_plan()), [
+            "reconciliation_migration_not_applied",
+            EXECUTION_UNAVAILABLE_ERROR,
+        ])
+
+    def test_execution_remains_blocked_after_forward_migration_is_applied(self):
+        plan = self.ready_plan()
+        plan["rollback"]["migration_required"] = False
+        self.assertEqual(self.valid_args(plan), [EXECUTION_UNAVAILABLE_ERROR])
 
     def test_expired_plan_is_rejected(self):
         plan = self.ready_plan()

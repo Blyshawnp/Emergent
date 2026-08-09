@@ -20,6 +20,7 @@ from .core import (
 PLAN_TTL_SECONDS = 15 * 60
 EXECUTION_ACK_ENV = "MTS_SUPABASE_RECONCILIATION_EXECUTION_ACK"
 EXECUTION_ACK_VALUE = "I_UNDERSTAND_THIS_WRITES_HOSTED_DATA"
+EXECUTION_UNAVAILABLE_ERROR = "incremental_execution_not_implemented"
 
 CLASSIFICATIONS = {
     "insert_new", "update_existing", "already_current", "expected_historical",
@@ -781,6 +782,15 @@ def generate_reconciliation_plan(
         elif outcome == "unresolved":
             lineage_counts["unresolved"] += 1
 
+    # This checkpoint implements deterministic planning and rollback guards, but
+    # it does not yet contain a plan-bound writer. Never advertise a plan as
+    # executable until that separately reviewed engine exists.
+    blockers.append({
+        "entity_type": "execution",
+        "safe_identity_hash": "0" * 64,
+        "reason": EXECUTION_UNAVAILABLE_ERROR,
+    })
+
     safe_items = sorted(items, key=lambda item: (
         item["entity_type"], item["safe_identity_hash"], item["classification"]
     ))
@@ -904,10 +914,9 @@ def validate_execution_request(
         errors.append("plan_not_ready")
     if (plan.get("lineage_operations") or {}).get("potential_source_conflict") or (plan.get("lineage_operations") or {}).get("potential_entity_conflict"):
         errors.append("lineage_conflict")
-    # The forward schema is deliberately not applied in this task. Even with all
-    # operator acknowledgements, execution remains impossible until it exists.
     if (plan.get("rollback") or {}).get("migration_required", True):
         errors.append("reconciliation_migration_not_applied")
+    errors.append(EXECUTION_UNAVAILABLE_ERROR)
     return errors
 
 

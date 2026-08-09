@@ -349,8 +349,8 @@ def sync_incremental_cmd(args):
             plan_checksum=args.plan_checksum,
             confirmation=args.confirmation,
         )
-        # No write implementation is reachable in this checkpoint. The forward
-        # reconciliation schema is intentionally unapplied and is a hard guard.
+        # A plan-bound writer is intentionally unreachable until its payload,
+        # checksum, exact-mutation, audit, and rollback contract is reviewed.
         print(json.dumps({"status": "blocked", "mode": "execute", "errors": errors}, indent=2))
         return 2
 
@@ -374,7 +374,7 @@ def sync_incremental_cmd(args):
         )
         output["safe_plan_written"] = True
     print(json.dumps(output, indent=2))
-    return 1 if plan.get("blockers") else 0
+    return 0 if plan.get("status") == "ready" else 1
 
 
 def compare_shadow_cmd(args):
