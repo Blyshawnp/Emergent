@@ -1,6 +1,6 @@
 # MTS/SAM incremental reconciliation plan
 
-Status: planning checkpoint only. No hosted synchronization has been executed.
+Status: migration-deployed planning checkpoint only. No hosted reconciliation has been executed.
 
 Google Sheets remains authoritative. `MTS_DATA_PROVIDER=sheets`,
 `MTS_SHADOW_COMPARE=false`, and `MTS_DUAL_WRITE_ENABLED=false` remain required.
@@ -23,8 +23,11 @@ promotes historical staging rows. Derived domains are effects, not separate writ
 
 ## Fresh read-only evidence
 
-The 2026-08-07 ET read-only run used one Sheet batch fetch with zero retries and
+The final 2026-08-08 ET read-only run (snapshot `2026-08-09T00:33:40.386615+00:00`)
+used one Sheet batch fetch with zero retries and
 snapshot checksum `ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`.
+Its deterministic plan checksum is
+`c1822d525ee5a724669b469b212a430abb2296a8e13abcbb4b209a0b76b36857`.
 The snapshot contained 226 physical rows across the eight mapped tabs. All 14
 comparisons completed and still reported 67 unexplained differences. Hosted
 counts were identical before and after the run: import batches 3, candidates 54,
@@ -35,10 +38,10 @@ The exact planning projection is:
 
 | Canonical target | Start | Planned inserts | Planned updates | Safe projected end |
 |---|---:|---:|---:|---:|
-| candidates | 54 | 0 | 0 | 54 |
+| candidates | 54 | 4 | 0 | 58 |
 | candidate_sessions | 69 | 4 | 1 | 73 |
 | session_attempts | 137 | 8 | 0 | 145 |
-| headset_catalog | 96 | 0 | 0 | 96 |
+| headset_catalog | 96 | 2 | 0 | 98 |
 | headset_reviews | 11 | 1 | 0 | 12 |
 | supervisor_transfers | 14 | 1 | 0 | 15 |
 | newbie_shift_requests | 9 | 5 | 0 | 14 |
@@ -46,13 +49,19 @@ The exact planning projection is:
 | pending_requests (candidate deletion only) | 0 | 3 | 0 | 3 |
 | notifications | 4 | 0 | 0 | 4 |
 
-The plan has 22 canonical inserts and one narrow session update. Four candidate rows
-are blocked because the current Sheet provides no approved non-name candidate identity;
-the four dependent session inserts therefore cannot execute. Two timestamp-less catalog
-rows are also blocked because provenance and recency cannot be established. Resolving
-candidate identity would add four candidate inserts and raise the candidate projection
-to 58. Resolving catalog provenance could add up to two catalog inserts and raise its
-projection to 98. Neither is assumed by the current safe plan.
+The plan has 28 canonical inserts and one narrow session update. The original four
+candidate blockers resolve through deterministic, tab-aware UUIDv5 identities derived
+only from each singleton source history UUID. Every source history UUID is unique, each
+candidate grouping is singleton, and the resulting IDs have no canonical or lineage
+collision. Names are used only to reject a possible multi-session grouping; they never
+enter the identity input. The four sessions and their eight attempts retain explicit
+parent dependencies.
+
+The two timestamp-less catalog rows classify as `safe_new_insert`. Both normalized
+brand/model identities are unique, absent from both successful staging histories,
+absent from canonical data and lineage, and occur after an exact 96-row historical
+prefix in the current 98-row catalog. Source ordering is corroboration, not the sole
+evidence. The final plan has zero ambiguous, unresolved, or conflicting items.
 
 The one canonical session update represents the source status change; its candidate
 status, tracking, and history differences are derived effects. The five Newbie Shift
@@ -65,7 +74,7 @@ direct `pending_requests` inserts.
 
 | Entity | Identity |
 |---|---|
-| candidate | approved source candidate ID or existing canonical relationship/lineage; never a name |
+| candidate | linked canonical session, existing lineage, persisted UUID, or tab-aware singleton history UUIDv5; never a name |
 | candidate session | source session ID |
 | attempt | source session ID plus actual nonblank call slot/source action ID |
 | headset catalog | normalized brand + model only when unique and provenance is safe |
@@ -93,32 +102,34 @@ or lineage conflict blocks the batch rather than overwriting newer data.
 The execution CLI requires `--execute`, the exact project ref, a safe plan file, the
 exact plan checksum, an exact confirmation token, and the separate
 `MTS_SUPABASE_RECONCILIATION_EXECUTION_ACK` environment acknowledgement. That
-acknowledgement was not set in this checkpoint. Even with it, execution remains
-hard-blocked until the unapplied reconciliation migration is reviewed and deployed.
+acknowledgement was not set in this checkpoint. The migration is deployed, but the CLI
+still contains no reachable write implementation and this task did not use `--execute`.
 
 ## Batch, lineage, and rollback contract
 
 Forward migration `20260807000000_mts_sam_incremental_reconciliation.sql` defines
 private `reconciliation_batches`, `reconciliation_plan_items`, and
-`reconciliation_before_images` tables. It is not applied. The tables provide exact
+`reconciliation_before_images` tables. It is applied to project
+`xyfhikikddcqcmzbdvbj`. The tables provide exact
 plan/batch state, operation ordering, immutable narrow before-values, created-by-batch
 evidence, post-write checksums, and rollback status. RLS is enabled and forced; public,
 anon, and authenticated access is revoked; only the trusted service role receives the
-required narrow privileges.
+required narrow privileges. Invoker-mode trigger functions with an empty search path
+enforce batch status transitions, plan immutability after execution starts,
+created-by-batch proof, batch-scoped before-images, and immutable audit evidence.
 
 Future lineage creation must call `mts_sam.insert_lineage_if_absent()` and accept only:
 `inserted`, `already_exists_same_mapping`,
 `conflict_source_maps_to_different_entity`, or
 `conflict_entity_maps_to_different_source`. Existing canonical rows are not replayed
-merely to rewrite old lineage keys. The dry run predicts 22 new mappings, 155 exact
-reuses, zero source/entity conflicts, and six unresolved mappings tied to the four
-candidate and two catalog blockers.
+merely to rewrite old lineage keys.
 
 Rollback is batch-exact. It first verifies batch eligibility, later dependencies, and
 every current post-sync checksum. It restores only allowlisted fields from private
 before-images, deletes only entities proven created by that batch, uses child-before-
 parent FK order, preserves audit evidence, marks the batch rolled back, and reruns the
-read-only comparison. It never deletes by timestamp, deletes rows merely absent from
+read-only comparison. The final dry run predicts 28 new mappings, 155 exact reuses,
+zero source/entity conflicts, and zero unresolved mappings. It never deletes by timestamp, deletes rows merely absent from
 Sheets, removes pre-existing lineage, or overwrites newer changes.
 
 ## Derived-domain accounting
@@ -141,7 +152,7 @@ Aggregate output includes the snapshot and plan checksums, expiration, classific
 canonical/lineage/derived counts, blockers, projected counts, and identical hosted
 before/after counts. A blocked plan exits nonzero by design.
 
-Future execution shape (not authorized and currently hard-blocked):
+Future execution shape (not authorized; a separate prompt and implementation review are required):
 
 ```powershell
 .venv\Scripts\python.exe -m backend.tools.supabase_import.cli sync-incremental --execute `

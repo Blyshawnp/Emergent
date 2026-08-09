@@ -265,6 +265,10 @@ class SheetsDataProvider(DataProvider):
         if resource == "candidate_sessions":
             return [{
                 **row,
+                # Preserve a production-persisted opaque candidate ID separately.
+                # The legacy name-derived projection remains only for shadow-read
+                # compatibility and must never be treated as reconciliation identity.
+                "persisted_candidate_id": _text(row.get("candidate_id")),
                 "candidate_id": _deterministic_uuid("candidate", row.get("candidate_name", "")),
             } for row in self._candidate_rows()]
         if resource == "candidates":

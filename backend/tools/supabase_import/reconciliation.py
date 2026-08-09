@@ -44,6 +44,10 @@ HOSTED_COUNT_TABLES = (
     "pending_requests",
 )
 
+RECONCILIATION_TABLES = (
+    "reconciliation_batches", "reconciliation_plan_items", "reconciliation_before_images",
+)
+
 
 @dataclass(frozen=True)
 class DomainRule:
@@ -237,6 +241,92 @@ def hosted_count_snapshot(provider) -> dict[str, int]:
     return counts
 
 
+def reconciliation_infrastructure_ready(provider) -> bool:
+    """Probe the private reconciliation tables without creating a batch."""
+    try:
+        for table in RECONCILIATION_TABLES:
+            rows = provider._request(table, query={"select": "id", "limit": 1})
+            if not isinstance(rows, list):
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def _normalized_uuid(value: Any) -> str:
+    try:
+        return str(uuid.UUID(str(value or "").strip()))
+    except (ValueError, TypeError, AttributeError):
+        return ""
+
+
+def _legacy_candidate_identity(session_id: str) -> str:
+    """Tab-aware immutable identity for singleton legacy history sessions."""
+    normalized = _normalized_uuid(session_id)
+    return f"Candidate Sessions|session_id:{normalized}" if normalized else ""
+
+
+def _legacy_candidate_uuid(session_id: str) -> str:
+    identity = _legacy_candidate_identity(session_id)
+    return _canonical_uuid("candidate-legacy-session", identity) if identity else ""
+
+
+def _candidate_lineage_source_key(session_id: str) -> str:
+    normalized = _normalized_uuid(session_id)
+    return f"legacy_session_id:{normalized}" if normalized else ""
+
+
+def _headset_provenance(provider, current_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Return safe evidence from successful staging snapshots; never expose raw rows."""
+    try:
+        batches = provider._request("import_batches", query={
+            "status": "eq.succeeded", "select": "id,started_at",
+            "order": "started_at.asc", "limit": 100,
+        })
+        batch_ids = [str(row.get("id") or "") for row in batches or [] if row.get("id")]
+        if len(batch_ids) < 2:
+            return {"available": False, "safe_new": set(), "successful_batch_count": len(batch_ids)}
+        staged = provider._request("import_staging_rows", query={
+            "source_tab": "eq.headsets",
+            "select": "import_batch_id,source_row_number,source_checksum,normalization_status,raw_row",
+            "order": "source_row_number.asc", "limit": 5000,
+        })
+    except Exception:
+        return {"available": False, "safe_new": set(), "successful_batch_count": 0}
+
+    identities_by_batch: dict[str, list[tuple[int, str]]] = {batch_id: [] for batch_id in batch_ids}
+    all_historical = set()
+    for staged_row in staged or []:
+        batch_id = str(staged_row.get("import_batch_id") or "")
+        if batch_id not in identities_by_batch:
+            continue
+        raw = staged_row.get("raw_row") or {}
+        identity = _domain_identity("headset_catalog", raw)
+        if not identity:
+            continue
+        all_historical.add(identity)
+        identities_by_batch[batch_id].append((int(staged_row.get("source_row_number") or 0), identity))
+
+    latest = [identity for _number, identity in sorted(identities_by_batch[batch_ids[-1]])]
+    current = [_domain_identity("headset_catalog", row) for row in current_rows]
+    exact_prefix = bool(latest) and current[:len(latest)] == latest
+    current_counts = {identity: current.count(identity) for identity in set(current) if identity}
+    safe_new = {
+        identity for index, identity in enumerate(current)
+        if identity and identity not in all_historical and current_counts.get(identity) == 1
+        and exact_prefix and index >= len(latest)
+    }
+    return {
+        "available": True,
+        "safe_new": safe_new,
+        "historical_identities": all_historical,
+        "successful_batch_count": len(batch_ids),
+        "latest_staged_count": len(latest),
+        "current_count": len(current),
+        "historical_sequence_is_exact_prefix": exact_prefix,
+    }
+
+
 def _lineage_outcome(
     domain: str,
     identity: str,
@@ -301,44 +391,115 @@ def _raw_changed_fields(
     )
 
 
-def _candidate_items(source_rows, target_rows):
-    """Reuse canonical candidate IDs only; never construct identity from a name."""
+def _candidate_items(source_rows, target_rows, target_sessions, by_source, by_entity, source_attempts):
+    """Resolve candidates by durable relationships; names are exclusion-only evidence."""
     target_by_id = {str(row.get("id") or ""): row for row in target_rows if row.get("id")}
-    source_sessions = {str(row.get("session_id") or ""): row for row in source_rows}
+    target_session_by_id = {
+        str(row.get("session_id") or ""): row for row in target_sessions if row.get("session_id")
+    }
+    session_counts = {}
+    private_group_counts = {}
+    for row in source_rows:
+        session_id = str(row.get("session_id") or "").strip()
+        session_counts[session_id] = session_counts.get(session_id, 0) + 1
+        private_group = str(row.get("candidate_name") or "").strip().casefold()
+        if private_group:
+            private_group_counts[private_group] = private_group_counts.get(private_group, 0) + 1
+
     items = []
-    seen = set()
-    for session_id, row in source_sessions.items():
-        canonical_id = str(row.get("candidate_id") or "")
-        if canonical_id and canonical_id in target_by_id:
-            if canonical_id in seen:
-                continue
-            seen.add(canonical_id)
-            items.append({
-                "entity_type": "candidates", "classification": "already_current",
-                "safe_identity_hash": _safe_identity_hash("candidates", canonical_id),
-                "source_checksum": _source_checksum("candidate_sessions", row),
-                "target_checksum": _target_checksum("candidates", target_by_id[canonical_id]),
-                "proposed_checksum": _target_checksum("candidates", target_by_id[canonical_id]),
-                "changed_fields": [], "dependencies": [], "lineage_outcome": "already_exists_same_mapping",
-                "blocking_reason": None, "derived_effects": [],
-            })
-        elif session_id:
-            # The Sheet has no approved candidate ID. A name is private and is
-            # explicitly forbidden as identity, so this must remain blocked.
-            key = _safe_identity_hash("candidate-session-fallback", session_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            items.append({
-                "entity_type": "candidates", "classification": "ambiguous",
-                "safe_identity_hash": key,
-                "source_checksum": _source_checksum("candidate_sessions", row),
-                "target_checksum": None, "proposed_checksum": None,
-                "changed_fields": [], "dependencies": [], "lineage_outcome": "unresolved",
-                "blocking_reason": "approved_candidate_identity_unavailable_name_fallback_forbidden",
-                "derived_effects": ["candidate_tracking", "history"],
-            })
-    return items
+    seen_candidates = set()
+    resolutions = {}
+    for row in source_rows:
+        session_id = str(row.get("session_id") or "").strip()
+        if not session_id:
+            continue
+        safe_hash = _safe_identity_hash("candidate-session-fallback", session_id)
+        canonical_id = ""
+        method = ""
+        classification = "already_current"
+        lineage_outcome = "already_exists_same_mapping"
+        blocking_reason = None
+
+        linked_session = target_session_by_id.get(session_id)
+        if linked_session:
+            canonical_id = str(linked_session.get("candidate_id") or "")
+            method = "existing_canonical_session_relationship"
+            if canonical_id not in target_by_id:
+                blocking_reason = "linked_session_candidate_missing"
+        else:
+            lineage_key = _candidate_lineage_source_key(session_id)
+            lineage = by_source.get(("google_sheets", "Candidate Sessions", lineage_key))
+            if lineage:
+                canonical_id = str(lineage.get("entity_id") or "")
+                method = "existing_candidate_lineage"
+                if str(lineage.get("entity_type") or "") != "candidates" or canonical_id not in target_by_id:
+                    blocking_reason = "candidate_lineage_target_missing_or_mismatched"
+            else:
+                persisted = row.get("persisted_candidate_id") if "persisted_candidate_id" in row else row.get("candidate_id")
+                persisted = _normalized_uuid(persisted)
+                if persisted:
+                    canonical_id = persisted
+                    method = "persisted_candidate_uuid"
+                    classification = "already_current" if canonical_id in target_by_id else "insert_new"
+                    lineage_outcome = "already_exists_same_mapping" if canonical_id in target_by_id else "inserted"
+                else:
+                    legacy_identity = _legacy_candidate_identity(session_id)
+                    legacy_id = _legacy_candidate_uuid(session_id)
+                    private_group = str(row.get("candidate_name") or "").strip().casefold()
+                    if session_counts.get(session_id) != 1:
+                        blocking_reason = "legacy_session_identity_not_unique"
+                    elif not legacy_identity:
+                        blocking_reason = "durable_uuid_history_identity_unavailable"
+                    elif private_group and private_group_counts.get(private_group) != 1:
+                        # A name never creates identity. It may only prevent a
+                        # singleton-session fallback from splitting a known group.
+                        blocking_reason = "legacy_session_identity_candidate_group_ambiguous"
+                    elif legacy_id in target_by_id or any(
+                        str(value.get("entity_id") or "") == legacy_id for value in by_source.values()
+                    ):
+                        blocking_reason = "legacy_candidate_identity_collision"
+                    else:
+                        canonical_id = legacy_id
+                        method = "deterministic_legacy_history_uuid"
+                        classification = "insert_new"
+                        lineage_outcome = "inserted"
+
+        if not canonical_id or blocking_reason:
+            classification = "ambiguous" if not blocking_reason or "collision" not in blocking_reason else "conflict"
+            lineage_outcome = "unresolved"
+            blocking_reason = blocking_reason or "approved_candidate_identity_unavailable_name_fallback_forbidden"
+            canonical_id = ""
+
+        resolutions[session_id] = {
+            "candidate_id": canonical_id,
+            "safe_identity_hash": safe_hash if classification != "already_current" else _safe_identity_hash("candidates", canonical_id),
+            "method": method or "unresolved",
+            "classification": classification,
+            "blocking_reason": blocking_reason,
+        }
+        item_key = canonical_id or safe_hash
+        if item_key in seen_candidates:
+            continue
+        seen_candidates.add(item_key)
+        target = target_by_id.get(canonical_id)
+        items.append({
+            "entity_type": "candidates", "classification": classification,
+            "safe_identity_hash": resolutions[session_id]["safe_identity_hash"],
+            "source_checksum": _source_checksum("candidate_sessions", row),
+            "target_checksum": _target_checksum("candidates", target) if target else None,
+            "proposed_checksum": _target_checksum("candidates", target) if target else _source_checksum("candidate_sessions", row),
+            "changed_fields": [], "dependencies": [], "lineage_outcome": lineage_outcome,
+            "blocking_reason": blocking_reason,
+            "derived_effects": ["candidate_tracking", "history"] if classification == "insert_new" else [],
+            "identity_resolution_method": method or "unresolved",
+            "candidate_operation": "insert" if classification == "insert_new" else "none",
+            "dependent_session_count": 1,
+            "dependent_attempt_count": sum(
+                1 for attempt in source_attempts
+                if str(attempt.get("source_session_id") or "") == session_id
+            ),
+        })
+    return items, resolutions
 
 
 def generate_reconciliation_plan(
@@ -380,7 +541,20 @@ def generate_reconciliation_plan(
         raise RuntimeError("snapshot_checksum_invalid")
 
     by_source, by_entity = _lineage_index(supabase_provider)
-    items = _candidate_items(source_by_domain["candidate_sessions"], target_by_domain["candidates"])
+    candidate_items, candidate_resolutions = _candidate_items(
+        source_by_domain["candidate_sessions"], target_by_domain["candidates"],
+        target_by_domain["candidate_sessions"], by_source, by_entity,
+        source_by_domain["session_attempts"],
+    )
+    items = list(candidate_items)
+    for source_session in source_by_domain["candidate_sessions"]:
+        session_id = str(source_session.get("session_id") or "")
+        resolution = candidate_resolutions.get(session_id) or {}
+        if resolution.get("candidate_id"):
+            source_session["candidate_id"] = resolution["candidate_id"]
+    headset_provenance = _headset_provenance(
+        supabase_provider, source_by_domain["headset_catalog"],
+    )
     private_before_images = []
 
     for domain in CANONICAL_DOMAINS:
@@ -429,19 +603,30 @@ def generate_reconciliation_plan(
                     target_candidate_ids = {
                         str(row.get("id") or "") for row in target_by_domain["candidates"]
                     }
-                    if not parent_candidate or parent_candidate not in target_candidate_ids:
+                    resolution = candidate_resolutions.get(identity) or {}
+                    planned_candidate = resolution.get("classification") == "insert_new"
+                    if not parent_candidate or (parent_candidate not in target_candidate_ids and not planned_candidate):
                         blocking_reason = "parent_candidate_identity_unresolved"
-                        dependencies.append({
-                            "entity_type": "candidates",
-                            "safe_identity_hash": _safe_identity_hash(
-                                "candidate-session-fallback", identity
-                            ),
-                        })
+                    dependencies.append({
+                        "entity_type": "candidates",
+                        "safe_identity_hash": resolution.get("safe_identity_hash")
+                        or _safe_identity_hash("candidate-session-fallback", identity),
+                    })
+                elif parent and (candidate_resolutions.get(parent) or {}).get("blocking_reason"):
+                    classification = "ambiguous"
+                    blocking_reason = "parent_session_identity_unresolved"
                 if domain == "headset_catalog":
                     timestamp = _first(source, ("created_at", "updated_at", "CreatedAt", "UpdatedAt"))
-                    if not timestamp:
+                    if identity in headset_provenance.get("safe_new", set()):
+                        classification = "insert_new"
+                        blocking_reason = None
+                    elif not timestamp:
                         classification = "ambiguous"
-                        blocking_reason = "catalog_provenance_and_recency_unavailable"
+                        blocking_reason = (
+                            "historical_catalog_row_missing_canonical"
+                            if identity in headset_provenance.get("historical_identities", set())
+                            else "catalog_provenance_and_recency_unavailable"
+                        )
                 entity_id = _canonical_uuid(rule.entity_namespace, identity)
                 lineage_outcome = _lineage_outcome(domain, identity, entity_id, by_source, by_entity) if rule.lineage else "not_required"
                 if classification in {"ambiguous", "unresolved", "unsupported"}:
@@ -449,14 +634,25 @@ def generate_reconciliation_plan(
                 if lineage_outcome.startswith("conflict_"):
                     classification = "conflict"
                     blocking_reason = lineage_outcome
-                items.append({
+                item = {
                     "entity_type": domain, "classification": classification,
                     "safe_identity_hash": safe_hash, "source_checksum": source_checksum,
                     "target_checksum": None, "proposed_checksum": source_checksum,
                     "changed_fields": [], "dependencies": dependencies,
                     "lineage_outcome": lineage_outcome, "blocking_reason": blocking_reason,
                     "derived_effects": list(rule.derived_effects),
-                })
+                }
+                if domain == "headset_catalog":
+                    item["provenance_classification"] = (
+                        "safe_new_insert" if identity in headset_provenance.get("safe_new", set())
+                        else "expected_legacy_unmapped"
+                        if identity in headset_provenance.get("historical_identities", set())
+                        else "ambiguous"
+                    )
+                    item["identity_resolution_method"] = "normalized_brand_model"
+                    item["historical_successful_snapshot_count"] = headset_provenance.get("successful_batch_count", 0)
+                    item["historical_sequence_is_exact_prefix"] = headset_provenance.get("historical_sequence_is_exact_prefix", False)
+                items.append(item)
                 continue
 
             spec = SHADOW_DOMAIN_SPECS[domain]
@@ -510,14 +706,22 @@ def generate_reconciliation_plan(
                     "original_checksum": target_checksum,
                     "proposed_checksum": proposed_checksum,
                 })
-            items.append({
+            item = {
                 "entity_type": domain, "classification": classification,
                 "safe_identity_hash": safe_hash, "source_checksum": source_checksum,
                 "target_checksum": target_checksum, "proposed_checksum": proposed_checksum,
                 "changed_fields": mismatches, "dependencies": dependencies,
                 "lineage_outcome": lineage_outcome, "blocking_reason": blocking_reason,
                 "derived_effects": list(rule.derived_effects),
-            })
+            }
+            if domain == "headset_catalog":
+                item["provenance_classification"] = (
+                    "existing_canonical_update" if classification == "update_existing"
+                    else "normalized_duplicate" if classification == "already_current"
+                    else "ambiguous"
+                )
+                item["identity_resolution_method"] = "normalized_brand_model"
+            items.append(item)
 
         if domain == "headset_reviews":
             for identity in sorted(set(target_index) - set(source_index)):
@@ -629,7 +833,7 @@ def generate_reconciliation_plan(
         "created_entity_count": canonical_inserts,
         "rollback": {
             "eligible": not blockers,
-            "migration_required": True,
+            "migration_required": not reconciliation_infrastructure_ready(supabase_provider),
             "delete_order": [
                 "newbie_shift_reschedules", "session_attempts", "supervisor_transfers",
                 "headset_reviews", "newbie_shift_requests", "candidate_corrections",
