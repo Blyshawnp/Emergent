@@ -145,6 +145,19 @@ class ProviderSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported reconciliation RPC"):
             provider._reconciliation_rpc("caller_controlled_rpc", {})
 
+    def test_rollback_preview_accepts_eligibility_contract_without_result_field(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "synthetic-key")
+        provider._request = lambda *_args, **_kwargs: {"eligible": True, "blockers": []}
+        self.assertEqual(provider.preview_reconciliation_rollback("synthetic-batch"), {
+            "eligible": True, "blockers": [],
+        })
+
+    def test_rollback_preview_rejects_malformed_contract(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "synthetic-key")
+        provider._request = lambda *_args, **_kwargs: {"result": "not-a-preview"}
+        with self.assertRaisesRegex(RuntimeError, "rollback preview RPC returned a malformed response"):
+            provider.preview_reconciliation_rollback("synthetic-batch")
+
 
 class ForwardMigrationContractTests(unittest.TestCase):
     def test_execution_migration_is_narrow_locked_and_private(self):

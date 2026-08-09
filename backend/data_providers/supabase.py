@@ -146,7 +146,18 @@ class SupabaseDataProvider(DataProvider):
         return self._reconciliation_rpc("finalize_reconciliation_batch", {"p_batch_id": batch_id})
 
     def preview_reconciliation_rollback(self, batch_id):
-        return self._reconciliation_rpc("preview_reconciliation_rollback", {"p_batch_id": batch_id})
+        result = self._request(
+            "rpc/preview_reconciliation_rollback",
+            method="POST",
+            body={"p_batch_id": batch_id},
+        )
+        if (
+            not isinstance(result, dict)
+            or not isinstance(result.get("eligible"), bool)
+            or not isinstance(result.get("blockers"), list)
+        ):
+            raise SupabaseProviderError("Supabase rollback preview RPC returned a malformed response")
+        return result
 
     def rollback_reconciliation_batch(self, batch_id):
         return self._reconciliation_rpc("rollback_reconciliation_batch", {"p_batch_id": batch_id})

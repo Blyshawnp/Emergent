@@ -176,19 +176,35 @@ copied totals are not treated as current evidence.
 The current importer now keys request tabs by `request_id`, projects candidate and
 session relationships only when the referenced canonical entity exists, and routes
 candidate-deletion requests into the existing generic `pending_requests` table.
-No synchronization was executed at this checkpoint. Exact target accounting, fixed
-insert/update handlers, lineage attribution, database locking, and deterministic rollback
-are implemented in local forward migration
-`20260809025333_reconciliation_execution_engine.sql`. That migration is intentionally
-unapplied, so execution still fails closed and remains separately approval-gated.
+No production synchronization was executed at this checkpoint. Exact target accounting,
+fixed insert/update handlers, lineage attribution, database locking, and deterministic
+rollback are implemented by applied forward migration
+`20260809025333_reconciliation_execution_engine.sql`. Execution remains fail-closed and
+separately approval-gated by fresh checksums and explicit operator/task acknowledgements.
 
 The engine adds exact batch ownership to the eight approved canonical targets, extends
 the sole lineage RPC with reconciliation attribution, and exposes fixed service-role RPCs
 for begin, per-item transactional insert/update, failure/finalization, rollback preview,
 and exact rollback. The CLI never trusts a saved payload: it refetches one Sheets snapshot
 and reproduces the approved plan. Partial batches retain exact ownership and can be
-previewed and rolled back without deleting pre-existing rows or lineage. Hosted behavior
-is not claimed until the migration is applied and integration-tested in a later task.
+previewed and rolled back without deleting pre-existing rows or lineage.
+
+Hosted verification on 2026-08-09 used only UUIDv5 synthetic identities and the isolated
+`__mts_sam_reconciliation_synthetic__` source namespace. Candidate, session, attempt,
+narrow session update, locking, lineage outcomes, finalization, rollback preview, exact
+rollback, and a controlled partial batch were exercised. All synthetic canonical and
+lineage effects were removed by the exact rollback engine; canonical/lineage counts were
+restored to 54 candidates, 69 sessions, 137 attempts, and 264 mappings. Five synthetic
+batch records, ten plan items, and one narrow before-image remain as designed audit
+evidence. No active batch remains.
+
+The fresh production dry run generated at `2026-08-09T09:43:40.820133+00:00` reproduced
+the approved 28+1 scope with 28 new and 155 reused lineage mappings and zero ambiguity,
+unresolved identity, or conflict. Its snapshot checksum is
+`ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`; its plan checksum
+is `f017f69b61e7f6fb06c7cb0468a7dc8d4eeb1bdaea2752c974ddd72ae0a62cd2`.
+Google Sheets remains authoritative, Apps Script remains active, and shadow reads and
+dual writes remain disabled.
 
 ### 2026-08-07 incremental reconciliation planning checkpoint
 

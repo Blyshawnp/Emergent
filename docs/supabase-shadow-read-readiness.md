@@ -5,18 +5,19 @@ Google Sheets remains the authoritative data provider.
 
 ## 2026-08-08 execution-framework checkpoint
 
-The backend now has a plan-bound reconciliation and exact rollback framework, but
-`20260809025333_reconciliation_execution_engine.sql` is intentionally unapplied.
-The runtime probe therefore blocks execution. The CLI ignores serialized payloads and
+The backend now has a deployed, plan-bound reconciliation and exact rollback framework.
+`20260809025333_reconciliation_execution_engine.sql` is applied and its runtime probe,
+security contract, synthetic transactions, and exact rollback were verified on the
+linked hosted project. The CLI ignores serialized payloads and
 reconstructs one fresh Sheets snapshot before checking the exact project, snapshot and
 plan checksums, expiry, provider flags, zero-conflict state, approved 28-insert/one-update
 shape, explicit acknowledgement, and task-level guard.
 
 The migration contains only fixed entity RPC handlers, database locking, exact ownership,
 lineage attribution, before-images, terminal accounting, rollback preview, and child-first
-exact rollback. No hosted reconciliation, rollback, shadow activation, migration push, or
-provider cutover occurred in this checkpoint. Local validation is readiness evidence only;
-hosted transaction behavior remains unverified until the migration is separately applied.
+exact rollback. Only isolated synthetic reconciliation batches were executed and rolled
+back; no production reconciliation, shadow activation, dual write, or provider cutover
+occurred. Google Sheets and Apps Script remain authoritative.
 
 ## Failed-audit finding and correction
 
@@ -60,7 +61,7 @@ migration deployment must still be recorded before this document may claim readi
 | `20260803000000` | `mts_sam_lineage_rpc.sql` | Applied |
 | `20260804015610` | `harden_mts_sam_lineage_rpc_outcomes.sql` | Applied and verified |
 | `20260807000000` | `mts_sam_incremental_reconciliation.sql` | Applied planning/audit foundation |
-| `20260809025333` | `reconciliation_execution_engine.sql` | Local forward migration; **NOT APPLIED** |
+| `20260809025333` | `reconciliation_execution_engine.sql` | Applied; hosted security/transaction/rollback verified |
 | `20260614083525` | *(archived, not in active chain)* | NOT APPLIED ✓ |
 
 ---
@@ -373,11 +374,10 @@ Before/after hosted counts were identical, including 3 import batches and 264 li
 rows. No synchronization, batch creation, lineage mutation, status write, shadow
 activation, dual write, provider switch, or migration application occurred.
 
-Exact rollback accounting requires unapplied forward migration
-`20260807000000_mts_sam_incremental_reconciliation.sql`. Until it is separately
-reviewed and deployed—and the identity/provenance blockers are resolved—the execution
-path remains hard-disabled. Details are in
-`docs/supabase-incremental-reconciliation-plan.md`.
+At that checkpoint, exact rollback accounting still required deployment of forward
+migration `20260807000000_mts_sam_incremental_reconciliation.sql` and resolution of the
+identity/provenance blockers. Both the later planner correction and the current hosted
+execution-engine status are recorded in `docs/supabase-incremental-reconciliation-plan.md`.
 
 ---
 
