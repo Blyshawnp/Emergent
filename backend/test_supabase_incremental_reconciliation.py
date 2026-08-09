@@ -446,6 +446,8 @@ class ReconciliationPlannerTests(unittest.TestCase):
         self.assertFalse(plan["rollback"]["migration_required"])
         self.assertEqual(plan["status"], "ready")
         self.assertTrue(plan["execution_engine_implemented"])
+        self.assertTrue(plan["execution_prerequisites_structurally_satisfied"])
+        self.assertTrue(plan["future_separately_authorized_plan_could_be_executable"])
 
 
 class ExecutionGuardTests(unittest.TestCase):

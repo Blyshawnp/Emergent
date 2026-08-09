@@ -830,6 +830,7 @@ def generate_reconciliation_plan(
         elif outcome == "unresolved":
             lineage_counts["unresolved"] += 1
 
+    data_invariants_satisfied = not blockers
     runtime_ready = reconciliation_execution_runtime_ready(supabase_provider)
     if not runtime_ready:
         blockers.append({
@@ -867,6 +868,8 @@ def generate_reconciliation_plan(
         "execution_engine_implemented": EXECUTION_ENGINE_IMPLEMENTED,
         "execution_runtime_ready": runtime_ready,
         "execution_task_guard_enabled": os.environ.get(EXECUTION_ACK_ENV) == EXECUTION_ACK_VALUE,
+        "execution_prerequisites_structurally_satisfied": data_invariants_satisfied and runtime_ready,
+        "future_separately_authorized_plan_could_be_executable": data_invariants_satisfied,
         "project_ref": project_ref,
         "generated_at": generated.isoformat(),
         "expires_at": expires.isoformat(),

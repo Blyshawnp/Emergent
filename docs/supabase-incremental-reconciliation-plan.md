@@ -80,7 +80,7 @@ It never deletes by timestamp, by name, by Brand/Model, or merely because a row 
 The dry run records aggregate-only plan evidence and compares hosted counts before and after. With the new migration unapplied, status must be `blocked` only by `reconciliation_execution_migration_not_applied`; that blocker is expected and proves execution is disabled. No reconciliation batch, plan item, before-image, lineage, or canonical mutation is created.
 
 The 2026-08-08 ET post-implementation run used one Sheets fetch with zero retries at
-`2026-08-09T03:22:51.437643+00:00`. Snapshot checksum was
+`2026-08-09T03:28:44.376169+00:00`. Snapshot checksum was
 `ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7` and plan
 checksum was `f017f69b61e7f6fb06c7cb0468a7dc8d4eeb1bdaea2752c974ddd72ae0a62cd2`.
 It reproduced 28 inserts, one update, 28 new and 155 reused lineage mappings, zero
