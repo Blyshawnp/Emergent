@@ -392,6 +392,37 @@ outcome, and zero conflicts. Snapshot checksum is
 `49c06943dafbb0942a4e0f02c1165a278bf2f9281db1f229fbf9315dffba6456`.
 No hosted canonical, lineage, or Sheet data was changed.
 
+### 2026-08-10 corrected source relationship checkpoint
+
+One authorized `headset-review-log.source_session_id` correction now links the uniquely
+matched current review to one verified Candidate Sessions parent. Pre- and post-write
+checks proved the review identity, every non-parent field, and the parent source row were
+unchanged, with no duplicate review or parent match. Apps Script version 24 is active on
+the retained endpoint; safe live probes confirmed role authorization, missing-parent
+rejection, and exact-parent no-op behavior.
+The correction reason was: transient session identity replaced by proven stable Candidate
+Sessions identity.
+
+The fresh one-fetch, zero-retry source snapshot at
+`2026-08-10T09:37:03.802905+00:00` contains 226 physical rows and has checksum
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`.
+The new dry-run plan checksum
+`a79592d5d40416e8411883c3c66d2226d7e1ee86727733fd0d88f391d369522d`
+restores the intended 28 inserts plus one update, with 28 new and 155 reused lineage
+mappings and zero ambiguity, unresolved relationships, conflicts, unsupported operations,
+or blockers. No live reconciliation was executed.
+
+The separate fresh 14-domain comparison remains `not_ready`: 69 mismatches and 67
+unexplained differences because hosted state intentionally remains at the pre-plan
+baseline. Candidate corrections and notifications are ready; the other 12 domains are
+not ready. The headset-review domain's remaining expected link warning describes the
+unchanged hosted pre-reconciliation row, while the fresh planner confirms the corrected
+source relationship is resolved. `verify-production` remains `ok=false`, with
+`shadow_comparison_current` as its error and warnings for the hosted headset link, nine
+unmapped configuration tabs (66 rows), and six rejected authorization rows. Shadow
+reads, dual writes, provider cutover, Auth migration, and live reconciliation remain
+blocked pending separate explicit approval. No hosted canonical or lineage data changed.
+
 ### 2026-08-07 reconciliation-planner checkpoint
 
 A fresh one-fetch, zero-retry comparison reproduced the same 67 unexplained logical

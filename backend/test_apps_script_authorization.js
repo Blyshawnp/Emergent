@@ -624,6 +624,27 @@ test('headset review submission fails closed when the exact parent session is un
   assert.equal(reviewSheet.values.length, 1);
 });
 
+test('headset review submission fails closed when the parent session identity is duplicated', () => {
+  const reviewSheet = createFakeSheet('headset-review-log', [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ]);
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name'], [
+    ['duplicate-session', 'Candidate One'],
+    ['duplicate-session', 'Candidate Two'],
+  ]);
+  const workbook = createFakeWorkbook([reviewSheet, candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const result = responsePayload(api.doPost(postEvent('submitHeadsetReview', 'mts-current', {
+    review_id: 'review-test', source_session_id: 'duplicate-session',
+    candidate_name: 'Candidate Example', tester_name: 'Tester Example',
+    brand: 'ExampleBrand', model: 'Model 9000',
+  })));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /parent session could not be verified/i);
+  assert.equal(reviewSheet.values.length, 1);
+});
+
 test('candidate deletion cannot silently orphan a linked headset review', () => {
   const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name'], [
     ['session-1', 'Candidate Example'],

@@ -191,6 +191,41 @@ identical. No live reconciliation, canonical write, lineage write, or Sheet writ
 performed. Sheets remains authoritative; Apps Script remains active; provider `sheets`,
 shadow disabled, and dual writes disabled are unchanged.
 
+## 2026-08-10 headset-review source correction and fresh plan
+
+At `2026-08-10T09:27:33.783148+00:00`, one explicitly authorized source correction
+changed only `headset-review-log.source_session_id` for the uniquely matched review.
+The reason was: transient session identity replaced by proven stable Candidate Sessions
+identity.
+The review ID hash remained
+`8b2d0d64e1ece8e809f779e2997d8a7e84a407a8f81dee94257401dbbf5e00fc`; the prior
+parent hash was `f67d2a7b2ab32f6e0df1281d8ae50eca351c85b3842d6696f71a7aab9225ec59`
+and the verified Candidate Sessions parent hash is
+`17b158e19a07f680bf62c012a305ad48ce4c50009a9677f8a2451baca1c6ea09`.
+Pre- and post-write checks proved one review match, one parent match, zero duplicate
+reviews, and unchanged review identity, non-parent fields, and Candidate Sessions row.
+The planner source checksum changed from
+`941d6231bd4074dbdeba8915ae38ef7d3b15332a212d1bfb5d2f29f14f3afceb` to
+`6b9eb57f153fad0478f3c7f983a0c9b64615549e0d6976f5a160a39c4bcf508e`.
+
+The committed Apps Script guard was deployed to the existing web app as version 24,
+retaining its endpoint. Live safe probes confirmed both role endpoints remain reachable,
+MTS cannot call the SAM-only action, missing parents are rejected, and the corrected
+exact parent is accepted as an already-resolved no-op. Duplicate-parent and deletion
+protection remain covered by the local authorization harness rather than unsafe live
+mutation probes.
+
+The fresh one-fetch, zero-retry snapshot at `2026-08-10T09:37:03.802905+00:00`
+contains 226 physical source rows and has checksum
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`.
+The dry-run plan checksum is
+`a79592d5d40416e8411883c3c66d2226d7e1ee86727733fd0d88f391d369522d`:
+28 inserts, one update, 28 new and 155 reused lineage mappings, with zero ambiguity,
+unresolved relationships, conflicts, unsupported operations, or blockers. Hosted
+before/after counts were identical. No live reconciliation was executed, and no hosted
+canonical or lineage data changed. Sheets remains authoritative; provider `sheets`,
+shadow disabled, and dual writes disabled are unchanged.
+
 Post-rollback validation passed backend compilation, 387 backend unittest tests, 408
 pytest tests plus 103 subtests, 150 focused Supabase tests, 32 frontend suites with 311
 tests, the frontend production build, the backend executable build, 33 Apps Script
