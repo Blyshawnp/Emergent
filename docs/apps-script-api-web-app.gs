@@ -1289,6 +1289,8 @@ function submitHeadsetReview_(body) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) throw new Error('Headset review request is busy. Please try again.');
   try {
+    const parentSessions = readTableRows_('Candidate Sessions').filter((row) => String(row.session_id || '').trim() === sourceSessionId);
+    if (parentSessions.length !== 1) throw new Error('Headset review parent session could not be verified.');
     const sheet = ensureSheetWithHeaders_('headset-review-log', HEADSET_REVIEW_V2_HEADERS);
     const headers = headerMap_(sheet);
     const schema = headsetReviewSchema_(headers.names);
@@ -1619,13 +1621,26 @@ function applyCandidateOperation_(body) {
   }
   if (operation === 'delete_candidate_history') {
     const targets = Array.isArray(body.targets) ? body.targets : [body];
-    const candidateDeleted = deleteMatchingRows_('Candidate Sessions', (row) => targets.some((target) =>
-      (target.session_id && String(row.session_id || '') === String(target.session_id)) ||
-      (target.candidate_name && normalize_(row.candidate_name) === normalize_(target.candidate_name))));
-    const pendingDeleted = deleteMatchingRows_('Pending Sup Transfers', (row) => targets.some((target) =>
-      (target.pending_id && String(row.pending_id || '') === String(target.pending_id)) ||
-      (target.candidate_name && normalize_(row.candidate_name) === normalize_(target.candidate_name))));
-    return { updated: true, deletedCandidates: candidateDeleted, deletedPending: pendingDeleted };
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) throw new Error('Candidate deletion is busy. Please try again.');
+    try {
+      const candidateTargets = readTableRows_('Candidate Sessions').filter((row) => targets.some((target) =>
+        (target.session_id && String(row.session_id || '') === String(target.session_id)) ||
+        (target.candidate_name && normalize_(row.candidate_name) === normalize_(target.candidate_name))));
+      const targetSessionIds = candidateTargets.map((row) => String(row.session_id || '').trim()).filter(Boolean);
+      const linkedReviews = readOptionalTableRows_('headset-review-log').filter((row) =>
+        targetSessionIds.indexOf(String(row.source_session_id || '').trim()) !== -1);
+      if (linkedReviews.length) throw new Error('Candidate session has a linked headset review. Resolve the review relationship before deleting the session.');
+      const candidateDeleted = deleteMatchingRows_('Candidate Sessions', (row) => targets.some((target) =>
+        (target.session_id && String(row.session_id || '') === String(target.session_id)) ||
+        (target.candidate_name && normalize_(row.candidate_name) === normalize_(target.candidate_name))));
+      const pendingDeleted = deleteMatchingRows_('Pending Sup Transfers', (row) => targets.some((target) =>
+        (target.pending_id && String(row.pending_id || '') === String(target.pending_id)) ||
+        (target.candidate_name && normalize_(row.candidate_name) === normalize_(target.candidate_name))));
+      return { updated: true, deletedCandidates: candidateDeleted, deletedPending: pendingDeleted };
+    } finally {
+      lock.releaseLock();
+    }
   }
   if (operation === 'move_pending_sup_transfer') {
     const nextPendingId = pendingId || ('pending-' + (sessionId || new Date().getTime()));

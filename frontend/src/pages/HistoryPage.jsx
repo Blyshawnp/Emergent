@@ -428,7 +428,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
     try {
       result = await api.logHeadsetReview({
         review_id: record.headset_review_id || '',
-        source_session_id: record.session_id || record.history_id || '',
+        source_session_id: record.history_id || record.resume_source_history_id || record.session_id || '',
         candidate_name: record.candidate_name || record.candidate || '',
         tester_name: record.tester_name || '',
         headset_model: getCandidateHeadset(record).label,

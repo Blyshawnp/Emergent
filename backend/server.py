@@ -5365,6 +5365,22 @@ def _append_headset_review_log(payload):
             return {"ok": True, "logged": True, "review_id": review_id, "source_session_id": source_session_id, "status": "pending", **(result if isinstance(result, dict) else {})}
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
+        candidate_rows = _shared_read_rows(
+            sheets_api,
+            sheet_id,
+            SHARED_CANDIDATE_SESSIONS_TAB,
+            SHARED_CANDIDATE_SESSION_HEADERS,
+        )
+        parent_matches = [
+            row for row in candidate_rows
+            if str(row.get("session_id") or "").strip() == source_session_id
+        ]
+        if len(parent_matches) != 1:
+            return {
+                "ok": False,
+                "reason": "parent_session_unavailable",
+                "error": "Headset review parent session could not be verified.",
+            }
         schema = _headset_review_schema_from_context(context)
         headers = _headset_review_headers(schema)
         rows = _shared_read_rows(sheets_api, sheet_id, HEADSET_REVIEW_LOG_TAB, headers)
@@ -8143,6 +8159,28 @@ def _shared_admin_candidate_action(payload):
             if not candidate_delete_rows and not pending_delete_rows:
                 return {"ok": False, "error": "No matching Candidate Sessions or Pending Sup Transfers rows were found to delete."}
 
+            candidate_delete_session_ids = {
+                str(row.get("session_id") or "").strip()
+                for row in candidate_delete_rows
+                if str(row.get("session_id") or "").strip()
+            }
+            if candidate_delete_session_ids:
+                review_schema = _headset_review_schema_from_context(context)
+                review_rows = _shared_read_rows(
+                    sheets_api,
+                    sheet_id,
+                    HEADSET_REVIEW_LOG_TAB,
+                    _headset_review_headers(review_schema),
+                )
+                if any(
+                    str(row.get("source_session_id") or "").strip() in candidate_delete_session_ids
+                    for row in review_rows
+                ):
+                    return {
+                        "ok": False,
+                        "error": "Candidate session has a linked headset review. Resolve the review relationship before deleting the session.",
+                    }
+
             requests = []
             candidate_gid = _shared_sheet_gid(sheets_api, sheet_id, SHARED_CANDIDATE_SESSIONS_TAB)
             pending_gid = _shared_sheet_gid(sheets_api, sheet_id, SHARED_PENDING_SUP_TRANSFERS_TAB)
@@ -8765,12 +8803,22 @@ def _readiness_tracking_values(session):
     ]
 
 
+def _candidate_session_identity(session):
+    """Return the exact stable identity used by Candidate Sessions."""
+    return str(
+        (session or {}).get("history_id")
+        or (session or {}).get("resume_source_history_id")
+        or (session or {}).get("session_id")
+        or ""
+    ).strip()
+
+
 def _candidate_session_row(session, existing_rows=None):
     existing_rows = existing_rows or []
     session = _session_with_workflow_defaults(session)
     status = compute_final_status(session)
     shared_status = _shared_status(status)
-    session_id = str(session.get("history_id") or session.get("resume_source_history_id") or uuid.uuid4())
+    session_id = _candidate_session_identity(session) or str(uuid.uuid4())
     candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
     first, last_initial = _split_candidate_name(candidate_name)
     pending_id = str(session.get("pending_sup_transfer_id") or session.get("shared_pending_id") or "").strip()
@@ -13253,14 +13301,15 @@ async def google_sheet_permission_check(request: Request):
         }
 
 
-async def _sync_started_session_headset_review(session):
-    source_session_id = str(
-        session.get("resume_source_history_id")
-        or session.get("source_session_id")
-        or session.get("session_id")
-        or ""
-    ).strip()
-    headset_review = await asyncio.to_thread(_append_headset_review_log, {
+async def _sync_finished_session_headset_review(session):
+    source_session_id = _candidate_session_identity(session)
+    if not source_session_id:
+        return {
+            "ok": False,
+            "reason": "parent_session_unavailable",
+            "error": "Headset review parent session could not be verified.",
+        }
+    return await asyncio.to_thread(_append_headset_review_log, {
         "review_id": session.get("headset_review_id"),
         "source_session_id": source_session_id,
         "candidate_name": session.get("candidate_name"),
@@ -13268,20 +13317,44 @@ async def _sync_started_session_headset_review(session):
         "headset_model": session.get("headset_brand"),
         "note": session.get("headset_review_note") or "",
     })
-    current = await db.sessions.find_one({"_id": "active_session"})
-    if not current or current.get("session_id") != session.get("session_id"):
-        return
-    now_iso = datetime.now(timezone.utc).isoformat()
-    if headset_review.get("ok"):
-        updates = {
+
+
+def _headset_review_sync_updates(session, headset_review):
+    if headset_review and headset_review.get("ok"):
+        return {
             "headset_review_id": headset_review.get("review_id") or session.get("headset_review_id") or "",
             "headset_review_sync_status": "synced",
-            "headset_review_status": headset_review.get("status") or ("approved" if headset_review.get("reason") == "approved_headset" else ""),
-            "headset_review_last_synced_at": now_iso,
+            "headset_review_status": headset_review.get("status") or (
+                "approved" if headset_review.get("reason") == "approved_headset" else ""
+            ),
+            "headset_review_last_synced_at": datetime.now(timezone.utc).isoformat(),
         }
-    else:
-        updates = {"headset_review_sync_status": "failed", "headset_review_status": "pending_retry"}
-    await db.sessions.update_one({"_id": "active_session"}, {"$set": updates}, upsert=False)
+    return {"headset_review_sync_status": "failed", "headset_review_status": "pending_retry"}
+
+
+def _update_saved_history_fields(history_id, updates):
+    history_id = str(history_id or "").strip()
+    if not history_id:
+        return False
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC", ())
+    matches = []
+    for row in rows:
+        record = SQLiteCollection.decode(row["data"])
+        if str(record.get("history_id") or "").strip() == history_id:
+            matches.append((row, record))
+    if len(matches) != 1:
+        return False
+    row, record = matches[0]
+    record.update(SQLiteCollection.clone(updates))
+    db.history.store.execute(
+        "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+        (
+            SQLiteCollection.encode(record),
+            str(record.get("timestamp_iso") or record.get("timestamp") or ""),
+            row["id"],
+        ),
+    )
+    return True
 
 
 @api_router.post("/session/start")
@@ -13289,6 +13362,7 @@ async def start_session(payload: dict, request: Request, background_tasks: Backg
     session = empty_session()
     session.update(payload)
     session["session_id"] = str(session.get("session_id") or uuid.uuid4())
+    session["history_id"] = _candidate_session_identity(session) or session["session_id"]
     if str(session.get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE:
         if not str(session.get("newbie_shift_request_id") or "").strip():
             session["newbie_shift_request_id"] = f"newbie-{session['session_id']}-{uuid.uuid4().hex}"
@@ -13298,7 +13372,6 @@ async def start_session(payload: dict, request: Request, background_tasks: Backg
     if _shared_truthy(session.get("headset_review_requested")):
         session["headset_review_sync_status"] = "pending"
         await db.sessions.update_one({"_id": "active_session"}, {"$set": {"headset_review_sync_status": "pending"}}, upsert=False)
-        background_tasks.add_task(_sync_started_session_headset_review, dict(session))
     return {"ok": True, "session": session, "headsetReview": None, "warning": ""}
 
 
@@ -13412,17 +13485,33 @@ async def finish_session_simple(request: Request):
     }
     saved_record, action = await _upsert_history_record(record, doc)
     shared_result = _sync_shared_candidate_tracking(saved_record)
+    headset_review = None
+    if _shared_truthy(saved_record.get("headset_review_requested")):
+        if shared_result.get("ok"):
+            headset_review = await _sync_finished_session_headset_review(saved_record)
+        else:
+            headset_review = {
+                "ok": False,
+                "reason": "parent_session_unavailable",
+                "error": "Headset review parent session could not be verified.",
+            }
+        review_updates = _headset_review_sync_updates(saved_record, headset_review)
+        saved_record.update(review_updates)
+        _update_saved_history_fields(saved_record.get("history_id"), review_updates)
     db.backup("after-finish-session")
     await db.sessions.delete_one({"_id": "active_session"})
-    warning = ""
+    warnings = []
     if not shared_result.get("ok"):
-        warning = "Session saved locally, but shared Google Sheet update failed."
+        warnings.append("Session saved locally, but shared Google Sheet update failed.")
+    elif headset_review and not headset_review.get("ok"):
+        warnings.append("Session saved, but the headset review could not be submitted. Retry it from History.")
     return {
         "ok": True,
         "action": action,
         "record": {k: v for k, v in saved_record.items() if k != "_id"},
         "sharedTracking": shared_result,
-        "warning": warning,
+        "headsetReview": headset_review,
+        "warning": " ".join(warnings),
     }
 
 

@@ -106,7 +106,10 @@ class HeadsetReviewTransportTests(unittest.TestCase):
             "setupStatus": {"statuses": [{"tab": server.HEADSET_REVIEW_LOG_TAB, "schema": "review"}]},
         }
         with mock.patch.object(server, "_shared_sheet_context", return_value=context), \
-                mock.patch.object(server, "_shared_read_rows", return_value=[]):
+                mock.patch.object(server, "_shared_read_rows", side_effect=[
+                    [{"session_id": "session-1"}],
+                    [],
+                ]):
             result = server._append_headset_review_log(self.payload)
 
         self.assertTrue(result["ok"])
@@ -131,12 +134,28 @@ class HeadsetReviewTransportTests(unittest.TestCase):
         ]))
         existing["_row_number"] = 2
         with mock.patch.object(server, "_shared_sheet_context", return_value=context), \
-                mock.patch.object(server, "_shared_read_rows", return_value=[existing]):
+                mock.patch.object(server, "_shared_read_rows", side_effect=[
+                    [{"session_id": "session-1"}],
+                    [existing],
+                ]):
             result = server._append_headset_review_log(self.payload)
         self.assertTrue(result["ok"])
         self.assertEqual(result["reason"], "duplicate_pending")
         self.assertEqual(result["review_id"], "existing-review")
         self.assertEqual(result["model"], "Corrected Model")
+        self.assertEqual(sheets_api.values_api.appended, [])
+
+    def test_direct_creation_rejects_missing_parent_session(self):
+        sheets_api = _SheetsApi()
+        context = {
+            "ok": True, "service": _Service(sheets_api), "sheet_id": "masked-in-test",
+            "setupStatus": {"statuses": [{"tab": server.HEADSET_REVIEW_LOG_TAB, "schema": "review"}]},
+        }
+        with mock.patch.object(server, "_shared_sheet_context", return_value=context), \
+                mock.patch.object(server, "_shared_read_rows", return_value=[]):
+            result = server._append_headset_review_log(self.payload)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "parent_session_unavailable")
         self.assertEqual(sheets_api.values_api.appended, [])
 
     def test_approved_headset_and_invalid_request_do_not_create_rows(self):
@@ -155,7 +174,7 @@ class HeadsetReviewTransportTests(unittest.TestCase):
         self.assertEqual(result["error"], "Headset review request could not be submitted.")
         self.assertNotIn("raw transport", result["error"])
 
-    def test_session_start_persists_locally_and_schedules_remote_headset_sync(self):
+    def test_session_start_assigns_final_parent_identity_without_remote_write(self):
         background_tasks = mock.Mock()
         payload = {**self.payload, "headset_review_requested": True}
         with mock.patch.object(server.db.sessions, "replace_one", new=mock.AsyncMock()) as replace_one, \
@@ -165,26 +184,82 @@ class HeadsetReviewTransportTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["session"]["headset_review_sync_status"], "pending")
+        self.assertEqual(result["session"]["history_id"], result["session"]["session_id"])
         replace_one.assert_awaited_once()
         update_one.assert_awaited_once()
-        background_tasks.add_task.assert_called_once()
-        self.assertIs(background_tasks.add_task.call_args.args[0], server._sync_started_session_headset_review)
+        background_tasks.add_task.assert_not_called()
         remote_append.assert_not_called()
 
-    def test_resumed_session_sync_reuses_source_session_and_review_identity(self):
+    def test_finished_resumed_session_sync_reuses_source_session_and_review_identity(self):
         session = {
             "session_id": "continuation-1", "resume_source_history_id": "session-1",
             "headset_review_id": "review-1", "candidate_name": "Candidate Example",
             "tester_name": "Tester Example", "headset_brand": "SYNTHETIC USB MIGRATION HEADSET",
         }
         append = mock.Mock(return_value={"ok": True, "review_id": "review-1", "status": "pending"})
-        with mock.patch.object(server, "_append_headset_review_log", append), \
-                mock.patch.object(server.db.sessions, "find_one", new=mock.AsyncMock(return_value={"session_id": "continuation-1"})), \
-                mock.patch.object(server.db.sessions, "update_one", new=mock.AsyncMock()):
-            asyncio.run(server._sync_started_session_headset_review(session))
+        with mock.patch.object(server, "_append_headset_review_log", append):
+            result = asyncio.run(server._sync_finished_session_headset_review(session))
         submitted = append.call_args.args[0]
+        self.assertTrue(result["ok"])
         self.assertEqual(submitted["review_id"], "review-1")
         self.assertEqual(submitted["source_session_id"], "session-1")
+
+    def test_finished_session_prefers_final_history_identity_over_transient_session_id(self):
+        session = {
+            "session_id": "transient-1", "history_id": "stable-1",
+            "candidate_name": "Candidate Example", "tester_name": "Tester Example",
+            "headset_brand": "SYNTHETIC USB MIGRATION HEADSET",
+        }
+        append = mock.Mock(return_value={"ok": True, "review_id": "review-1", "status": "pending"})
+        with mock.patch.object(server, "_append_headset_review_log", append):
+            result = asyncio.run(server._sync_finished_session_headset_review(session))
+        self.assertTrue(result["ok"])
+        self.assertEqual(append.call_args.args[0]["source_session_id"], "stable-1")
+
+    def test_direct_candidate_deletion_rejects_linked_headset_review(self):
+        sheets_api = _SheetsApi()
+        context = {
+            "ok": True, "service": _Service(sheets_api), "sheet_id": "masked-in-test",
+            "setupStatus": {"statuses": [{"tab": server.HEADSET_REVIEW_LOG_TAB, "schema": "review"}]},
+        }
+        candidate = {"session_id": "session-1", "candidate_name": "Candidate Example", "_row_number": 2}
+        review = {"review_id": "review-1", "source_session_id": "session-1", "_row_number": 2}
+        with mock.patch.object(server, "_shared_sheet_context", return_value=context), \
+                mock.patch.object(server, "_shared_read_rows", side_effect=[[candidate], [], [review]]):
+            result = server._shared_admin_candidate_action({
+                "action": "delete_candidate_history",
+                "targets": [{"session_id": "session-1"}],
+            })
+        self.assertFalse(result["ok"])
+        self.assertIn("linked headset review", result["error"].lower())
+        self.assertEqual(sheets_api.values_api.appended, [])
+
+    def test_finish_writes_candidate_parent_before_headset_review(self):
+        events = []
+        doc = {
+            "session_id": "active-1", "history_id": "stable-1",
+            "candidate_name": "Candidate Example", "tester_name": "Tester Example",
+            "headset_brand": "SYNTHETIC USB MIGRATION HEADSET",
+            "headset_review_requested": True, "headset_review_sync_status": "pending",
+        }
+        saved = {**doc, "status": "Incomplete", "final_status": "Incomplete"}
+        background_review = mock.AsyncMock(side_effect=lambda _row: (
+            events.append("review") or {"ok": True, "review_id": "review-1", "status": "pending"}
+        ))
+        with mock.patch.object(server.db.sessions, "find_one", new=mock.AsyncMock(return_value=doc)), \
+                mock.patch.object(server.db.sessions, "delete_one", new=mock.AsyncMock()), \
+                mock.patch.object(server, "_upsert_history_record", new=mock.AsyncMock(return_value=(saved, "inserted"))), \
+                mock.patch.object(server, "_sync_shared_candidate_tracking", side_effect=lambda _row: (
+                    events.append("parent") or {"ok": True}
+                )), \
+                mock.patch.object(server, "_sync_finished_session_headset_review", new=background_review), \
+                mock.patch.object(server, "_update_saved_history_fields", return_value=True), \
+                mock.patch.object(server.db, "backup"):
+            result = asyncio.run(server.finish_session_simple(None))
+        self.assertTrue(result["ok"])
+        self.assertEqual(events, ["parent", "review"])
+        self.assertEqual(result["record"]["headset_review_sync_status"], "synced")
+        self.assertEqual(result["record"]["headset_review_id"], "review-1")
 
     def test_apps_script_decision_targets_stable_review_id(self):
         client = _AppsScriptClient({"updated": True})

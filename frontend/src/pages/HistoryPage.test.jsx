@@ -27,6 +27,7 @@ jest.mock('../api', () => ({
     deleteHistorySession: jest.fn(),
     requestHistorySessionDeletion: jest.fn(),
     requestHistorySessionCorrection: jest.fn(),
+    logHeadsetReview: jest.fn(),
     clearHistory: jest.fn(),
   },
 }));
@@ -125,6 +126,7 @@ beforeEach(() => {
   mockModal.confirmDanger.mockResolvedValue(false);
   mockModal.showModal.mockResolvedValue('cancel');
   api.startSession.mockResolvedValue({ ok: true, session: { session_id: 'active-reschedule' } });
+  api.logHeadsetReview.mockResolvedValue({ ok: true, review_id: 'review-1', status: 'pending' });
 });
 
 afterEach(() => {
@@ -614,5 +616,26 @@ test('optional reconciliation warning keeps candidate History usable and offers 
   expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Taylor Example');
   expect(view.container.querySelector('[role="alert"]').textContent).toContain('Some candidate updates could not be refreshed');
   expect(Array.from(view.container.querySelectorAll('button')).some((button) => button.textContent === 'Retry')).toBe(true);
+  await view.unmount();
+});
+
+test('headset review retry uses the stable history identity instead of the transient session identity', async () => {
+  const row = {
+    ...historyRows[0],
+    history_id: 'stable-1',
+    session_id: 'transient-1',
+    headset_review_id: 'review-1',
+    headset_review_sync_status: 'failed',
+    headset_brand: 'ExampleBrand Model 9000',
+  };
+  const view = await renderPage([row]);
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-headset-retry-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(api.logHeadsetReview).toHaveBeenCalledWith(expect.objectContaining({
+    review_id: 'review-1',
+    source_session_id: 'stable-1',
+  }));
   await view.unmount();
 });

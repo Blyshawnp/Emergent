@@ -574,7 +574,10 @@ test('legacy headset review submission and SAM decision preserve the existing sc
     'headset_model', 'candidate_name', 'tester_name', 'entered_at', 'review_status', 'notes',
   ]);
   const headsetsSheet = createFakeSheet('headsets', ['Brand', 'Model', 'Status', 'Note']);
-  const workbook = createFakeWorkbook([legacySheet, headsetsSheet]);
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name'], [
+    ['session-test', 'Candidate Example'],
+  ]);
+  const workbook = createFakeWorkbook([legacySheet, headsetsSheet, candidateSheet]);
   const { api } = createRuntime({ __workbook: workbook });
 
   const submitted = responsePayload(api.doPost(postEvent('submitHeadsetReview', 'mts-current', {
@@ -599,6 +602,48 @@ test('legacy headset review submission and SAM decision preserve the existing sc
   assert.equal(decided.ok, true);
   assert.equal(legacySheet.values[1][4], 'approved');
   assert.equal(headsetsSheet.values[1][2], 'approved');
+});
+
+test('headset review submission fails closed when the exact parent session is unavailable', () => {
+  const reviewSheet = createFakeSheet('headset-review-log', [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ]);
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name'], [
+    ['different-session', 'Candidate Example'],
+  ]);
+  const workbook = createFakeWorkbook([reviewSheet, candidateSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const result = responsePayload(api.doPost(postEvent('submitHeadsetReview', 'mts-current', {
+    review_id: 'review-test', source_session_id: 'missing-session',
+    candidate_name: 'Candidate Example', tester_name: 'Tester Example',
+    brand: 'ExampleBrand', model: 'Model 9000',
+  })));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /parent session could not be verified/i);
+  assert.equal(reviewSheet.values.length, 1);
+});
+
+test('candidate deletion cannot silently orphan a linked headset review', () => {
+  const candidateSheet = createFakeSheet('Candidate Sessions', ['session_id', 'candidate_name'], [
+    ['session-1', 'Candidate Example'],
+  ]);
+  const reviewSheet = createFakeSheet('headset-review-log', [
+    'review_id', 'source_session_id', 'candidate_name', 'tester_name', 'Brand', 'Model',
+    'Status', 'Note', 'created_at', 'updated_at', 'decision_at', 'decision_by', 'denial_reason',
+  ], [[
+    'review-1', 'session-1', 'Candidate Example', 'Tester Example', 'USB', 'MODEL',
+    'pending', '', 'created', 'updated', '', '', '',
+  ]]);
+  const workbook = createFakeWorkbook([candidateSheet, reviewSheet]);
+  const { api } = createRuntime({ __workbook: workbook });
+  const result = responsePayload(api.doPost(postEvent('updateCandidateTracking', 'sam-current', {
+    operation: 'delete_candidate_history', targets: [{ session_id: 'session-1' }],
+  })));
+  assert.equal(result.ok, false);
+  assert.match(result.error, /linked headset review/i);
+  assert.equal(candidateSheet.values.length, 2);
+  assert.equal(reviewSheet.values.length, 2);
 });
 
 test('pending headset edit updates the exact review and approval uses corrected authoritative values', () => {
