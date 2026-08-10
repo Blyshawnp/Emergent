@@ -15,9 +15,9 @@ shape, explicit acknowledgement, and task-level guard.
 
 The migration contains only fixed entity RPC handlers, database locking, exact ownership,
 lineage attribution, before-images, terminal accounting, rollback preview, and child-first
-exact rollback. Only isolated synthetic reconciliation batches were executed and rolled
-back; no production reconciliation, shadow activation, dual write, or provider cutover
-occurred. Google Sheets and Apps Script remain authoritative.
+exact rollback. Two controlled production reconciliation attempts and the isolated
+synthetic batches were rolled back exactly; no shadow activation, dual write, or provider
+cutover occurred. Google Sheets and Apps Script remain authoritative.
 
 ## Failed-audit finding and correction
 
@@ -422,6 +422,36 @@ source relationship is resolved. `verify-production` remains `ok=false`, with
 unmapped configuration tabs (66 rows), and six rejected authorization rows. Shadow
 reads, dual writes, provider cutover, Auth migration, and live reconciliation remain
 blocked pending separate explicit approval. No hosted canonical or lineage data changed.
+
+### 2026-08-10 controlled retry rollback checkpoint
+
+Fresh batch `da4a24d2-3682-4dce-8851-ec0072ebb97e` executed the approved 28 inserts plus
+one update using source checksum
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe` and plan
+checksum `a79592d5d40416e8411883c3c66d2226d7e1ee86727733fd0d88f391d369522d`.
+Internal execution verification passed: all 29 items completed, one before-image was
+captured, 28 new lineage mappings were attributed, ending counts matched, no duplicate or
+orphan was detected, and the corrected headset review used exactly one stable canonical
+parent without name matching.
+
+The required post-sync comparison did not prove mapped parity. It returned 29 mismatches
+and 27 unexplained differences: the four newly reconciled stable candidates appeared
+missing on both sides of the candidates comparison, and their sessions produced four
+relationship mismatches. The current Sheets shadow projection still derives compatibility
+candidate IDs from names, while reconciliation deliberately uses persisted or stable
+session identity. These differences were not reclassified as expected.
+
+The exact rollback preview had zero blockers and no later batch. Rollback restored the
+single update to its recorded checksum, removed all 28 batch-owned canonical rows and all
+28 batch-attributed lineage mappings, preserved the audit records, and returned operational
+counts to `54 / 69 / 137 / 96 / 11 / 14 / 9 / 0 / 264` for candidates, sessions,
+attempts, catalog, reviews, transfers, Newbie Shift requests, physical pending requests,
+and lineage. Batch status is `rolled_back`; rollback status is `succeeded`.
+
+The final post-rollback comparison is back to 69 mismatches and 67 unexplained differences.
+`verify-production` remains `ok=false`, mapped shadow readiness remains false, and full
+cutover remains false. Shadow reads, provider cutover, dual writes, and Auth migration
+remain blocked pending a separately reviewed identity-contract correction and new approval.
 
 ### 2026-08-07 reconciliation-planner checkpoint
 

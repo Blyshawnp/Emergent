@@ -1,8 +1,9 @@
 # MTS/SAM incremental reconciliation plan
 
-Status: execution framework deployed and synthetically verified; the first controlled
-production reconciliation attempt was rolled back exactly. Retry is blocked pending
-resolution of a newly proven headset-review parent-session gap and a new approval cycle.
+Status: execution framework deployed and verified; two controlled production
+reconciliation attempts were rolled back exactly. The latest retry proved a remaining
+stable-candidate versus shadow-projection identity mismatch and is blocked pending
+investigation plus a new approval cycle.
 
 Google Sheets remains authoritative. `MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, and `MTS_DUAL_WRITE_ENABLED=false` are mandatory. Shadow-read activation, provider cutover, and Apps Script retirement remain blocked.
 
@@ -226,7 +227,59 @@ before/after counts were identical. No live reconciliation was executed, and no 
 canonical or lineage data changed. Sheets remains authoritative; provider `sheets`,
 shadow disabled, and dual writes disabled are unchanged.
 
-Post-rollback validation passed backend compilation, 387 backend unittest tests, 408
+## 2026-08-10 controlled reconciliation retry and exact rollback
+
+Fresh source and target checks generated the approved plan from snapshot timestamp
+`2026-08-10T10:30:40.682416+00:00`, snapshot checksum
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`, and plan
+checksum `a79592d5d40416e8411883c3c66d2226d7e1ee86727733fd0d88f391d369522d`.
+The plan contained exactly 28 inserts, one allowlisted session update, 28 new and 155
+reused lineage mappings, one before-image, and zero ambiguity, unresolved relationships,
+conflicts, unsupported handlers, or blockers. Provider `sheets`, shadow disabled, and
+dual writes disabled were reverified before execution.
+
+Controlled production batch `da4a24d2-3682-4dce-8851-ec0072ebb97e` initially finalized
+successfully with all 29 items, exact ending counts, 28 batch-owned canonical inserts,
+28 attributed lineage mappings, and the single verified update. The corrected headset
+review inserted successfully against exactly one stable canonical session parent, with
+no name heuristic and no missing-parent result.
+
+The mandatory post-sync comparison nevertheless returned 29 mismatches and 27
+unexplained differences. Four newly reconciled candidates appeared missing on each side,
+and their sessions produced four relationship mismatches. The reconciliation planner
+intentionally resolves these candidates through persisted or stable session identity,
+while the current shadow candidate/session compatibility projection still derives its
+candidate identity from candidate names. Complete mapped parity therefore could not be
+proven, so the result was treated as an integrity failure rather than suppressing or
+reclassifying the differences.
+
+Rollback preview was eligible with zero blockers, no later batches, exact batch ownership,
+one restorable before-image, and child-before-parent delete order. Exact rollback completed
+at `2026-08-10T10:36:54.810848+00:00`: the session update checksum returned to
+`d17b36b30a5f405157519605aa25feb7fe566a43e1bcabb37c405dfbcc25a671`, all 28
+batch-created rows and 28 batch-attributed lineage mappings were removed, and canonical
+counts returned to 54 candidates, 69 sessions, 137 attempts, 96 catalog rows, 11 reviews,
+14 transfers, 9 Newbie Shift requests, 0 physical pending requests, and 264 lineage
+mappings. The batch, its 29 plan items, and before-image remain immutable audit evidence
+with `status=rolled_back` and `rollback_status=succeeded`.
+
+The final post-rollback comparison restored the prior 69 mismatches and 67 unexplained
+differences. `verify-production` remains `ok=false`, mapped shadow readiness remains
+false, and full cutover remains false. No shadow activation, provider cutover, dual write,
+Auth migration, or Sheet change occurred. A new live reconciliation is blocked until the
+stable reconciliation identity and shadow comparison identity contracts are aligned and
+separately reviewed.
+
+Post-rollback validation passed backend compilation, 395 backend unittest tests, 416
+root pytest tests, 228 focused headset/reconciliation/execution/rollback/shadow/session
+tests, 32 frontend suites with 312 tests, the frontend production build, the backend
+executable build, 36 Apps Script authorization tests plus syntax/package validation, and
+11 desktop lifecycle/package tests plus main/preload syntax checks. Local/remote migration
+parity remains exact through `20260809025333`; linked database lint retains only the
+pre-existing unused `v_count` warning in `rollback_reconciliation_batch`.
+
+The earlier 2026-08-09 post-rollback validation passed backend compilation, 387 backend
+unittest tests, 408
 pytest tests plus 103 subtests, 150 focused Supabase tests, 32 frontend suites with 311
 tests, the frontend production build, the backend executable build, 33 Apps Script
 authorization tests plus syntax validation, and 11 desktop lifecycle/package tests plus

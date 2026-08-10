@@ -233,6 +233,27 @@ fresh blocked plan retains 27 inserts, one update, 27 new and 155 reused lineage
 snapshot checksum `ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`,
 and plan checksum `49c06943dafbb0942a4e0f02c1165a278bf2f9281db1f229fbf9315dffba6456`.
 
+### 2026-08-10 controlled reconciliation retry rollback
+
+After the authorized source relationship correction and Apps Script version 24 deployment,
+a completely fresh plan reproduced the exact approved 28 inserts, one update, 28 new and
+155 reused lineage scope with zero blockers. Production batch
+`da4a24d2-3682-4dce-8851-ec0072ebb97e` committed and internally verified all 29 items,
+including the corrected headset review and its exact stable parent.
+
+The post-sync 14-domain comparison then exposed 27 unexplained differences rather than
+complete parity. The newly inserted candidates use the reconciliation contract's stable
+persisted/session identities, while the existing shadow compatibility projection derives
+candidate identity from names. Four candidates consequently appeared missing on each side
+and four sessions had relationship mismatches. Because parity could not be proven, the
+zero-blocker exact rollback restored the session before-image, removed all 28 batch-owned
+rows and 28 batch lineage mappings, and returned operational counts and lineage to the
+pre-execution baseline. The immutable batch audit is retained as `rolled_back/succeeded`.
+
+No provider, shadow, dual-write, Apps Script, Auth, or Google Sheets setting changed.
+Further live reconciliation requires a reviewed alignment between stable reconciliation
+identity and shadow comparison identity, followed by a new explicit approval.
+
 ### 2026-08-07 incremental reconciliation planning checkpoint
 
 `sync-incremental` now defaults to a one-snapshot, aggregate-only, zero-write plan.
