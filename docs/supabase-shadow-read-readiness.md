@@ -381,6 +381,17 @@ error is `shadow_comparison_current`; warnings remain for the unresolved headset
 nine unmapped configuration tabs (66 rows), and six rejected authorization rows. Shadow
 reads, dual writes, provider cutover, and Auth migration remain blocked.
 
+The focused follow-up proved the current headset row is an `orphaned_source_review`, not
+a planner dependency defect or missing hosted lineage. Its sole UUID parent has no stable
+match in current Sheets, canonical sessions, the four planned inserts, historical staging,
+or lineage; its one name correlation points to a different stable session identity and
+cannot be used. The final read-only plan remains blocked at 27 inserts plus one update,
+with 27 new and 155 reused lineage mappings, one ambiguous parent, one unresolved lineage
+outcome, and zero conflicts. Snapshot checksum is
+`ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`; plan checksum is
+`49c06943dafbb0942a4e0f02c1165a278bf2f9281db1f229fbf9315dffba6456`.
+No hosted canonical, lineage, or Sheet data was changed.
+
 ### 2026-08-07 reconciliation-planner checkpoint
 
 A fresh one-fetch, zero-retry comparison reproduced the same 67 unexplained logical

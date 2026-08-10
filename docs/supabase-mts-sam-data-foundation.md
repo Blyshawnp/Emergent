@@ -223,6 +223,16 @@ reviewed before any new live reconciliation approval. Google Sheets and Apps Scr
 remain authoritative; provider `sheets`, shadow disabled, and dual writes disabled are
 unchanged.
 
+The subsequent identity investigation classified the row as an
+`orphaned_source_review`: its UUID-shaped source parent has no exact stable match in the
+current Sheet sessions, canonical sessions, planned session inserts, historical staging,
+or lineage. The row postdates the historical import and cannot be hidden as an expected
+historical exception. No planner/importer change and no hosted correction were justified;
+the source requires an authorized, evidence-backed stable session ID correction. The
+fresh blocked plan retains 27 inserts, one update, 27 new and 155 reused lineage mappings,
+snapshot checksum `ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7`,
+and plan checksum `49c06943dafbb0942a4e0f02c1165a278bf2f9281db1f229fbf9315dffba6456`.
+
 ### 2026-08-07 incremental reconciliation planning checkpoint
 
 `sync-incremental` now defaults to a one-snapshot, aggregate-only, zero-write plan.

@@ -7,7 +7,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from tools.supabase_import.execution import (  # noqa: E402
-    APPROVED_INSERT_COUNTS, APPROVED_UPDATE_COUNTS, _payload, approved_plan_errors, execute_plan,
+    APPROVED_INSERT_COUNTS, APPROVED_UPDATE_COUNTS, INSERT_ORDER, _payload, approved_plan_errors, execute_plan,
 )
 from data_providers.supabase import SupabaseDataProvider  # noqa: E402
 
@@ -70,6 +70,9 @@ class FailingExecutionProvider(FakeExecutionProvider):
 
 
 class OrchestrationTests(unittest.TestCase):
+    def test_parent_session_is_ordered_before_headset_review_child(self):
+        self.assertLess(INSERT_ORDER["candidate_sessions"], INSERT_ORDER["headset_reviews"])
+
     def test_insert_then_update_then_finalize(self):
         insert = {"entity_type": "candidates", "classification": "insert_new", "operation": "insert",
                   "safe_identity_hash": "insert", "canonical_entity_id": "11111111-1111-4111-8111-111111111111",

@@ -161,6 +161,36 @@ parent, `status=blocked`, and unchanged hosted counts. No retry occurred. A corr
 source relationship or an explicitly reviewed alternative is required before a new
 execution approval cycle.
 
+## 2026-08-09 headset-review identity investigation
+
+The blocked current review is an `orphaned_source_review`. Its source row contains a
+review ID and one UUID-shaped `source_session_id`, but that parent identity does not
+exist in current Candidate Sessions, canonical `candidate_sessions`, any of the four
+planned session inserts, immutable staging evidence, or lineage. It also does not match
+an alternate canonical ID or deterministic session ID. The review postdates the latest
+historical import snapshot and therefore cannot be reclassified as one of the eleven
+expected historical exceptions. One candidate-name correlation exists, but its stable
+session identity differs; name-only reassociation is prohibited and unsafe.
+
+No planner/importer correction or hosted metadata/lineage correction is justified. The
+planner already resolves legitimate stable parents in the same plan and existing stable
+parents, orders sessions before reviews, and fails closed on this missing parent. The
+authoritative source row requires its correct stable source session ID, if that identity
+can be established by an authorized source owner; no ID was inferred or written.
+
+The final zero-write dry run used a one-fetch, zero-retry snapshot at
+`2026-08-10T02:47:59.366137+00:00`, generated at
+`2026-08-10T02:48:01.361132+00:00`, and expiring at
+`2026-08-10T03:03:01.361132+00:00`. Snapshot checksum
+`ff3ab5ad96aa38563d3cb3c5234ec3caf112d71a2a808cd809e8ca004ad754a7` and plan
+checksum `49c06943dafbb0942a4e0f02c1165a278bf2f9281db1f229fbf9315dffba6456`
+produce 27 inserts, one update, 27 new and 155 reused lineage mappings, one ambiguous
+parent, one unresolved lineage outcome, zero conflicts, and blocker
+`headset_reviews:parent_session_identity_unresolved`. Hosted before/after counts were
+identical. No live reconciliation, canonical write, lineage write, or Sheet write was
+performed. Sheets remains authoritative; Apps Script remains active; provider `sheets`,
+shadow disabled, and dual writes disabled are unchanged.
+
 Post-rollback validation passed backend compilation, 387 backend unittest tests, 408
 pytest tests plus 103 subtests, 150 focused Supabase tests, 32 frontend suites with 311
 tests, the frontend production build, the backend executable build, 33 Apps Script

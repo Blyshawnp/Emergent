@@ -11,6 +11,7 @@ from tools.supabase_import.reconciliation import (
     EXECUTION_ACK_ENV,
     EXECUTION_ACK_VALUE,
     EXPECTED_SUPABASE_PROJECT_REF,
+    _safe_identity_hash,
     generate_reconciliation_plan,
     hosted_count_snapshot,
     public_plan,
@@ -377,6 +378,66 @@ class ReconciliationPlannerTests(unittest.TestCase):
             if item["entity_type"] == "headset_reviews"
         )
         self.assertEqual(item["classification"], "insert_new")
+
+    def test_orphan_review_is_not_resolved_by_matching_candidate_name(self):
+        source = resources(
+            candidate_sessions=[{
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "candidate_name": "Private Name",
+            }],
+            headset_reviews=[{
+                "review_id": "review-1",
+                "source_session_id": "22222222-2222-4222-8222-222222222222",
+                "candidate_name": "Private Name",
+            }],
+        )
+        plan = build_plan(source)
+        review = next(item for item in plan["items"] if item["entity_type"] == "headset_reviews")
+        self.assertEqual(review["classification"], "ambiguous")
+        self.assertEqual(review["blocking_reason"], "parent_session_identity_unresolved")
+        self.assertFalse(plan["future_separately_authorized_plan_could_be_executable"])
+        self.assertNotIn("Private Name", str(public_plan(plan, diagnostic=True)))
+
+    def test_review_with_planned_stable_parent_resolves_dependency(self):
+        session_id = "11111111-1111-4111-8111-111111111111"
+        source = resources(
+            candidate_sessions=[{"session_id": session_id}],
+            headset_reviews=[{"review_id": "review-1", "source_session_id": session_id}],
+        )
+        plan = build_plan(source)
+        session = next(item for item in plan["items"] if item["entity_type"] == "candidate_sessions")
+        review = next(item for item in plan["items"] if item["entity_type"] == "headset_reviews")
+        self.assertEqual(session["classification"], "insert_new")
+        self.assertIsNone(session["blocking_reason"])
+        self.assertEqual(review["classification"], "insert_new")
+        self.assertIsNone(review["blocking_reason"])
+        self.assertEqual(review["dependencies"], [{
+            "entity_type": "candidate_sessions",
+            "safe_identity_hash": session["safe_identity_hash"],
+        }])
+
+    def test_current_unresolved_review_cannot_be_hidden_as_historical(self):
+        source = resources(headset_reviews=[{
+            "review_id": "current-review", "source_session_id": "missing-session",
+        }])
+        target = resources(headset_reviews=[{
+            "id": "historical", "review_id": "old-review",
+            "source_session_id": None, "session_id": None,
+        }])
+        plan = build_plan(source, target)
+        current = next(
+            item for item in plan["items"]
+            if item["entity_type"] == "headset_reviews"
+            and item["safe_identity_hash"] == _safe_identity_hash("headset_reviews", "current-review")
+        )
+        historical = next(
+            item for item in plan["items"]
+            if item["entity_type"] == "headset_reviews"
+            and item["classification"] == "expected_historical"
+        )
+        self.assertEqual(current["classification"], "ambiguous")
+        self.assertEqual(current["blocking_reason"], "parent_session_identity_unresolved")
+        self.assertIsNone(historical["blocking_reason"])
 
     def test_historical_standalone_review_is_preserved(self):
         target = resources(headset_reviews=[{"id": "x", "review_id": "old-review", "source_session_id": None, "session_id": None}])
