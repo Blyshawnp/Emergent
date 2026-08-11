@@ -408,7 +408,12 @@ def sync_incremental_cmd(args):
             **projected,
             "simulation_metadata": projected_provider.simulation_metadata,
             "projected_readiness": projected_readiness_summary(
-                projected, plan.get("provider_state"),
+                projected, {
+                    **(plan.get("provider_state") or {}),
+                    "reconciliation_migration_required": bool(
+                        (plan.get("rollback") or {}).get("migration_required")
+                    ),
+                },
             ),
         }
     if args.output_plan:

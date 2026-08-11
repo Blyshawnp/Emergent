@@ -59,6 +59,7 @@ class FakeExecutionProvider:
 
     def execute_reconciliation_insert(self, *_args): self.calls.append("insert"); return {"result": "inserted"}
     def execute_reconciliation_candidate_session_update(self, *_args): self.calls.append("update"); return {"result": "updated"}
+    def execute_reconciliation_candidate_correction_update(self, *_args): self.calls.append("correction_update"); return {"result": "updated"}
     def finalize_reconciliation_batch(self, _batch): self.calls.append("finalize"); return {"result": "succeeded"}
     def fail_reconciliation_batch(self, *_args): self.calls.append("fail"); return {"result": "failed"}
 
@@ -141,6 +142,56 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("fail", provider.calls)
         self.assertNotIn("finalize", provider.calls)
 
+    def test_candidate_correction_update_dispatches_exact_narrow_handler(self):
+        update = {
+            "entity_type": "candidate_corrections", "classification": "update_existing", "operation": "update",
+            "safe_identity_hash": "c" * 64, "canonical_entity_id": "11111111-1111-4111-8111-111111111111",
+            "source_checksum": "b" * 64, "source_tab": "candidate-information-correction-requests",
+            "source_row_key": "request_id:r-1", "changed_fields": ["candidate_id"],
+            "dependencies": [], "lineage_outcome": "not_required", "lineage_required": False,
+        }
+        plan = {
+            "items": [update],
+            "_private_source_rows": {"c" * 64: {"candidate_id": "22222222-2222-4222-8222-222222222222"}},
+            "_private_before_images": [{"safe_identity_hash": "c" * 64, "fields": {"candidate_id": None}}],
+            "_private_target_preconditions": {"c" * 64: {
+                "id": update["canonical_entity_id"], "request_id": "r-1", "source_session_id": "s-1",
+                "session_id": "33333333-3333-4333-8333-333333333333", "candidate_id": None, "status": "pending",
+            }},
+        }
+        provider = FakeExecutionProvider()
+        result = execute_plan(provider, plan)
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(provider.calls, ["begin", "correction_update", "finalize"])
+
+    def test_candidate_correction_update_rejects_every_field_except_candidate_id(self):
+        update = {
+            "entity_type": "candidate_corrections", "classification": "update_existing", "operation": "update",
+            "safe_identity_hash": "c" * 64, "canonical_entity_id": "11111111-1111-4111-8111-111111111111",
+            "source_checksum": "b" * 64, "source_tab": "candidate-information-correction-requests",
+            "source_row_key": "request_id:r-1", "changed_fields": ["candidate_id", "status"],
+        }
+        plan = {
+            "items": [update], "_private_source_rows": {"c" * 64: {"candidate_id": "x", "status": "approved"}},
+            "_private_before_images": [{"safe_identity_hash": "c" * 64, "fields": {}}],
+            "_private_target_preconditions": {"c" * 64: {"id": update["canonical_entity_id"]}},
+        }
+        with self.assertRaisesRegex(ValueError, "candidate_correction_update_fields_not_allowed"):
+            execute_plan(FakeExecutionProvider(), plan)
+
+    def test_unapproved_28_plus_6_shape_remains_execution_blocked(self):
+        plan = self.approved_synthetic_plan()
+        for index in range(5):
+            plan["items"].append({
+                "entity_type": "candidate_corrections", "classification": "update_existing",
+                "canonical_entity_id": f"10000000-0000-4000-8000-{index:012d}",
+                "source_tab": "candidate-information-correction-requests",
+                "source_row_key": f"request_id:r-{index}", "source_checksum": "d" * 64,
+            })
+        plan.update({"canonical_operations": {"inserts": 28, "updates": 6}, "created_entity_count": 28,
+                     "before_image_count": 6, "lineage_operations": {"expected_new": 28}})
+        self.assertIn("approved_update_shape_mismatch", approved_plan_errors(plan))
+
 
 class ProviderSafetyTests(unittest.TestCase):
     def test_arbitrary_reconciliation_rpc_name_is_rejected_before_transport(self):
@@ -184,6 +235,29 @@ class ForwardMigrationContractTests(unittest.TestCase):
             "session_attempts", "candidate_sessions", "headset_catalog", "candidates",
         )]
         self.assertEqual(delete_positions, sorted(delete_positions))
+
+    def test_remaining_drift_migration_is_candidate_id_only_and_rollback_complete(self):
+        path = Path(__file__).resolve().parents[1] / "supabase" / "migrations" / "20260811022016_reconcile_remaining_projected_drift.sql"
+        sql = path.read_text(encoding="utf-8").casefold()
+        for token in (
+            "execute_reconciliation_candidate_correction_update", "array['candidate_id']",
+            "stable_parent_session_not_exact", "correction_session_fk_mismatch",
+            "candidate_not_proven_by_stable_session", "update_row_count_mismatch",
+            "reconciliation_before_images", "post_write_value_mismatch",
+            "rollback_restore_checksum_mismatch", "candidate_corrections set candidate_id=v_correction.candidate_id",
+            "session_type=v_after.session_type", "completed_at=v_after.completed_at",
+            "reconciliation_runtime_capabilities", "candidate_correction_update",
+            "grant select on mts_sam.reconciliation_runtime_capabilities to service_role",
+        ):
+            self.assertIn(token, sql)
+        self.assertIn("from public,anon,authenticated", sql)
+        self.assertIn("to service_role", sql)
+        self.assertNotIn("execute format", sql)
+        correction_update = sql.split("create function mts_sam.execute_reconciliation_candidate_correction_update", 1)[1]
+        correction_update = correction_update.split("create or replace function mts_sam.rollback_reconciliation_batch", 1)[0]
+        self.assertNotIn("candidate_name", correction_update)
+        self.assertNotIn("source_session_id=", correction_update)
+        self.assertNotIn("request_id=", correction_update)
 
 
 if __name__ == "__main__":

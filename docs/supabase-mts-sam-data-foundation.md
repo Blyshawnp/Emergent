@@ -296,3 +296,21 @@ their stable session relationships. Google Sheets remains authoritative; provide
 `sheets`, Apps Script version 24, disabled shadow reads, disabled dual writes, and the
 rolled-back production state are unchanged. No canonical, lineage, Auth, or Sheet mutation
 was made.
+
+### 2026-08-10 final projected relationship-drift design
+
+Stable relationship proof classified all five correction differences as wrong hosted
+foreign keys: each exact source session, canonical session, immutable staging record, and
+session/candidate lineage chain identifies one candidate, while the hosted correction FK
+is null. Candidate names are never used. The remaining session has genuine stale hosted
+`session_type` and `completed_at` values following a later authoritative supervisor-only
+completion; History inherits the same timestamp and has no independent write target.
+
+Local reconciliation support now models 28 inserts plus six narrow updates: one session
+update limited to `session_type`/`completed_at` and five correction updates limited to
+`candidate_id`. The local forward migration adds strict target identity, one-row effects,
+pre/post checksums, narrow before-images, and exact rollback, but is intentionally
+unapplied. The projected provider reaches zero unexplained mapped-domain differences;
+execution remains blocked pending a separate migration and scope review. Production is
+still rolled back, Sheets remains authoritative, Apps Script version 24 remains active,
+and provider, shadow, dual-write, Auth, canonical, and lineage state were not changed.

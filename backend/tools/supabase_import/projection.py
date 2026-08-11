@@ -154,7 +154,24 @@ def project_reconciliation_plan(sheets_provider, supabase_provider, plan):
                     value = parse_boolean(value)
                 elif canonical_field in {"current_attempt_number", "allowed_attempt_count"}:
                     value = _integer(value)
+                elif canonical_field == "completed_at":
+                    value = _hosted_timestamp_values({"completed_at": value})["completed_at"]
+                elif canonical_field == "session_type":
+                    value = str(value or "").strip().casefold()
                 target[canonical_field] = value
+        elif entity == "candidate_corrections":
+            if list(item.get("changed_fields") or []) != ["candidate_id"]:
+                raise ValueError("projected_candidate_correction_update_fields_not_allowed")
+            target_id = str(item.get("canonical_entity_id") or "")
+            target = next(
+                (row for row in resources[entity] if str(row.get("id") or "") == target_id),
+                None,
+            )
+            if target is None:
+                raise ValueError("projected_update_target_missing")
+            target["candidate_id"] = raw.get("candidate_id")
+        elif operation == "update":
+            raise ValueError(f"projected_update_entity_not_supported:{entity}")
 
     sessions = resources["candidate_sessions"]
     status_rows = []
@@ -266,6 +283,8 @@ def projected_readiness_summary(comparison, provider_state=None):
         blockers.append("shadow_mode_not_disabled")
     if str(state.get("dual_write", "false")).casefold() != "false":
         blockers.append("dual_write_not_disabled")
+    if bool(state.get("reconciliation_migration_required")):
+        blockers.append("reconciliation_migration_not_applied")
     blockers.extend(["auth_migration_not_approved", "full_cutover_not_approved"])
     return {
         "evidence_class": "simulation_only",

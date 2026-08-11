@@ -516,3 +516,24 @@ It reports 7 unexplained differences: one candidate-session value group
 historical correction candidate-FK relationships. All other mapped domains have zero
 unexplained projected differences; the headset domain retains only its approved historical
 exceptions. Therefore projected mapped readiness is false and full cutover remains false.
+
+### 2026-08-10 projected repair simulation
+
+The remaining seven differences have now been classified without changing hosted data.
+Five correction rows have null hosted `candidate_id` values that conflict with the exact
+candidate reached through their unique `source_session_id`; immutable staging and exact
+session/candidate lineage agree. One canonical session retains stale `session_type` and
+`completed_at` values after a later authoritative supervisor-only completion. The single
+History difference is wholly derived from that completion timestamp.
+
+The planner and in-memory projection now model the minimum 28+6 future scope: 28 inserts,
+one session update (`session_type`, `completed_at`), five correction updates
+(`candidate_id` only), 28 new lineage mappings, and 155 reused mappings. The same
+production comparator reports zero unexplained differences across all mapped domains in
+simulation; only approved headset-history exceptions remain. This is not live readiness:
+the required forward migration is local and unapplied, execution is explicitly blocked,
+and full cutover remains blocked by configuration/Auth scope and lack of approval.
+
+Production remains rolled back. Sheets is authoritative, Apps Script version 24 is
+active, `MTS_DATA_PROVIDER=sheets`, shadow reads and dual writes are disabled, and no
+canonical or lineage mutation occurred in this checkpoint.

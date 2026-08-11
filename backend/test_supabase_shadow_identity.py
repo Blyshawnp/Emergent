@@ -382,6 +382,68 @@ class ProjectedReadinessTests(unittest.TestCase):
         projected = project_reconciliation_plan(_sheets([]), base, plan)
         self.assertEqual(projected.simulation_metadata["projected_lineage_count"], 28)
 
+    def test_projected_correction_update_changes_only_candidate_fk(self):
+        correction_id = str(uuid.uuid4())
+        candidate_id = str(uuid.uuid4())
+        base = StaticProvider({
+            "candidate_corrections": [{
+                "id": correction_id, "request_id": "r-1", "source_session_id": "s-1",
+                "session_id": str(uuid.uuid4()), "candidate_id": None, "status": "pending",
+            }],
+        })
+        safe_hash = hashlib.sha256(b"correction-update").hexdigest()
+        projected = project_reconciliation_plan(_sheets([]), base, {
+            "items": [{
+                "entity_type": "candidate_corrections", "operation": "update",
+                "classification": "update_existing", "safe_identity_hash": safe_hash,
+                "canonical_entity_id": correction_id, "changed_fields": ["candidate_id"],
+            }],
+            "_private_source_rows": {safe_hash: {"candidate_id": candidate_id}},
+            "canonical_operations": {"inserts": 0, "updates": 1},
+        })
+        row = projected.list_resource("candidate_corrections", limit=5000)[0]
+        self.assertEqual(row["candidate_id"], candidate_id)
+        self.assertEqual(row["request_id"], "r-1")
+        self.assertEqual(row["source_session_id"], "s-1")
+        self.assertEqual(row["status"], "pending")
+
+    def test_projected_session_completion_update_flows_to_history(self):
+        candidate_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
+        canonical_id = _canonical_uuid("session", session_id)
+        base = StaticProvider({
+            "candidates": [{"id": candidate_id}],
+            "candidate_sessions": [{
+                "id": canonical_id, "session_id": session_id, "candidate_id": candidate_id,
+                "session_type": "mock_session", "completed_at": "2026-08-01T04:00:00+00:00",
+            }],
+        })
+        safe_hash = hashlib.sha256(b"session-completion-update").hexdigest()
+        projected = project_reconciliation_plan(_sheets([]), base, {
+            "items": [{
+                "entity_type": "candidate_sessions", "operation": "update",
+                "classification": "update_existing", "safe_identity_hash": safe_hash,
+                "canonical_entity_id": canonical_id, "changed_fields": ["completed_at", "session_type"],
+            }],
+            "_private_source_rows": {safe_hash: {
+                "completed_at": "2026-08-03T02:25:21.860957+00:00", "session_type": "sup_transfer_only",
+            }},
+            "canonical_operations": {"inserts": 0, "updates": 1},
+        })
+        session = projected.list_resource("candidate_sessions", limit=5000)[0]
+        history = projected.list_resource("history", limit=5000)[0]
+        self.assertEqual(session["session_type"], "sup_transfer_only")
+        self.assertEqual(history["completed_at"], "2026-08-03T02:25:21.860957+00:00")
+
+    def test_projected_readiness_reports_unapplied_reconciliation_migration(self):
+        categories = {name: {"readiness": "ready"} for name in REQUIRED_SHADOW_DOMAINS}
+        result = projected_readiness_summary(
+            {"completed": True, "overall_readiness": "ready", "categories": categories},
+            {"reconciliation_migration_required": True},
+        )
+        self.assertTrue(result["shadow_read_mapped_domains_ready"])
+        self.assertIn("reconciliation_migration_not_applied", result["blockers"])
+
     def test_clean_projected_28_plus_1_fixture_uses_production_comparator(self):
         base, plan = self._plan_fixture()
         projected = project_reconciliation_plan(_sheets([]), base, plan)

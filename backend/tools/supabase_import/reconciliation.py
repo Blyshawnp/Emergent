@@ -76,6 +76,7 @@ RULES = {
             "raw_status", "calculated_result", "final_result", "archived", "withdrawn",
             "final_attempt", "current_attempt_number", "allowed_attempt_count",
             "needs_sup_transfer", "pending_sup_transfer_id", "newbie_shift_number",
+            "session_type", "completed_at",
         ),
         derived_effects=("authoritative_candidate_status", "candidate_tracking", "history"),
     ),
@@ -110,7 +111,7 @@ RULES = {
     ),
     "candidate_corrections": DomainRule(
         "candidate-information-correction-requests", "request_id", ("request_id",), "correction",
-        update_fields=("status", "changes", "decided_by", "denial_reason", "decision_at", "updated_at"),
+        update_fields=("candidate_id", "status", "changes", "decided_by", "denial_reason", "decision_at", "updated_at"),
         derived_effects=("pending_requests", "recent_activity"),
         parent_identity_aliases=("source_session_id",),
     ),
@@ -255,7 +256,7 @@ def reconciliation_infrastructure_ready(provider) -> bool:
     return True
 
 
-def reconciliation_execution_runtime_ready(provider) -> bool:
+def reconciliation_execution_runtime_ready(provider, *, require_candidate_correction_update=False) -> bool:
     """Read-only probe for the forward execution migration contract."""
     try:
         probes = (
@@ -267,6 +268,13 @@ def reconciliation_execution_runtime_ready(provider) -> bool:
         for table, fields in probes:
             rows = provider._request(table, query={"select": fields, "limit": 1})
             if not isinstance(rows, list):
+                return False
+        if require_candidate_correction_update:
+            rows = provider._request(
+                "reconciliation_runtime_capabilities",
+                query={"select": "candidate_correction_update", "limit": 1},
+            )
+            if len(rows) != 1 or rows[0].get("candidate_correction_update") is not True:
                 return False
     except Exception:
         return False
@@ -394,7 +402,8 @@ SESSION_SOURCE_TO_CANONICAL = {
     "archived": "archived", "withdrawn": "withdrawn", "final_attempt": "final_attempt",
     "current_attempt_number": "current_attempt_number", "allowed_attempt_count": "allowed_attempt_count",
     "needs_sup_transfer": "needs_sup_transfer", "pending_sup_transfer_id": "pending_sup_transfer_id",
-    "newbie_shift_number": "newbie_shift_number",
+    "newbie_shift_number": "newbie_shift_number", "session_type": "session_type",
+    "completed_at": "completed_at",
 }
 
 
@@ -409,6 +418,48 @@ def _raw_changed_fields(
         if stable_checksum({"value": comparable(source.get(key))})
         != stable_checksum({"value": comparable(target.get(key))})
     )
+
+
+def _session_comparable_value(field: str, value: Any):
+    if value is None or str(value).strip() == "":
+        return None
+    if field in {"archived", "withdrawn", "final_attempt", "needs_sup_transfer"}:
+        normalized = str(value).strip().casefold()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0"}:
+            return False
+    if field in {"current_attempt_number", "allowed_attempt_count"}:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+    if field == "completed_at":
+        try:
+            parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(datetime.timezone.utc).isoformat()
+            return parsed.isoformat()
+        except ValueError:
+            return str(value).strip()
+    if field == "session_type":
+        return str(value).strip().casefold()
+    return value
+
+
+def _candidate_session_canonical_changes(source: Mapping[str, Any], target: Mapping[str, Any]):
+    changes = []
+    for canonical_field in dict.fromkeys(SESSION_SOURCE_TO_CANONICAL.values()):
+        source_aliases = [
+            source_field for source_field, mapped in SESSION_SOURCE_TO_CANONICAL.items()
+            if mapped == canonical_field
+        ]
+        source_value = _first(source, source_aliases)
+        if stable_checksum({"value": _session_comparable_value(canonical_field, source_value)}) != stable_checksum({
+            "value": _session_comparable_value(canonical_field, target.get(canonical_field))
+        }):
+            changes.append(canonical_field)
+    return sorted(changes)
 
 
 def _candidate_items(source_rows, target_rows, target_sessions, by_source, by_entity, source_attempts):
@@ -577,6 +628,23 @@ def generate_reconciliation_plan(
         resolution = candidate_resolutions.get(session_id) or {}
         if resolution.get("candidate_id"):
             source_session["candidate_id"] = resolution["candidate_id"]
+    # A correction candidate relationship is meaningful only when its exact
+    # source session resolves through the same stable contract. Names never
+    # participate, and legacy requests without a canonical session stay null.
+    source_session_counts = {}
+    for source_session in source_by_domain["candidate_sessions"]:
+        key = str(source_session.get("session_id") or "").strip()
+        source_session_counts[key] = source_session_counts.get(key, 0) + 1
+    for correction in source_by_domain["candidate_corrections"]:
+        source_session_id = str(correction.get("source_session_id") or "").strip()
+        resolution = candidate_resolutions.get(source_session_id) or {}
+        correction["candidate_id"] = (
+            resolution.get("candidate_id")
+            if source_session_id
+            and source_session_counts.get(source_session_id) == 1
+            and not resolution.get("blocking_reason")
+            else ""
+        )
     headset_provenance = _headset_provenance(
         supabase_provider, source_by_domain["headset_catalog"],
     )
@@ -715,13 +783,16 @@ def generate_reconciliation_plan(
                 continue
 
             spec = SHADOW_DOMAIN_SPECS[domain]
-            if domain == "candidate_sessions" and isinstance(target.get("source_payload"), Mapping):
+            if domain == "candidate_sessions":
                 source_raw = _candidate_session_raw(source)
-                raw_changes = _raw_changed_fields(
-                    source_raw, dict(target.get("source_payload") or {}),
-                    tuple(SESSION_SOURCE_TO_CANONICAL),
-                )
-                mismatches = sorted({SESSION_SOURCE_TO_CANONICAL.get(field, field) for field in raw_changes})
+                mismatches = _candidate_session_canonical_changes(source_raw, target)
+                for fields in (spec.values, spec.statuses, spec.relationships, spec.attempts):
+                    non_update_fields = tuple(
+                        aliases for aliases in fields
+                        if aliases[0] not in set(SESSION_SOURCE_TO_CANONICAL.values())
+                    )
+                    mismatches.extend(_mismatched_fields(non_update_fields, source, target))
+                mismatches = sorted(set(mismatches))
                 source_checksum = stable_checksum(source_raw)
             else:
                 mismatches = []
@@ -729,10 +800,12 @@ def generate_reconciliation_plan(
                     mismatches.extend(_mismatched_fields(fields, source, target))
                 mismatches = sorted(set(mismatches))
             target_checksum = _target_checksum(domain, target)
-            if domain == "candidate_sessions" and isinstance(target.get("source_payload"), Mapping):
+            if domain == "candidate_sessions":
                 proposed_target = dict(target)
-                for source_field in raw_changes:
-                    proposed_target[SESSION_SOURCE_TO_CANONICAL[source_field]] = source_raw.get(source_field)
+                source_values = dict(source_raw)
+                source_values["raw_status"] = source_raw.get("status") if source_raw.get("status") is not None else source_raw.get("raw_status")
+                for canonical_field in mismatches:
+                    proposed_target[canonical_field] = source_values.get(canonical_field)
                 proposed_checksum = _target_checksum(domain, proposed_target)
             else:
                 proposed_checksum = source_checksum
@@ -744,6 +817,22 @@ def generate_reconciliation_plan(
             elif not mismatches:
                 classification = "already_current"
                 blocking_reason = None
+            elif domain == "candidate_corrections" and "candidate_id" in mismatches and not source.get("candidate_id"):
+                classification = "ambiguous"
+                blocking_reason = "candidate_correction_stable_candidate_unresolved"
+            elif domain == "candidate_sessions" and "session_type" in mismatches and _session_comparable_value(
+                "session_type", source.get("session_type")
+            ) not in {"mock_session", "sup_transfer_only"}:
+                classification = "conflict"
+                blocking_reason = "unsupported_session_type_change"
+            elif domain == "candidate_sessions" and "completed_at" in mismatches and not source.get("completed_at"):
+                classification = "conflict"
+                blocking_reason = "completed_at_clear_not_allowed"
+            elif domain == "candidate_sessions" and "completed_at" in mismatches and not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}[t ].*", str(source.get("completed_at") or "").strip().casefold()
+            ):
+                classification = "conflict"
+                blocking_reason = "completed_at_invalid"
             elif not rule.update_fields or disallowed:
                 classification = "conflict"
                 blocking_reason = "non_allowlisted_change:" + ",".join(disallowed or mismatches)
@@ -758,10 +847,19 @@ def generate_reconciliation_plan(
                 classification = "conflict"
                 blocking_reason = lineage_outcome
             if classification == "update_existing":
-                private_target_preconditions[safe_hash] = {
-                    key: target.get(key) for key in (
+                if domain == "candidate_sessions":
+                    precondition_fields = (
                         "id", "session_id", "candidate_id", *RULES["candidate_sessions"].update_fields,
                     )
+                elif domain == "candidate_corrections":
+                    precondition_fields = (
+                        "id", "request_id", "source_session_id", "session_id",
+                        "candidate_id", "status",
+                    )
+                else:
+                    precondition_fields = ("id", *rule.update_fields)
+                private_target_preconditions[safe_hash] = {
+                    key: target.get(key) for key in precondition_fields
                 }
                 private_before_images.append({
                     "entity_type": domain,
@@ -851,12 +949,20 @@ def generate_reconciliation_plan(
             lineage_counts["unresolved"] += 1
 
     data_invariants_satisfied = not blockers
-    runtime_ready = reconciliation_execution_runtime_ready(supabase_provider)
+    correction_updates_planned = entity_counts.get("candidate_corrections", {}).get("updates", 0) > 0
+    runtime_ready = reconciliation_execution_runtime_ready(
+        supabase_provider,
+        require_candidate_correction_update=correction_updates_planned,
+    )
     if not runtime_ready:
         blockers.append({
             "entity_type": "execution",
             "safe_identity_hash": "0" * 64,
-            "reason": "reconciliation_execution_migration_not_applied",
+            "reason": (
+                "candidate_correction_update_migration_not_applied"
+                if correction_updates_planned
+                else "reconciliation_execution_migration_not_applied"
+            ),
         })
 
     safe_items = sorted(items, key=lambda item: (

@@ -43,12 +43,14 @@ class FakeSupabase:
     _url = f"https://{EXPECTED_SUPABASE_PROJECT_REF}.supabase.co"
     lineage_write_mode = "rpc_only"
 
-    def __init__(self, resources=None, lineage=None, count_rows=None, table_rows=None, infrastructure_ready=False):
+    def __init__(self, resources=None, lineage=None, count_rows=None, table_rows=None,
+                 infrastructure_ready=False, correction_runtime_ready=False):
         self.resources = resources or {}
         self.lineage = lineage or []
         self.count_rows = count_rows or {}
         self.table_rows = table_rows or {}
         self.infrastructure_ready = infrastructure_ready
+        self.correction_runtime_ready = correction_runtime_ready
         self.calls = []
 
     def list_resource(self, resource, **_kwargs):
@@ -65,6 +67,10 @@ class FakeSupabase:
             if not self.infrastructure_ready:
                 raise RuntimeError("relation does not exist")
             return list(self.table_rows.get(table, ()))
+        if table == "reconciliation_runtime_capabilities":
+            if not self.correction_runtime_ready:
+                raise RuntimeError("relation does not exist")
+            return [{"candidate_correction_update": True}]
         if table in self.table_rows:
             return list(self.table_rows[table])
         return [{"id": str(index)} for index in range(self.count_rows.get(table, 0))]
@@ -81,11 +87,13 @@ def resources(**overrides):
     return result
 
 
-def build_plan(source=None, target=None, lineage=None, table_rows=None, infrastructure_ready=False):
+def build_plan(source=None, target=None, lineage=None, table_rows=None, infrastructure_ready=False,
+               correction_runtime_ready=False):
     return generate_reconciliation_plan(
         FakeSheets(source or resources()), FakeSupabase(
             target or resources(), lineage=lineage, table_rows=table_rows,
             infrastructure_ready=infrastructure_ready,
+            correction_runtime_ready=correction_runtime_ready,
         ),
         comparison_result={"completed": True, "overall_readiness": "not_ready", "total_unexplained": 1},
         now=NOW,
@@ -197,6 +205,148 @@ class ReconciliationPlannerTests(unittest.TestCase):
         self.assertEqual(item["changed_fields"], ["raw_status"])
         self.assertEqual(plan["before_image_count"], 1)
         self.assertEqual(set(plan["_private_before_images"][0]["fields"]), {"raw_status"})
+
+    def test_correction_candidate_update_uses_exact_canonical_session(self):
+        source = resources(
+            candidate_sessions=[{"session_id": "s-1", "candidate_name": "Collision", "candidate_id": "ignored"}],
+            candidate_corrections=[{
+                "request_id": "r-1", "source_session_id": "s-1", "canonical_session_id": "cs-1",
+                "candidate_name": "Wrong Name",
+            }],
+        )
+        target = resources(
+            candidates=[{"id": "c-1"}],
+            candidate_sessions=[{"id": "cs-1", "session_id": "s-1", "candidate_id": "c-1", "candidate_name": "Collision"}],
+            candidate_corrections=[{
+                "id": "cr-1", "request_id": "r-1", "source_session_id": "s-1",
+                "session_id": "cs-1", "candidate_id": None,
+            }],
+        )
+        plan = build_plan(source, target)
+        item = next(row for row in plan["items"] if row["entity_type"] == "candidate_corrections")
+        self.assertEqual(item["classification"], "update_existing")
+        self.assertEqual(item["changed_fields"], ["candidate_id"])
+        self.assertEqual(plan["_private_source_rows"][item["safe_identity_hash"]]["candidate_id"], "c-1")
+        self.assertEqual(plan["_private_target_preconditions"][item["safe_identity_hash"]]["source_session_id"], "s-1")
+        self.assertEqual(plan["_private_before_images"][0]["fields"], {"candidate_id": None})
+        self.assertTrue(plan["rollback"]["migration_required"])
+
+        deployed_plan = build_plan(
+            source, target, infrastructure_ready=True, correction_runtime_ready=True,
+        )
+        self.assertFalse(deployed_plan["rollback"]["migration_required"])
+        self.assertEqual(deployed_plan["status"], "ready")
+
+    def test_correction_without_canonical_session_keeps_null_candidate(self):
+        source = resources(candidate_corrections=[{"request_id": "r-1", "source_session_id": "missing"}])
+        target = resources(candidate_corrections=[{
+            "id": "cr-1", "request_id": "r-1", "source_session_id": "missing",
+            "session_id": None, "candidate_id": None,
+        }])
+        item = next(row for row in build_plan(source, target)["items"] if row["entity_type"] == "candidate_corrections")
+        self.assertEqual(item["classification"], "already_current")
+
+    def test_legacy_correction_fk_without_stable_session_fails_closed(self):
+        source = resources(candidate_corrections=[{"request_id": "r-1", "source_session_id": "missing"}])
+        target = resources(
+            candidates=[{"id": "legacy-candidate"}],
+            candidate_corrections=[{
+                "id": "cr-1", "request_id": "r-1", "source_session_id": "missing",
+                "session_id": None, "candidate_id": "legacy-candidate",
+            }],
+        )
+        item = next(row for row in build_plan(source, target)["items"] if row["entity_type"] == "candidate_corrections")
+        self.assertEqual(item["classification"], "ambiguous")
+        self.assertEqual(item["blocking_reason"], "candidate_correction_stable_candidate_unresolved")
+
+    def test_ambiguous_source_session_never_proves_correction_candidate(self):
+        source = resources(
+            candidate_sessions=[
+                {"session_id": "s-1", "candidate_id": "c-1"},
+                {"session_id": "s-1", "candidate_id": "c-1"},
+            ],
+            candidate_corrections=[{"request_id": "r-1", "source_session_id": "s-1"}],
+        )
+        target = resources(
+            candidates=[{"id": "c-1"}, {"id": "legacy"}],
+            candidate_sessions=[{"id": "cs-1", "session_id": "s-1", "candidate_id": "c-1"}],
+            candidate_corrections=[{
+                "id": "cr-1", "request_id": "r-1", "source_session_id": "s-1",
+                "session_id": "cs-1", "candidate_id": "legacy",
+            }],
+        )
+        item = next(row for row in build_plan(source, target)["items"] if row["entity_type"] == "candidate_corrections")
+        self.assertEqual(item["classification"], "ambiguous")
+        self.assertEqual(item["blocking_reason"], "candidate_correction_stable_candidate_unresolved")
+
+    def test_name_collision_does_not_change_correction_parent(self):
+        source = resources(
+            candidate_sessions=[
+                {"session_id": "s-1", "candidate_name": "Same"},
+                {"session_id": "s-2", "candidate_name": "Same"},
+            ],
+            candidate_corrections=[{"request_id": "r-1", "source_session_id": "s-2", "candidate_name": "Same"}],
+        )
+        target = resources(
+            candidates=[{"id": "c-1"}, {"id": "c-2"}],
+            candidate_sessions=[
+                {"id": "cs-1", "session_id": "s-1", "candidate_id": "c-1"},
+                {"id": "cs-2", "session_id": "s-2", "candidate_id": "c-2"},
+            ],
+            candidate_corrections=[{
+                "id": "cr-1", "request_id": "r-1", "source_session_id": "s-2",
+                "session_id": "cs-2", "candidate_id": None,
+            }],
+        )
+        plan = build_plan(source, target)
+        item = next(row for row in plan["items"] if row["entity_type"] == "candidate_corrections")
+        self.assertEqual(plan["_private_source_rows"][item["safe_identity_hash"]]["candidate_id"], "c-2")
+
+    def test_session_type_and_real_completion_drift_are_narrow_updates(self):
+        source = resources(candidate_sessions=[{
+            "session_id": "s-1", "candidate_id": "c-1", "session_type": "sup_transfer_only",
+            "completed_at": "2026-08-03T02:25:21.860957+00:00",
+        }])
+        target = resources(
+            candidates=[{"id": "c-1"}],
+            candidate_sessions=[{
+                "id": "cs-1", "session_id": "s-1", "candidate_id": "c-1",
+                "session_type": "mock_session", "completed_at": "2026-08-01T03:01:08.110828+00:00",
+            }],
+        )
+        item = next(row for row in build_plan(source, target)["items"] if row["entity_type"] == "candidate_sessions")
+        self.assertEqual(item["classification"], "update_existing")
+        self.assertEqual(item["changed_fields"], ["completed_at", "session_type"])
+
+    def test_timezone_and_precision_equivalent_completion_is_exact(self):
+        source = resources(candidate_sessions=[{
+            "session_id": "s-1", "candidate_id": "c-1", "session_type": "MOCK_SESSION",
+            "completed_at": "2026-08-01T00:00:00.110-04:00",
+        }])
+        target = resources(
+            candidates=[{"id": "c-1"}],
+            candidate_sessions=[{
+                "id": "cs-1", "session_id": "s-1", "candidate_id": "c-1",
+                "session_type": "mock_session", "completed_at": "2026-08-01T04:00:00.110000+00:00",
+            }],
+        )
+        item = next(row for row in build_plan(source, target)["items"] if row["entity_type"] == "candidate_sessions")
+        self.assertEqual(item["classification"], "already_current")
+
+    def test_unsupported_session_type_and_completion_clear_fail_closed(self):
+        source = resources(candidate_sessions=[{
+            "session_id": "s-1", "candidate_id": "c-1", "session_type": "invented", "completed_at": "",
+        }])
+        target = resources(
+            candidates=[{"id": "c-1"}],
+            candidate_sessions=[{
+                "id": "cs-1", "session_id": "s-1", "candidate_id": "c-1",
+                "session_type": "mock_session", "completed_at": "2026-08-01T04:00:00+00:00",
+            }],
+        )
+        item = next(row for row in build_plan(source, target)["items"] if row["entity_type"] == "candidate_sessions")
+        self.assertEqual(item["classification"], "conflict")
+        self.assertEqual(item["blocking_reason"], "unsupported_session_type_change")
 
     def test_new_blank_lazy_headers_do_not_replay_historical_sessions(self):
         source = resources(candidate_sessions=[{

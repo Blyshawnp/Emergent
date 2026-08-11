@@ -207,13 +207,24 @@ def execute_plan(provider, plan: Mapping[str, Any]) -> dict[str, Any]:
             else:
                 source_values = dict(raw)
                 source_values["raw_status"] = raw.get("status") if raw.get("status") is not None else raw.get("raw_status")
-                changes = {SESSION_SOURCE_TO_CANONICAL.get(field, field): source_values.get(field) for field in item["changed_fields"]}
-                for field in ("archived", "withdrawn", "final_attempt", "needs_sup_transfer"):
-                    if field in changes:
-                        changes[field] = parse_boolean(changes[field])
-                for field in ("current_attempt_number", "allowed_attempt_count"):
-                    if field in changes:
-                        changes[field] = _integer(changes[field])
+                if item["entity_type"] == "candidate_sessions":
+                    changes = {SESSION_SOURCE_TO_CANONICAL.get(field, field): source_values.get(field) for field in item["changed_fields"]}
+                    for field in ("archived", "withdrawn", "final_attempt", "needs_sup_transfer"):
+                        if field in changes:
+                            changes[field] = parse_boolean(changes[field])
+                    for field in ("current_attempt_number", "allowed_attempt_count"):
+                        if field in changes:
+                            changes[field] = _integer(changes[field])
+                    if "completed_at" in changes:
+                        changes["completed_at"] = parse_date(changes["completed_at"])
+                    if "session_type" in changes:
+                        changes["session_type"] = str(changes["session_type"] or "").strip().casefold()
+                elif item["entity_type"] == "candidate_corrections":
+                    if item.get("changed_fields") != ["candidate_id"]:
+                        raise ValueError("candidate_correction_update_fields_not_allowed")
+                    changes = {"candidate_id": source_values.get("candidate_id")}
+                else:
+                    raise ValueError(f"unsupported_reconciliation_update:{item['entity_type']}")
                 before = next((image for image in plan.get("_private_before_images") or []
                                if image.get("safe_identity_hash") == item["safe_identity_hash"]), None)
                 if before is None:
@@ -221,7 +232,10 @@ def execute_plan(provider, plan: Mapping[str, Any]) -> dict[str, Any]:
                 precondition = (plan.get("_private_target_preconditions") or {}).get(item["safe_identity_hash"])
                 if not precondition:
                     raise ValueError("target_precondition_missing")
-                completed.append(provider.execute_reconciliation_candidate_session_update(batch_id, current_id, precondition, changes, changes))
+                if item["entity_type"] == "candidate_sessions":
+                    completed.append(provider.execute_reconciliation_candidate_session_update(batch_id, current_id, precondition, changes, changes))
+                else:
+                    completed.append(provider.execute_reconciliation_candidate_correction_update(batch_id, current_id, precondition, changes, changes))
         final = provider.finalize_reconciliation_batch(batch_id)
         return {"batch_id": batch_id, "completed": len(completed), "result": final}
     except Exception as exc:

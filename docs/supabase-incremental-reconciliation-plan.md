@@ -324,3 +324,32 @@ narrow update. Stable correction relationship checking also exposed five histori
 through their exact `source_session_id`. These seven differences remain unexplained and
 mapped readiness remains false. A future live retry requires separate review and a safe
 canonical correction/update plan; this checkpoint authorizes neither.
+
+### 2026-08-10 remaining projected-drift repair design
+
+Read-only row-by-row evidence proved that all five correction differences are
+`wrong_hosted_candidate_fk`: each correction has an exact, unique current
+`source_session_id`, that session resolves to exactly one canonical session, and the
+candidate reached through that session is supported by exact session and candidate
+lineage plus matching immutable staging history. The hosted `candidate_id` is null in
+each case. Names are not used as evidence. The other two correction rows correctly have
+no candidate relationship and remain null.
+
+The session difference is also true stale hosted data. Sheets records the later
+supervisor-only workflow type and completion time, while canonical Supabase and both
+historical staging snapshots retain the earlier mock-session values. The timestamp is an
+actual later completion, not a timezone or precision representation. The History
+difference is derived entirely from `candidate_sessions.completed_at`; it requires no
+History write.
+
+The minimum future scope is therefore 28 inserts, one exact `candidate_sessions` update
+allowlisted to `session_type` and `completed_at`, five exact
+`candidate_corrections` updates allowlisted to `candidate_id`, 28 new lineage mappings,
+and 155 reused mappings. A local forward migration
+`20260811022016_reconcile_remaining_projected_drift.sql` adds the correction update RPC,
+extends session update/checksum support, persists narrow before-images, verifies exact
+pre/post checksums and one-row effects, and extends exact rollback. It has not been
+applied. Until it is separately reviewed and deployed, the new plan is deliberately
+blocked from execution even though the in-memory production comparator reaches zero
+unexplained mapped-domain differences. No production reconciliation or hosted mutation
+was executed.

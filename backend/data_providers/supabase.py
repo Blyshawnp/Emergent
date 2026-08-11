@@ -19,7 +19,8 @@ class SupabaseDataProvider(DataProvider):
     lineage_write_mode = "rpc_only"
     _RECONCILIATION_RPCS = frozenset({
         "begin_reconciliation_execution", "execute_reconciliation_insert",
-        "execute_reconciliation_candidate_session_update", "fail_reconciliation_batch",
+        "execute_reconciliation_candidate_session_update",
+        "execute_reconciliation_candidate_correction_update", "fail_reconciliation_batch",
         "finalize_reconciliation_batch", "preview_reconciliation_rollback",
         "rollback_reconciliation_batch",
     })
@@ -133,6 +134,12 @@ class SupabaseDataProvider(DataProvider):
 
     def execute_reconciliation_candidate_session_update(self, batch_id, item_id, precondition, changes, expected):
         return self._reconciliation_rpc("execute_reconciliation_candidate_session_update", {
+            "p_batch_id": batch_id, "p_plan_item_id": item_id, "p_precondition": dict(precondition),
+            "p_changes": dict(changes), "p_expected_values": dict(expected),
+        })
+
+    def execute_reconciliation_candidate_correction_update(self, batch_id, item_id, precondition, changes, expected):
+        return self._reconciliation_rpc("execute_reconciliation_candidate_correction_update", {
             "p_batch_id": batch_id, "p_plan_item_id": item_id, "p_precondition": dict(precondition),
             "p_changes": dict(changes), "p_expected_values": dict(expected),
         })
