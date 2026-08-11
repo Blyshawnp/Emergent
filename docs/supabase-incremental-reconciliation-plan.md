@@ -377,3 +377,41 @@ lineage. A fresh one-fetch plan remained 28 inserts plus 6 updates with 6 before
 expected migration-not-applied blocker. The in-memory production comparator again
 reached zero unexplained differences across all mapped domains. No production
 reconciliation was executed.
+
+### 2026-08-11 Supabase CLI deployment-access diagnosis
+
+The authorization failure is classified `A. STALE_OR_WRONG_CLI_ACCOUNT`. The active
+Supabase CLI profile is a normal CLI login stored in Windows Credential Manager. No
+`SUPABASE_ACCESS_TOKEN`, database-password, or project-reference environment override
+was present at process, user, or machine scope, and no repository wrapper was found
+injecting one. The active account can list only organization
+`fcxvemuaeapsxemdntlo` and two unrelated QA projects; it cannot see the linked target
+organization `olmyyfgmolaiofoevmzp` or project `xyfhikikddcqcmzbdvbj`.
+
+Local linkage remains correct and unambiguous: the linked project is `MTS-SAM`, ref
+`xyfhikikddcqcmzbdvbj`, in organization `olmyyfgmolaiofoevmzp`. Because the active
+account cannot see that organization or project, its exact target organization/project
+role is unavailable and must not be inferred. Read-only linked commands that request a
+database login role (`migration list`, database lint, and database advisors) all return
+HTTP 403 with the safe server message that the account lacks the necessary privileges.
+Project and organization listing succeeds for the unrelated account, demonstrating that
+the CLI credential is accepted but lacks access to this linked target.
+
+The normal `supabase login` flow was attempted without a token, but the CLI cannot run
+its automatic login flow in this non-interactive terminal. No credential or authorization
+change was made. The operator must run `supabase login` in an interactive terminal,
+authenticate the account that belongs to organization `olmyyfgmolaiofoevmzp`, and then
+verify both project visibility and `supabase migration list` before running only
+`supabase db push --dry-run --linked`. No token should be shared or recorded.
+
+The final migration dry run was not run because access was not restored. Fresh
+application-level read-only evidence at `2026-08-11T09:56:09.218176+00:00` retained the
+source checksum `a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`,
+the exact hosted baseline and 264 lineage mappings, 28 inserts plus 6 updates, 6
+before-images, 28 new and 155 reused lineage mappings, and zero ambiguity, conflicts, or
+unresolved relationships. The only execution blocker remains
+`candidate_correction_update_migration_not_applied`. The projected comparison is
+simulation-only and reaches zero unexplained differences across all 14 mapped domains.
+Migration `20260811022016_reconcile_remaining_projected_drift.sql` remains unapplied;
+live reconciliation remains blocked, and no canonical, lineage, Google Sheets, Auth,
+provider, shadow-read, or dual-write mutation occurred.
