@@ -43,6 +43,10 @@ from tools.supabase_import.reconciliation import (  # noqa: E402
     validate_execution_request,
 )
 from tools.supabase_import.execution import approved_plan_errors, execute_plan  # noqa: E402
+from tools.supabase_import.projection import (  # noqa: E402
+    project_reconciliation_plan,
+    projected_readiness_summary,
+)
 
 
 def _sheets_client():
@@ -354,6 +358,12 @@ def sync_incremental_cmd(args):
         return 0
 
     sheets = SheetsDataProvider(_sheets_client())
+    if args.execute and args.projected_comparison:
+        print(json.dumps({
+            "status": "blocked", "mode": "execute",
+            "errors": ["projected_comparison_is_dry_run_only"],
+        }, indent=2))
+        return 2
     if args.execute:
         # Never execute a serialized plan. This fresh provider instance fetches
         # exactly one new Sheets snapshot and reconstructs all private payloads.
@@ -387,6 +397,20 @@ def sync_incremental_cmd(args):
     output["hosted_counts_before"] = counts_before
     output["hosted_counts_after"] = counts_after
     output["hosted_counts_unchanged"] = True
+    if args.projected_comparison:
+        projected_provider = project_reconciliation_plan(sheets, provider, plan)
+        projected = compare_shadow_provider(
+            sheets, projected_provider, diagnostic_mode=args.diagnostic,
+        )
+        output["projected_post_reconciliation_comparison"] = {
+            "evidence_class": "simulation_only",
+            "production_verified": False,
+            **projected,
+            "simulation_metadata": projected_provider.simulation_metadata,
+            "projected_readiness": projected_readiness_summary(
+                projected, plan.get("provider_state"),
+            ),
+        }
     if args.output_plan:
         safe_plan = public_plan(plan, diagnostic=True)
         Path(args.output_plan).write_text(
@@ -495,6 +519,10 @@ def main(argv=None):
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--execute", action="store_true")
     sync_parser.add_argument("--diagnostic", action="store_true")
+    sync_parser.add_argument(
+        "--projected-comparison", action="store_true",
+        help="Apply the dry-run plan in memory and run the production comparator without hosted writes",
+    )
     sync_parser.add_argument("--output-plan")
     sync_parser.add_argument("--project-ref")
     sync_parser.add_argument("--plan-checksum")

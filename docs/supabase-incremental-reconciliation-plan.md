@@ -288,3 +288,39 @@ main/preload syntax checks. Local/remote migration parity still matches through
 in `rollback_reconciliation_batch`.
 
 Sheets remains primary until a separate cutover decision.
+
+### 2026-08-10 stable-identity comparison checkpoint
+
+No live reconciliation was run in this checkpoint. The comparison layer now resolves
+candidate identity through the exact reconciliation contract: an existing canonical
+session relationship, existing candidate lineage, a persisted candidate UUID, or the
+approved deterministic UUIDv5 legacy-session identity. Candidate display names are
+values only. A row that cannot satisfy that contract is reported as
+`legacy_identity_unresolved`; it is not grouped or deduplicated by name.
+
+The fresh one-fetch snapshot at `2026-08-11T01:09:20.157607+00:00` retained source
+checksum `a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`.
+The zero-write dry-run remained exactly 28 inserts plus one narrow update, 28 new and 155
+reused lineage mappings, zero ambiguity/unresolved/conflicts/blockers, plan checksum
+`f0e1d29adf6b9185d5fd7508c81987bbba3bda22329471b77be3170e0f1d6d19`, and expiration
+`2026-08-11T01:24:22.789956+00:00`.
+
+`sync-incremental --dry-run --projected-comparison` applies those planned effects only to
+an in-memory provider and then invokes the same production comparator. It cannot write
+canonical tables or lineage and labels its evidence `simulation_only`. The projection
+reached the expected 58 candidates, 73 sessions, 145 attempts, 98 catalog rows, 12
+reviews, 15 transfers, 14 Newbie Shift requests, 7 corrections, 24 combined pending
+requests, 4 notifications, and 292 lineage mappings.
+
+Across the five identity/status-sensitive domains, the projected comparison reduced the
+rolled-back live result from 27 to 2 unexplained differences. Candidate false positives
+fell from 9 to 0; candidate sessions from 5 to 1; authoritative status from 1 to 0;
+candidate tracking from 6 to 0; and History from 6 to 1. Stable checking separately
+exposed five historical correction relationships, leaving 7 unexplained differences in
+the projected all-domain result. The remaining session/History difference is one exact stable session whose hosted
+`session_type` and `completed_at` differ from Sheets; neither field is in the authorized
+narrow update. Stable correction relationship checking also exposed five historical
+`candidate_corrections.candidate_id` foreign keys that disagree with the candidate reached
+through their exact `source_session_id`. These seven differences remain unexplained and
+mapped readiness remains false. A future live retry requires separate review and a safe
+canonical correction/update plan; this checkpoint authorizes neither.

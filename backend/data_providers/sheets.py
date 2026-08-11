@@ -74,11 +74,15 @@ def _authoritative_status(row):
     status = normalized(row.get("status") or row.get("latest_status"))
     if status in {"FAIL FINAL ATTEMPT", "FAILED FINAL ATTEMPT"}:
         return "FAIL-Final Attempt"
+    failed_calls = sum(
+        normalized(row.get(f"call_{index}_result")) in {"FAIL", "FAILED"}
+        for index in (1, 2, 3)
+    )
     failed_transfers = sum(
         normalized(row.get(f"sup_transfer_{index}_result")) in {"FAIL", "FAILED"}
         for index in (1, 2)
     )
-    if _truthy(row.get("final_attempt")) and failed_transfers >= 2:
+    if _truthy(row.get("final_attempt")) and (failed_calls >= 2 or failed_transfers >= 2):
         return "FAIL-Final Attempt"
     if status in {"FAIL", "FAILED"}:
         return "Fail"
@@ -111,6 +115,16 @@ def _deterministic_uuid(namespace, value):
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"mts-sam:{namespace}:{value}"))
 
 
+def _stable_session_identity(row):
+    """Return the persisted session/history identity hierarchy, never a name."""
+    return _text(
+        row.get("session_id")
+        or row.get("history_id")
+        or row.get("resume_source_history_id")
+        or row.get("source_session_id")
+    )
+
+
 def _combine_datetime(date_value, time_value):
     date_text = str(date_value or "").strip()
     time_text = str(time_value or "").strip()
@@ -126,6 +140,7 @@ def _combine_datetime(date_value, time_value):
 
 class SheetsDataProvider(DataProvider):
     name = "sheets"
+    stable_identity_resolution_required = True
 
     def __init__(self, client, *, max_retries=4, base_delay=1.0):
         self._client = client
@@ -265,35 +280,35 @@ class SheetsDataProvider(DataProvider):
         if resource == "candidate_sessions":
             return [{
                 **row,
-                # Preserve a production-persisted opaque candidate ID separately.
-                # The legacy name-derived projection remains only for shadow-read
-                # compatibility and must never be treated as reconciliation identity.
+                "session_id": _stable_session_identity(row),
+                # Candidate identity is resolved by the shared reconciliation-aware
+                # comparison layer. Never synthesize it from a display name here.
                 "persisted_candidate_id": _text(row.get("candidate_id")),
-                "candidate_id": _deterministic_uuid("candidate", row.get("candidate_name", "")),
+                "candidate_id": _text(row.get("candidate_id")),
+                "authoritative_status": _authoritative_status(row),
+                "category": _tracking_category(row),
             } for row in self._candidate_rows()]
         if resource == "candidates":
-            latest = {}
+            projected = []
             for row in self._candidate_rows():
                 name = _text(row.get("candidate_name"))
-                if not name:
+                session_id = _stable_session_identity(row)
+                if not name or not session_id:
                     continue
-                candidate = {
+                projected.append({
                     **row,
                     "display_name": name,
-                    "source_candidate_id": name,
-                    "latest_session_id": _text(row.get("session_id")),
+                    "source_candidate_id": "",
+                    "comparison_source_session_id": session_id,
+                    "latest_session_id": session_id,
                     "authoritative_status": _authoritative_status(row),
-                    "lineage_identity": f"candidate:{name}",
-                }
-                stamp = str(row.get("completed_at") or row.get("updated_at") or row.get("created_at") or "")
-                current = latest.get(name.casefold())
-                if current is None or stamp >= current[0]:
-                    latest[name.casefold()] = (stamp, candidate)
-            return [item[1] for item in latest.values()]
+                    "lineage_identity": "",
+                })
+            return projected
         if resource == "session_attempts":
             attempts = []
             for row in self._candidate_rows():
-                session_id = _text(row.get("session_id"))
+                session_id = _stable_session_identity(row)
                 if not session_id:
                     continue
                 for number, field in ((1, "call_1_result"), (2, "call_2_result"), (3, "call_3_result")):
@@ -311,22 +326,22 @@ class SheetsDataProvider(DataProvider):
             return attempts
         if resource == "authoritative_candidate_status":
             return [{
-                "session_id": _text(row.get("session_id")),
+                "session_id": _stable_session_identity(row),
                 "authoritative_status": _authoritative_status(row),
-                "determining_session_id": _text(row.get("session_id")),
+                "determining_session_id": _stable_session_identity(row),
                 "final_attempt": _truthy(row.get("final_attempt")),
                 "archived": _truthy(row.get("archived")),
-            } for row in self._candidate_rows() if _text(row.get("session_id"))]
+            } for row in self._candidate_rows() if _stable_session_identity(row)]
         if resource in {"candidate_tracking", "history"}:
             projected = []
             for row in self._candidate_rows():
-                session_id = _text(row.get("session_id"))
+                session_id = _stable_session_identity(row)
                 if not session_id:
                     continue
                 projected.append({
                     **row,
                     "session_id": session_id,
-                    "candidate_id": _deterministic_uuid("candidate", row.get("candidate_name", "")),
+                    "candidate_id": _text(row.get("candidate_id")),
                     "authoritative_status": _authoritative_status(row),
                     "category": _tracking_category(row),
                 })
@@ -352,7 +367,7 @@ class SheetsDataProvider(DataProvider):
             } for row in rows] if isinstance(rows, list) else []
         if resource == "headset_reviews":
             rows = self._tab_rows("headset-review-log")
-            valid_sessions = {_text(row.get("session_id")) for row in self._candidate_rows()}
+            valid_sessions = {_stable_session_identity(row) for row in self._candidate_rows()}
             catalog_by_display = {
                 _text(f"{row.get('Brand', '')} {row.get('Model', '')}").casefold(): row
                 for row in self._tab_rows("headsets")
@@ -364,7 +379,7 @@ class SheetsDataProvider(DataProvider):
                 if _text(row.get("source_session_id")) in valid_sessions else "",
             } for row in rows] if isinstance(rows, list) else []
         if resource == "newbie_shift_requests":
-            valid_sessions = {_text(row.get("session_id")) for row in self._candidate_rows()}
+            valid_sessions = {_stable_session_identity(row) for row in self._candidate_rows()}
             return [{
                 **row,
                 "canonical_session_id": _deterministic_uuid("session", row.get("source_session_id", ""))
@@ -372,17 +387,13 @@ class SheetsDataProvider(DataProvider):
             } for row in self._request_rows() if row.get("source_tab") == "newbie-shift-requests"]
         if resource == "candidate_corrections":
             candidate_rows = self._candidate_rows()
-            valid_sessions = {_text(row.get("session_id")) for row in candidate_rows}
-            valid_candidates = {
-                _text(row.get("candidate_name")).casefold()
-                for row in candidate_rows if _text(row.get("candidate_name"))
-            }
+            valid_sessions = {_stable_session_identity(row) for row in candidate_rows}
             return [{
                 **row,
                 "canonical_session_id": _deterministic_uuid("session", row.get("source_session_id", ""))
                 if _text(row.get("source_session_id")) in valid_sessions else "",
-                "candidate_id": _deterministic_uuid("candidate", row.get("candidate", ""))
-                if _text(row.get("candidate")).casefold() in valid_candidates else "",
+                # Resolved from source_session_id by the comparison identity layer.
+                "candidate_id": "",
             } for row in self._request_rows() if row.get("source_tab") == "candidate-information-correction-requests"]
         if resource == "pending_requests":
             return self._request_rows()

@@ -272,3 +272,27 @@ future execution approval. See `docs/supabase-incremental-reconciliation-plan.md
 
 For complete shadow-read readiness details, deployment audit, and activation criteria
 see `docs/supabase-shadow-read-readiness.md`.
+
+### 2026-08-10 stable comparison identity contract
+
+Shadow comparison no longer creates candidate UUIDs from names or groups candidate rows by
+normalized display name. Candidate/session relationships are resolved through the same
+read-only evidence used by the incremental planner: canonical session relationship,
+lineage, persisted UUID, and only then the already-approved immutable singleton legacy
+session identity. `history_id`, `resume_source_history_id`, and `source_session_id` remain
+ordered stable fallbacks when the primary source session field is absent. A name is never
+an identity fallback.
+
+The new projected-provider harness applies a fresh dry-run plan in memory, recomputes
+candidate, status, tracking, History, pending, and activity projections, and sends those
+rows through the production comparator. It is hard-labeled `simulation_only`, exposes no
+write method, and never represents projected evidence as hosted verification.
+
+Fresh projected evidence eliminated all candidate/session name-identity false positives
+from the rolled-back live result. It also truthfully exposed seven remaining differences:
+one stable session has non-allowlisted `session_type`/`completed_at` drift, History reflects
+that timestamp drift, and five historical correction candidate foreign keys disagree with
+their stable session relationships. Google Sheets remains authoritative; provider
+`sheets`, Apps Script version 24, disabled shadow reads, disabled dual writes, and the
+rolled-back production state are unchanged. No canonical, lineage, Auth, or Sheet mutation
+was made.

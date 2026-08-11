@@ -1142,7 +1142,7 @@ def _empty_domain_result():
         'identity_mismatch_count': 0, 'value_mismatch_count': 0,
         'status_mismatch_count': 0, 'relationship_mismatch_count': 0,
         'attempt_mismatch_count': 0,
-        'duplicate_identity_count': 0,
+        'duplicate_identity_count': 0, 'unresolved_identity_count': 0,
         'expected_difference_count': 0, 'unexplained_difference_count': 0,
         'error_count': 0, 'errors': [],
         'readiness': 'unknown',
@@ -1171,8 +1171,8 @@ class ShadowDomainSpec:
 
 SHADOW_DOMAIN_SPECS = {
     "candidates": ShadowDomainSpec(
-        identity=(("source_candidate_id", "display_name", "candidate_name"),),
-        values=(("display_name", "candidate_name"), ("first_name", "candidate_first_name"), ("last_initial", "candidate_last_initial"), ("lineage_identity",)),
+        identity=(("comparison_candidate_id", "id"),),
+        values=(("display_name", "candidate_name"), ("first_name", "candidate_first_name"), ("last_initial", "candidate_last_initial")),
         statuses=(("authoritative_status",), ("archived",)),
         relationships=(("latest_session_id",),),
     ),
@@ -1347,16 +1347,123 @@ def _mismatched_fields(spec_fields, sheets_row, supabase_row):
 def _comparison_index(spec, rows):
     index = {}
     duplicates = 0
+    unresolved = 0
     for row in rows:
         key = _identity_key(spec, row)
         if not key:
-            duplicates += 1
+            unresolved += 1
             continue
         if key in index:
             duplicates += 1
         else:
             index[key] = row
-    return index, duplicates
+    return index, duplicates, unresolved
+
+
+def _candidate_comparison_context(sheets_provider, supabase_provider):
+    """Resolve comparison candidate IDs through the reconciliation contract."""
+    source_sessions = list(sheets_provider.list_resource("candidate_sessions", limit=5000) or [])
+    target_candidates = list(supabase_provider.list_resource("candidates", limit=5000) or [])
+    target_sessions = list(supabase_provider.list_resource("candidate_sessions", limit=5000) or [])
+    source_attempts = list(sheets_provider.list_resource("session_attempts", limit=5000) or [])
+    lineage_rows = []
+    request = getattr(supabase_provider, "_request", None)
+    if callable(request):
+        try:
+            candidate_lineage = request("data_source_lineage", query={
+                "select": "entity_type,entity_id,source_system,source_tab,source_row_key,source_checksum,import_batch_id",
+                "limit": 5000,
+            })
+            if isinstance(candidate_lineage, list):
+                lineage_rows = candidate_lineage
+        except Exception:
+            lineage_rows = []
+    by_source = {}
+    by_entity = {}
+    for row in lineage_rows:
+        by_source[(
+            str(row.get("source_system") or ""), str(row.get("source_tab") or ""),
+            str(row.get("source_row_key") or ""),
+        )] = row
+        by_entity[(
+            str(row.get("entity_type") or ""), str(row.get("entity_id") or ""),
+            str(row.get("source_system") or ""), str(row.get("source_tab") or ""),
+        )] = row
+
+    # Local import avoids a module cycle while reusing the exact planner
+    # identity contract instead of inventing comparison-only identity rules.
+    from .reconciliation import _candidate_items
+    _items, resolutions = _candidate_items(
+        source_sessions, target_candidates, target_sessions,
+        by_source, by_entity, source_attempts,
+    )
+    aligned_sessions = []
+    for row in source_sessions:
+        next_row = dict(row)
+        resolution = resolutions.get(str(row.get("session_id") or "").strip()) or {}
+        candidate_id = str(resolution.get("candidate_id") or "")
+        next_row["candidate_id"] = candidate_id
+        next_row["comparison_identity_status"] = (
+            "stable" if candidate_id and not resolution.get("blocking_reason")
+            else "legacy_identity_unresolved"
+        )
+        aligned_sessions.append(next_row)
+    return {
+        "source_sessions": aligned_sessions,
+        "target_candidates": target_candidates,
+        "target_sessions": target_sessions,
+        "source_attempts": source_attempts,
+        "resolutions": resolutions,
+    }
+
+
+def _align_candidate_comparison_rows(domain, rows, *, side, context):
+    rows = [dict(row) for row in rows]
+    resolutions = context["resolutions"]
+    if side == "supabase":
+        if domain == "candidates":
+            for row in rows:
+                row["comparison_candidate_id"] = str(row.get("id") or "")
+        return rows
+
+    if domain == "candidate_sessions":
+        return [dict(row) for row in context["source_sessions"]]
+    if domain == "candidates":
+        latest = {}
+        unresolved = []
+        for session in context["source_sessions"]:
+            candidate_id = str(session.get("candidate_id") or "")
+            candidate = {
+                **session,
+                "comparison_candidate_id": candidate_id,
+                "display_name": session.get("candidate_name"),
+                "latest_session_id": session.get("session_id"),
+                "authoritative_status": session.get("authoritative_status") or _first_value(
+                    session, ("authoritative_status", "status", "raw_status")
+                ),
+            }
+            if not candidate_id:
+                candidate["comparison_identity_status"] = "legacy_identity_unresolved"
+                unresolved.append(candidate)
+                continue
+            stamp = str(session.get("completed_at") or session.get("updated_at") or session.get("created_at") or "")
+            current = latest.get(candidate_id)
+            if current is None or stamp >= current[0]:
+                latest[candidate_id] = (stamp, candidate)
+        return [item[1] for item in latest.values()] + unresolved
+    if domain in {"candidate_tracking", "history"}:
+        for row in rows:
+            resolution = resolutions.get(str(row.get("session_id") or "").strip()) or {}
+            row["candidate_id"] = str(resolution.get("candidate_id") or "")
+            if not row["candidate_id"]:
+                row["comparison_identity_status"] = "legacy_identity_unresolved"
+    elif domain == "candidate_corrections":
+        for row in rows:
+            resolution = resolutions.get(str(row.get("source_session_id") or "").strip()) or {}
+            row["candidate_id"] = str(resolution.get("candidate_id") or "")
+            if row.get("source_session_id") and not row["candidate_id"]:
+                row["comparison_identity_status"] = "legacy_identity_unresolved"
+    return rows
 
 
 def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=False) -> dict[str, Any]:
@@ -1391,6 +1498,17 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
     if not result["lineage_rpc_path_verified"]:
         result["invariant_errors"].append("lineage_rpc_path_inactive")
 
+    identity_context = None
+    identity_context_error = None
+    stable_identity_required = (
+        getattr(sheets_provider, "stable_identity_resolution_required", False) is True
+    )
+    if stable_identity_required:
+        try:
+            identity_context = _candidate_comparison_context(sheets_provider, supabase_provider)
+        except Exception:
+            identity_context_error = "stable_identity_context_unavailable"
+
     for domain in REQUIRED_SHADOW_DOMAINS:
         spec = SHADOW_DOMAIN_SPECS[domain]
         domain_result = _empty_domain_result()
@@ -1399,22 +1517,46 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
             domain_result["field_mismatch_counts"] = {}
         try:
             sheets_rows, sheets_error = _fetch_with_retry(
-                lambda: sheets_provider.list_resource(domain, limit=5000), domain, max_retries=0
+                lambda: (
+                    identity_context["source_sessions"]
+                    if identity_context is not None and domain == "candidate_sessions"
+                    else identity_context["source_attempts"]
+                    if identity_context is not None and domain == "session_attempts"
+                    else sheets_provider.list_resource(domain, limit=5000)
+                ), domain, max_retries=0
             )
             if sheets_error:
                 raise RuntimeError(sheets_error["code"])
             supabase_rows, supabase_error = _fetch_with_retry(
-                lambda: supabase_provider.list_resource(domain, limit=5000), domain, max_retries=0
+                lambda: (
+                    identity_context["target_candidates"]
+                    if identity_context is not None and domain == "candidates"
+                    else identity_context["target_sessions"]
+                    if identity_context is not None and domain == "candidate_sessions"
+                    else supabase_provider.list_resource(domain, limit=5000)
+                ), domain, max_retries=0
             )
             if supabase_error:
                 raise RuntimeError("supabase_query_error")
             sheets_rows = list(sheets_rows or [])
             supabase_rows = list(supabase_rows or [])
+            if identity_context is not None:
+                sheets_rows = _align_candidate_comparison_rows(
+                    domain, sheets_rows, side="sheets", context=identity_context,
+                )
+                supabase_rows = _align_candidate_comparison_rows(
+                    domain, supabase_rows, side="supabase", context=identity_context,
+                )
+            elif stable_identity_required and domain in {"candidates", "candidate_sessions", "candidate_tracking", "history", "candidate_corrections"}:
+                raise RuntimeError(identity_context_error or "stable_identity_context_unavailable")
             domain_result["sheets_count"] = len(sheets_rows)
             domain_result["supabase_count"] = len(supabase_rows)
-            sheets_index, sheets_duplicates = _comparison_index(spec, sheets_rows)
-            supabase_index, supabase_duplicates = _comparison_index(spec, supabase_rows)
+            sheets_index, sheets_duplicates, sheets_unresolved = _comparison_index(spec, sheets_rows)
+            supabase_index, supabase_duplicates, supabase_unresolved = _comparison_index(spec, supabase_rows)
             domain_result["duplicate_identity_count"] = sheets_duplicates + supabase_duplicates
+            domain_result["unresolved_identity_count"] = sheets_unresolved + supabase_unresolved
+            if domain_result["unresolved_identity_count"]:
+                domain_result["error_codes"].append("legacy_identity_unresolved")
             missing_supabase = set(sheets_index) - set(supabase_index)
             missing_sheets = set(supabase_index) - set(sheets_index)
             domain_result["missing_in_supabase_count"] = len(missing_supabase)
@@ -1443,9 +1585,25 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
                         relationship_mismatch, attempt_mismatch,
                     )))
                 if diagnostic_mode:
+                    mismatch_fields = {}
                     for fields in (spec.identity, spec.values, spec.statuses, spec.relationships, spec.attempts):
                         for field in _mismatched_fields(fields, sheets_row, supabase_row):
                             domain_result["field_mismatch_counts"][field] = domain_result["field_mismatch_counts"].get(field, 0) + 1
+                    for label, fields in (
+                        ("identity", spec.identity), ("value", spec.values),
+                        ("status", spec.statuses), ("relationship", spec.relationships),
+                        ("attempt", spec.attempts),
+                    ):
+                        names = _mismatched_fields(fields, sheets_row, supabase_row)
+                        if names:
+                            mismatch_fields[label] = names
+                    if mismatch_fields:
+                        domain_result.setdefault("safe_mismatch_details", []).append({
+                            "safe_identity_hash": hashlib.sha256(
+                                f"{domain}:{key}".encode("utf-8")
+                            ).hexdigest(),
+                            "fields": mismatch_fields,
+                        })
                 if not any((identity_mismatch, value_mismatch, status_mismatch, relationship_mismatch, attempt_mismatch)):
                     domain_result["exact_match_count"] += 1
 
@@ -1480,6 +1638,7 @@ def compare_shadow_provider(sheets_provider, supabase_provider, diagnostic_mode=
                 "identity_mismatch_count", "value_mismatch_count",
                 "status_mismatch_count", "relationship_mismatch_count",
                 "attempt_mismatch_count", "duplicate_identity_count",
+                "unresolved_identity_count",
             ))
             domain_result["unexplained_difference_count"] = max(0, mismatch_total - min(expected_offset, mismatch_total))
             domain_result["readiness"] = "ready" if domain_result["unexplained_difference_count"] == 0 else "not_ready"

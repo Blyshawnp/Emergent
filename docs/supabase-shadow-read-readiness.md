@@ -483,3 +483,36 @@ execution-engine status are recorded in `docs/supabase-incremental-reconciliatio
 | `compare-shadow` zero unexplained differences for ALL domains (including attempts, status, history) | Pending |
 | Explicit prompt to change `MTS_DATA_PROVIDER` to `supabase` | Pending |
 | End-to-end smoke test against Supabase provider | Pending |
+
+### 2026-08-10 comparison identity architecture
+
+| Domain | Former Sheets comparison identity | Supabase identity | Reconciliation/lineage identity | Current comparison identity |
+|---|---|---|---|---|
+| candidates | normalized display name | canonical candidate UUID/source field | canonical relationship, lineage, persisted UUID, then approved legacy-session UUIDv5 | canonical candidate UUID resolved through the reconciliation contract |
+| candidate_sessions | source `session_id`; candidate relationship synthesized from name | stable source session ID plus canonical candidate UUID | source session ID and exact resolved candidate UUID | stable session hierarchy plus exact resolved candidate UUID |
+| session_attempts | source action ID | source action ID | source action ID, parent source session ID | unchanged stable action ID and parent session |
+| authoritative_candidate_status | source session ID | source session ID | derived from canonical session | stable session ID; application/SQL final-attempt rule |
+| candidate_tracking | session ID; candidate relationship synthesized from name | session ID and canonical candidate UUID | derived from candidate session | stable session and resolved candidate UUID |
+| history | session ID; candidate relationship synthesized from name | canonical/source session ID and candidate UUID | candidate session/history identity | `session_id`, then `history_id`, `resume_source_history_id`, `source_session_id`; resolved candidate UUID |
+| headset_catalog | normalized brand/model | normalized brand/model | normalized brand/model source key | unchanged |
+| headset_reviews | review ID | review ID | review ID plus exact source-session parent | unchanged; historical exception contract preserved |
+| supervisor_transfers | transfer/pending ID | transfer ID | transfer ID plus exact source-session parent | unchanged |
+| newbie_shift_requests | request ID | request ID | request ID plus exact source-session parent | unchanged |
+| candidate_corrections | request ID; candidate relationship synthesized from name | request ID plus session/candidate FKs | request ID plus exact source-session parent | request ID plus candidate reached through exact source session |
+| pending_requests | source tab plus request ID | category plus request ID | request ID within exact source tab | unchanged |
+| recent_activity | source tab plus request ID | category plus request/event ID | derived from exact request identity | unchanged |
+| notifications | notification ID | notification ID | notification ID | unchanged |
+
+Names now participate only as display/value fields and as exclusion-only ambiguity
+evidence in the existing legacy candidate resolver. They never create comparison identity.
+The only legacy candidate fallback is the existing tab-aware
+`Candidate Sessions|session_id:<uuid>` contract transformed through the same deterministic
+UUIDv5 namespace used by reconciliation. Missing or non-unique immutable identity is
+classified `legacy_identity_unresolved`, counted, and makes readiness false.
+
+The projected 28+1 result is explicitly simulation evidence, not production verification.
+It reports 7 unexplained differences: one candidate-session value group
+(`session_type`, `completed_at`), the corresponding History `completed_at`, and five
+historical correction candidate-FK relationships. All other mapped domains have zero
+unexplained projected differences; the headset domain retains only its approved historical
+exceptions. Therefore projected mapped readiness is false and full cutover remains false.

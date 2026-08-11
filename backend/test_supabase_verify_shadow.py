@@ -795,7 +795,7 @@ class SheetsSnapshotProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "sheets_quota_exhausted"):
             provider.list_resource("candidate_sessions", limit=5000)
 
-    def test_correction_relationships_only_project_existing_canonical_targets(self):
+    def test_correction_projection_does_not_derive_candidate_identity_from_name(self):
         provider = SheetsDataProvider(MagicMock())
         provider._snapshot = {}
         provider._tabs = {
@@ -809,7 +809,7 @@ class SheetsSnapshotProviderTests(unittest.TestCase):
         }
         rows = provider.list_resource("candidate_corrections", limit=5000)
         self.assertTrue(rows[0]["canonical_session_id"])
-        self.assertTrue(rows[0]["candidate_id"])
+        self.assertEqual(rows[0]["candidate_id"], "")
         self.assertEqual(rows[1]["canonical_session_id"], "")
         self.assertEqual(rows[1]["candidate_id"], "")
 
