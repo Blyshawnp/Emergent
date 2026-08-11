@@ -314,3 +314,18 @@ unapplied. The projected provider reaches zero unexplained mapped-domain differe
 execution remains blocked pending a separate migration and scope review. Production is
 still rolled back, Sheets remains authoritative, Apps Script version 24 remains active,
 and provider, shadow, dual-write, Auth, canonical, and lineage state were not changed.
+
+### 2026-08-10 migration authority blocker
+
+The local final-drift migration now independently validates the two allowed session
+values, requires a non-empty valid completion timestamp, and requires a non-empty string
+candidate UUID before the exact stable-session proof is evaluated. Static contracts and
+the complete local regression suite pass.
+
+The linked dry run identified only migration `20260811022016`. Deployment did not occur:
+`supabase db push --linked --yes` received an HTTP 403 insufficient-privilege response
+from the login-role endpoint before a database connection. No workaround was attempted,
+so hosted function/security and synthetic update/rollback verification remain pending.
+Post-attempt read-only counts are identical to baseline and the fresh production plan is
+still blocked at 28 inserts plus 6 updates. Sheets, Apps Script version 24, provider,
+shadow, dual-write, Auth, canonical, lineage, and cutover state remain unchanged.

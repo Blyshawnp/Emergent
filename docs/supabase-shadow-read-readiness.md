@@ -537,3 +537,17 @@ and full cutover remains blocked by configuration/Auth scope and lack of approva
 Production remains rolled back. Sheets is authoritative, Apps Script version 24 is
 active, `MTS_DATA_PROVIDER=sheets`, shadow reads and dual writes are disabled, and no
 canonical or lineage mutation occurred in this checkpoint.
+
+### 2026-08-10 final migration deployment blocked by account access
+
+Static review added database-side rejection for unsupported session types, cleared or
+malformed completion timestamps, and absent/non-string correction candidate IDs. The
+linked migration dry run contained only `20260811022016`, but the authorized push was
+rejected by the Supabase login-role endpoint with HTTP 403 before connecting to the
+database. The migration remains local-only. No alternate credentials, direct SQL, hosted
+synthetic rows, reconciliation batch, or production write was used.
+
+Fresh read-only evidence after the rejection shows unchanged canonical/lineage/audit
+counts and the same 28+6 plan. Projection still reaches all 14 mapped domains with zero
+unexplained differences, while live readiness correctly remains false and the execution
+gate continues to report `candidate_correction_update_migration_not_applied`.

@@ -248,6 +248,8 @@ class ForwardMigrationContractTests(unittest.TestCase):
             "session_type=v_after.session_type", "completed_at=v_after.completed_at",
             "reconciliation_runtime_capabilities", "candidate_correction_update",
             "grant select on mts_sam.reconciliation_runtime_capabilities to service_role",
+            "unsupported_session_type_change", "completed_at_clear_not_allowed",
+            "perform (p_changes->>'completed_at')::timestamptz", "candidate_id_required",
         ):
             self.assertIn(token, sql)
         self.assertIn("from public,anon,authenticated", sql)

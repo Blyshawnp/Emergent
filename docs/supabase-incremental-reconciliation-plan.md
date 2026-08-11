@@ -353,3 +353,27 @@ applied. Until it is separately reviewed and deployed, the new plan is deliberat
 blocked from execution even though the in-memory production comparator reaches zero
 unexplained mapped-domain differences. No production reconciliation or hosted mutation
 was executed.
+
+### 2026-08-10 migration deployment access checkpoint
+
+The final migration was re-reviewed before deployment. Its still-unapplied session RPC
+was hardened to reject unknown `session_type` values, cleared/non-string
+`completed_at`, malformed timestamps, and missing/non-string correction candidate IDs at
+the database boundary. Focused migration, update, checksum, before-image, rollback,
+identity, and projected-comparison tests pass.
+
+The linked dry run listed exactly
+`20260811022016_reconcile_remaining_projected_drift.sql`. The subsequent authorized
+`supabase db push --linked --yes` stopped before a database connection because the
+Supabase login-role endpoint returned HTTP 403 for insufficient account privileges. The
+migration was not applied and no manual SQL or password workaround was attempted.
+Consequently, hosted function/grant verification and all synthetic update/rollback tests
+were not run.
+
+Read-only application checks after the rejected push retained the exact canonical
+baseline, 7 reconciliation batches, 68 plan items, 2 before-images, and unchanged
+lineage. A fresh one-fetch plan remained 28 inserts plus 6 updates with 6 before-images,
+28 new and 155 reused lineage mappings, zero ambiguity/conflict/unresolved rows, and the
+expected migration-not-applied blocker. The in-memory production comparator again
+reached zero unexplained differences across all mapped domains. No production
+reconciliation was executed.

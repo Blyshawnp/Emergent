@@ -51,6 +51,17 @@ begin
   perform mts_sam.assert_reconciliation_json_keys(p_changes,v_allowed);
   if (select array_agg(k order by k) from jsonb_object_keys(p_changes) k) is distinct from
      (select array_agg(k order by k) from unnest(v_item.changed_fields) k) then raise exception 'changed_fields_do_not_match_plan'; end if;
+  if p_changes ? 'session_type' and (
+    jsonb_typeof(p_changes->'session_type') is distinct from 'string'
+    or p_changes->>'session_type' not in ('mock_session','sup_transfer_only')
+  ) then raise exception 'unsupported_session_type_change'; end if;
+  if p_changes ? 'completed_at' and (
+    jsonb_typeof(p_changes->'completed_at') is distinct from 'string'
+    or nullif(btrim(p_changes->>'completed_at'),'') is null
+  ) then raise exception 'completed_at_clear_not_allowed'; end if;
+  if p_changes ? 'completed_at' then
+    perform (p_changes->>'completed_at')::timestamptz;
+  end if;
   select * into v_before from mts_sam.candidate_sessions where id=v_item.canonical_entity_id for update;
   if not found then raise exception 'update_target_missing'; end if;
   if not (to_jsonb(v_before) @> coalesce(p_precondition,'{}'::jsonb)) then raise exception 'target_precondition_mismatch'; end if;
@@ -95,6 +106,10 @@ begin
   perform mts_sam.assert_reconciliation_json_keys(p_changes,v_allowed);
   if (select array_agg(k order by k) from jsonb_object_keys(p_changes) k) is distinct from
      (select array_agg(k order by k) from unnest(v_item.changed_fields) k) then raise exception 'changed_fields_do_not_match_plan'; end if;
+  if jsonb_typeof(p_changes->'candidate_id') is distinct from 'string'
+     or nullif(btrim(p_changes->>'candidate_id'),'') is null then
+    raise exception 'candidate_id_required';
+  end if;
   select * into v_before from mts_sam.candidate_corrections where id=v_item.canonical_entity_id for update;
   if not found then raise exception 'update_target_missing'; end if;
   if not (to_jsonb(v_before) @> coalesce(p_precondition,'{}'::jsonb)) then raise exception 'target_precondition_mismatch'; end if;
