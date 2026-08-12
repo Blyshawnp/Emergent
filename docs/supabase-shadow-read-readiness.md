@@ -551,3 +551,27 @@ Fresh read-only evidence after the rejection shows unchanged canonical/lineage/a
 counts and the same 28+6 plan. Projection still reaches all 14 mapped domains with zero
 unexplained differences, while live readiness correctly remains false and the execution
 gate continues to report `candidate_correction_update_migration_not_applied`.
+
+### 2026-08-12 migration-deployed projected-readiness checkpoint
+
+Migration `20260811022016_reconcile_remaining_projected_drift.sql` is now deployed with
+local/remote parity and no deployment-time canonical, lineage, or batch-count change.
+Hosted checks prove the correction/session update handlers and rollback helpers are
+security-invoker functions with empty search paths and service-role-only execution; the
+private security-invoker capability view reports correction-update support. Forced RLS
+remains enabled on the affected canonical and audit tables.
+
+Deterministic synthetic complete and partial batches exercised both narrow hosted update
+paths, validation failures, finalization, rollback preview, and exact rollback. Both
+restored the 54-candidate, 69-session, 7-correction, 264-lineage operational baseline and
+left zero synthetic canonical or lineage residue. Their rolled-back audit evidence is
+intentionally retained.
+
+The fresh ready plan remains exactly 28 inserts plus one session and five correction
+updates, with six before-images and 28 new/155 reused lineage mappings. Its in-memory
+projection reaches all 14 mapped domains with zero unexplained differences and only the
+approved historical headset exceptions. This is simulation only. Current live comparison
+still has 67 unexplained differences because the production plan was not executed;
+`shadow_read_mapped_domains_ready=false` and `full_cutover_ready=false` remain correct.
+Auth migration and full cutover are still unapproved. Sheets, Apps Script version 24,
+provider `sheets`, disabled shadow reads, and disabled dual writes remain authoritative.

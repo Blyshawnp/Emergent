@@ -329,3 +329,31 @@ so hosted function/security and synthetic update/rollback verification remain pe
 Post-attempt read-only counts are identical to baseline and the fresh production plan is
 still blocked at 28 inserts plus 6 updates. Sheets, Apps Script version 24, provider,
 shadow, dual-write, Auth, canonical, lineage, and cutover state remain unchanged.
+
+### 2026-08-12 final reconciliation migration hosted verification
+
+The correct Supabase account and linked MTS-SAM project were reverified, and migration
+`20260811022016_reconcile_remaining_projected_drift.sql` was deployed as the only pending
+migration. Migration history is now in parity and a subsequent linked dry run reports no
+pending migrations. Deployment changed no canonical, lineage, or reconciliation batch
+row counts.
+
+Hosted metadata and negative privilege checks confirm empty search paths,
+`SECURITY INVOKER`, forced RLS on affected tables, and service-role-only access to the
+narrow update functions and capability view. Deterministic synthetic full and partial
+batches verified exact correction/session updates, validation guards, before-images,
+checksums, finalization, partial failure, rollback preview, and rollback. Operational
+counts returned exactly to 54 candidates, 69 sessions, 137 attempts, 96 catalog rows,
+11 reviews, 14 transfers, 9 Newbie Shift requests, 7 corrections, 0 physical pending
+requests, 4 notifications, and 264 lineage mappings. No synthetic canonical or lineage
+row remains; immutable rolled-back audit evidence is retained.
+
+The fresh production dry run is ready but was not executed. It remains exactly 28 inserts,
+one `candidate_sessions` update limited to `session_type`/`completed_at`, five
+`candidate_corrections` updates limited to `candidate_id`, six before-images, and 28
+new/155 reused lineage mappings with zero ambiguity, unresolved relationships, conflicts,
+unsupported operations, or blockers. Projected mapped parity is true in simulation with
+zero unexplained differences; current live parity remains false until a separate prompt
+authorizes the production reconciliation. Google Sheets and Apps Script version 24 remain
+authoritative; provider `sheets`, disabled shadow reads, disabled dual writes, and no Auth
+migration or provider cutover remain unchanged.

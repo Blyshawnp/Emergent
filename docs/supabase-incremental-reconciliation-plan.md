@@ -415,3 +415,51 @@ simulation-only and reaches zero unexplained differences across all 14 mapped do
 Migration `20260811022016_reconcile_remaining_projected_drift.sql` remains unapplied;
 live reconciliation remains blocked, and no canonical, lineage, Google Sheets, Auth,
 provider, shadow-read, or dual-write mutation occurred.
+
+### 2026-08-12 final reconciliation migration verification
+
+Interactive authentication was corrected outside this repository and independently
+reverified: organization `olmyyfgmolaiofoevmzp` and linked project `MTS-SAM`
+(`xyfhikikddcqcmzbdvbj`) are visible, and migration history is readable without the
+prior HTTP 403. The linked dry run listed only
+`20260811022016_reconcile_remaining_projected_drift.sql`; the authorized push applied
+that migration, local/remote history reached exact parity, and the follow-up dry run
+reported the remote database up to date.
+
+Deployment caused no canonical, lineage, or reconciliation-batch data change. Counts
+remained 54 candidates, 69 sessions, 137 attempts, 96 catalog rows, 11 reviews, 14
+transfers, 9 Newbie Shift requests, 7 corrections, 0 physical pending requests, 4
+notifications, and 264 lineage mappings. The runtime capability view changed from absent
+to `candidate_correction_update=true` as intended.
+
+Hosted metadata verifies both narrow update handlers, checksum and rollback helpers as
+`SECURITY INVOKER` with empty search paths. `PUBLIC`, `anon`, and `authenticated` cannot
+execute them; `service_role` can. The security-invoker capability view is readable only
+by `service_role`, and all affected canonical/audit tables retain forced RLS. Linked lint
+reports no schema errors. The security advisor retains the pre-existing warning for the
+authenticated `current_app_has_role` helper; it is not introduced by this migration.
+
+Two deterministic, non-production synthetic batches verified the hosted execution path.
+The complete batch updated only one correction `candidate_id` and one session's
+`session_type`/`completed_at`, persisted two before-images, rejected invalid and extra
+fields without mutation, refused premature finalization, finalized with exact accounting,
+previewed rollback with zero blockers, and rolled back successfully. The partial-batch
+test committed one correction update, deliberately failed the later session validation,
+entered `partially_failed`, previewed exactly one committed effect, and rolled back. Both
+tests restored all operational counts and left zero synthetic canonical or lineage rows;
+only immutable rolled-back audit evidence remains. No real candidate, session, request,
+source row, or Sheet value was used.
+
+The fresh one-fetch, zero-retry snapshot at `2026-08-12T10:34:34.264277+00:00` retained
+source checksum `a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`.
+The ready plan checksum is
+`da24708b4c92c7f26482a1a12acb1d0e107d696ddcdbb07c1d57214b967f89f2`:
+28 inserts, one session update, five correction updates, six before-images, 28 new and
+155 reused lineage mappings, with zero ambiguity, unresolved relationships, conflicts,
+unsupported operations, or blockers. The in-memory production comparator reaches zero
+unexplained differences in all 14 mapped domains. This remains simulation evidence;
+current live comparison remains not ready with 67 unexplained differences.
+
+No production reconciliation was executed. Sheets remains authoritative, Apps Script
+version 24 remains active, provider `sheets`, shadow disabled, and dual writes disabled
+remain unchanged. No provider cutover or Auth migration occurred.
