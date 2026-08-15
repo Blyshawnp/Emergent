@@ -397,6 +397,22 @@ def sync_incremental_cmd(args):
     output["hosted_counts_before"] = counts_before
     output["hosted_counts_after"] = counts_after
     output["hosted_counts_unchanged"] = True
+    scope_errors = approved_plan_errors(plan)
+    output["canonical_execution_scope_authorized"] = not scope_errors
+    output["canonical_execution_scope_errors"] = scope_errors
+    output["canonical_execution_update_fields"] = {
+        entity: sorted({
+            field
+            for item in plan.get("items") or []
+            if item.get("classification") == "update_existing" and item.get("entity_type") == entity
+            for field in item.get("changed_fields") or []
+        })
+        for entity in sorted({
+            item.get("entity_type")
+            for item in plan.get("items") or []
+            if item.get("classification") == "update_existing" and item.get("entity_type")
+        })
+    }
     if args.projected_comparison:
         projected_provider = project_reconciliation_plan(sheets, provider, plan)
         projected = compare_shadow_provider(

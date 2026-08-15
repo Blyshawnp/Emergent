@@ -17,7 +17,86 @@ APPROVED_INSERT_COUNTS = {
     "headset_catalog": 2, "headset_reviews": 1, "supervisor_transfers": 1,
     "newbie_shift_requests": 5, "pending_requests": 3,
 }
-APPROVED_UPDATE_COUNTS = {"candidate_sessions": 1}
+APPROVED_UPDATE_COUNTS = {"candidate_sessions": 1, "candidate_corrections": 5}
+APPROVED_UPDATE_FIELDS = {
+    "candidate_sessions": (
+        "raw_status", "calculated_result", "final_result", "needs_sup_transfer",
+        "pending_sup_transfer_id", "session_type", "completed_at",
+    ),
+    "candidate_corrections": ("candidate_id",),
+}
+APPROVED_CANONICAL_OPERATIONS = {"inserts": 28, "updates": 6}
+APPROVED_BEFORE_IMAGE_COUNT = 6
+APPROVED_NEW_LINEAGE_COUNT = 28
+
+
+def _reviewed_candidate_session_state_errors(
+    plan: Mapping[str, Any], item: Mapping[str, Any],
+    private_sources: Mapping[str, Any], target_preconditions: Mapping[str, Any],
+) -> list[str]:
+    """Bind the one approved session update to its reviewed resumed-transfer evidence."""
+    safe_hash = str(item.get("safe_identity_hash") or "")
+    source = private_sources.get(safe_hash) or {}
+    before = target_preconditions.get(safe_hash) or {}
+    errors = []
+    statuses = (
+        source.get("status") if source.get("status") is not None else source.get("raw_status"),
+        source.get("calculated_result"), source.get("final_result"),
+    )
+    if any(str(value or "").strip().casefold() != "resumed-pass" for value in statuses):
+        errors.append("approved_session_result_transition_mismatch")
+    if (
+        parse_boolean(source.get("needs_sup_transfer")) is not False
+        or str(source.get("pending_sup_transfer_id") or "").strip()
+        or str(source.get("session_type") or "").strip().casefold() != "sup_transfer_only"
+        or parse_date(source.get("completed_at")) is None
+    ):
+        errors.append("approved_session_completion_state_mismatch")
+    if (
+        [str(source.get(f"call_{index}_result") or "").strip().casefold() for index in (1, 2, 3)]
+        != ["pass", "fail", "pass"]
+        or [str(source.get(f"sup_transfer_{index}_result") or "").strip().casefold() for index in (1, 2)]
+        != ["pass", ""]
+        or parse_boolean(source.get("final_attempt")) is not False
+        or parse_boolean(source.get("readiness_override_applied")) is not False
+    ):
+        errors.append("approved_session_result_evidence_mismatch")
+    previous_pending_id = str(before.get("pending_sup_transfer_id") or "").strip()
+    source_session_id = str(source.get("session_id") or "").strip()
+    before_statuses = (before.get("raw_status"), before.get("calculated_result"), before.get("final_result"))
+    if (
+        any(str(value or "").strip().casefold() != "incomplete" for value in before_statuses)
+        or str(before.get("session_type") or "").strip().casefold() != "mock_session"
+        or parse_date(before.get("completed_at")) is None
+        or parse_date(before.get("completed_at")) == parse_date(source.get("completed_at"))
+    ):
+        errors.append("approved_session_prior_state_mismatch")
+    if (
+        parse_boolean(before.get("needs_sup_transfer")) is not True
+        or not previous_pending_id
+        or not source_session_id
+        or item.get("dependencies")
+    ):
+        errors.append("approved_session_relationship_transition_mismatch")
+        return errors
+    matching_transfers = []
+    for candidate in plan.get("items") or []:
+        if (
+            candidate.get("entity_type") != "supervisor_transfers"
+            or candidate.get("classification") != "already_current"
+            or candidate.get("operation") != "none"
+        ):
+            continue
+        transfer = private_sources.get(str(candidate.get("safe_identity_hash") or "")) or {}
+        transfer_id = str(transfer.get("pending_id") or transfer.get("transfer_id") or "").strip()
+        transfer_session_id = str(
+            transfer.get("original_session_id") or transfer.get("source_session_id") or ""
+        ).strip()
+        if transfer_id == previous_pending_id and transfer_session_id == source_session_id:
+            matching_transfers.append(candidate)
+    if len(matching_transfers) != 1:
+        errors.append("approved_session_existing_transfer_relationship_mismatch")
+    return errors
 
 
 def _integer(value: Any, default=None):
@@ -144,31 +223,91 @@ def _payload(entity: str, item: Mapping[str, Any], raw: Mapping[str, Any]) -> di
 
 
 def approved_plan_errors(plan: Mapping[str, Any]) -> list[str]:
+    items = list(plan.get("items") or [])
     insert_counts: dict[str, int] = {}
     update_counts: dict[str, int] = {}
-    for item in plan.get("items") or []:
-        if item.get("classification") == "insert_new":
-            insert_counts[item["entity_type"]] = insert_counts.get(item["entity_type"], 0) + 1
-        elif item.get("classification") == "update_existing":
-            update_counts[item["entity_type"]] = update_counts.get(item["entity_type"], 0) + 1
+    executable = []
     errors = []
+    for item in items:
+        entity = item.get("entity_type")
+        if item.get("classification") == "insert_new":
+            insert_counts[entity] = insert_counts.get(entity, 0) + 1
+            executable.append(item)
+            if item.get("operation") != "insert":
+                errors.append("approved_operation_binding_mismatch")
+        elif item.get("classification") == "update_existing":
+            update_counts[entity] = update_counts.get(entity, 0) + 1
+            executable.append(item)
+            if item.get("operation") != "update":
+                errors.append("approved_operation_binding_mismatch")
+            allowed_fields = APPROVED_UPDATE_FIELDS.get(entity)
+            actual_fields = tuple(sorted(item.get("changed_fields") or []))
+            if allowed_fields is None or actual_fields != tuple(sorted(allowed_fields)):
+                errors.append("approved_update_field_set_mismatch")
+        elif item.get("classification") in {"ambiguous", "unresolved", "conflict", "unsupported"}:
+            errors.append("approved_plan_contains_blocking_classification")
+        if item.get("operation") not in {None, "none", "insert", "update"}:
+            errors.append("unsupported_plan_operation")
     if insert_counts != APPROVED_INSERT_COUNTS:
         errors.append("approved_insert_shape_mismatch")
     if update_counts != APPROVED_UPDATE_COUNTS:
         errors.append("approved_update_shape_mismatch")
-    if (plan.get("lineage_operations") or {}).get("expected_new") != 28:
+    lineage = plan.get("lineage_operations") or {}
+    if lineage.get("expected_new") != APPROVED_NEW_LINEAGE_COUNT:
         errors.append("approved_lineage_shape_mismatch")
-    if plan.get("canonical_operations") != {"inserts": 28, "updates": 1}:
+    if any(lineage.get(key) for key in ("potential_source_conflict", "potential_entity_conflict", "unresolved")):
+        errors.append("approved_lineage_integrity_mismatch")
+    if plan.get("status") != "ready" or plan.get("blockers"):
+        errors.append("approved_plan_not_ready")
+    if plan.get("canonical_operations") != APPROVED_CANONICAL_OPERATIONS:
         errors.append("canonical_operation_count_mismatch")
-    if plan.get("created_entity_count") != 28 or plan.get("before_image_count") != 1:
+    if len(executable) != sum(APPROVED_CANONICAL_OPERATIONS.values()):
+        errors.append("executable_operation_count_mismatch")
+    if plan.get("created_entity_count") != APPROVED_CANONICAL_OPERATIONS["inserts"]:
+        errors.append("created_entity_count_mismatch")
+    if plan.get("before_image_count") != APPROVED_BEFORE_IMAGE_COUNT:
         errors.append("rollback_evidence_shape_mismatch")
-    for item in plan.get("items") or []:
+    executable_hashes = [str(item.get("safe_identity_hash") or "") for item in executable]
+    if not all(executable_hashes) or len(set(executable_hashes)) != len(executable_hashes):
+        errors.append("executable_identity_binding_mismatch")
+    update_hashes = [str(item.get("safe_identity_hash") or "") for item in executable if item.get("operation") == "update"]
+    before_images = list(plan.get("_private_before_images") or [])
+    before_hashes = [str(image.get("safe_identity_hash") or "") for image in before_images]
+    if (
+        len(before_images) != APPROVED_BEFORE_IMAGE_COUNT
+        or len(set(update_hashes)) != len(update_hashes)
+        or len(set(before_hashes)) != len(before_hashes)
+        or set(before_hashes) != set(update_hashes)
+    ):
+        errors.append("before_image_mapping_mismatch")
+    item_by_hash = {str(item.get("safe_identity_hash") or ""): item for item in executable}
+    for image in before_images:
+        item = item_by_hash.get(str(image.get("safe_identity_hash") or ""))
+        if item is None or tuple(sorted((image.get("fields") or {}).keys())) != tuple(sorted(item.get("changed_fields") or [])):
+            errors.append("before_image_field_set_mismatch")
+            break
+    for item in executable:
         if item.get("classification") in {"insert_new", "update_existing"} and not all(
-            item.get(key) not in (None, "") for key in ("canonical_entity_id", "source_tab", "source_row_key", "source_checksum")
+            item.get(key) not in (None, "")
+            for key in ("safe_identity_hash", "canonical_entity_id", "source_tab", "source_row_key", "source_checksum")
         ):
             errors.append("executable_item_binding_incomplete")
             break
-    return errors
+    private_sources = plan.get("_private_source_rows") or {}
+    if any(safe_hash not in private_sources for safe_hash in executable_hashes):
+        errors.append("executable_source_binding_missing")
+    target_preconditions = plan.get("_private_target_preconditions") or {}
+    if any(not target_preconditions.get(safe_hash) for safe_hash in update_hashes):
+        errors.append("update_target_precondition_missing")
+    session_updates = [
+        item for item in executable
+        if item.get("entity_type") == "candidate_sessions" and item.get("operation") == "update"
+    ]
+    if len(session_updates) == 1:
+        errors.extend(_reviewed_candidate_session_state_errors(
+            plan, session_updates[0], private_sources, target_preconditions,
+        ))
+    return sorted(set(errors))
 
 
 def _insert_expected_values(entity: str, payload: Mapping[str, Any]) -> dict[str, Any]:

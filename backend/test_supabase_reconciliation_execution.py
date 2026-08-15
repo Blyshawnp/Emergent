@@ -1,5 +1,6 @@
 import sys
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -7,8 +8,11 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from tools.supabase_import.execution import (  # noqa: E402
-    APPROVED_INSERT_COUNTS, APPROVED_UPDATE_COUNTS, INSERT_ORDER, _payload, approved_plan_errors, execute_plan,
+    APPROVED_BEFORE_IMAGE_COUNT, APPROVED_CANONICAL_OPERATIONS, APPROVED_INSERT_COUNTS,
+    APPROVED_NEW_LINEAGE_COUNT, APPROVED_UPDATE_COUNTS, APPROVED_UPDATE_FIELDS, INSERT_ORDER,
+    _payload, approved_plan_errors, execute_plan,
 )
+from tools.supabase_import.reconciliation import rollback_preview  # noqa: E402
 from data_providers.supabase import SupabaseDataProvider  # noqa: E402
 
 
@@ -33,16 +37,7 @@ class PayloadHandlerTests(unittest.TestCase):
                 self.assertEqual(_payload(entity, self.item(entity), row)["id"], self.item(entity)["canonical_entity_id"])
 
     def test_approved_shape_is_exact(self):
-        items = []
-        for entity, count in APPROVED_INSERT_COUNTS.items():
-            items += [{"entity_type": entity, "classification": "insert_new"}] * count
-        for entity, count in APPROVED_UPDATE_COUNTS.items():
-            items += [{"entity_type": entity, "classification": "update_existing"}] * count
-        for index, item in enumerate(items):
-            item.update({"canonical_entity_id": f"00000000-0000-4000-8000-{index:012d}", "source_tab": "tab",
-                         "source_row_key": f"key:{index}", "source_checksum": "a" * 64})
-        plan = {"items": items, "lineage_operations": {"expected_new": 28},
-                "canonical_operations": {"inserts": 28, "updates": 1}, "created_entity_count": 28, "before_image_count": 1}
+        plan = OrchestrationTests.approved_synthetic_plan()
         self.assertEqual(approved_plan_errors(plan), [])
         self.assertIn("approved_insert_shape_mismatch", approved_plan_errors({"items": [], "lineage_operations": {}}))
 
@@ -116,23 +111,85 @@ class OrchestrationTests(unittest.TestCase):
                         "source_checksum": "a" * 64, "source_tab": "synthetic", "source_row_key": f"synthetic:{sequence}",
                         "changed_fields": [], "dependencies": [], "lineage_outcome": "inserted", "lineage_required": True}
                 items.append(item); sources[safe_hash] = dict(raw_by_entity[entity])
+        before_images = []
+        target_preconditions = {}
         sequence += 1
         update_hash = f"{sequence:064x}"
         update = {"entity_type": "candidate_sessions", "classification": "update_existing", "operation": "update",
                   "safe_identity_hash": update_hash, "canonical_entity_id": f"00000000-0000-4000-8000-{sequence:012d}",
-                  "source_checksum": "b" * 64, "source_tab": "synthetic", "source_row_key": "synthetic:update",
-                  "changed_fields": ["raw_status"], "dependencies": [], "lineage_outcome": "not_required", "lineage_required": False}
-        items.append(update); sources[update_hash] = {"status": "Pass"}
-        return {"items": items, "_private_source_rows": sources,
-                "_private_before_images": [{"safe_identity_hash": update_hash, "fields": {"raw_status": "Fail"}}],
-                "_private_target_preconditions": {update_hash: {"id": update["canonical_entity_id"], "raw_status": "Fail"}}}
+                  "source_checksum": "b" * 64, "source_tab": "synthetic", "source_row_key": "synthetic:session-update",
+                  "changed_fields": list(APPROVED_UPDATE_FIELDS["candidate_sessions"]), "dependencies": [],
+                  "lineage_outcome": "not_required", "lineage_required": False}
+        items.append(update)
+        sources[update_hash] = {
+            "session_id": "synthetic-session", "status": "RESUMED-PASS",
+            "calculated_result": "RESUMED-PASS", "final_result": "RESUMED-PASS",
+            "needs_sup_transfer": False, "pending_sup_transfer_id": "",
+            "session_type": "sup_transfer_only", "completed_at": "2026-08-14T00:00:00Z",
+            "call_1_result": "Pass", "call_2_result": "Fail", "call_3_result": "Pass",
+            "sup_transfer_1_result": "Pass", "sup_transfer_2_result": "",
+            "final_attempt": False, "readiness_override_applied": False,
+        }
+        session_before = {
+            "raw_status": "INCOMPLETE", "calculated_result": "Incomplete", "final_result": "Incomplete",
+            "needs_sup_transfer": True, "pending_sup_transfer_id": "pending-reviewed",
+            "session_type": "mock_session", "completed_at": "2026-08-12T00:00:00Z",
+        }
+        before_images.append({"safe_identity_hash": update_hash, "fields": dict(session_before)})
+        target_preconditions[update_hash] = {
+            "id": update["canonical_entity_id"], "session_id": "synthetic-session",
+            "candidate_id": "22222222-2222-4222-8222-222222222222", **session_before,
+        }
+        sequence += 1
+        transfer_hash = f"{sequence:064x}"
+        items.append({
+            "entity_type": "supervisor_transfers", "classification": "already_current", "operation": "none",
+            "safe_identity_hash": transfer_hash, "canonical_entity_id": "30000000-0000-4000-8000-000000000001",
+            "source_checksum": "d" * 64, "source_tab": "Pending Sup Transfers",
+            "source_row_key": "pending_id:pending-reviewed", "changed_fields": [], "dependencies": [],
+            "lineage_outcome": "already_exists_same_mapping", "lineage_required": False,
+        })
+        sources[transfer_hash] = {
+            "pending_id": "pending-reviewed", "original_session_id": "synthetic-session", "status": "pending",
+        }
+        for correction_index in range(5):
+            sequence += 1
+            correction_hash = f"{sequence:064x}"
+            correction = {
+                "entity_type": "candidate_corrections", "classification": "update_existing", "operation": "update",
+                "safe_identity_hash": correction_hash,
+                "canonical_entity_id": f"10000000-0000-4000-8000-{correction_index:012d}",
+                "source_checksum": "c" * 64, "source_tab": "candidate-information-correction-requests",
+                "source_row_key": f"request_id:synthetic-{correction_index}", "changed_fields": ["candidate_id"],
+                "dependencies": [], "lineage_outcome": "not_required", "lineage_required": False,
+            }
+            items.append(correction)
+            sources[correction_hash] = {"candidate_id": f"20000000-0000-4000-8000-{correction_index:012d}"}
+            before_images.append({"safe_identity_hash": correction_hash, "fields": {"candidate_id": None}})
+            target_preconditions[correction_hash] = {
+                "id": correction["canonical_entity_id"], "request_id": f"synthetic-{correction_index}",
+                "source_session_id": f"session-{correction_index}", "candidate_id": None, "status": "pending",
+            }
+        return {
+            "status": "ready", "blockers": [],
+            "items": items, "_private_source_rows": sources, "_private_before_images": before_images,
+            "_private_target_preconditions": target_preconditions,
+            "canonical_operations": dict(APPROVED_CANONICAL_OPERATIONS),
+            "created_entity_count": APPROVED_CANONICAL_OPERATIONS["inserts"],
+            "before_image_count": APPROVED_BEFORE_IMAGE_COUNT,
+            "lineage_operations": {
+                "expected_new": APPROVED_NEW_LINEAGE_COUNT, "expected_same_mapping": 155,
+                "potential_source_conflict": 0, "potential_entity_conflict": 0, "unresolved": 0,
+            },
+        }
 
-    def test_complete_28_plus_1_synthetic_scenario(self):
+    def test_complete_28_plus_6_synthetic_scenario(self):
         provider = FakeExecutionProvider()
         result = execute_plan(provider, self.approved_synthetic_plan())
-        self.assertEqual(result["completed"], 29)
+        self.assertEqual(result["completed"], 34)
         self.assertEqual(provider.calls.count("insert"), 28)
         self.assertEqual(provider.calls.count("update"), 1)
+        self.assertEqual(provider.calls.count("correction_update"), 5)
         self.assertEqual(provider.calls[-1], "finalize")
 
     def test_partial_failure_is_accounted_and_never_finalized(self):
@@ -179,18 +236,247 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "candidate_correction_update_fields_not_allowed"):
             execute_plan(FakeExecutionProvider(), plan)
 
-    def test_unapproved_28_plus_6_shape_remains_execution_blocked(self):
+    def test_exact_28_plus_6_shape_is_authorized(self):
+        self.assertEqual(approved_plan_errors(self.approved_synthetic_plan()), [])
+
+    def test_obsolete_28_plus_1_shape_is_rejected(self):
         plan = self.approved_synthetic_plan()
-        for index in range(5):
-            plan["items"].append({
-                "entity_type": "candidate_corrections", "classification": "update_existing",
-                "canonical_entity_id": f"10000000-0000-4000-8000-{index:012d}",
-                "source_tab": "candidate-information-correction-requests",
-                "source_row_key": f"request_id:r-{index}", "source_checksum": "d" * 64,
-            })
-        plan.update({"canonical_operations": {"inserts": 28, "updates": 6}, "created_entity_count": 28,
-                     "before_image_count": 6, "lineage_operations": {"expected_new": 28}})
+        correction_hashes = {
+            item["safe_identity_hash"] for item in plan["items"]
+            if item["entity_type"] == "candidate_corrections"
+        }
+        plan["items"] = [item for item in plan["items"] if item["safe_identity_hash"] not in correction_hashes]
+        plan["_private_before_images"] = [
+            image for image in plan["_private_before_images"] if image["safe_identity_hash"] not in correction_hashes
+        ]
+        plan["canonical_operations"]["updates"] = 1
+        plan["before_image_count"] = 1
         self.assertIn("approved_update_shape_mismatch", approved_plan_errors(plan))
+
+    def test_scope_guard_rejects_wrong_counts_distributions_and_operations(self):
+        mutations = {
+            "27 inserts": lambda p: p["items"].pop(0),
+            "29 inserts": lambda p: p["items"].append(deepcopy(p["items"][0])),
+            "missing correction": lambda p: p["items"].pop(next(
+                i for i, item in enumerate(p["items"]) if item["entity_type"] == "candidate_corrections"
+            )),
+            "extra correction": lambda p: p["items"].append(deepcopy(next(
+                item for item in p["items"] if item["entity_type"] == "candidate_corrections"
+            ))),
+            "missing session update": lambda p: p["items"].pop(next(
+                i for i, item in enumerate(p["items"])
+                if item["entity_type"] == "candidate_sessions" and item["operation"] == "update"
+            )),
+            "extra session update": lambda p: p["items"].append(deepcopy(next(
+                item for item in p["items"]
+                if item["entity_type"] == "candidate_sessions" and item["operation"] == "update"
+            ))),
+            "unsupported operation": lambda p: p["items"].append({"classification": "already_current", "operation": "delete"}),
+            "ambiguous item": lambda p: p["items"].append({"classification": "ambiguous"}),
+            "unresolved item": lambda p: p["items"].append({"classification": "unresolved"}),
+            "unsupported item": lambda p: p["items"].append({"classification": "unsupported"}),
+            "conflict item": lambda p: p["items"].append({"classification": "conflict"}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                plan = self.approved_synthetic_plan()
+                mutate(plan)
+                self.assertTrue(approved_plan_errors(plan))
+
+    def test_nonexecuting_plan_items_use_explicit_none_operation(self):
+        plan = self.approved_synthetic_plan()
+        plan["items"].append({"classification": "already_current", "operation": "none"})
+        self.assertEqual(approved_plan_errors(plan), [])
+
+    def test_scope_guard_rejects_nonapproved_update_fields(self):
+        invalid_fields = {
+            "candidate_sessions": (
+                [*APPROVED_UPDATE_FIELDS["candidate_sessions"], "candidate_id"],
+                [field for field in APPROVED_UPDATE_FIELDS["candidate_sessions"] if field != "raw_status"],
+                ["candidate_id"], ["session_id"], ["history_id"], ["source_session_id"],
+                ["resume_source_history_id"], ["created_at"],
+            ),
+            "candidate_corrections": (["candidate_id", "status"], ["source_session_id"], ["request_id"]),
+        }
+        for entity, cases in invalid_fields.items():
+            for fields in cases:
+                with self.subTest(entity=entity, fields=fields):
+                    plan = self.approved_synthetic_plan()
+                    item = next(row for row in plan["items"] if row["entity_type"] == entity and row["operation"] == "update")
+                    item["changed_fields"] = list(fields)
+                    self.assertIn("approved_update_field_set_mismatch", approved_plan_errors(plan))
+
+    def test_scope_guard_requires_exact_before_image_mapping(self):
+        mutations = {
+            "five images": lambda p: p["_private_before_images"].pop(),
+            "seven images": lambda p: p["_private_before_images"].append(deepcopy(p["_private_before_images"][0])),
+            "duplicate mapping": lambda p: p["_private_before_images"].__setitem__(
+                1, deepcopy(p["_private_before_images"][0])
+            ),
+            "missing relationship": lambda p: p["_private_before_images"][0].__setitem__("safe_identity_hash", "missing"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                plan = self.approved_synthetic_plan()
+                mutate(plan)
+                self.assertIn("before_image_mapping_mismatch", approved_plan_errors(plan))
+
+    def test_scope_guard_rejects_accounting_and_lineage_changes(self):
+        changes = (
+            ("before_image_count", 5, "rollback_evidence_shape_mismatch"),
+            ("before_image_count", 7, "rollback_evidence_shape_mismatch"),
+            ("created_entity_count", 27, "created_entity_count_mismatch"),
+        )
+        for key, value, expected in changes:
+            with self.subTest(key=key, value=value):
+                plan = self.approved_synthetic_plan(); plan[key] = value
+                self.assertIn(expected, approved_plan_errors(plan))
+        for key in ("potential_source_conflict", "potential_entity_conflict", "unresolved"):
+            with self.subTest(lineage=key):
+                plan = self.approved_synthetic_plan(); plan["lineage_operations"][key] = 1
+                self.assertIn("approved_lineage_integrity_mismatch", approved_plan_errors(plan))
+
+    def test_scope_guard_rejects_blockers_and_nonready_status(self):
+        plan = self.approved_synthetic_plan()
+        plan["status"] = "blocked"
+        self.assertIn("approved_plan_not_ready", approved_plan_errors(plan))
+        plan = self.approved_synthetic_plan()
+        plan["blockers"] = [{"reason": "synthetic_blocker"}]
+        self.assertIn("approved_plan_not_ready", approved_plan_errors(plan))
+
+    def test_scope_guard_requires_unique_identity_source_and_precondition_bindings(self):
+        mutations = {
+            "duplicate executable identity": lambda p: p["items"][1].__setitem__(
+                "safe_identity_hash", p["items"][0]["safe_identity_hash"]
+            ),
+            "missing private source": lambda p: p["_private_source_rows"].pop(p["items"][0]["safe_identity_hash"]),
+            "missing update precondition": lambda p: p["_private_target_preconditions"].pop(next(
+                item["safe_identity_hash"] for item in p["items"] if item["operation"] == "update"
+            )),
+        }
+        expected = {
+            "duplicate executable identity": "executable_identity_binding_mismatch",
+            "missing private source": "executable_source_binding_missing",
+            "missing update precondition": "update_target_precondition_missing",
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                plan = self.approved_synthetic_plan()
+                mutate(plan)
+                self.assertIn(expected[name], approved_plan_errors(plan))
+
+    def test_scope_guard_requires_exact_34_operation_accounting(self):
+        for updates in (5, 7):
+            with self.subTest(updates=updates):
+                plan = self.approved_synthetic_plan(); plan["canonical_operations"]["updates"] = updates
+                self.assertIn("canonical_operation_count_mismatch", approved_plan_errors(plan))
+        plan = self.approved_synthetic_plan()
+        session_update = next(
+            item for item in plan["items"]
+            if item["entity_type"] == "candidate_sessions" and item["operation"] == "update"
+        )
+        session_update["entity_type"] = "notifications"
+        self.assertIn("approved_update_shape_mismatch", approved_plan_errors(plan))
+
+    def test_scope_guard_rejects_same_total_with_wrong_insert_distribution(self):
+        plan = self.approved_synthetic_plan()
+        candidate = next(item for item in plan["items"] if item["entity_type"] == "candidates")
+        candidate["entity_type"] = "candidate_sessions"
+        self.assertIn("approved_insert_shape_mismatch", approved_plan_errors(plan))
+
+    def test_authorized_update_field_contract_is_exact(self):
+        self.assertEqual(APPROVED_UPDATE_FIELDS, {
+            "candidate_sessions": (
+                "raw_status", "calculated_result", "final_result", "needs_sup_transfer",
+                "pending_sup_transfer_id", "session_type", "completed_at",
+            ),
+            "candidate_corrections": ("candidate_id",),
+        })
+
+    def test_scope_guard_rejects_altered_session_state_or_relationship_evidence(self):
+        mutations = {
+            "contradictory result": lambda p, item: p["_private_source_rows"][item["safe_identity_hash"]].__setitem__("final_result", "Fail"),
+            "still needs transfer": lambda p, item: p["_private_source_rows"][item["safe_identity_hash"]].__setitem__("needs_sup_transfer", True),
+            "dangling proposed transfer": lambda p, item: p["_private_source_rows"][item["safe_identity_hash"]].__setitem__("pending_sup_transfer_id", "missing"),
+            "wrong prior relationship": lambda p, item: p["_private_target_preconditions"][item["safe_identity_hash"]].__setitem__("pending_sup_transfer_id", "wrong"),
+            "wrong prior status": lambda p, item: p["_private_target_preconditions"][item["safe_identity_hash"]].__setitem__("raw_status", "Pass"),
+            "missing transfer relationship": lambda p, item: p["items"].__setitem__(slice(None), [
+                row for row in p["items"] if row["entity_type"] != "supervisor_transfers" or row["classification"] != "already_current"
+            ]),
+            "wrong transfer session": lambda p, item: next(
+                p["_private_source_rows"][row["safe_identity_hash"]]
+                for row in p["items"] if row["entity_type"] == "supervisor_transfers" and row["classification"] == "already_current"
+            ).__setitem__("original_session_id", "different-session"),
+            "unexpected insert dependency": lambda p, item: item.__setitem__("dependencies", [{"entity_type": "supervisor_transfers", "safe_identity_hash": "x"}]),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                plan = self.approved_synthetic_plan()
+                session_item = next(
+                    item for item in plan["items"]
+                    if item["entity_type"] == "candidate_sessions" and item["operation"] == "update"
+                )
+                mutate(plan, session_item)
+                self.assertTrue(any(
+                    error.startswith("approved_session_") for error in approved_plan_errors(plan)
+                ))
+
+    def test_all_inserts_execute_before_the_reviewed_session_update(self):
+        provider = FakeExecutionProvider()
+        execute_plan(provider, self.approved_synthetic_plan())
+        session_update_index = provider.calls.index("update")
+        self.assertEqual(provider.calls[1:session_update_index].count("insert"), 28)
+        self.assertNotIn("insert", provider.calls[session_update_index + 1:])
+
+    def test_28_plus_6_rollback_preview_accounts_for_only_batch_owned_changes(self):
+        plan = self.approved_synthetic_plan()
+        inserted = [item for item in plan["items"] if item["operation"] == "insert"]
+        updates = [item for item in plan["items"] if item["operation"] == "update"]
+        batch = {
+            "batch_id": "synthetic-28-plus-6", "status": "succeeded",
+            "created_items": [
+                {"safe_identity_hash": item["safe_identity_hash"], "post_sync_checksum": "after"}
+                for item in inserted
+            ],
+            "before_images": deepcopy(plan["_private_before_images"]),
+            "rollback": {"delete_order": [
+                "newbie_shift_reschedules", "session_attempts", "supervisor_transfers",
+                "headset_reviews", "newbie_shift_requests", "candidate_corrections",
+                "pending_requests", "candidate_sessions", "headset_catalog", "candidates",
+            ]},
+        }
+        current = {item["safe_identity_hash"]: "after" for item in inserted}
+        preview = rollback_preview(batch, current_checksums=current)
+        self.assertTrue(preview["eligible"])
+        self.assertEqual(preview["delete_created"], 28)
+        self.assertEqual(preview["restore_updates"], 6)
+        self.assertEqual(len(plan["_private_before_images"]), len(updates))
+        session_images = [
+            image for image in plan["_private_before_images"]
+            if image.get("safe_identity_hash") == next(
+                item["safe_identity_hash"] for item in updates if item["entity_type"] == "candidate_sessions"
+            )
+        ]
+        correction_hashes = {
+            item["safe_identity_hash"] for item in updates if item["entity_type"] == "candidate_corrections"
+        }
+        correction_images = [
+            image for image in plan["_private_before_images"]
+            if image.get("safe_identity_hash") in correction_hashes
+        ]
+        self.assertEqual(len(session_images), 1)
+        self.assertEqual(set(session_images[0]["fields"]), set(APPROVED_UPDATE_FIELDS["candidate_sessions"]))
+        self.assertEqual(len(correction_images), 5)
+        self.assertTrue(all(set(image["fields"]) == {"candidate_id"} for image in correction_images))
+        self.assertEqual(sum(item["entity_type"] == "candidate_sessions" for item in updates), 1)
+        self.assertEqual(sum(item["entity_type"] == "candidate_corrections" for item in updates), 5)
+        self.assertEqual(plan["lineage_operations"]["expected_new"], 28)
+        self.assertEqual(plan["lineage_operations"]["expected_same_mapping"], 155)
+        self.assertTrue(preview["preserve_audit_evidence"])
+        self.assertLess(
+            preview["delete_order"].index("session_attempts"),
+            preview["delete_order"].index("candidate_sessions"),
+        )
 
 
 class ProviderSafetyTests(unittest.TestCase):
