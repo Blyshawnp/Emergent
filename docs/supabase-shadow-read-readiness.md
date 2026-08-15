@@ -575,3 +575,32 @@ still has 67 unexplained differences because the production plan was not execute
 `shadow_read_mapped_domains_ready=false` and `full_cutover_ready=false` remain correct.
 Auth migration and full cutover are still unapproved. Sheets, Apps Script version 24,
 provider `sheets`, disabled shadow reads, and disabled dual writes remain authoritative.
+
+### 2026-08-15 live reconciliation rollback checkpoint
+
+The approved fresh production plan retained source checksum
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`, plan
+checksum `da24708b4c92c7f26482a1a12acb1d0e107d696ddcdbb07c1d57214b967f89f2`,
+28 inserts, six updates, six before-images, and 28 new/155 reused lineage mappings. It
+passed the exact executor scope and projected all 14 mapped domains ready with zero
+unexplained differences and zero errors.
+
+The live batch `3c635332-c4c6-403d-ad00-1154813a3c4f` inserted all 28 planned rows, but
+the database rejected the reviewed candidate-session update with
+`post_write_value_mismatch`. The batch became `partially_failed`; the five correction
+updates were dependency-blocked, so no update or before-image committed. The exact
+rollback preview had zero blockers and identified only the 28 batch-created rows. The
+batch-scoped rollback succeeded, removed those rows and their 28 lineage mappings in
+child-before-parent order, preserved audit evidence, and left no batch-owned canonical or
+lineage artifact.
+
+Operational counts and checksums returned to their pre-execution values. The real
+post-rollback comparison is restored to 69 mismatches, 67 unexplained differences, zero
+errors, and `not_ready`; this is expected pre-reconciliation drift, not a rollback defect.
+Mapped-domain production readiness therefore remains false. No execution retry or
+unreviewed repair was attempted.
+
+Google Sheets remains authoritative, Apps Script version 24 remains active,
+`MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, and
+`MTS_DUAL_WRITE_ENABLED=false`. No migration, Auth migration, shadow activation, dual
+write activation, provider cutover, or Google Sheets mutation occurred.

@@ -463,3 +463,42 @@ current live comparison remains not ready with 67 unexplained differences.
 No production reconciliation was executed. Sheets remains authoritative, Apps Script
 version 24 remains active, provider `sheets`, shadow disabled, and dual writes disabled
 remain unchanged. No provider cutover or Auth migration occurred.
+
+## 2026-08-15 controlled 28+6 execution attempt and exact rollback
+
+The separately approved live attempt used one fresh Sheets fetch with zero retries at
+`2026-08-15T20:26:52.355037+00:00`. The source checksum was
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe` and the
+plan checksum was
+`da24708b4c92c7f26482a1a12acb1d0e107d696ddcdbb07c1d57214b967f89f2`.
+The plan passed the exact reviewed 28-insert plus 6-update authorization, including six
+before-images, 28 new and 155 reused lineage mappings, the seven-field session update,
+five `candidate_id`-only correction updates, and zero ambiguity, conflicts, unsupported
+items, or blockers. Its pre-write 14-domain projection had zero unexplained differences
+and zero errors, with only the approved historical headset-review exceptions.
+
+Execution created all 28 planned insert rows and their lineage, then the database rejected
+the candidate-session update with `post_write_value_mismatch`. The batch
+`3c635332-c4c6-403d-ad00-1154813a3c4f` became `partially_failed`: 28 items were inserted,
+the session update failed, and all five correction updates were dependency-blocked. No
+update committed and no production before-image was created.
+
+The exact batch-scoped rollback preview was eligible with zero blockers, no later batch,
+the expected child-before-parent delete order, exactly 28 batch-created entities, and zero
+applied updates. The existing rollback engine completed successfully. All 28 created rows
+and all 28 batch-created lineage mappings were removed, no batch-owned canonical or
+lineage artifact remained, and the immutable audit evidence was preserved. The batch is
+`rolled_back` with rollback status `succeeded`.
+
+Post-rollback counts returned to 54 candidates, 69 sessions, 137 attempts, 96 catalog
+rows, 11 reviews, 14 transfers, 9 Newbie Shift requests, 7 corrections, 0 physical
+pending requests, 4 notifications, and 264 lineage mappings. A new dry run reproduced
+the same source and plan checksums and exact pre-execution 28+6 drift, proving target
+preconditions were restored. The real post-rollback comparison returned to 69 mismatches,
+67 unexplained differences, and zero errors. Production mapped readiness remains false.
+
+No retry or ad-hoc repair was attempted. The hosted `post_write_value_mismatch` requires
+a new investigation and approval cycle. Sheets remains authoritative; Apps Script version
+24 remains active; provider `sheets`, shadow disabled, and dual writes disabled remain
+unchanged. No migration, Auth migration, provider cutover, or Google Sheets mutation
+occurred.
