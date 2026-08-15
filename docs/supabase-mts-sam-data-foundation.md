@@ -380,3 +380,21 @@ Its 14-domain simulation has zero unexplained differences and zero errors. No pr
 retry occurred; canonical and lineage counts remain at the restored baseline. Google
 Sheets and Apps Script version 24 remain authoritative, provider remains `sheets`, shadow
 and dual writes remain disabled, and no Auth migration or provider cutover occurred.
+
+### 2026-08-15 independent hosted contract verification
+
+The deployed fix from commit `922c714a1d3126ec60050d400ea300e6f2fe188c` was
+independently reverified against hosted synthetic data. Equivalent offset and UTC
+`completed_at` values compare as the same instant while a genuinely different instant
+remains rejected. The full seven-field candidate-session update passed its before-image,
+post-write comparison, and checksum gates, then rolled back exactly with its synthetic
+setup and lineage. The candidate-correction `candidate_id`-only path also passed and
+rolled back.
+
+A fresh zero-write plan and simulation retained the source and plan checksums recorded
+above, the exact 28-insert plus 6-update scope, six before-images, 28 new/155 reused
+lineage mappings, and all 14 projected domains ready with zero unexplained differences.
+No live retry or real canonical, lineage, or Sheets mutation occurred. The failed live
+batch remains rolled back; Sheets remains authoritative, Apps Script version 24 remains
+active, provider is `sheets`, shadow and dual writes are disabled, and Auth/cutover work
+remains unperformed.

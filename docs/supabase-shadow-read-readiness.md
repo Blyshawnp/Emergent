@@ -628,3 +628,19 @@ false because the reviewed drift is still present, and full cutover remains sepa
 blocked by Auth and cutover approval. Sheets remains authoritative, Apps Script version
 24 remains active, provider is `sheets`, shadow and dual writes remain disabled, and the
 failed production batch remains rolled back.
+
+### 2026-08-15 independent timestamp-fix readiness check
+
+An independent hosted rerun verified the deployed `completed_at` canonicalization with
+both the minimal offset-versus-UTC case and the full seven-field session transition. The
+synthetic update and its synthetic setup both rolled back exactly; operational canonical
+counts and lineage remained unchanged. The correction handler's `candidate_id`-only
+contract also passed without alteration.
+
+The fresh `2026-08-15T21:35:13.365025+00:00` simulation retained the reviewed 28+6
+scope and projected all 14 mapped domains ready with zero unexplained differences and
+zero errors. The only mismatches are the two manifestations of approved historical
+headset-review exceptions. This is not production verification: the live retry did not
+run, production mapped readiness remains false, and Auth/full-cutover approval remains
+outstanding. Sheets remains authoritative, Apps Script version 24 remains active,
+provider is `sheets`, and shadow and dual writes remain disabled.

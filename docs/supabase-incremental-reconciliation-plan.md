@@ -542,3 +542,29 @@ the restored baseline, and no real canonical or lineage mutation occurred. Sheet
 Apps Script version 24 remain authoritative; provider `sheets`, shadow disabled, dual
 writes disabled, Auth migration not performed, and provider cutover not performed remain
 unchanged.
+
+## 2026-08-15 independent post-write fix verification
+
+Commit `922c714a1d3126ec60050d400ea300e6f2fe188c` was independently audited and the
+deployed timestamp-normalization contract was exercised again against isolated hosted
+synthetic data. The formerly failing offset-versus-UTC `completed_at` representation now
+passes exact semantic comparison; a full seven-field candidate-session update completed
+with one before-image and its expected checksum. Rollback batches
+`711ceb4a-316d-417c-a001-52d5df414e77` and
+`22675dd8-0552-46a2-ace5-58f22f20f6d6` restored the update and removed its two-row
+synthetic setup plus two synthetic lineage mappings. The existing candidate-correction
+`candidate_id`-only path also passed inside an isolated transaction and rolled back.
+
+The independent fresh snapshot at `2026-08-15T21:35:13.365025+00:00` used one Sheets
+fetch, zero retries, source checksum
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`, and plan checksum
+`da24708b4c92c7f26482a1a12acb1d0e107d696ddcdbb07c1d57214b967f89f2`.
+The zero-write plan remains exactly 28 inserts plus six updates, six before-images, 28
+new and 155 reused lineage mappings, and no blocking classification. Its simulation-only
+14-domain comparison is ready with zero unexplained differences and zero errors.
+
+No production retry occurred. Operational counts remain at the restored baseline,
+including 264 lineage mappings; failed production batch
+`3c635332-c4c6-403d-ad00-1154813a3c4f` remains rolled back. Sheets remains
+authoritative, Apps Script version 24 remains active, provider is `sheets`, shadow and
+dual writes remain disabled, and no Auth migration or provider cutover occurred.
