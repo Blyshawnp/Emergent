@@ -502,3 +502,43 @@ a new investigation and approval cycle. Sheets remains authoritative; Apps Scrip
 24 remains active; provider `sheets`, shadow disabled, and dual writes disabled remain
 unchanged. No migration, Auth migration, provider cutover, or Google Sheets mutation
 occurred.
+
+## 2026-08-15 hosted session timestamp-contract correction
+
+Read-only inspection of the rolled-back production evidence and hosted function isolated
+the failure to `completed_at`. The source supplied an offset timestamp while PostgreSQL
+stored the same instant in UTC; the update was semantically correct, but JSON containment
+compared the two timestamp strings literally and raised `post_write_value_mismatch`.
+Individual hosted synthetic tests proved the other six reviewed fields independently
+round-trip exactly. Empty-string relationship clearing, boolean serialization, status
+values, result values, and the `updated_at` trigger were not responsible.
+
+Forward migration `20260815204523_normalize_reconciliation_session_timestamps.sql`
+canonicalizes only the expected `completed_at` value through `timestamptz` before the
+otherwise exact post-write comparison. It also requires expected keys to match the plan's
+declared changed fields. It does not relax the field allowlist, value comparison for any
+other field, checksum verification, before-images, or rollback. Local/remote migration
+history is in parity through `20260815204523`.
+
+A hosted synthetic seven-field update then succeeded with one exact before-image and the
+expected post-write checksum. Only the seven reviewed fields changed. Exact rollback
+restored the original row, and exact rollback of its synthetic setup removed both setup
+rows and both lineage mappings; no synthetic canonical or lineage residue remains. The
+candidate-correction `candidate_id`-only handler also passed an isolated synthetic update
+and rollback without any contract change.
+
+The fresh zero-write snapshot at `2026-08-15T20:56:41.517605+00:00` retained source
+checksum `a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe` and plan
+checksum `da24708b4c92c7f26482a1a12acb1d0e107d696ddcdbb07c1d57214b967f89f2`.
+The plan remains exactly 28 inserts plus six updates, six before-images, and 28 new/155
+reused lineage mappings with zero ambiguity, unresolved identity, conflicts, unsupported
+items, or blockers. Its simulation-only 14-domain projection is ready with zero
+unexplained differences and zero errors, retaining only the approved historical headset
+exceptions.
+
+The production reconciliation was not retried. Batch
+`3c635332-c4c6-403d-ad00-1154813a3c4f` remains rolled back, operational counts remain at
+the restored baseline, and no real canonical or lineage mutation occurred. Sheets and
+Apps Script version 24 remain authoritative; provider `sheets`, shadow disabled, dual
+writes disabled, Auth migration not performed, and provider cutover not performed remain
+unchanged.

@@ -357,3 +357,26 @@ zero unexplained differences; current live parity remains false until a separate
 authorizes the production reconciliation. Google Sheets and Apps Script version 24 remain
 authoritative; provider `sheets`, disabled shadow reads, disabled dual writes, and no Auth
 migration or provider cutover remain unchanged.
+
+### 2026-08-15 candidate-session timestamp comparison contract
+
+The failed production batch remains safely rolled back. Hosted field-by-field testing
+proved its only defect was exact-string comparison of equivalent `completed_at`
+representations after PostgreSQL normalized an offset timestamp to UTC. Forward migration
+`20260815204523_normalize_reconciliation_session_timestamps.sql` canonicalizes that one
+expected timestamp to a PostgreSQL `timestamptz` JSON value before exact comparison and
+requires expected fields to match the plan item. It does not change canonical tables or
+the seven-field production authorization.
+
+Hosted synthetic execution verified the complete seven-field session transition,
+post-write checksum, one-field-set before-image, and exact rollback. A separate
+transactional synthetic check reverified the correction handler remains
+`candidate_id`-only. Synthetic setup and lineage were removed through batch rollback,
+while safe audit evidence for the hosted session proof remains.
+
+The subsequent fresh zero-write plan remains 28 inserts plus six updates, six
+before-images, 28 new and 155 reused lineage mappings, and zero blocking classifications.
+Its 14-domain simulation has zero unexplained differences and zero errors. No production
+retry occurred; canonical and lineage counts remain at the restored baseline. Google
+Sheets and Apps Script version 24 remain authoritative, provider remains `sheets`, shadow
+and dual writes remain disabled, and no Auth migration or provider cutover occurred.

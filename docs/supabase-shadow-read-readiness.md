@@ -604,3 +604,27 @@ Google Sheets remains authoritative, Apps Script version 24 remains active,
 `MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, and
 `MTS_DUAL_WRITE_ENABLED=false`. No migration, Auth migration, shadow activation, dual
 write activation, provider cutover, or Google Sheets mutation occurred.
+
+### 2026-08-15 session timestamp-contract investigation
+
+The failed hosted session write was caused solely by representation-level comparison of
+two equivalent `timestamptz` strings: the Sheets offset form and PostgreSQL's UTC form.
+Migration `20260815204523_normalize_reconciliation_session_timestamps.sql` now
+canonicalizes only the expected `completed_at` instant before exact containment. All
+other reviewed values remain exact, expected keys must equal declared plan fields, and
+checksum, before-image, ownership, and rollback gates remain intact.
+
+The hosted synthetic seven-field transition completed, matched its independently
+calculated post-write checksum, produced one before-image, changed only the seven
+authorized fields, and rolled back exactly. Its synthetic setup was also rolled back;
+no synthetic canonical or lineage row remains. The correction handler's existing
+`candidate_id`-only path was reverified without broadening it.
+
+The fresh simulation at `2026-08-15T20:56:41.517605+00:00` projects all 14 mapped
+domains ready with zero unexplained differences and zero errors. The headset-review
+domain retains only its approved historical exceptions. This remains simulation-only:
+the 28+6 production reconciliation was not retried, current live mapped readiness remains
+false because the reviewed drift is still present, and full cutover remains separately
+blocked by Auth and cutover approval. Sheets remains authoritative, Apps Script version
+24 remains active, provider is `sheets`, shadow and dual writes remain disabled, and the
+failed production batch remains rolled back.

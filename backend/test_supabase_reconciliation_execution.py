@@ -1,3 +1,4 @@
+import datetime
 import sys
 import unittest
 from copy import deepcopy
@@ -57,6 +58,13 @@ class FakeExecutionProvider:
     def execute_reconciliation_candidate_correction_update(self, *_args): self.calls.append("correction_update"); return {"result": "updated"}
     def finalize_reconciliation_batch(self, _batch): self.calls.append("finalize"); return {"result": "succeeded"}
     def fail_reconciliation_batch(self, *_args): self.calls.append("fail"); return {"result": "failed"}
+
+
+class CapturingExecutionProvider(FakeExecutionProvider):
+    def execute_reconciliation_candidate_session_update(self, *args):
+        self.calls.append("update")
+        self.session_update_args = args
+        return {"result": "updated"}
 
 
 class FailingExecutionProvider(FakeExecutionProvider):
@@ -191,6 +199,37 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(provider.calls.count("update"), 1)
         self.assertEqual(provider.calls.count("correction_update"), 5)
         self.assertEqual(provider.calls[-1], "finalize")
+
+    def test_reviewed_session_payload_preserves_strict_types_and_offset_timestamp(self):
+        plan = self.approved_synthetic_plan()
+        session_item = next(
+            item for item in plan["items"]
+            if item["entity_type"] == "candidate_sessions" and item["operation"] == "update"
+        )
+        source = plan["_private_source_rows"][session_item["safe_identity_hash"]]
+        source["completed_at"] = "2026-08-02T22:25:21.860957-04:00"
+        provider = CapturingExecutionProvider()
+        execute_plan(provider, plan)
+        _batch_id, _item_id, _precondition, changes, expected = provider.session_update_args
+        self.assertEqual(changes, expected)
+        self.assertIs(changes["needs_sup_transfer"], False)
+        self.assertEqual(changes["pending_sup_transfer_id"], "")
+        self.assertEqual(changes["completed_at"], "2026-08-02T22:25:21.860957-04:00")
+        self.assertEqual(set(changes), set(APPROVED_UPDATE_FIELDS["candidate_sessions"]))
+
+    def test_scope_guard_rejects_invalid_boolean_and_status_values(self):
+        plan = self.approved_synthetic_plan()
+        session_item = next(
+            item for item in plan["items"]
+            if item["entity_type"] == "candidate_sessions" and item["operation"] == "update"
+        )
+        source = plan["_private_source_rows"][session_item["safe_identity_hash"]]
+        source["final_result"] = "RESUMED_PAS"
+        self.assertIn("approved_session_result_transition_mismatch", approved_plan_errors(plan))
+        source["final_result"] = "RESUMED-PASS"
+        source["needs_sup_transfer"] = "not-a-boolean"
+        with self.assertRaisesRegex(ValueError, "unrecognized_boolean"):
+            approved_plan_errors(plan)
 
     def test_partial_failure_is_accounted_and_never_finalized(self):
         provider = FailingExecutionProvider()
@@ -546,6 +585,38 @@ class ForwardMigrationContractTests(unittest.TestCase):
         self.assertNotIn("candidate_name", correction_update)
         self.assertNotIn("source_session_id=", correction_update)
         self.assertNotIn("request_id=", correction_update)
+
+    def test_timestamp_normalization_migration_is_exact_narrow_and_private(self):
+        path = Path(__file__).resolve().parents[1] / "supabase" / "migrations" / "20260815204523_normalize_reconciliation_session_timestamps.sql"
+        sql = path.read_text(encoding="utf-8").casefold()
+        for token in (
+            "execute_reconciliation_candidate_session_update", "expected_fields_do_not_match_plan",
+            "completed_at_expected_invalid", "(v_expected_values->>'completed_at')::timestamptz",
+            "to_jsonb(v_after) @> v_expected_values", "post_write_value_mismatch",
+            "reconciliation_entity_checksum", "reconciliation_before_images",
+            "changed_fields_do_not_match_plan", "set search_path = ''",
+            "from public,anon,authenticated", "to service_role",
+        ):
+            self.assertIn(token, sql)
+        self.assertEqual(sql.count("jsonb_set("), 1)
+        self.assertIn("'{completed_at}'", sql)
+        self.assertNotIn("2026-08-02t22:25:21", sql)
+        self.assertNotIn("execute format", sql)
+        self.assertNotIn("delete from mts_sam.candidate_sessions", sql)
+        self.assertNotIn("reconciliation_entity_checksum('candidate_sessions',v_item.canonical_entity_id) is distinct", sql)
+
+    def test_timestamp_regression_requires_same_instant_not_same_string(self):
+        source = datetime.datetime.fromisoformat("2026-08-02T22:25:21.860957-04:00")
+        hosted = datetime.datetime.fromisoformat("2026-08-03T02:25:21.860957+00:00")
+        different = datetime.datetime.fromisoformat("2026-08-03T02:25:21.860958+00:00")
+        self.assertNotEqual(source.isoformat(), hosted.isoformat())
+        self.assertEqual(source, hosted)
+        self.assertNotEqual(source, different)
+
+    def test_null_empty_and_non_timestamp_values_remain_exact(self):
+        self.assertNotEqual("", None)
+        self.assertNotEqual(False, "false")
+        self.assertNotEqual("RESUMED-PASS", "RESUMED_PASS")
 
 
 if __name__ == "__main__":
