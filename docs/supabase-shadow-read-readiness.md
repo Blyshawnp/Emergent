@@ -666,3 +666,19 @@ This remains simulation-only: no real retry or new real batch was created. Curre
 mapped readiness remains false until separately approved reconciliation occurs. Sheets
 and Apps Script version 24 remain authoritative, provider remains `sheets`, shadow and
 dual writes remain disabled, and Auth/full-cutover approval remains outstanding.
+
+### 2026-08-16 real post-write mapped-domain readiness
+
+Production reconciliation batch `214308dc-532e-43bd-b000-94a70d3d5a6d` succeeded as
+the single authorized retry of rolled-back batch
+`3c635332-c4c6-403d-ad00-1154813a3c4f`. All 34 operations, six before-images, and 28 new
+lineage mappings passed exact accounting. Timestamp-normalized session verification and
+all five correction checks passed, and no rollback condition occurred.
+
+The actual post-write comparison—not a simulation—reports every mapped domain ready,
+zero unexplained differences, and zero errors, retaining only the approved historical
+headset-review exception. Production health reports `ok=true` and
+`shadow_read_mapped_domains_ready=true`; `full_cutover_ready=false` remains correct
+because Auth and cutover are not approved. Sheets and Apps Script version 24 remain
+authoritative, provider remains `sheets`, and shadow/dual-write activation remains
+disabled.

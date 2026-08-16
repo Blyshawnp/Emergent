@@ -426,3 +426,19 @@ unexplained differences and zero errors. No real batch was created and no produc
 Sheets data changed. Sheets remains authoritative, Apps Script version 24 remains active,
 provider remains `sheets`, shadow and dual writes remain disabled, and Auth/cutover work
 remains unperformed.
+
+### 2026-08-16 successful production reconciliation retry
+
+The exact-rollback idempotency contract admitted one new production batch,
+`214308dc-532e-43bd-b000-94a70d3d5a6d`, linked to rolled-back parent
+`3c635332-c4c6-403d-ad00-1154813a3c4f`. The parent remained unchanged. The new batch
+completed all 28 inserts and six constrained updates, retained six exact before-images,
+created 28 batch-attributed lineage mappings, passed hosted post-write checksums, and
+finalized `succeeded` with no failed or blocked plan item.
+
+Aggregate orphan checks were zero, final operational counts matched every approved delta,
+and the actual 14-domain comparison returned zero unexplained differences and zero
+errors. Production health is `ok=true`; mapped shadow-read domains are ready, while full
+cutover remains separately blocked. Sheets and Apps Script version 24 remain
+authoritative, provider remains `sheets`, shadow and dual writes remain disabled, and no
+Auth migration, provider cutover, shadow activation, or Sheets mutation occurred.

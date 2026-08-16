@@ -607,3 +607,29 @@ including 264 lineage mappings; failed production batch
 `3c635332-c4c6-403d-ad00-1154813a3c4f` remains rolled back. Sheets remains
 authoritative, Apps Script version 24 remains active, provider is `sheets`, shadow and
 dual writes remain disabled, and no Auth migration or provider cutover occurred.
+
+## 2026-08-16 successful live 28+6 reconciliation retry
+
+The separately approved production retry completed through the reconciliation engine as
+batch `214308dc-532e-43bd-b000-94a70d3d5a6d`, linked by `retry_of_batch_id` to immutable
+rolled-back batch `3c635332-c4c6-403d-ad00-1154813a3c4f`. The source checksum was
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe` and the plan
+checksum was `da24708b4c92c7f26482a1a12acb1d0e107d696ddcdbb07c1d57214b967f89f2`.
+
+All 34 canonical operations succeeded: 28 reviewed inserts and six reviewed updates.
+The batch owns exactly 28 new lineage mappings and six before-images. The one
+candidate-session update changed only the seven approved fields; timestamp
+canonicalization passed, the hosted post-write checksum matched, and
+`post_write_value_mismatch` did not occur. All five correction updates changed only
+`candidate_id` and matched their hosted post-write checksums. Final operational counts
+are 58 candidates, 73 sessions, 145 attempts, 98 catalog rows, 12 reviews, 15 transfers,
+14 Newbie Shift requests, seven corrections, three physical pending requests, four
+notifications, and 292 lineage mappings.
+
+The real post-write 14-domain comparison is ready with zero unexplained differences and
+zero errors; only the approved historical headset-review exception remains. Production
+health returned `ok=true` and `shadow_read_mapped_domains_ready=true` while
+`full_cutover_ready=false`. No rollback was required. Google Sheets and Apps Script
+version 24 remain authoritative, provider remains `sheets`, shadow and dual writes remain
+disabled, and no Auth migration, provider cutover, shadow activation, or Sheets mutation
+occurred.
