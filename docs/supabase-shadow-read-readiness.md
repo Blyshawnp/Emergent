@@ -644,3 +644,25 @@ headset-review exceptions. This is not production verification: the live retry d
 run, production mapped readiness remains false, and Auth/full-cutover approval remains
 outstanding. Sheets remains authoritative, Apps Script version 24 remains active,
 provider is `sheets`, and shadow and dual writes remain disabled.
+
+### 2026-08-16 exact-rollback retry readiness
+
+The live retry acknowledgement was rejected before batch creation because the rolled-back
+historical batch already held the deterministic plan checksum. The new hosted
+idempotency contract permits reuse only after exact successful rollback, zero batch-owned
+residue, and a fresh plan whose project, provider, source, scope, operation identities,
+expiry, and target preconditions still match. It retains permanent duplicate protection
+for succeeded batches and blocks all active, unresolved, failed-rollback, stale, changed,
+or concurrent attempts.
+
+The hosted synthetic production-shaped retry completed all 34 operations, including the
+timestamp-normalized session update and five correction updates, then rejected a third
+execution. The test transaction left no synthetic residue. A fresh zero-write real plan
+remains exactly 28 inserts plus six updates with six before-images and 28 new/155 reused
+lineage mappings. Its retry preflight is eligible and its 14-domain simulation is ready
+with zero unexplained differences and zero errors.
+
+This remains simulation-only: no real retry or new real batch was created. Current live
+mapped readiness remains false until separately approved reconciliation occurs. Sheets
+and Apps Script version 24 remain authoritative, provider remains `sheets`, shadow and
+dual writes remain disabled, and Auth/full-cutover approval remains outstanding.

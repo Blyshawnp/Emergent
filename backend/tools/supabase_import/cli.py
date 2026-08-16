@@ -413,6 +413,14 @@ def sync_incremental_cmd(args):
             if item.get("classification") == "update_existing" and item.get("entity_type")
         })
     }
+    if not scope_errors:
+        executable = [
+            dict(item) for item in plan.get("items") or []
+            if item.get("operation") in {"insert", "update"}
+        ]
+        output["reconciliation_retry_eligibility"] = (
+            provider.preview_reconciliation_retry_eligibility(plan, executable)
+        )
     if args.projected_comparison:
         projected_provider = project_reconciliation_plan(sheets, provider, plan)
         projected = compare_shadow_provider(

@@ -327,6 +327,10 @@ def _insert_expected_values(entity: str, payload: Mapping[str, Any]) -> dict[str
 def execute_plan(provider, plan: Mapping[str, Any]) -> dict[str, Any]:
     executable = [dict(item) for item in plan.get("items") or [] if item.get("operation") in {"insert", "update"}]
     executable.sort(key=lambda item: (0 if item["operation"] == "insert" else 1, INSERT_ORDER.get(item["entity_type"], 99), item["safe_identity_hash"]))
+    eligibility = provider.preview_reconciliation_retry_eligibility(plan, executable)
+    if not eligibility.get("eligible"):
+        blockers = ",".join(str(value) for value in eligibility.get("blockers") or [])
+        raise ValueError(f"reconciliation_retry_not_eligible:{blockers}")
     start = provider.begin_reconciliation_execution(plan, executable)
     batch_id = start["batch_id"]
     ids = {row["safe_identity_hash"]: row["id"] for row in start.get("items") or []}

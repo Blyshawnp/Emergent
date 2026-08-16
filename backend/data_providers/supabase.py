@@ -22,7 +22,7 @@ class SupabaseDataProvider(DataProvider):
         "execute_reconciliation_candidate_session_update",
         "execute_reconciliation_candidate_correction_update", "fail_reconciliation_batch",
         "finalize_reconciliation_batch", "preview_reconciliation_rollback",
-        "rollback_reconciliation_batch",
+        "rollback_reconciliation_batch", "preview_reconciliation_retry_eligibility",
     })
 
     def __init__(self, url: str, service_role_key: str, *, timeout: float = 10.0, retries: int = 2):
@@ -111,20 +111,46 @@ class SupabaseDataProvider(DataProvider):
         return result
 
     def begin_reconciliation_execution(self, plan, items):
+        return self._reconciliation_rpc(
+            "begin_reconciliation_execution", self._reconciliation_execution_body(plan, items)
+        )
+
+    def _reconciliation_execution_body(self, plan, items):
         counts = plan.get("canonical_operations") or {}
         accounted = {"candidates", "candidate_sessions", "session_attempts", "headset_catalog", "headset_reviews",
                      "supervisor_transfers", "newbie_shift_requests", "pending_requests"}
         ending = {name: values.get("expected_ending_count") for name, values in (plan.get("entity_counts") or {}).items()
                   if name in accounted}
-        return self._reconciliation_rpc("begin_reconciliation_execution", {
+        return {
             "p_project_ref": plan["project_ref"], "p_source_snapshot_at": plan.get("source_snapshot_timestamp") or plan["generated_at"],
             "p_source_snapshot_checksum": plan["source_snapshot_checksum"], "p_plan_checksum": plan["plan_checksum"],
             "p_plan_expires_at": plan["expires_at"], "p_provider_state": plan["provider_state"],
             "p_source_rows": plan.get("source_rows_considered") or 0, "p_inserts": counts.get("inserts") or 0,
             "p_updates": counts.get("updates") or 0, "p_lineage": (plan.get("lineage_operations") or {}).get("expected_new") or 0,
             "p_expected_ending_counts": ending, "p_actor_metadata": {"client": "supabase_import_cli", "plan_bound": True},
+            "p_target_preconditions": dict(plan.get("_private_target_preconditions") or {}),
             "p_items": list(items),
-        })
+        }
+
+    def preview_reconciliation_retry_eligibility(self, plan, items):
+        body = self._reconciliation_execution_body(plan, items)
+        result = self._request(
+            "rpc/preview_reconciliation_retry_eligibility",
+            method="POST",
+            body={key: body[key] for key in (
+                "p_project_ref", "p_source_snapshot_checksum", "p_plan_checksum",
+                "p_plan_expires_at", "p_provider_state", "p_items",
+                "p_target_preconditions",
+            )},
+        )
+        if (
+            not isinstance(result, dict)
+            or not isinstance(result.get("eligible"), bool)
+            or not isinstance(result.get("blockers"), list)
+            or not isinstance(result.get("result"), str)
+        ):
+            raise SupabaseProviderError("Supabase retry eligibility RPC returned a malformed response")
+        return result
 
     def execute_reconciliation_insert(self, batch_id, item_id, payload, expected, lineage):
         return self._reconciliation_rpc("execute_reconciliation_insert", {

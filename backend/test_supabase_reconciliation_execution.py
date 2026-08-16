@@ -53,6 +53,10 @@ class FakeExecutionProvider:
             {"id": f"item-{i}", "safe_identity_hash": item["safe_identity_hash"]} for i, item in enumerate(items)
         ]}
 
+    def preview_reconciliation_retry_eligibility(self, _plan, _items):
+        self.calls.append("retry_preview")
+        return {"result": "eligible", "eligible": True, "blockers": []}
+
     def execute_reconciliation_insert(self, *_args): self.calls.append("insert"); return {"result": "inserted"}
     def execute_reconciliation_candidate_session_update(self, *_args): self.calls.append("update"); return {"result": "updated"}
     def execute_reconciliation_candidate_correction_update(self, *_args): self.calls.append("correction_update"); return {"result": "updated"}
@@ -71,6 +75,15 @@ class FailingExecutionProvider(FakeExecutionProvider):
     def execute_reconciliation_insert(self, *_args):
         self.calls.append("insert")
         raise RuntimeError("synthetic_write_failure")
+
+
+class RetryBlockedExecutionProvider(FakeExecutionProvider):
+    def preview_reconciliation_retry_eligibility(self, _plan, _items):
+        self.calls.append("retry_preview")
+        return {
+            "result": "blocked", "eligible": False,
+            "blockers": ["plan_checksum_succeeded"],
+        }
 
 
 class OrchestrationTests(unittest.TestCase):
@@ -93,7 +106,7 @@ class OrchestrationTests(unittest.TestCase):
         provider = FakeExecutionProvider()
         result = execute_plan(provider, plan)
         self.assertEqual(result["completed"], 2)
-        self.assertEqual(provider.calls, ["begin", "insert", "update", "finalize"])
+        self.assertEqual(provider.calls, ["retry_preview", "begin", "insert", "update", "finalize"])
 
     @staticmethod
     def approved_synthetic_plan():
@@ -258,7 +271,13 @@ class OrchestrationTests(unittest.TestCase):
         provider = FakeExecutionProvider()
         result = execute_plan(provider, plan)
         self.assertEqual(result["completed"], 1)
-        self.assertEqual(provider.calls, ["begin", "correction_update", "finalize"])
+        self.assertEqual(provider.calls, ["retry_preview", "begin", "correction_update", "finalize"])
+
+    def test_retry_preflight_blocks_before_batch_begin(self):
+        provider = RetryBlockedExecutionProvider()
+        with self.assertRaisesRegex(ValueError, "plan_checksum_succeeded"):
+            execute_plan(provider, self.approved_synthetic_plan())
+        self.assertEqual(provider.calls, ["retry_preview"])
 
     def test_candidate_correction_update_rejects_every_field_except_candidate_id(self):
         update = {
@@ -537,6 +556,45 @@ class ProviderSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "rollback preview RPC returned a malformed response"):
             provider.preview_reconciliation_rollback("synthetic-batch")
 
+    def test_retry_eligibility_preview_accepts_exact_contract(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "synthetic-key")
+        captured = {}
+        def request(*_args, **kwargs):
+            captured.update(kwargs.get("body") or {})
+            return {
+            "result": "eligible", "eligible": True, "blockers": [],
+            "retry_required": True, "retry_of_batch_id": "synthetic-prior",
+            }
+        provider._request = request
+        plan = OrchestrationTests.approved_synthetic_plan()
+        plan.update({
+            "project_ref": "xyfhikikddcqcmzbdvbj",
+            "source_snapshot_timestamp": "2026-08-16T00:00:00+00:00",
+            "source_snapshot_checksum": "a" * 64,
+            "plan_checksum": "b" * 64,
+            "expires_at": "2026-08-16T00:15:00+00:00",
+            "provider_state": {"provider": "sheets", "shadow_compare": "false", "dual_write": "false"},
+            "canonical_operations": {"inserts": 28, "updates": 6},
+            "entity_counts": {},
+        })
+        result = provider.preview_reconciliation_retry_eligibility(plan, plan["items"])
+        self.assertTrue(result["eligible"])
+        self.assertTrue(result["retry_required"])
+        self.assertEqual(captured["p_target_preconditions"], plan["_private_target_preconditions"])
+
+    def test_retry_eligibility_preview_rejects_malformed_contract(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "synthetic-key")
+        provider._request = lambda *_args, **_kwargs: {"result": "eligible"}
+        plan = {
+            "project_ref": "xyfhikikddcqcmzbdvbj", "source_snapshot_checksum": "a" * 64,
+            "plan_checksum": "b" * 64, "expires_at": "2026-08-16T00:15:00+00:00",
+            "generated_at": "2026-08-16T00:00:00+00:00",
+            "provider_state": {"provider": "sheets", "shadow_compare": "false", "dual_write": "false"},
+            "canonical_operations": {}, "entity_counts": {},
+        }
+        with self.assertRaisesRegex(RuntimeError, "retry eligibility RPC returned a malformed response"):
+            provider.preview_reconciliation_retry_eligibility(plan, [])
+
 
 class ForwardMigrationContractTests(unittest.TestCase):
     def test_execution_migration_is_narrow_locked_and_private(self):
@@ -617,6 +675,66 @@ class ForwardMigrationContractTests(unittest.TestCase):
         self.assertNotEqual("", None)
         self.assertNotEqual(False, "false")
         self.assertNotEqual("RESUMED-PASS", "RESUMED_PASS")
+
+    def test_retry_idempotency_migration_is_status_aware_private_and_auditable(self):
+        path = Path(__file__).resolve().parents[1] / "supabase" / "migrations" / "20260816101657_allow_reconciliation_retry_after_exact_rollback.sql"
+        sql = path.read_text(encoding="utf-8").casefold()
+        for token in (
+            "retry_of_batch_id", "reconciliation_retry_parent_uidx",
+            "reconciliation_plan_checksum_non_rolled_back_uidx", "where status <> 'rolled_back'",
+            "preview_reconciliation_retry_eligibility", "reconciliation_batch_residue_count",
+            "reconciliation_batch_has_exact_reviewed_scope", "prior_rollback_not_succeeded",
+            "prior_batch_residue_exists", "target_precondition_changed",
+            "insert_target_now_exists", "operation_identity_mismatch",
+            "later_overlapping_batch_exists", "prior_batch_retry_already_created",
+            "plan_checksum_execution_active", "plan_checksum_succeeded",
+            "plan_checksum_rollback_pending", "plan_checksum_rollback_failed",
+            "pg_advisory_xact_lock", "set search_path = ''",
+            "from public,anon,authenticated", "to service_role",
+        ):
+            self.assertIn(token, sql)
+        self.assertIn("drop constraint reconciliation_batches_plan_checksum_key", sql)
+        self.assertNotIn("update mts_sam.reconciliation_batches set plan_checksum", sql)
+        self.assertNotIn("delete from mts_sam.reconciliation_batches", sql)
+        self.assertNotIn("security definer", sql)
+        self.assertNotIn("set_config", sql)
+        self.assertNotIn("current_setting", sql)
+        for table in (
+            "candidates", "candidate_sessions", "session_attempts", "headset_catalog",
+            "headset_reviews", "supervisor_transfers", "newbie_shift_requests", "pending_requests",
+            "data_source_lineage",
+        ):
+            self.assertNotIn(f"delete from mts_sam.{table}", sql)
+            self.assertNotIn(f"update mts_sam.{table}", sql)
+
+    def test_retry_idempotency_matrix_is_fail_closed_by_status(self):
+        path = Path(__file__).resolve().parents[1] / "supabase" / "migrations" / "20260816101657_allow_reconciliation_retry_after_exact_rollback.sql"
+        sql = path.read_text(encoding="utf-8").casefold()
+        for status in ("running", "succeeded", "rollback_pending", "rollback_failed"):
+            self.assertIn(f"status='{status}'", sql)
+        self.assertIn("status<>'rolled_back'", sql)
+        self.assertIn("status='rolled_back'", sql)
+        self.assertIn("rollback_status is distinct from 'succeeded'", sql)
+        self.assertIn("create unique index reconciliation_retry_parent_uidx", sql)
+
+    def test_retry_target_precondition_migration_uses_hosted_row_containment(self):
+        path = Path(__file__).resolve().parents[1] / "supabase" / "migrations" / "20260816103201_bind_reconciliation_retry_to_target_preconditions.sql"
+        sql = path.read_text(encoding="utf-8").casefold()
+        for token in (
+            "p_target_preconditions jsonb", "reconciliation_entity_json",
+            "target_preconditions_required", "target_precondition_count_mismatch",
+            "target_precondition_missing", "target_precondition_changed",
+            "v_current @> v_precondition", "pg_advisory_xact_lock",
+            "set search_path = ''", "security invoker",
+            "from public,anon,authenticated", "to service_role",
+        ):
+            self.assertIn(token, sql)
+        self.assertNotIn("delete from mts_sam.reconciliation_batches", sql)
+        self.assertNotIn("update mts_sam.reconciliation_batches set plan_checksum", sql)
+        self.assertNotIn("security definer", sql)
+        self.assertNotIn("current_setting", sql)
+        self.assertNotIn("set_config", sql)
+        self.assertNotIn("v_current_checksum is distinct from v_expected_checksum", sql)
 
 
 if __name__ == "__main__":

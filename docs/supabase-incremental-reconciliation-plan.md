@@ -543,6 +543,45 @@ Apps Script version 24 remain authoritative; provider `sheets`, shadow disabled,
 writes disabled, Auth migration not performed, and provider cutover not performed remain
 unchanged.
 
+## 2026-08-16 exact-rollback retry idempotency correction
+
+The separately approved retry was rejected before batch creation with
+`plan_checksum_already_used`. The deterministic plan checksum was still linked to the
+immutable production batch `3c635332-c4c6-403d-ad00-1154813a3c4f`, even though that batch
+is `rolled_back`, its rollback status is `succeeded`, and it has zero canonical and
+lineage residue. The rejection created no batch and changed no production data.
+
+Forward migrations `20260816101657_allow_reconciliation_retry_after_exact_rollback.sql`
+and `20260816103201_bind_reconciliation_retry_to_target_preconditions.sql` replace the
+global checksum prohibition with a fail-closed exact-rollback retry contract. A retry is
+allowed only for a proven exact rollback, under the same project/provider/source and a
+new unexpired plan, with exact reviewed scope, operation identities, fresh hosted target
+preconditions, zero residue, no conflicting active or later execution, and a new batch
+UUID linked through `retry_of_batch_id`. Active, unresolved, failed-rollback, succeeded,
+expired, changed-source, changed-target, and concurrent duplicate attempts remain
+blocked. Historical batch evidence is not changed or released.
+
+The hosted synthetic matrix exercised the complete production-shaped 28+6 flow,
+including the seven-field timestamp-normalized session update and five candidate-only
+correction updates. Exact rollback permitted one new retry; that retry succeeded, and a
+third execution was rejected. The entire synthetic harness was transactionally rolled
+back, leaving no synthetic canonical, lineage, or batch residue.
+
+A fresh zero-write snapshot at `2026-08-16T10:36:41.608669+00:00` retained source
+checksum `a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe` and plan
+checksum `da24708b4c92c7f26482a1a12acb1d0e107d696ddcdbb07c1d57214b967f89f2`.
+The plan remains exactly 28 inserts plus six updates, six before-images, 28 new and 155
+reused lineage mappings, with zero ambiguity, unresolved identities, conflicts,
+unsupported operations, blockers, or scope errors. The read-only retry preflight reports
+the real plan eligible, and its 14-domain simulation has zero unexplained differences
+and zero errors.
+
+No real retry was executed. Operational counts remain at the restored baseline, the
+prior production batch remains rolled back and immutable, and no real canonical,
+lineage, or Google Sheets mutation occurred. Sheets and Apps Script version 24 remain
+authoritative; provider `sheets`, shadow disabled, dual writes disabled, no Auth
+migration, and no provider cutover remain unchanged.
+
 ## 2026-08-15 independent post-write fix verification
 
 Commit `922c714a1d3126ec60050d400ea300e6f2fe188c` was independently audited and the

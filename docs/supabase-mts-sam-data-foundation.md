@@ -398,3 +398,31 @@ No live retry or real canonical, lineage, or Sheets mutation occurred. The faile
 batch remains rolled back; Sheets remains authoritative, Apps Script version 24 remains
 active, provider is `sheets`, shadow and dual writes are disabled, and Auth/cutover work
 remains unperformed.
+
+### 2026-08-16 reconciliation retry idempotency contract
+
+The approved retry stopped before batch creation because the original rolled-back batch
+already held the deterministic plan checksum. The hosted begin function and the global
+checksum uniqueness constraint both treated every historical checksum as permanently
+consumed, without distinguishing an exact successful rollback from a completed or
+unresolved execution.
+
+Migrations `20260816101657` and `20260816103201` introduce a narrow service-role-only
+retry path. They preserve the old batch and its plan items, link a new attempt to its
+rolled-back parent, require zero owned residue, require exact project/provider/source,
+scope, operation, expiry, and freshly supplied hosted target preconditions, serialize
+the decision under an advisory lock, and keep successful or unresolved duplicates
+blocked. No canonical table or lineage row is rewritten by either migration.
+
+Hosted synthetic tests proved active, succeeded, unresolved, failed-rollback, residual,
+expired, source-changed, target-changed, scope-changed, operation-changed, and concurrent
+duplicates remain blocked. One exact-rollback retry was allowed with a new UUID, the
+production-shaped 28+6 operation completed, and a third attempt was permanently blocked.
+The synthetic transaction was rolled back in full.
+
+The fresh production plan remains the reviewed 28+6 scope and is read-only
+`retry_eligible=true`; the simulation-only 14-domain comparison is ready with zero
+unexplained differences and zero errors. No real batch was created and no production or
+Sheets data changed. Sheets remains authoritative, Apps Script version 24 remains active,
+provider remains `sheets`, shadow and dual writes remain disabled, and Auth/cutover work
+remains unperformed.
