@@ -742,3 +742,60 @@ applications. This requires no data, migration, provider, or Sheets rollback. Be
 activation, production routes must explicitly honor the flag while keeping
 `MTS_DATA_PROVIDER=sheets`, perform bounded non-blocking read-only comparisons, retain
 Sheets responses, and add application-boundary failure and performance coverage.
+
+### 2026-08-16 production-route shadow runtime wiring
+
+The blocked routing contract is now implemented without activating it. The backend
+retains the normal Sheets result, schedules only the mapped domains relevant to the
+completed GET route, and returns without awaiting Supabase. Integrated reads cover
+candidate lookup/tracking and status, history/sessions, headset catalog and reviews,
+supervisor transfers, Newbie Shift and correction requests, pending/recent activity,
+and notifications. No POST, PUT, PATCH, or DELETE route invokes the shadow scheduler.
+The legacy `MTS_DATA_PROVIDER=shadow_compare` wrapper remains compatibility-only and is
+not the production activation mechanism.
+
+The owned backend executor is bounded to two workers plus four queued jobs by default.
+Repeated in-flight domains coalesce, saturated work is skipped diagnostically, grouped
+domains from one route share one Sheets snapshot, Supabase retries default to zero, and
+each comparison receives a ten-second absolute deadline. Shutdown stops submissions,
+cancels queued jobs, and waits only for bounded running I/O. In-memory telemetry is
+limited to 200 safe events and rate-limited logs contain only domain, outcome, duration,
+exception class, skip reason, and safe-hash count. Row payloads and credentials are not
+logged. Outcomes are `match`, `expected_historical_difference`,
+`unexplained_difference`, `shadow_error`, or `skipped_due_to_capacity`.
+
+Application-boundary tests confirm that exact matches, mismatches, malformed responses,
+timeouts, transport failures, saturation, worker exceptions, and shutdown do not change
+the Sheets-derived payload or successful HTTP status. With deliberately blocked shadow
+I/O, measured caller times were 16.5 ms for Candidate History, 9.8 ms for candidate
+tracking, 5.2 ms for pending/recent activity, and 5.2 ms for headset catalog. The blocked
+comparison continued only in the owned executor. The first two hosted attempts also
+proved failure isolation when the former five-second Apps Script bound expired; after
+setting the reviewed ten-second absolute comparison bound, the controlled process
+reported 13 exact matches and the one approved headset historical difference.
+
+The headset allowance is now bound to one safe stable-identity hash and the exact
+approved `approved` to `pending` status plus unresolved canonical-session manifestation.
+An unrelated missing session, status difference, or field difference remains
+unexplained. The controlled hosted run exposed only that allowlisted identity and no new
+exception. Hosted counts before and after were identical: candidates 58, sessions 73,
+attempts 145, catalog 98, reviews 12, transfers 15, Newbie Shift requests 14,
+corrections 7, pending requests 3, notifications 4, lineage 292, batches 21, plan items
+154, and before-images 17. No reconciliation audit row or canonical/lineage row was
+created.
+
+The nine configuration tabs remain Sheets-only: callers 22, call-types 5,
+call-fail-reasons 8, sup-coaching 8, sup-fail-reasons 6, sup-reasons 7, shows 8, and the
+two Gemini prompt tabs with one row each (66 total). Six authorized-user rows remain
+outside Supabase Auth. Neither set is in the runtime shadow domain allowlist, and the
+shadow flag is absent from login, authorization, enrollment, and write paths.
+
+Future activation is a reversible configuration-only operation: set
+`MTS_SHADOW_COMPARE=true` in the environment inherited by the Electron launcher, keep
+`MTS_DATA_PROVIDER=sheets` and `MTS_DUAL_WRITE_ENABLED=false`, then restart only the
+owned MTS and SAM applications. Disable by restoring `MTS_SHADOW_COMPARE=false` (or
+removing it) and restarting those owned processes. No provider, database, migration, or
+Sheets rollback is involved. This verification did not perform that activation;
+production remains `MTS_SHADOW_COMPARE=false`, Sheets and Apps Script remain
+authoritative, and full cutover remains blocked by configuration mapping, Auth, and
+separate approval.

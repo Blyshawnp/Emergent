@@ -6,6 +6,7 @@ import sys
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
@@ -18,6 +19,7 @@ from tools.supabase_import.core import (
     ShadowDomainSpec,
     _comparison_index,
     compare_shadow_provider,
+    APPROVED_HISTORICAL_HEADSET_REVIEW_EXCEPTIONS,
 )
 from tools.supabase_import.projection import (
     project_reconciliation_plan,
@@ -218,8 +220,23 @@ class StableIdentityComparisonTests(unittest.TestCase):
         rows = {"headset_reviews": [{"review_id": "legacy", "source_session_id": "missing", "session_id": None}]}
         sheets = StaticProvider(rows)
         sheets.snapshot_metadata = _snapshot_metadata()
-        result = compare_shadow_provider(sheets, StaticProvider(rows))
+        safe_hash = hashlib.sha256(b"headset_reviews:legacy").hexdigest()
+        with patch.dict(APPROVED_HISTORICAL_HEADSET_REVIEW_EXCEPTIONS, {
+            safe_hash: {
+                "source_status": "approved",
+                "target_status": "pending",
+                "allow_relationship": True,
+            },
+        }, clear=True):
+            result = compare_shadow_provider(sheets, StaticProvider(rows))
         self.assertEqual(result["categories"]["headset_reviews"]["readiness"], "ready")
+
+    def test_unapproved_headset_missing_session_remains_not_ready(self):
+        rows = {"headset_reviews": [{"review_id": "future", "source_session_id": "missing", "session_id": None}]}
+        sheets = StaticProvider(rows)
+        sheets.snapshot_metadata = _snapshot_metadata()
+        result = compare_shadow_provider(sheets, StaticProvider(rows))
+        self.assertEqual(result["categories"]["headset_reviews"]["readiness"], "not_ready")
 
 
 class ProjectedReadinessTests(unittest.TestCase):

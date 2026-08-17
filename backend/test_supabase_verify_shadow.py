@@ -8,6 +8,7 @@ Run from the backend/ directory:
 from __future__ import annotations
 
 import datetime
+import hashlib
 import os
 import sys
 import unittest
@@ -21,10 +22,12 @@ if str(BACKEND_DIR) not in sys.path:
 from tools.supabase_import.core import (
     verify_production_health,
     compare_shadow_provider,
+    compare_shadow_resource,
     _fetch_with_retry,
     safe_upsert_lineage,
     REQUIRED_SHADOW_DOMAINS,
     SHADOW_DOMAIN_SPECS,
+    APPROVED_HISTORICAL_HEADSET_REVIEW_EXCEPTIONS,
 )
 from data_providers.sheets import SheetsDataProvider, SNAPSHOT_TABS
 from tools.supabase_import import cli as import_cli
@@ -219,6 +222,13 @@ class VerifyProductionHealthTests(unittest.TestCase):
     def test_shadow_mode_enabled(self):
         p = _healthy_provider()
         with patch.dict(os.environ, {"MTS_SHADOW_COMPARE": "true"}):
+            result = verify_production_health(p, comparison_result=_healthy_comparison())
+        self.assertTrue(result["shadow_read_mapped_domains_ready"])
+        self.assertNotIn("env_shadow_mode", result["errors"])
+
+    def test_malformed_shadow_mode_value_fails_closed(self):
+        p = _healthy_provider()
+        with patch.dict(os.environ, {"MTS_SHADOW_COMPARE": "sometimes"}):
             result = verify_production_health(p, comparison_result=_healthy_comparison())
         self.assertFalse(result["shadow_read_mapped_domains_ready"])
         self.assertIn("env_shadow_mode", result["errors"])
@@ -446,6 +456,42 @@ class CompareShadowProviderTests(unittest.TestCase):
         self.assertEqual(result["not_implemented"], [])
         self.assertEqual(set(result["categories"]), set(REQUIRED_SHADOW_DOMAINS))
 
+    def test_runtime_resource_comparison_fetches_only_requested_domain(self):
+        row = _domain_row("notifications")
+        sheets = self._make_sheets({"notifications": [row]})
+        supabase = self._make_supabase({"notifications": [row]})
+        result = compare_shadow_resource(sheets, supabase, "notifications")
+        self.assertEqual(set(result["categories"]), {"notifications"})
+        self.assertEqual(result["overall_readiness"], "ready")
+        sheets.list_resource.assert_called_once_with("notifications", limit=5000)
+        supabase.list_resource.assert_called_once_with("notifications", limit=5000)
+
+    def test_runtime_resource_comparison_rejects_unknown_domain(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported or empty shadow comparison domain set"):
+            compare_shadow_resource(self._make_sheets(), self._make_supabase(), "auth")
+
+    def test_runtime_resource_comparison_never_invokes_write_or_reconciliation_methods(self):
+        row = _domain_row("notifications")
+        sheets = self._make_sheets({"notifications": [row]})
+        supabase = self._make_supabase({"notifications": [row]})
+        for name in ("create_resource", "update_resource", "delete_resource"):
+            setattr(sheets, name, MagicMock(side_effect=AssertionError(name)))
+        for name in (
+            "upsert_rows", "insert_lineage_if_absent", "begin_reconciliation_execution",
+            "execute_reconciliation_insert", "rollback_reconciliation_batch",
+        ):
+            setattr(supabase, name, MagicMock(side_effect=AssertionError(name)))
+        compare_shadow_resource(sheets, supabase, "notifications")
+        for provider, names in (
+            (sheets, ("create_resource", "update_resource", "delete_resource")),
+            (supabase, (
+                "upsert_rows", "insert_lineage_if_absent", "begin_reconciliation_execution",
+                "execute_reconciliation_insert", "rollback_reconciliation_batch",
+            )),
+        ):
+            for name in names:
+                getattr(provider, name).assert_not_called()
+
     def test_aggregate_mismatch_count(self):
         """mismatch_count aggregates across all domains."""
         sheets_rows = [{"session_id": "s-1"}]
@@ -523,8 +569,7 @@ class CompareShadowProviderTests(unittest.TestCase):
         result = compare_shadow_provider(sheets, sup)
         self.assertEqual(result["overall_readiness"], "not_ready")
 
-    def test_headset_review_legacy_is_expected_difference(self):
-        """Review with unresolved_legacy_brand → expected_difference_count > 0."""
+    def test_unapproved_standalone_headset_review_is_not_suppressed(self):
         sup_reviews = [
             {"review_id": "r-1", "normalization_status": "unresolved_legacy_brand",
              "session_id": None, "source_session_id": None},
@@ -534,10 +579,10 @@ class CompareShadowProviderTests(unittest.TestCase):
         sup = self._make_supabase({"headset_reviews": sup_reviews})
         result = compare_shadow_provider(sheets, sup)
         cat = result["categories"]["headset_reviews"]
-        self.assertEqual(cat["expected_difference_count"], 1)
-        self.assertEqual(cat["unexplained_difference_count"], 0)
+        self.assertEqual(cat["expected_difference_count"], 0)
+        self.assertGreater(cat["unexplained_difference_count"], 0)
 
-    def test_historical_standalone_headset_status_mismatch_is_expected(self):
+    def test_unapproved_standalone_headset_status_mismatch_is_unexplained(self):
         sheets_review = {
             "review_id": "r-standalone", "status": "pending",
             "session_id": None, "source_session_id": None,
@@ -551,11 +596,11 @@ class CompareShadowProviderTests(unittest.TestCase):
         )
         cat = result["categories"]["headset_reviews"]
         self.assertEqual(cat["status_mismatch_count"], 1)
-        self.assertEqual(cat["expected_difference_count"], 1)
-        self.assertEqual(cat["unexplained_difference_count"], 0)
-        self.assertEqual(cat["readiness"], "ready")
+        self.assertEqual(cat["expected_difference_count"], 0)
+        self.assertGreater(cat["unexplained_difference_count"], 0)
+        self.assertEqual(cat["readiness"], "not_ready")
 
-    def test_unresolved_headset_session_is_visible_expected_relationship_mismatch(self):
+    def test_unapproved_unresolved_headset_session_is_unexplained(self):
         review = {
             "review_id": "r-unresolved",
             "session_id": None,
@@ -567,25 +612,34 @@ class CompareShadowProviderTests(unittest.TestCase):
         )
         cat = result["categories"]["headset_reviews"]
         self.assertEqual(cat["relationship_mismatch_count"], 1)
-        self.assertEqual(cat["expected_difference_count"], 1)
-        self.assertEqual(cat["unexplained_difference_count"], 0)
-        self.assertEqual(cat["readiness"], "ready")
+        self.assertEqual(cat["expected_difference_count"], 0)
+        self.assertGreater(cat["unexplained_difference_count"], 0)
+        self.assertEqual(cat["readiness"], "not_ready")
 
-    def test_unresolved_headset_status_mismatch_is_also_historical(self):
+    def test_allowlisted_headset_manifestations_are_expected(self):
         sheets_review = {
-            "review_id": "r-unresolved", "status": "pending",
-            "session_id": None, "source_session_id": "missing-session",
+            "review_id": "r-approved", "status": "approved",
+            "session_id": None, "source_session_id": "approved-source-session",
         }
-        supabase_review = {**sheets_review, "status": "approved"}
-        result = compare_shadow_provider(
-            self._make_sheets({"headset_reviews": [sheets_review]}),
-            self._make_supabase({"headset_reviews": [supabase_review]}),
-        )
+        supabase_review = {**sheets_review, "status": "pending"}
+        safe_hash = hashlib.sha256(b"headset_reviews:r-approved").hexdigest()
+        with patch.dict(APPROVED_HISTORICAL_HEADSET_REVIEW_EXCEPTIONS, {
+            safe_hash: {
+                "source_status": "approved",
+                "target_status": "pending",
+                "allow_relationship": True,
+            },
+        }, clear=True):
+            result = compare_shadow_provider(
+                self._make_sheets({"headset_reviews": [sheets_review]}),
+                self._make_supabase({"headset_reviews": [supabase_review]}),
+            )
         cat = result["categories"]["headset_reviews"]
         self.assertEqual(cat["status_mismatch_count"], 1)
         self.assertEqual(cat["relationship_mismatch_count"], 1)
         self.assertEqual(cat["expected_difference_count"], 1)
         self.assertEqual(cat["unexplained_difference_count"], 0)
+        self.assertEqual(cat["readiness"], "ready")
 
     def test_result_has_required_keys(self):
         """Result always contains required top-level keys."""

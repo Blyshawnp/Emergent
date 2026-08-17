@@ -151,6 +151,11 @@ class SheetsDataProvider(DataProvider):
         self._tabs = {}
         self.snapshot_metadata = {}
 
+    def set_comparison_deadline(self, seconds):
+        """Bound the next snapshot transport call for diagnostic shadow work."""
+        if hasattr(self._client, "timeout"):
+            self._client.timeout = max(1.0, float(seconds))
+
     def health(self) -> ProviderHealth:
         try:
             self._client.get("ping")

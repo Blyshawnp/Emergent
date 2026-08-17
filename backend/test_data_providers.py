@@ -5,6 +5,7 @@ from urllib.error import URLError
 
 from data_providers.factory import build_data_provider, configured_provider_mode
 from data_providers.shadow import ShadowCompareDataProvider
+from data_providers.sheets import SheetsDataProvider
 from data_providers.supabase import SupabaseDataProvider, SupabaseProviderError
 
 
@@ -30,9 +31,37 @@ class ProviderTests(unittest.TestCase):
         client = Mock()
         self.assertEqual(build_data_provider(sheets_client=client, environ={}).name, "sheets")
 
+    def test_shadow_flag_does_not_replace_sheets_primary_provider(self):
+        client = Mock()
+        provider = build_data_provider(
+            sheets_client=client,
+            environ={
+                "MTS_DATA_PROVIDER": "sheets",
+                "MTS_SHADOW_COMPARE": "true",
+                "MTS_DUAL_WRITE_ENABLED": "false",
+            },
+        )
+        self.assertEqual(provider.name, "sheets")
+        self.assertNotIsInstance(provider, ShadowCompareDataProvider)
+
     def test_service_key_required_only_for_supabase_mode(self):
         with self.assertRaises(ValueError):
             build_data_provider(sheets_client=Mock(), environ={"MTS_DATA_PROVIDER": "supabase"})
+
+    def test_supabase_shadow_deadline_fails_before_an_overdue_request(self):
+        provider = SupabaseDataProvider("https://example.supabase.co", "secret-key")
+        with patch("data_providers.supabase.time.monotonic", side_effect=[100.0, 101.1]), \
+             patch("data_providers.supabase.urlopen") as request:
+            provider.set_comparison_deadline(1.0)
+            with self.assertRaisesRegex(SupabaseProviderError, "deadline exceeded"):
+                provider._request("notifications")
+        request.assert_not_called()
+
+    def test_sheets_shadow_deadline_bounds_apps_script_transport(self):
+        client = Mock(timeout=180)
+        provider = SheetsDataProvider(client)
+        provider.set_comparison_deadline(10)
+        self.assertEqual(client.timeout, 10.0)
 
     def test_shadow_failure_never_changes_primary_response(self):
         provider = ShadowCompareDataProvider(FakeProvider([{"session_id": "s-1"}]), FakeProvider(error=TimeoutError()))

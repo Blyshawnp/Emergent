@@ -36,6 +36,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from services.form_filler import fill_form as fill_cert_form
+from data_providers.runtime_shadow import (
+    ShadowComparisonRuntime,
+    build_runtime_shadow_providers,
+)
+from services.apps_script_api import apps_script_api_role
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -43,6 +48,43 @@ load_dotenv(ROOT_DIR / '.env')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logger.info("[STARTUP] backend process start")
+
+_shadow_runtime = None
+
+
+def _runtime_shadow_provider_factory(config):
+    return build_runtime_shadow_providers(
+        ROOT_DIR,
+        apps_script_api_role(),
+        config,
+    )
+
+
+def _schedule_shadow_domains(*domains):
+    runtime = _shadow_runtime
+    if runtime is None:
+        return []
+    submit_many = getattr(runtime, "submit_many", None)
+    if callable(submit_many):
+        try:
+            return [submit_many(domains)]
+        except Exception as exc:
+            logger.warning(
+                "[DATA-SHADOW] domains=%s scheduling_failed=%s",
+                len(domains), exc.__class__.__name__,
+            )
+            return ["shadow_error"]
+    outcomes = []
+    for domain in domains:
+        try:
+            outcomes.append(runtime.submit(domain))
+        except Exception as exc:
+            logger.warning(
+                "[DATA-SHADOW] domain=%s scheduling_failed=%s",
+                str(domain or ""), exc.__class__.__name__,
+            )
+            outcomes.append("shadow_error")
+    return outcomes
 
 # ══════════════════════════════════════════════════════════════════
 # CONSTANTS / DEFAULTS
@@ -3133,6 +3175,16 @@ def _runtime_diagnostics_payload():
             "error": notification_config.get("error") or "",
         },
         "contentSourceSummary": _content_source_summary_payload(),
+        "shadowComparison": (
+            _shadow_runtime.diagnostics()
+            if _shadow_runtime is not None
+            else {
+                "enabled": False,
+                "pending": 0,
+                "telemetryCount": 0,
+                "statusCounts": {},
+            }
+        ),
         "lastGoogleSheetAuthStatus": dict(_google_sheet_auth_status),
         "lastGoogleSheetContentLoadErrors": list(_google_sheet_content_errors),
     }
@@ -11645,6 +11697,9 @@ async def import_sqlite_seed_if_requested():
 # ══════════════════════════════════════════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _shadow_runtime
+    _shadow_runtime = ShadowComparisonRuntime(_runtime_shadow_provider_factory)
+    _shadow_runtime.start()
     await import_sqlite_seed_if_requested()
     logger.info("[STARTUP] SQLite ready")
     _log_startup_runtime_diagnostics()
@@ -11713,6 +11768,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"[STARTUP] Mock Testing Suite v{APP_VERSION}")
     logger.info("[STARTUP] server health ready")
     yield
+    if _shadow_runtime is not None:
+        _shadow_runtime.shutdown(wait=True)
+        _shadow_runtime = None
     _gemini_executor.shutdown(wait=False, cancel_futures=True)
     db.close()
     logger.info("[SHUTDOWN] Server stopped")
@@ -12092,12 +12150,16 @@ async def get_session_attempt_state():
 @api_router.get("/shared/candidates/lookup")
 async def lookup_shared_candidate(name: str = ""):
     await asyncio.to_thread(_reconcile_remote_newbie_requests_into_local_state)
-    return await asyncio.to_thread(_lookup_shared_candidate_sessions, name)
+    result = await asyncio.to_thread(_lookup_shared_candidate_sessions, name)
+    _schedule_shadow_domains("candidate_tracking")
+    return result
 
 
 @api_router.get("/shared/pending-sup-transfers")
 async def get_shared_pending_sup_transfers():
-    return await asyncio.to_thread(_get_shared_pending_sup_transfers)
+    result = await asyncio.to_thread(_get_shared_pending_sup_transfers)
+    _schedule_shadow_domains("supervisor_transfers")
+    return result
 
 
 RESIDENTIAL_USAGE_MARKERS = (
@@ -13126,13 +13188,20 @@ async def check_candidate_ip_intelligence(payload: dict):
 @api_router.get("/shared/admin/candidates")
 async def get_shared_admin_candidates(request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_shared_admin_candidate_snapshot)
+    result = await asyncio.to_thread(_shared_admin_candidate_snapshot)
+    _schedule_shadow_domains("candidate_tracking", "authoritative_candidate_status")
+    return result
 
 
 @api_router.get("/shared/admin/snapshot")
 async def get_shared_admin_snapshot(request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_shared_admin_snapshot)
+    result = await asyncio.to_thread(_shared_admin_snapshot)
+    _schedule_shadow_domains(
+        "candidate_tracking", "authoritative_candidate_status",
+        "supervisor_transfers", "pending_requests", "recent_activity",
+    )
+    return result
 
 
 @api_router.post("/shared/admin/candidates/action")
@@ -13144,7 +13213,12 @@ async def post_shared_admin_candidate_action(payload: dict, request: Request):
 @api_router.get("/shared/admin/pending-requests")
 async def get_shared_admin_pending_requests(request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_shared_pending_request_snapshot)
+    result = await asyncio.to_thread(_shared_pending_request_snapshot)
+    _schedule_shadow_domains(
+        "pending_requests", "recent_activity", "newbie_shift_requests",
+        "candidate_corrections",
+    )
+    return result
 
 
 @api_router.post("/shared/admin/pending-requests/action")
@@ -13535,6 +13609,7 @@ async def get_history():
             doc["final_status"] = normalized_status
         doc["history_id"] = doc.get("history_id") or _history_identity(doc)
         docs[index] = doc
+    _schedule_shadow_domains("history", "candidate_sessions")
     return docs
 
 
@@ -13590,7 +13665,9 @@ async def get_history_stats():
     ncns = sum(1 for status in normalized_statuses if status == "NC/NS")
     incomplete = sum(1 for status in normalized_statuses if status == "Incomplete")
     pass_rate = round((passes / total * 100) if total > 0 else 0, 1)
-    return {"total": total, "passes": passes, "fails": fails, "ncns": ncns, "incomplete": incomplete, "pass_rate": pass_rate}
+    result = {"total": total, "passes": passes, "fails": fails, "ncns": ncns, "incomplete": incomplete, "pass_rate": pass_rate}
+    _schedule_shadow_domains("history")
+    return result
 
 
 @api_router.delete("/history")
@@ -15760,11 +15837,13 @@ async def get_ticker():
 @api_router.get("/notifications")
 async def get_notifications():
     groups = await _fetch_notifications_from_sheet()
-    return {
+    result = {
         **groups,
         "source": _ticker_fetch_status.get("source") or "unknown",
         "fallback": (_ticker_fetch_status.get("source") or "unknown") not in {"google", "cache"},
     }
+    _schedule_shadow_domains("notifications")
+    return result
 
 
 @api_router.get("/config-status")
@@ -15861,7 +15940,7 @@ async def get_notifications_manage(request: Request):
             authenticated = {"ok": False, "items": [], "error": f"Unable to read master sam-notifications tab: {exc}"}
 
     if authenticated.get("ok"):
-        return {
+        result = {
             "ok": True,
             "items": authenticated.get("items", []),
             "sheet": {
@@ -15877,8 +15956,10 @@ async def get_notifications_manage(request: Request):
                 "error": "",
             },
         }
+        _schedule_shadow_domains("notifications")
+        return result
 
-    return {
+    result = {
         "ok": False,
         "items": _default_managed_notifications,
         "error": "Remote content could not be loaded. Fallback content is being used.",
@@ -15895,6 +15976,8 @@ async def get_notifications_manage(request: Request):
             "error": authenticated.get("error") or "Notification writes require the master sam-notifications tab.",
         },
     }
+    _schedule_shadow_domains("notifications")
+    return result
 
 
 @api_router.post("/notifications/manage")
@@ -15997,7 +16080,9 @@ async def get_screenshot_asset(filename: str):
 @api_router.get("/headsets")
 async def get_approved_headsets(force: bool = False):
     groups, denied, error = await _fetch_approved_headsets(force=force)
-    return {"groups": groups, "denied": denied, "error": error}
+    result = {"groups": groups, "denied": denied, "error": error}
+    _schedule_shadow_domains("headset_catalog")
+    return result
 
 
 @api_router.post("/headsets/review-log")
@@ -16008,7 +16093,9 @@ async def log_headset_review(payload: dict):
 @api_router.get("/headsets/reviews")
 async def get_headset_reviews(request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_headset_review_snapshot)
+    result = await asyncio.to_thread(_headset_review_snapshot)
+    _schedule_shadow_domains("headset_reviews")
+    return result
 
 
 async def _propagate_headset_review_edit_to_local_records(result, payload):

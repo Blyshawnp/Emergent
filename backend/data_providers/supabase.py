@@ -31,11 +31,24 @@ class SupabaseDataProvider(DataProvider):
         self._timeout = max(1.0, float(timeout))
         self._retries = max(0, int(retries))
         self._comparison_cache = {}
+        self._comparison_deadline = None
         if not self._url.startswith("https://") or not self._key:
             raise ValueError("Supabase backend configuration is incomplete")
 
     def __repr__(self) -> str:
         return "SupabaseDataProvider(configured=True)"
+
+    def set_comparison_deadline(self, seconds):
+        """Apply one absolute deadline across a runtime shadow domain projection."""
+        self._comparison_deadline = time.monotonic() + max(1.0, float(seconds))
+
+    def _request_timeout(self):
+        if self._comparison_deadline is None:
+            return self._timeout
+        remaining = self._comparison_deadline - time.monotonic()
+        if remaining <= 0:
+            raise SupabaseProviderError("Supabase shadow comparison deadline exceeded")
+        return max(0.05, min(self._timeout, remaining))
 
     def _request(self, path: str, *, query: Mapping[str, Any] | None = None, method="GET", body=None, prefer=None):
         encoded_path = "/".join(quote(segment, safe="") for segment in str(path).split("/"))
@@ -58,7 +71,7 @@ class SupabaseDataProvider(DataProvider):
         request = Request(url, method=method, headers=headers, data=encoded_body)
         for attempt in range(self._retries + 1):
             try:
-                with urlopen(request, timeout=self._timeout) as response:
+                with urlopen(request, timeout=self._request_timeout()) as response:
                     return json.loads(response.read().decode("utf-8-sig"))
             except HTTPError as exc:
                 try:
