@@ -718,6 +718,15 @@ all requested failure modes at the application boundary. The hosted comparison C
 provide safe read-only production evidence, but it is a separate operator command and is
 not the runtime `MTS_SHADOW_COMPARE` path.
 
+The current headset data still produces only the two approved historical mismatch
+manifestations, but the exception matcher is not yet identity-bound. It discounts
+comparison fields for any hosted headset review whose `session_id` is absent. That rule
+must be narrowed to the approved historical identities and expected fields so that a new
+unrelated mismatch on an unresolved review cannot be classified as expected. The wrapper
+also emits one log record per compared resource without an explicit rate or volume bound;
+although its payload is privacy-safe, production telemetry needs bounded emission before
+route-level activation.
+
 The fresh inventory confirms the nine staging-only configuration tabs remain `callers`
 (22), `call-types` (5), `call-fail-reasons` (8), `sup-coaching` (8),
 `sup-fail-reasons` (6), `sup-reasons` (7), `shows` (8),
