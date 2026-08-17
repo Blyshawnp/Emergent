@@ -682,3 +682,54 @@ headset-review exception. Production health reports `ok=true` and
 because Auth and cutover are not approved. Sheets and Apps Script version 24 remain
 authoritative, provider remains `sheets`, and shadow/dual-write activation remains
 disabled.
+
+### 2026-08-16 shadow activation contract review
+
+The successful reconciliation remains intact. A fresh one-fetch, zero-retry source
+snapshot retained checksum
+`a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`.
+The current production comparison completed all 14 mapped domains with zero unexplained
+differences and zero errors. The headset-review result retains only the narrowly
+classified historical unresolved-session exception. Production health remains
+`ok=true`, `shadow_read_mapped_domains_ready=true`, and `full_cutover_ready=false`.
+
+Activation is blocked by the application integration contract, not by mapped-data
+parity. `MTS_SHADOW_COMPARE` is currently consumed only by readiness and reconciliation
+guards. It is not read by `data_providers.factory`, and no production application route
+constructs that factory. The only `ShadowCompareDataProvider` selection requires
+`MTS_DATA_PROVIDER=shadow_compare`, which would violate the required
+`MTS_DATA_PROVIDER=sheets` authority contract. Setting only
+`MTS_SHADOW_COMPARE=true` would therefore change health metadata without causing
+production application reads to execute shadow comparisons.
+
+The isolated wrapper is read-only and always returns its primary Sheets rows after a
+Supabase match, mismatch, malformed result, stale result, timeout, or other comparison
+exception. Its safe logs contain the resource, row counts, mismatch boolean, or exception
+class and do not include row payloads or credentials. However, the wrapper performs the
+Supabase request synchronously after the Sheets request. A controlled timing check with
+50 ms Sheets and 100 ms Supabase delays took approximately 153 ms total; a 200 ms shadow
+timeout delayed the primary response by approximately 200 ms. The configured Supabase
+defaults permit three 10-second attempts plus backoff, so this implementation is not an
+acceptable user-request activation path without bounded non-blocking execution.
+
+Existing coverage proves only that one shadow timeout returns the primary result. It does
+not prove production-route wiring, flag-controlled activation, non-blocking behavior, or
+all requested failure modes at the application boundary. The hosted comparison CLI does
+provide safe read-only production evidence, but it is a separate operator command and is
+not the runtime `MTS_SHADOW_COMPARE` path.
+
+The fresh inventory confirms the nine staging-only configuration tabs remain `callers`
+(22), `call-types` (5), `call-fail-reasons` (8), `sup-coaching` (8),
+`sup-fail-reasons` (6), `sup-reasons` (7), `shows` (8),
+`gemini-coaching-prompt` (1), and `gemini-fail-prompt` (1): 66 rows total. They may
+remain Sheets-only for a future mapped-domain shadow phase, but still block full cutover.
+The six `sam-authorized-users` rows remain outside Supabase Auth enrollment; current
+authorization remains Sheets/Apps Script based and is not touched by the shadow flag.
+
+No runtime flag was changed in this review. The disable procedure for a future corrected
+implementation is to set or restore `MTS_SHADOW_COMPARE=false` (or remove the variable)
+in the environment inherited by the Electron launcher and restart the owned MTS and SAM
+applications. This requires no data, migration, provider, or Sheets rollback. Before any
+activation, production routes must explicitly honor the flag while keeping
+`MTS_DATA_PROVIDER=sheets`, perform bounded non-blocking read-only comparisons, retain
+Sheets responses, and add application-boundary failure and performance coverage.
