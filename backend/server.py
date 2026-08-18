@@ -13271,6 +13271,114 @@ async def post_sam_setup_reset(request: Request):
     return {"ok": True}
 
 
+def _supabase_anon_rpc(rpc_name: str, body: dict = None):
+    runtime_config = _load_backend_runtime_config() or {}
+    url = str(runtime_config.get("supabase_url") or "").rstrip("/")
+    key = str(runtime_config.get("supabase_anon_key") or "").strip()
+    if not url or not key:
+        return {"ok": False, "error": "Supabase configuration is not available."}
+    rpc_url = f"{url}/rest/v1/rpc/{rpc_name}"
+    req_body = json.dumps(body or {}, separators=(",", ":")).encode("utf-8")
+    req = Request(
+        rpc_url,
+        data=req_body,
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Accept-Profile": "mts_sam",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=10.0) as resp:
+            return json.loads(resp.read().decode("utf-8-sig"))
+    except HTTPError as exc:
+        try:
+            err_text = exc.read().decode("utf-8-sig")
+            err_json = json.loads(err_text)
+            return {"ok": False, "error": err_json.get("message") or err_text}
+        except Exception:
+            return {"ok": False, "error": f"HTTP {exc.code}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@api_router.get("/sam/auth/config")
+async def get_sam_auth_config():
+    config = _load_backend_runtime_config() or {}
+    return {
+        "ok": True,
+        "supabase_url": config.get("supabase_url", ""),
+        "supabase_anon_key": config.get("supabase_anon_key", ""),
+    }
+
+
+@api_router.post("/sam/auth/verify")
+async def post_sam_auth_verify(payload: dict):
+    auth_uid = str((payload or {}).get("auth_uid") or "").strip()
+    if not auth_uid:
+        return {"ok": False, "errorCode": "missing_auth_identity", "error": "Authentication identity is required."}
+    result = await asyncio.to_thread(_supabase_anon_rpc, "verify_sam_authorization", {"p_auth_uid": auth_uid})
+    return result
+
+
+@api_router.post("/sam/auth/complete")
+async def post_sam_auth_complete(payload: dict):
+    name = str((payload or {}).get("name") or "").strip()
+    role = str((payload or {}).get("role") or "").strip()
+    auth_uid = str((payload or {}).get("auth_uid") or "").strip()
+    email = str((payload or {}).get("email") or "").strip()
+    if not name or not role:
+        return {"ok": False, "error": "Name and role are required."}
+    try:
+        await db.settings.update_one(
+            {"_id": "app_settings"},
+            {"$set": {
+                "sam_setup_complete": True,
+                "sam_user_name": name,
+                "sam_user_role": role,
+                "sam_auth_email": email,
+                "sam_auth_uid": auth_uid,
+                "sam_auth_provider": "supabase",
+            }},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning("[SAM-AUTH] status=persistence_failed error_type=%s", type(exc).__name__)
+        return {"ok": False, "error": "Failed to save local session."}
+    return {"ok": True, "name": name, "role": role}
+
+
+@api_router.post("/sam/admin/users/list")
+async def post_sam_admin_users_list(payload: dict):
+    caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
+    if not caller_auth_uid:
+        return {"ok": False, "error": "Unauthorized"}
+    result = await asyncio.to_thread(_supabase_anon_rpc, "get_sam_user_management_list", {"p_caller_auth_uid": caller_auth_uid})
+    return result
+
+
+@api_router.post("/sam/admin/users/set-active")
+async def post_sam_admin_users_set_active(payload: dict):
+    caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
+    target_user_id = str((payload or {}).get("target_user_id") or "").strip()
+    active = bool((payload or {}).get("active"))
+    if not caller_auth_uid or not target_user_id:
+        return {"ok": False, "error": "Caller and target user IDs are required."}
+    result = await asyncio.to_thread(
+        _supabase_anon_rpc,
+        "set_sam_user_active",
+        {
+            "p_caller_auth_uid": caller_auth_uid,
+            "p_target_user_id": target_user_id,
+            "p_active": active,
+        }
+    )
+    return result
+
+
 @api_router.get("/admin/verify-shared-session-sheets")
 async def verify_shared_session_sheets(request: Request):
     _require_admin_token(request)

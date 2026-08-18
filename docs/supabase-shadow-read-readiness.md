@@ -1256,3 +1256,31 @@ All 6 SAM user authorization mappings are staged into `mts_sam.app_users` and `m
 4. **Enrollment Gate**:
    - User creation and invitation emails are deferred until a separate, explicitly approved user onboarding session.
    - Google Sheets authorization remains 100% active and authoritative.
+
+---
+
+## 6. One-User Pilot Auth & SAM Account / User Management Architecture
+
+### Pilot Implementation State
+- **Pilot User**: Shawn Bly (`c6cdf86b-9624-dc61-cfc9-acd33d4aee9a`)
+- **Pilot Supabase Auth UID**: `ca4cb01e-0777-435d-8a7c-1f2bcfaed291`
+- **Pilot Linkage**: `auth_user_id` linked on `mts_sam.app_users`
+- **Remaining 5 Users Protection**: `auth_user_id = NULL` (Ashley Shealey, Becky Sowles, Lisa Byrd, Kristi Green, Kimberly O'brien). No enrollment, no invites.
+
+### Architecture Components
+1. **Migration `20260818040000_mts_sam_user_management.sql`**:
+   - `mts_sam.verify_sam_authorization(p_auth_uid)`: Transactional RPC returning user identity and authorization role from `mts_sam.app_users`.
+   - `mts_sam.get_sam_user_management_list(p_caller_auth_uid)`: Returns all 6 staged SAM user mappings with Auth linkage status.
+   - `mts_sam.set_sam_user_active(p_caller_auth_uid, p_target_user_id, p_active)`: Owner-only activation toggle with strict last-owner protection.
+2. **Electron Safe Storage (Windows DPAPI)**:
+   - IPC endpoints `authSession:get`, `authSession:save`, `authSession:clear` backed by `safeStorage.encryptString` / `safeStorage.decryptString`.
+   - Stored in `%APPDATA%/.../sam_auth_session.enc`.
+3. **SAM Frontend Integration (`NotificationManagerApp.jsx`)**:
+   - `SamSetupWizard`: Supabase Auth email/password sign-in by default, password recovery, and legacy PIN fallback.
+   - Auto-restore: Automatically validates persistent session on launch with server-side authorization check.
+   - `HelpModal` (Settings):
+     - **Account**: Displays authoritative name (`app_users.display_name`), email, role (`administrator`), Change Password, Change Email, Log Out.
+     - **User Management**: Displays all 6 SAM users with Auth linkage status (`Linked` vs `Not enrolled`), active status, and owner activation controls with last-owner protection.
+4. **Backend REST Proxy (`backend/server.py`)**:
+   - Endpoints `/api/sam/auth/config`, `/api/sam/auth/verify`, `/api/sam/auth/complete`, `/api/sam/admin/users/list`, `/api/sam/admin/users/set-active`.
+   - Least-privilege RPC execution using publishable anon key. No `service_role_key` in client environment.

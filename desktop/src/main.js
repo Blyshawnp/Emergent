@@ -2,7 +2,7 @@
  * Mock Testing Suite — Electron Main Process
  * Manages the application window, system tray, backend server, and auto-updates.
  */
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog, ipcMain, screen, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -1626,6 +1626,57 @@ ipcMain.handle('assets:getUrl', (_event, filename) => {
   }
   const assetPath = getAssetPath(safeName);
   return fs.existsSync(assetPath) ? pathToFileURL(assetPath).toString() : '';
+});
+
+function getAuthSessionFilePath() {
+  return path.join(app.getPath('userData'), 'sam_auth_session.enc');
+}
+
+ipcMain.handle('authSession:get', async () => {
+  try {
+    const sessionPath = getAuthSessionFilePath();
+    if (!fs.existsSync(sessionPath)) {
+      return null;
+    }
+    const encrypted = fs.readFileSync(sessionPath);
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+      return null;
+    }
+    const decrypted = safeStorage.decryptString(encrypted);
+    return JSON.parse(decrypted);
+  } catch (_err) {
+    return null;
+  }
+});
+
+ipcMain.handle('authSession:save', async (_event, session) => {
+  try {
+    if (!session || typeof session !== 'object') {
+      return false;
+    }
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+      return false;
+    }
+    const sessionPath = getAuthSessionFilePath();
+    const plainText = JSON.stringify(session);
+    const encrypted = safeStorage.encryptString(plainText);
+    fs.writeFileSync(sessionPath, encrypted);
+    return true;
+  } catch (_err) {
+    return false;
+  }
+});
+
+ipcMain.handle('authSession:clear', async () => {
+  try {
+    const sessionPath = getAuthSessionFilePath();
+    if (fs.existsSync(sessionPath)) {
+      fs.unlinkSync(sessionPath);
+    }
+    return true;
+  } catch (_err) {
+    return false;
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════

@@ -38,6 +38,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getBackendState: () => ipcRenderer.invoke('backend:getState'),
   retryBackendStartup: (options = {}) => ipcRenderer.invoke('backend:retryStartup', options || {}),
   getAssetUrl: (filename) => ipcRenderer.invoke('assets:getUrl', filename),
+  authSession: {
+    get: () => ipcRenderer.invoke('authSession:get'),
+    save: (session) => ipcRenderer.invoke('authSession:save', session),
+    clear: () => ipcRenderer.invoke('authSession:clear'),
+  },
   onAppEvent: (callback) => {
     if (typeof callback !== 'function') {
       return () => {};
