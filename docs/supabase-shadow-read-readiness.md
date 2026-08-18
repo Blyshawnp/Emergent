@@ -832,3 +832,58 @@ corrections 7, pending requests 3, notifications 4, lineage 292, reconciliation 
 must place the approved backend in both owned application packages and verify its hashes
 before retrying configuration-only activation. Sheets and Apps Script remain
 authoritative; dual writes, Auth migration, and provider cutover remain disabled.
+
+### 2026-08-18 packaged shadow backend deployment
+
+The stale packaged-runtime prerequisite is resolved without changing source code or
+production flags. The approved `backend/dist/backend.exe` and the backend embedded in
+both freshly built Electron packages are 52,515,808 bytes, retain the approved
+2026-08-17 build timestamp, and have SHA-256
+`9662041FA2FB7496F0630A3126EEC82A2DF4E22E99FB177F67AB6EB3FB9926B0`. The normal
+production-ready sync copied those exact package outputs into the current MTS and SAM
+production-ready trees; all four deployed runtime copies match the approved digest.
+Generated packages, installers, unpacked directories, maps, and logs remain untracked.
+
+The path audit confirmed that development launchers use the repository Python backend,
+while packaged MTS and SAM both resolve `backend/backend.exe` beneath Electron's
+`process.resourcesPath`. Their Electron Builder definitions source that resource from
+`backend/dist/backend.exe`. MTS and SAM package builds therefore used the established
+`extraResources` workflow, followed by the repository's production-ready-only sync; no
+backend rebuild or manual installed-file patch was used.
+
+Controlled package startup verified MTS on port 8600 and SAM on port 8601. Each listener
+resolved to its own newly packaged backend path and approved digest, health returned
+version 1.0.1, and the established Apps Script update-metadata read succeeded. MTS and
+SAM ran concurrently with distinct listeners. Exact owned-process cleanup removed one
+application without affecting the other, and both listeners were absent after cleanup.
+
+An isolated production-ready backend capability run used process-scoped
+`MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=true`, and
+`MTS_DUAL_WRITE_ENABLED=false`. It returned a safe headset read, reported shadow mode
+enabled, scheduled one bounded diagnostic, and was terminated with no persistent flag
+change. The diagnostic was safely isolated as `shadow_error` because the controlled
+packaged process had no Supabase URL or service-role credential installed in process,
+user, or machine environment. A separate activation step must provide the existing
+Supabase runtime configuration through the approved secret-management mechanism; the
+credential was not inspected or copied during this deployment.
+
+Hosted counts before and after were identical: candidates 58, sessions 73, attempts
+145, catalog 98, reviews 12, transfers 15, Newbie Shift requests 14, corrections 7,
+pending requests 3, notifications 4, lineage 292, reconciliation batches 21, plan items
+154, and before-images 17. No reconciliation, canonical, lineage, audit, or Google
+Sheets write occurred.
+
+Fresh validation passed 225 focused shadow/provider/reconciliation tests, 488 backend
+unittest discovery tests, 509 root pytest tests plus 148 subtests, 32 frontend suites
+with 312 tests, the frontend production build, 36 Apps Script authorization/workflow
+tests, 35 Apps Script API tests, Apps Script syntax/package validation, 11 desktop
+lifecycle/package tests, six desktop syntax checks, and compilation of 59 tracked Python
+files. Both package builds, packaged health/startup checks, exact port cleanup, migration
+parity through `20260816103201`, and Git whitespace checks passed.
+
+Production remains Sheets-authoritative with Apps Script active. Provider, shadow, and
+dual-write flags remain at their reviewed defaults: `sheets`, `false`, and `false`.
+Auth migration, configuration-tab migration, and provider cutover remain unperformed.
+The next separately approved activation must first bind the owned packaged processes to
+the existing Supabase read credentials without persisting or exposing them, then set only
+`MTS_SHADOW_COMPARE=true` and repeat zero-write smoke verification.
