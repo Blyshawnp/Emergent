@@ -45,7 +45,14 @@ class ReadOnlySupabaseShadowProvider:
             raise RuntimeError("runtime_shadow_write_forbidden")
         if str(path) != "data_source_lineage":
             raise RuntimeError("runtime_shadow_direct_query_forbidden")
-        return self._provider._request(path, query=query)
+        try:
+            return self._provider._request(path, query=query)
+        except Exception:
+            return self._provider._request(
+                "rpc/get_shadow_domain_data",
+                method="POST",
+                body={"p_domain": "candidate_lineage", "p_limit": 5000}
+            )
 
 
 def _enabled(value) -> bool:
@@ -324,9 +331,31 @@ def build_runtime_shadow_providers(
         apps_config, timeout=config.io_timeout_seconds
     )
     sheets = SheetsDataProvider(sheets_client, max_retries=0)
+    supabase_url = str(env.get("SUPABASE_URL") or "").strip()
+    supabase_key = str(env.get("SUPABASE_ANON_KEY") or env.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+
+    if not supabase_url or not supabase_key:
+        try:
+            import json
+            from pathlib import Path
+            candidate_paths = [
+                Path(backend_root) / "config" / "runtime_config.json",
+                Path(backend_root).parent / "backend" / "config" / "runtime_config.json",
+            ]
+            for cfg_p in candidate_paths:
+                if cfg_p.exists():
+                    with open(cfg_p, "r", encoding="utf-8") as f:
+                        cfg_data = json.load(f)
+                        supabase_url = supabase_url or str(cfg_data.get("supabase_url") or "").strip()
+                        supabase_key = supabase_key or str(cfg_data.get("supabase_anon_key") or "").strip()
+                    if supabase_url and supabase_key:
+                        break
+        except Exception:
+            pass
+
     supabase = SupabaseDataProvider(
-        env.get("SUPABASE_URL", ""),
-        env.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+        supabase_url,
+        supabase_key,
         timeout=config.io_timeout_seconds,
         retries=config.retry_limit,
     )

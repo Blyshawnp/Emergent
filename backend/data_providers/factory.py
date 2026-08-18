@@ -20,7 +20,7 @@ def configured_provider_mode(environ=None) -> str:
 def _supabase_provider(environ):
     return SupabaseDataProvider(
         environ.get("SUPABASE_URL", ""),
-        environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
+        environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or environ.get("SUPABASE_ANON_KEY", ""),
         timeout=float(environ.get("SUPABASE_TIMEOUT_SECONDS", "10")),
     )
 

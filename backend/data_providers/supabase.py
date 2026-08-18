@@ -271,37 +271,63 @@ class SupabaseDataProvider(DataProvider):
         try:
             self._request("sync_state", query={"select": "provider", "limit": 1})
             return ProviderHealth(True, self.name, "ready")
-        except SupabaseProviderError as exc:
-            return ProviderHealth(False, self.name, str(exc))
+        except SupabaseProviderError:
+            try:
+                res = self._request("rpc/get_shadow_readiness_ping", method="POST", body={})
+                if isinstance(res, dict) and res.get("ok"):
+                    return ProviderHealth(True, self.name, "ready (least_privilege_shadow)")
+            except Exception as exc:
+                return ProviderHealth(False, self.name, str(exc))
+            return ProviderHealth(False, self.name, "health check failed")
 
     def list_resource(self, resource, *, filters=None, limit=1000, offset=0):
         if str(resource) == "candidates" and not filters:
-            return self._list_candidate_projection(limit=limit, offset=offset)
+            try:
+                return self._list_candidate_projection(limit=limit, offset=offset)
+            except SupabaseProviderError:
+                pass
         if str(resource) == "pending_requests" and not filters:
-            return self._list_request_projection(limit=limit, offset=offset)
+            try:
+                return self._list_request_projection(limit=limit, offset=offset)
+            except SupabaseProviderError:
+                pass
         if str(resource) == "recent_activity" and not filters:
-            requests = self._list_request_projection(limit=5000, offset=0)
-            projected = [{
-                **row,
-                "event_id": row.get("request_id"),
-                "event_key": row.get("request_id"),
-                "event_type": row.get("request_type"),
-                "occurred_at": row.get("updated_at") or row.get("created_at"),
-                "source_entity_id": row.get("source_session_id"),
-            } for row in requests]
-            projected.sort(key=lambda row: str(row.get("occurred_at") or ""), reverse=True)
-            return projected[offset:offset + limit]
+            try:
+                requests = self._list_request_projection(limit=5000, offset=0)
+                projected = [{
+                    **row,
+                    "event_id": row.get("request_id"),
+                    "event_key": row.get("request_id"),
+                    "event_type": row.get("request_type"),
+                    "occurred_at": row.get("updated_at") or row.get("created_at"),
+                    "source_entity_id": row.get("source_session_id"),
+                } for row in requests]
+                projected.sort(key=lambda row: str(row.get("occurred_at") or ""), reverse=True)
+                return projected[offset:offset + limit]
+            except SupabaseProviderError:
+                pass
         table = RESOURCE_TABLES.get(str(resource))
         if not table:
             raise ValueError(f"Unsupported canonical resource: {resource}")
         if limit < 1 or limit > 5000 or offset < 0:
             raise ValueError("Invalid pagination")
-        query = {"select": "*", "limit": limit, "offset": offset}
-        for key, value in (filters or {}).items():
-            if not str(key).replace("_", "").isalnum():
-                raise ValueError("Invalid filter field")
-            query[str(key)] = f"eq.{value}"
-        result = self._request(table, query=query)
+        result = None
+        if not filters:
+            try:
+                result = self._request("rpc/get_shadow_domain_data", method="POST", body={
+                    "p_domain": str(resource),
+                    "p_limit": limit,
+                    "p_offset": offset,
+                })
+            except SupabaseProviderError:
+                result = None
+        if result is None:
+            query = {"select": "*", "limit": limit, "offset": offset}
+            for key, value in (filters or {}).items():
+                if not str(key).replace("_", "").isalnum():
+                    raise ValueError("Invalid filter field")
+                query[str(key)] = f"eq.{value}"
+            result = self._request(table, query=query)
         if not isinstance(result, list):
             raise SupabaseProviderError("Supabase returned an invalid resource response")
         if str(resource) == "headset_catalog":
@@ -312,7 +338,10 @@ class SupabaseDataProvider(DataProvider):
                 "deleted": bool(row.get("deleted_at")) or row.get("status") == "deleted",
             } for row in result]
         elif str(resource) == "history":
-            statuses = self._cached_read("current_candidate_status_view", {"select": "*", "limit": 5000})
+            try:
+                statuses = self._cached_read("current_candidate_status_view", {"select": "*", "limit": 5000})
+            except Exception:
+                statuses = self._request("rpc/get_shadow_domain_data", method="POST", body={"p_domain": "authoritative_candidate_status"})
             status_by_session = {str(row.get("session_id") or ""): row.get("authoritative_status") for row in statuses}
             result = [{**row, "authoritative_status": status_by_session.get(str(row.get("session_id") or ""))} for row in result]
         elif str(resource) == "candidate_tracking":
@@ -341,7 +370,26 @@ class SupabaseDataProvider(DataProvider):
     def _cached_read(self, table, query):
         key = (table, tuple(sorted((str(k), str(v)) for k, v in query.items())))
         if key not in self._comparison_cache:
-            result = self._request(table, query=query)
+            try:
+                result = self._request(table, query=query)
+            except SupabaseProviderError:
+                domain_map = {
+                    "candidates": "candidates",
+                    "candidate_sessions": "candidate_sessions",
+                    "candidate_history_view": "candidate_tracking",
+                    "current_candidate_status_view": "authoritative_candidate_status",
+                    "pending_requests": "pending_requests",
+                    "newbie_shift_requests": "newbie_shift_requests",
+                    "candidate_corrections": "candidate_corrections",
+                    "data_source_lineage": "candidate_lineage",
+                    "headset_catalog": "headset_catalog",
+                    "headset_reviews": "headset_reviews",
+                    "supervisor_transfers": "supervisor_transfers",
+                    "notifications": "notifications",
+                    "recent_activity_view": "recent_activity",
+                }
+                dom = domain_map.get(table, table)
+                result = self._request("rpc/get_shadow_domain_data", method="POST", body={"p_domain": dom, "p_limit": 5000})
             if not isinstance(result, list):
                 raise SupabaseProviderError(f"Supabase returned invalid comparison rows for {table}")
             self._comparison_cache[key] = result

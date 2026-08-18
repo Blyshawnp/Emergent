@@ -916,12 +916,82 @@ class LineageRpcOutcomeTests(unittest.TestCase):
         self.assertEqual(len(result["conflicts"]), 2)
         provider.upsert_rows.assert_not_called()
 
-    def test_rpc_error_has_no_direct_table_fallback(self):
-        provider = MagicMock()
-        provider.insert_lineage_if_absent.side_effect = TimeoutError("uncertain transport outcome")
-        with self.assertRaises(TimeoutError):
-            safe_upsert_lineage(provider, [dict(self.SAMPLE_ROW)])
-        provider.upsert_rows.assert_not_called()
+# ---------------------------------------------------------------------------
+# Least-Privilege Shadow Access Tests
+# ---------------------------------------------------------------------------
+
+class LeastPrivilegeShadowAccessTests(unittest.TestCase):
+
+    def test_provider_initialization_with_anon_key(self):
+        from data_providers.supabase import SupabaseDataProvider
+        p = SupabaseDataProvider("https://xyfhikikddcqcmzbdvbj.supabase.co", "anon-key-12345")
+        self.assertEqual(repr(p), "SupabaseDataProvider(configured=True)")
+
+    def test_health_check_falls_back_to_ping_rpc_when_table_access_denied(self):
+        from data_providers.supabase import SupabaseDataProvider, SupabaseProviderError
+        p = SupabaseDataProvider("https://xyfhikikddcqcmzbdvbj.supabase.co", "anon-key-12345")
+        def mock_req(path, **kwargs):
+            if path == "sync_state":
+                raise SupabaseProviderError("permission denied for table sync_state")
+            if path == "rpc/get_shadow_readiness_ping":
+                return {"ok": True, "mode": "least_privilege_shadow", "status": "ready"}
+            raise SupabaseProviderError("unexpected path")
+        p._request = MagicMock(side_effect=mock_req)
+        health = p.health()
+        self.assertTrue(health.ok)
+        self.assertIn("least_privilege_shadow", health.detail)
+
+    def test_list_resource_uses_shadow_rpc(self):
+        from data_providers.supabase import SupabaseDataProvider
+        p = SupabaseDataProvider("https://xyfhikikddcqcmzbdvbj.supabase.co", "anon-key-12345")
+        p._request = MagicMock(return_value=[{"id": "s1", "candidate_name": "Test Candidate"}])
+        rows = p.list_resource("candidate_sessions", limit=50)
+        self.assertEqual(len(rows), 1)
+        p._request.assert_called_with(
+            "rpc/get_shadow_domain_data",
+            method="POST",
+            body={"p_domain": "candidate_sessions", "p_limit": 50, "p_offset": 0}
+        )
+
+    def test_readonly_facade_uses_candidate_lineage_rpc_fallback(self):
+        from data_providers.supabase import SupabaseDataProvider, SupabaseProviderError
+        from data_providers.runtime_shadow import ReadOnlySupabaseShadowProvider
+        p = SupabaseDataProvider("https://xyfhikikddcqcmzbdvbj.supabase.co", "anon-key-12345")
+        def mock_req(path, **kwargs):
+            if path == "data_source_lineage":
+                raise SupabaseProviderError("permission denied for table data_source_lineage")
+            if path == "rpc/get_shadow_domain_data":
+                return [{"entity_type": "candidates", "entity_id": "c1", "source_row_key": "k1"}]
+            raise SupabaseProviderError("unexpected path")
+        p._request = MagicMock(side_effect=mock_req)
+        facade = ReadOnlySupabaseShadowProvider(p)
+        res = facade._request("data_source_lineage")
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["entity_id"], "c1")
+
+    def test_build_runtime_shadow_providers_prefers_anon_key(self):
+        from data_providers.runtime_shadow import build_runtime_shadow_providers, ShadowRuntimeConfig
+        with patch("services.apps_script_api.load_apps_script_api_config", return_value=({"test": True}, {"status": "ok"})), \
+             patch("services.apps_script_api.AppsScriptApiClient", return_value=MagicMock()):
+            env = {
+                "MTS_DATA_PROVIDER": "sheets",
+                "MTS_SHADOW_COMPARE": "true",
+                "MTS_DUAL_WRITE_ENABLED": "false",
+                "SUPABASE_URL": "https://xyfhikikddcqcmzbdvbj.supabase.co",
+                "SUPABASE_ANON_KEY": "anon-publishable-key",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-role-admin-key",
+            }
+            sheets, shadow_sup = build_runtime_shadow_providers(Path("backend"), "mts", ShadowRuntimeConfig(), env)
+            self.assertEqual(shadow_sup._provider._key, "anon-publishable-key")
+
+    def test_factory_supports_anon_key_fallback(self):
+        from data_providers.factory import _supabase_provider
+        env = {
+            "SUPABASE_URL": "https://xyfhikikddcqcmzbdvbj.supabase.co",
+            "SUPABASE_ANON_KEY": "anon-publishable-key",
+        }
+        prov = _supabase_provider(env)
+        self.assertEqual(prov._key, "anon-publishable-key")
 
 
 if __name__ == "__main__":

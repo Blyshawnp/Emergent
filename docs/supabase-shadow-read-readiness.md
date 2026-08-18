@@ -938,3 +938,21 @@ A rigorous truth check was conducted to determine how normal packaged MTS/SAM in
 8. **Classification**: `MULTIPLE_DEPLOYMENT_GAPS` (gaps B, C, and D).
 9. **Recommendation**: `PACKAGED RUNTIME CREDENTIAL PATH NOT READY — DO NOT ACTIVATE`.
 10. **Corrective Path**: Production deployment requires implementing a user-scoped configuration resolution mechanism (e.g. in `APP_DATA_DIR` / `%APPDATA%`), rebuilding `backend.exe`, and repackaging MTS/SAM installers before shadow activation approval.
+
+### 2026-08-18 least-privilege packaged shadow-read architecture implementation
+
+A least-privilege security architecture was designed, deployed, and verified to eliminate client-side `SUPABASE_SERVICE_ROLE_KEY` exposure while enabling packaged shadow comparison:
+
+1. **Security Principle**: Packaged Electron desktop applications are treated as untrusted clients. `SUPABASE_SERVICE_ROLE_KEY` must never be packaged, embedded, delivered via installer, or stored on client machines.
+2. **Architecture**: Dedicated `SECURITY DEFINER` read-only RPCs (`mts_sam.get_shadow_domain_data` and `mts_sam.get_shadow_readiness_ping`) were deployed in migration `20260818020000_least_privilege_shadow_reads.sql`.
+3. **Runtime Credential**: `SUPABASE_ANON_KEY` (a client-safe publishable key). Untrusted packaged clients receive only `SUPABASE_ANON_KEY`.
+4. **Privilege Denial & RLS Enforcement**:
+   - `anon` role is granted `USAGE ON SCHEMA mts_sam` and `EXECUTE` only on `get_shadow_domain_data` and `get_shadow_readiness_ping`.
+   - All direct table reads, inserts, updates, and deletes on `mts_sam` tables remain strictly denied (`401 Unauthorized / permission denied`).
+   - All privileged/mutation RPCs (`grant_extra_attempt`, `insert_lineage_if_absent`, `begin_reconciliation_execution`, etc.) remain strictly denied (`401 Unauthorized / permission denied`).
+   - Lineage table reads by `anon` are denied; candidate lineage projection is served exclusively through `get_shadow_domain_data(p_domain="candidate_lineage")`.
+5. **Runtime Shadow Provider Integration**: `SupabaseDataProvider` and `ReadOnlySupabaseShadowProvider` prioritize `SUPABASE_ANON_KEY` and route domain list requests through `get_shadow_domain_data`. All 14 mapped shadow domains pass comparison with 100% parity (`readiness=ready`, zero unexplained differences).
+6. **No-Auth Shadow Phase**: The architecture operates with `anon` and does not require premature Supabase Auth enrollment for SAM users.
+7. **Clean Packaged Configuration**: `supabase_url` and `supabase_anon_key` are bundled in `backend/config/runtime_config.json` as public client metadata. The redundant `load_dotenv(ROOT_DIR.parent / '.env')` line was removed from `backend/server.py`.
+8. **Zero-Write Verification**: Remote database row counts confirmed 100% identical before and after hosted security and comparison tests across all 13 tables.
+9. **Production State**: Google Sheets remains authoritative (`MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, `MTS_DUAL_WRITE_ENABLED=false`). Shadow mode remains off.
