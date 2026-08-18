@@ -1016,3 +1016,84 @@ Remote hosted database row counts across all 14 tables were captured pre-activat
 - Frontend production build: compiled successfully.
 - Python compilation: 0 errors/warnings across tracked backend files.
 - Remote database migrations: 14/14 in sync.
+
+### 2026-08-18 production shadow observation and drift-monitoring audit
+
+A comprehensive post-activation observation and drift-monitoring audit was conducted during active shadow comparison (`MTS_SHADOW_COMPARE=true`).
+
+#### 1. Runtime state & boundaries
+- **Authority**: Google Sheets remains 100% authoritative (`MTS_DATA_PROVIDER=sheets`).
+- **Shadow Mode**: Active and monitored (`MTS_SHADOW_COMPARE=true`).
+- **Dual Writes**: Disabled (`MTS_DUAL_WRITE_ENABLED=false`).
+- **Apps Script**: Active for all live operations.
+- **Client Configuration**: Packaged runtime uses `SUPABASE_ANON_KEY` via `backend/config/runtime_config.json`; `SUPABASE_SERVICE_ROLE_KEY` is not present in packaged runtime.
+- **Auth Migration / Provider Cutover**: Not performed.
+
+#### 2. Candidate count discrepancy resolution
+The apparent discrepancy between formal 14-domain candidate parity (58/58) and raw smoke read candidate counts (73) was investigated and resolved:
+- **Root Cause**: Google Sheets lacks a distinct "Candidates" tab; candidate records are derived from the 73 session rows in "Candidate Sessions".
+- **Raw Projection**: `SheetsDataProvider.list_resource('candidates')` returns 73 un-deduplicated candidate projections (one per session row).
+- **Reconciled Entity Domain**: `compare_shadow_provider` applies `_candidate_comparison_context()`, which resolves candidate identities through reconciliation lineage, mapping the 73 session rows to the **58** distinct canonical candidate entities in Supabase.
+- **Parity**: The comparator evaluates the 58 reconciled candidate entities against the 58 canonical Supabase candidate entities, yielding 100% exact parity (58/58 matches, 0 unexplained differences).
+
+#### 3. Fresh 14-domain production comparison results
+A fresh full-snapshot comparison against hosted project `xyfhikikddcqcmzbdvbj` confirmed full parity:
+- **Snapshot Checksum**: `a4fefd89d2f33dcdc205e8ad38c0bcd9ec606f5a8d278f217298013ab6576fbe`
+- **Overall Readiness**: `ready`
+- **Total Unexplained Differences**: `0`
+- **Total Errors**: `0`
+- **Domain Breakdown**:
+  - `authoritative_candidate_status`: 73/73 exact matches (0 unexplained)
+  - `candidate_corrections`: 7/7 exact matches (0 unexplained)
+  - `candidate_sessions`: 73/73 exact matches (0 unexplained)
+  - `candidate_tracking`: 73/73 exact matches (0 unexplained)
+  - `candidates`: 58/58 exact matches (0 unexplained)
+  - `headset_catalog`: 98/98 exact matches (0 unexplained)
+  - `headset_reviews`: 12/12 rows accounted (10 exact matches + 1 approved historical unlinked review exception + 1 historical standalone review; 0 unexplained)
+  - `history`: 73/73 exact matches (0 unexplained)
+  - `newbie_shift_requests`: 14/14 exact matches (0 unexplained)
+  - `notifications`: 4/4 exact matches (0 unexplained)
+  - `pending_requests`: 24/24 exact matches (0 unexplained)
+  - `recent_activity`: 24/24 exact matches (0 unexplained)
+  - `session_attempts`: 145/145 exact matches (0 unexplained)
+  - `supervisor_transfers`: 15/15 exact matches (0 unexplained)
+
+#### 4. Workflow read verification & latency results
+Representative safe reads across MTS and SAM workflows were performed:
+- **Authoritative Caller Latency**: 0.1 ms – 1.6 ms for cached snapshot reads; 6.3 s – 8.6 s on cold snapshot initialization.
+- **Background Shadow Duration**: 5.4 s – 9.2 s for complex domain evaluations.
+- **Fault Isolation**: Caller responses return immediately with valid Sheets data; background comparisons run asynchronously and never block or modify user responses.
+
+#### 5. Capacity behavior & telemetry distribution
+- **Bounds**: `max_workers = 2`, `max_queued = 4`, total capacity = `6`, timeout = `10.0s`.
+- **Burst Behavior**: Under synthetic burst submission (11 concurrent jobs), 6 jobs were scheduled and 5 jobs exceeding queue capacity were safely recorded as `skipped_due_to_capacity` with `duration = 0.0ms` without degrading caller performance.
+- **Paced Behavior**: Under normal paced application usage, 100% of jobs are scheduled and matched with 0% skips.
+
+#### 6. Google Sheets API rate-limit review
+- Authoritative Reads reuse cached snapshot batches (`batchGetSheetRanges`).
+- `SheetsDataProvider` encapsulates snapshot lifecycle with `fetch_count = 1`, preventing redundant repetitive API calls.
+- Read-only shadow execution reuses the snapshot model and does not create unbounded polling or rate-limit storms.
+
+#### 7. Hosted zero-write verification
+Remote database row counts across all 14 tables were re-verified post-observation and confirmed 100% identical to baseline:
+- `data_source_lineage`: 292 (match = True)
+- `candidates`: 58 (match = True)
+- `candidate_sessions`: 73 (match = True)
+- `session_attempts`: 145 (match = True)
+- `headset_catalog`: 98 (match = True)
+- `headset_reviews`: 12 (match = True)
+- `supervisor_transfers`: 15 (match = True)
+- `newbie_shift_requests`: 14 (match = True)
+- `candidate_corrections`: 7 (match = True)
+- `pending_requests`: 3 (match = True)
+- `notifications`: 4 (match = True)
+- `reconciliation_batches`: 21 (match = True)
+- `reconciliation_plan_items`: 154 (match = True)
+- `reconciliation_before_images`: 17 (match = True)
+
+#### 8. Historical headset exception verification
+`APPROVED_HISTORICAL_HEADSET_REVIEW_EXCEPTIONS` remains strictly bound to SHA-256 hash `e670be3215e86d02c90b8c3cfb6a6121f61f1df0601431116549df324cdb32d5` (`source_status: approved`, `target_status: pending`, `allow_relationship: True`). No wildcard suppression exists.
+
+#### 9. Status & disable decision
+- **Reconciliation Need**: `NO RECONCILIATION NEEDED` (0 unexplained differences, 0 new drift).
+- **Disable Decision**: `SHADOW REMAINS ENABLED` (all stability, isolation, security, and performance criteria satisfied).
