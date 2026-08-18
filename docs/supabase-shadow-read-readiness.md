@@ -799,3 +799,36 @@ Sheets rollback is involved. This verification did not perform that activation;
 production remains `MTS_SHADOW_COMPARE=false`, Sheets and Apps Script remain
 authoritative, and full cutover remains blocked by configuration mapping, Auth, and
 separate approval.
+
+### 2026-08-17 controlled activation preflight blocked by packaged runtime
+
+The separately approved production activation stopped before changing configuration or
+starting an application. Git, project targeting, and migration parity through
+`20260816103201` passed. A fresh one-snapshot production verification completed at
+`2026-08-18T03:45:25.358899+00:00` with the unchanged safe source checksum, all 14 mapped
+domains ready, zero comparison errors, and zero unexplained differences. Successful
+batch `214308dc-532e-43bd-b000-94a70d3d5a6d` remained succeeded with 34 successful items,
+28 inserts, six updates, six before-images, and 28 batch-attributed lineage rows.
+
+The configuration mechanism was confirmed to be the environment inherited by the
+Electron launcher and then by its backend child. The process, user, machine, and local
+root environment currently leave all three provider flags unset, producing the reviewed
+defaults `MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, and
+`MTS_DUAL_WRITE_ENABLED=false`.
+
+Activation was not safe because both unpacked application launchers and both
+production-ready copies still contain the same 2026-08-04 packaged backend, while the
+approved shadow-enabled `backend/dist/backend.exe` was built on 2026-08-17 and has a
+different SHA-256 digest. The established production launchers explicitly start their
+bundled backend. Setting the user environment flag would therefore advertise shadow
+activation while starting a runtime that does not contain commit `685b52e`. No binary
+was copied or replaced, no process was started or stopped, and the shadow setting stayed
+false.
+
+Hosted aggregate counts remained the pre-activation baseline: candidates 58, sessions
+73, attempts 145, catalog 98, reviews 12, transfers 15, Newbie Shift requests 14,
+corrections 7, pending requests 3, notifications 4, lineage 292, reconciliation batches
+21, plan items 154, and before-images 17. A separate reviewed package/deployment step
+must place the approved backend in both owned application packages and verify its hashes
+before retrying configuration-only activation. Sheets and Apps Script remain
+authoritative; dual writes, Auth migration, and provider cutover remain disabled.
