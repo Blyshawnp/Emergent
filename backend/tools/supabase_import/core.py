@@ -1896,6 +1896,208 @@ def import_configuration_domains(sheets_provider, supabase_provider, *, dry_run=
     return report
 
 
+def import_user_authorization_mapping(sheets_provider, supabase_provider, *, dry_run=False) -> dict[str, Any]:
+    """Import and map the 6 sam-authorized-users rows into mts_sam.app_users and user_role_assignments."""
+    logger.info("Importing user authorization mapping (dry_run=%s)", dry_run)
+    report = {
+        "dry_run": dry_run,
+        "total_source_rows": 0,
+        "total_app_users_inserted": 0,
+        "total_role_assignments_inserted": 0,
+        "total_duplicates": 0,
+        "total_errors": 0,
+        "users": [],
+        "ok": True,
+    }
+    try:
+        source_rows = []
+        if hasattr(sheets_provider, "_tab_rows"):
+            try:
+                source_rows = sheets_provider._tab_rows("sam-authorized-users")
+            except Exception:
+                pass
+        if not source_rows:
+            staged = supabase_provider._request("import_staging_rows", query={
+                "source_tab": "eq.sam-authorized-users",
+                "select": "id,source_row_key,source_checksum,raw_row"
+            })
+            source_rows = [dict(s.get("raw_row") or {}, _source_checksum=s.get("source_checksum")) for s in staged]
+
+        report["total_source_rows"] = len(source_rows)
+        app_users_payload = []
+        role_payload = []
+        seen_names = set()
+
+        for raw in source_rows:
+            name = str(raw.get("name") or "").strip()
+            if not name:
+                continue
+            name_key = name.casefold()
+            if name_key in seen_names:
+                report["total_duplicates"] += 1
+                continue
+            seen_names.add(name_key)
+
+            role = str(raw.get("role") or "admin").strip().casefold()
+            enabled = str(raw.get("enabled") or "").strip().casefold() in ("true", "1", "yes")
+            installed = str(raw.get("installed") or "").strip().casefold() in ("true", "1", "yes")
+            install_date = raw.get("install_date") or None
+            notes = raw.get("notes") or ""
+            checksum = raw.get("_source_checksum") or hashlib.sha256(f"user:{name}:{role}:{enabled}".encode("utf-8")).hexdigest()
+
+            source_user_id = f"name:{name}"
+            user_id_seed = f"google_sheets:sam_authorized_users:{source_user_id}".encode("utf-8")
+            user_uuid = hashlib.sha256(user_id_seed).hexdigest()
+            user_uuid_formatted = f"{user_uuid[:8]}-{user_uuid[8:12]}-{user_uuid[12:16]}-{user_uuid[16:20]}-{user_uuid[20:32]}"
+
+            assigned_role = "administrator" if role in ("owner", "admin", "administrator") else "viewer"
+            assignment_seed = f"{user_uuid_formatted}:{assigned_role}".encode("utf-8")
+            assign_uuid = hashlib.sha256(assignment_seed).hexdigest()
+            assign_uuid_formatted = f"{assign_uuid[:8]}-{assign_uuid[8:12]}-{assign_uuid[12:16]}-{assign_uuid[16:20]}-{assign_uuid[20:32]}"
+
+            user_entry = {
+                "id": user_uuid_formatted,
+                "auth_user_id": None,
+                "source_system": "google_sheets",
+                "source_user_id": source_user_id,
+                "display_name": name,
+                "active": enabled,
+                "metadata": {
+                    "source_role": role,
+                    "installed": installed,
+                    "install_date": install_date,
+                    "notes": notes,
+                    "source_checksum": checksum,
+                }
+            }
+            app_users_payload.append(user_entry)
+            role_payload.append({
+                "id": assign_uuid_formatted,
+                "user_id": user_uuid_formatted,
+                "role_key": assigned_role,
+                "assigned_by": None,
+            })
+            report["users"].append({
+                "name": name,
+                "user_id": user_uuid_formatted,
+                "role": assigned_role,
+                "active": enabled,
+                "status": "staged",
+            })
+
+        if not dry_run and app_users_payload:
+            supabase_provider.upsert_rows("app_users", app_users_payload, on_conflict="source_system,source_user_id")
+            report["total_app_users_inserted"] = len(app_users_payload)
+            if role_payload:
+                supabase_provider.upsert_rows("user_role_assignments", role_payload, on_conflict="user_id,role_key")
+                report["total_role_assignments_inserted"] = len(role_payload)
+        else:
+            report["total_app_users_inserted"] = len(app_users_payload)
+            report["total_role_assignments_inserted"] = len(role_payload)
+
+    except Exception as exc:
+        report["total_errors"] += 1
+        report["ok"] = False
+        report["error"] = str(exc)
+
+    return report
+
+
+def compare_user_authorization_mapping(sheets_provider, supabase_provider) -> dict[str, Any]:
+    """Compare the 6 sam-authorized-users rows from Sheets against mts_sam.app_users."""
+    report = {
+        "source_count": 0,
+        "app_users_count": 0,
+        "exact_matches": 0,
+        "missing_in_supabase": 0,
+        "missing_in_sheets": 0,
+        "role_mismatches": 0,
+        "active_mismatches": 0,
+        "not_enrolled_count": 0,
+        "enrolled_count": 0,
+        "parity_ready": False,
+        "users": [],
+        "errors": [],
+    }
+    try:
+        source_rows = []
+        if hasattr(sheets_provider, "_tab_rows"):
+            try:
+                source_rows = sheets_provider._tab_rows("sam-authorized-users")
+            except Exception:
+                pass
+        if not source_rows:
+            staged = supabase_provider._request("import_staging_rows", query={
+                "source_tab": "eq.sam-authorized-users",
+                "select": "id,source_row_key,source_checksum,raw_row"
+            })
+            source_rows = [dict(s.get("raw_row") or {}) for s in staged]
+
+        report["source_count"] = len(source_rows)
+        hosted_users = supabase_provider._request("app_users", query={
+            "source_system": "eq.google_sheets",
+            "select": "id,auth_user_id,source_user_id,display_name,active,metadata"
+        })
+        report["app_users_count"] = len(hosted_users)
+        hosted_by_name = {u.get("display_name", "").casefold(): u for u in hosted_users}
+
+        for raw in source_rows:
+            name = str(raw.get("name") or "").strip()
+            if not name:
+                continue
+            name_key = name.casefold()
+            expected_enabled = str(raw.get("enabled") or "").strip().casefold() in ("true", "1", "yes")
+            expected_role = str(raw.get("role") or "admin").strip().casefold()
+
+            hosted = hosted_by_name.get(name_key)
+            if not hosted:
+                report["missing_in_supabase"] += 1
+                report["users"].append({
+                    "name": name,
+                    "status": "missing_in_supabase",
+                    "active_match": False,
+                    "enrolled": False,
+                })
+                continue
+
+            active_match = hosted.get("active") == expected_enabled
+            if not active_match:
+                report["active_mismatches"] += 1
+
+            enrolled = bool(hosted.get("auth_user_id"))
+            if enrolled:
+                report["enrolled_count"] += 1
+            else:
+                report["not_enrolled_count"] += 1
+
+            if active_match:
+                report["exact_matches"] += 1
+
+            report["users"].append({
+                "name": name,
+                "user_id": hosted.get("id"),
+                "active": hosted.get("active"),
+                "expected_active": expected_enabled,
+                "enrolled": enrolled,
+                "status": "match" if active_match else "active_mismatch",
+            })
+
+        extra_in_supabase = len(hosted_users) - (len(source_rows) - report["missing_in_supabase"])
+        report["missing_in_sheets"] = max(0, extra_in_supabase)
+        report["parity_ready"] = (
+            report["source_count"] == 6
+            and report["app_users_count"] == 6
+            and report["exact_matches"] == 6
+            and report["missing_in_supabase"] == 0
+            and report["missing_in_sheets"] == 0
+            and report["active_mismatches"] == 0
+        )
+    except Exception as exc:
+        report["errors"].append(str(exc))
+
+    return report
+
+
 def verify_production_health(provider, comparison_result=None) -> dict[str, Any]:
     import re, os, glob
     logger.info("Verifying production environment health")

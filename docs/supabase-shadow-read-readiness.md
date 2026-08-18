@@ -1187,3 +1187,72 @@ Operational table row counts remain 100% identical to baseline (0 writes occurre
   - SAM runtime launched on port 8601 (`/api/health: ok, ready, 1.0.1`).
   - Process termination of MTS leaves SAM fully operational; closing SAM terminates cleanly with 0 orphan listeners.
 - **Secrets Verification**: Packaged `runtime_config.json` contains only client-safe publishable configuration (`supabase_url`, `supabase_anon_key`). `SUPABASE_SERVICE_ROLE_KEY` is strictly absent.
+
+---
+
+## 2026-08-18 SAM User Authorization Mapping & Supabase Auth Enrollment Plan
+
+### 1. Current SAM Authorization Model (Google Sheets)
+
+SAM authorization currently authenticates administrators using a shared Google Sheet tab `sam-authorized-users` via Apps Script. The sheet contains 6 records:
+- **Columns**: `name`, `pin`, `role`, `enabled`, `installed`, `install_date`, `device_name`, `notes`.
+- **Identity Mechanism**: `name` (case-insensitive string).
+- **Authentication Secret**: `pin` (stored in Google Sheets, matched via `hmac.compare_digest`).
+- **Authorization Role**: `owner` or `admin`.
+- **Active Gate**: `enabled = TRUE`.
+- **Current Authority**: Google Sheets via Apps Script is 100% authoritative for all SAM logins.
+
+### 2. Six-User Source Inventory & Classification
+
+| Source Name | Staged Role | Source Enabled | PIN Present | Existing `auth.users` | Enrollment Classification |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Ashley Shealey | `admin` | `False` | Yes (7 digits) | None | **NOT_ENROLLED** |
+| Becky Sowles | `admin` | `False` | Yes (7 digits) | None | **NOT_ENROLLED** |
+| Lisa Byrd | `admin` | `False` | Yes (7 digits) | None | **NOT_ENROLLED** |
+| Kristi Green | `admin` | `False` | Yes (7 digits) | None | **NOT_ENROLLED** |
+| Kimberly O'brien | `admin` | `False` | Yes (7 digits) | None | **NOT_ENROLLED** |
+| Shawn Bly | `owner` | `True` | Yes (6 digits) | None | **NOT_ENROLLED** |
+
+### 3. Application User Mapping Architecture
+
+Application authorization is decoupled from raw authentication via `mts_sam.app_users` and `mts_sam.user_role_assignments`:
+- **`mts_sam.app_users`**:
+  - `id`: Deterministic UUID generated from `google_sheets:sam_authorized_users:name:<name>`.
+  - `auth_user_id`: Foreign key to `auth.users(id)` (`NULL` until user enrollment occurs).
+  - `source_system`: `'google_sheets'`.
+  - `source_user_id`: `'name:<name>'`.
+  - `display_name`: Normalized string.
+  - `active`: Boolean matching source `enabled` state.
+  - `metadata`: Stored source role, install metadata, source checksum.
+- **`mts_sam.user_role_assignments`**:
+  - `user_id`: References `mts_sam.app_users(id)`.
+  - `role_key`: References `mts_sam.app_roles(role_key)` (`administrator`).
+
+### 4. Parity & Staging Verification
+
+All 6 SAM user authorization mappings are staged into `mts_sam.app_users` and `mts_sam.user_role_assignments`:
+- **Source Count**: 6
+- **`mts_sam.app_users` Count**: 6
+- **Exact Matches**: 6
+- **Missing in Supabase**: 0
+- **Missing in Sheets**: 0
+- **Role Mismatches**: 0
+- **Active Mismatches**: 0
+- **Enrolled Count**: 0 (`auth_user_id` is `NULL`)
+- **Not Enrolled Count**: 6
+- **Parity Status**: `parity_ready = True`
+
+### 5. Future Desktop Auth Flow & Security Architecture
+
+1. **Authentication Flow**:
+   - Supabase Auth will authenticate identity via email/password or magic link using PKCE callback.
+   - SAM Electron app handles localhost callback or deep-link redirect without embedding admin credentials.
+2. **Token Storage**:
+   - Access and refresh tokens will be stored securely using Electron `safeStorage` (Windows DPAPI / OS Keychain).
+   - Plaintext token files, `.env` files, and `runtime_config.json` storage are strictly prohibited.
+3. **Authorization Enforcement**:
+   - Server-side RLS and RPC checks query `mts_sam.app_users` by `auth.uid()` and require `active = TRUE` and assigned `role_key = 'administrator'`.
+   - Client metadata (`raw_user_meta_data`) is never trusted for authorization.
+4. **Enrollment Gate**:
+   - User creation and invitation emails are deferred until a separate, explicitly approved user onboarding session.
+   - Google Sheets authorization remains 100% active and authoritative.
