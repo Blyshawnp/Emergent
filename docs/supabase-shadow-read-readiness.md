@@ -920,6 +920,21 @@ The packaged backend environment loading was updated in `backend/server.py` to c
 - `MTS_SHADOW_COMPARE`: `false`
 - `MTS_DUAL_WRITE_ENABLED`: `false`
 - Apps Script active: YES
-- Supabase shadow runtime configuration available: YES
+- Supabase shadow runtime configuration available: YES (in development/parent shell context only)
 - Auth migration performed: NO
 - Provider cutover performed: NO
+
+### 2026-08-18 packaged runtime credential-path truth check
+
+A rigorous truth check was conducted to determine how normal packaged MTS/SAM installations obtain Supabase shadow configuration outside the development repository and without parent shell environment injection:
+
+1. **Commit `a9b91f4` Audit**: Verified that `a9b91f4` modified `backend/server.py` to add `load_dotenv(ROOT_DIR.parent / '.env')`.
+2. **Packaged Binary Stale Audit**: The five packaged `backend.exe` binaries match SHA-256 `9662041FA2FB7496F0630A3126EEC82A2DF4E22E99FB177F67AB6EB3FB9926B0` and were compiled on August 16, 2026, prior to commit `a9b91f4` (August 18). They do not contain the `load_dotenv(ROOT_DIR.parent / '.env')` source change (`PACKAGED BACKEND DOES NOT CONTAIN CURRENT SECRET-LOADING SOURCE CHANGE`).
+3. **PyInstaller Onefile Path Resolution**: In a packaged PyInstaller `--onefile` binary, `ROOT_DIR = Path(__file__).parent` resolves to `sys._MEIPASS` (the temporary unpack directory in `%TEMP%`). Thus, `ROOT_DIR.parent / '.env'` resolves to `%TEMP%\.env`, not `C:\Emergent-Mock-BU\APP-main\.env`.
+4. **Packaged Electron Launcher Audit**: Electron (`main.js` / `src/main.js`) does not load `.env` from the repository or disk; it passes `process.env` to the child backend.
+5. **Credential Source in Prior Verification**: Prior successful controlled shadow verifications succeeded because `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` were present in the parent process environment (`PARENT PROCESS ENVIRONMENT`).
+6. **Clean-Environment Test Result**: Launching packaged MTS or SAM with Supabase secrets omitted from the parent environment and from a working directory outside the repository fails to obtain Supabase credentials (`Supabase shadow configuration available from normal packaged launch: NO`).
+7. **Installed-App Reality Check**: If MTS and SAM were installed on a clean machine without `C:\Emergent-Mock-BU\APP-main`, shadow Supabase configuration would be absent (`PACKAGED APPS CURRENTLY DEPEND ON DEVELOPMENT REPOSITORY`).
+8. **Classification**: `MULTIPLE_DEPLOYMENT_GAPS` (gaps B, C, and D).
+9. **Recommendation**: `PACKAGED RUNTIME CREDENTIAL PATH NOT READY — DO NOT ACTIVATE`.
+10. **Corrective Path**: Production deployment requires implementing a user-scoped configuration resolution mechanism (e.g. in `APP_DATA_DIR` / `%APPDATA%`), rebuilding `backend.exe`, and repackaging MTS/SAM installers before shadow activation approval.
