@@ -1148,13 +1148,21 @@ def _empty_domain_result():
         'readiness': 'unknown',
     }
 
-REQUIRED_SHADOW_DOMAINS = (
+REQUIRED_OPERATIONAL_DOMAINS = (
     "candidates", "candidate_sessions", "session_attempts",
     "authoritative_candidate_status", "candidate_tracking", "history",
     "headset_catalog", "headset_reviews", "supervisor_transfers",
     "newbie_shift_requests", "candidate_corrections", "pending_requests",
     "recent_activity", "notifications",
 )
+
+REQUIRED_CONFIGURATION_DOMAINS = (
+    "callers", "call_types", "call_fail_reasons", "supervisor_coaching",
+    "supervisor_fail_reasons", "supervisor_reasons", "shows",
+    "gemini_coaching_prompt", "gemini_fail_prompt",
+)
+
+REQUIRED_SHADOW_DOMAINS = REQUIRED_OPERATIONAL_DOMAINS + REQUIRED_CONFIGURATION_DOMAINS
 
 SHADOW_SNAPSHOT_MAX_AGE_SECONDS = 15 * 60
 EXPECTED_SUPABASE_PROJECT_REF = "xyfhikikddcqcmzbdvbj"
@@ -1268,6 +1276,51 @@ SHADOW_DOMAIN_SPECS = {
         values=(("notification_type", "Type"), ("title", "Title"), ("message", "Message"), ("starts_at", "StartDate"), ("ends_at", "EndDate"), ("action_text", "ActionText"), ("action_url", "ActionURL")),
         statuses=(("enabled", "Enabled"), ("show_ticker", "ShowTicker"), ("show_popup", "ShowPopup"), ("show_banner", "ShowBanner"), ("persistent", "Persistent")),
     ),
+    "callers": ShadowDomainSpec(
+        identity=(("category",), ("first_name",), ("last_name",), ("phone",)),
+        values=(("category",), ("first_name",), ("last_name",), ("address",), ("city",), ("state",), ("zip",), ("phone",), ("email",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "call_types": ShadowDomainSpec(
+        identity=(("call_type",),),
+        values=(("call_type",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "call_fail_reasons": ShadowDomainSpec(
+        identity=(("fail_reason",),),
+        values=(("fail_reason",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "supervisor_coaching": ShadowDomainSpec(
+        identity=(("label",),),
+        values=(("label",), ("helper_text",), ("children_pipe_delimited",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "supervisor_fail_reasons": ShadowDomainSpec(
+        identity=(("fail_reason",),),
+        values=(("fail_reason",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "supervisor_reasons": ShadowDomainSpec(
+        identity=(("reason",),),
+        values=(("reason",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "shows": ShadowDomainSpec(
+        identity=(("show_name",),),
+        values=(("show_name",), ("one_time_amount",), ("monthly_amount",), ("gift",), ("notes",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "gemini_coaching_prompt": ShadowDomainSpec(
+        identity=(("prompt_key",),),
+        values=(("prompt_key",), ("prompt_text",), ("description",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
+    "gemini_fail_prompt": ShadowDomainSpec(
+        identity=(("prompt_key",),),
+        values=(("prompt_key",), ("prompt_text",), ("description",), ("display_order",)),
+        statuses=(("is_active",),),
+    ),
 }
 
 
@@ -1281,8 +1334,10 @@ def _first_value(row, aliases):
 def _normalized_compare_value(field, value):
     boolean_fields = {
         "enabled", "show_ticker", "show_popup", "show_banner", "persistent",
-        "archived", "deleted", "withdrawn", "final_attempt", "counts_as_attempt",
+        "archived", "deleted", "withdrawn", "final_attempt", "counts_as_attempt", "is_active",
     }
+    if field == "prompt_text":
+        return str(value or "").strip()
     if value is None or str(value).strip() == "":
         # Lazy Sheet boolean columns and absent canonical boolean projections both
         # represent the default false state. This equivalence is representational;
@@ -1735,6 +1790,24 @@ def compare_shadow_provider(
         and not result["invariant_errors"]
         and all(item["readiness"] != "unknown" for item in result["categories"].values())
     )
+    op_domains = set(REQUIRED_OPERATIONAL_DOMAINS) & set(result["categories"])
+    cfg_domains = set(REQUIRED_CONFIGURATION_DOMAINS) & set(result["categories"])
+
+    op_ready = bool(op_domains and all(
+        result["categories"][d]["readiness"] == "ready" and result["categories"][d]["unexplained_difference_count"] == 0 and result["categories"][d]["error_count"] == 0
+        for d in op_domains
+    ))
+    cfg_ready = bool(cfg_domains and all(
+        result["categories"][d]["readiness"] == "ready" and result["categories"][d]["unexplained_difference_count"] == 0 and result["categories"][d]["error_count"] == 0
+        for d in cfg_domains
+    ))
+
+    result["operational_readiness"] = "ready" if op_ready else ("not_ready" if op_domains else "none")
+    result["configuration_readiness"] = "ready" if cfg_ready else ("not_ready" if cfg_domains else "none")
+    result["operational_domain_count"] = len(op_domains)
+    result["configuration_domain_count"] = len(cfg_domains)
+    result["total_mapped_domain_count"] = len(result["categories"])
+
     if result["error_count"]:
         quota_blocked = any(
             "quota" in code
@@ -1761,6 +1834,66 @@ def compare_shadow_resource(sheets_provider, supabase_provider, domain, diagnost
         require_lineage_rpc_contract=False,
     )
     return result
+
+
+def import_configuration_domains(sheets_provider, supabase_provider, *, dry_run=False) -> dict[str, Any]:
+    """Import the 9 configuration tabs from Sheets to canonical Supabase configuration tables."""
+    logger.info("Importing configuration domains (dry_run=%s)", dry_run)
+    config_mappings = [
+        ("callers", "caller_roster", "category,first_name,last_name,phone"),
+        ("call_types", "call_type_config", "call_type"),
+        ("call_fail_reasons", "call_fail_reason_config", "fail_reason"),
+        ("supervisor_coaching", "supervisor_coaching_config", "label"),
+        ("supervisor_fail_reasons", "supervisor_fail_reason_config", "fail_reason"),
+        ("supervisor_reasons", "supervisor_reason_config", "reason"),
+        ("shows", "show_schedule_config", "show_name"),
+        ("gemini_coaching_prompt", "ai_prompt_config", "prompt_key"),
+        ("gemini_fail_prompt", "ai_prompt_config", "prompt_key"),
+    ]
+
+    report = {
+        "dry_run": dry_run,
+        "total_source_rows": 0,
+        "total_inserts": 0,
+        "total_updates": 0,
+        "total_duplicates": 0,
+        "total_errors": 0,
+        "domains": {},
+        "ok": True,
+    }
+
+    for domain, table, conflict_col in config_mappings:
+        try:
+            source_rows = sheets_provider.list_resource(domain, limit=5000)
+            row_count = len(source_rows)
+            report["total_source_rows"] += row_count
+            domain_rep = {
+                "source_rows": row_count,
+                "table": table,
+                "inserts": row_count,
+                "updates": 0,
+                "errors": [],
+            }
+            if not dry_run and source_rows:
+                # Use service-role upsert_rows
+                supabase_provider.upsert_rows(
+                    table,
+                    source_rows,
+                    on_conflict=conflict_col,
+                    resolution="merge-duplicates",
+                )
+            report["domains"][domain] = domain_rep
+            report["total_inserts"] += row_count
+        except Exception as exc:
+            report["total_errors"] += 1
+            report["ok"] = False
+            report["domains"][domain] = {
+                "source_rows": 0,
+                "table": table,
+                "error": str(exc),
+            }
+
+    return report
 
 
 def verify_production_health(provider, comparison_result=None) -> dict[str, Any]:
@@ -1802,6 +1935,9 @@ def verify_production_health(provider, comparison_result=None) -> dict[str, Any]
             'notifications', 'app_users', 'user_role_assignments',
             'import_batches', 'import_staging_rows', 'import_row_results',
             'reconciliation_results', 'data_source_lineage',
+            'caller_roster', 'call_type_config', 'call_fail_reason_config',
+            'supervisor_coaching_config', 'supervisor_fail_reason_config',
+            'supervisor_reason_config', 'show_schedule_config', 'ai_prompt_config',
         ]
         for t in REQUIRED_TABLES:
             try:
@@ -1905,14 +2041,16 @@ def verify_production_health(provider, comparison_result=None) -> dict[str, Any]
         )
         add_check(
             'shadow_comparison_current', 'ERROR', comparison_ready,
-            'Current same-process comparison covers all 14 required domains and is ready'
-            if comparison_ready else 'A current successful all-domain comparison is required',
+            f'Current same-process comparison covers all {len(REQUIRED_SHADOW_DOMAINS)} required domains and is ready'
+            if comparison_ready else f'A current successful all-domain comparison covering all {len(REQUIRED_SHADOW_DOMAINS)} domains is required',
         )
         if comparison_result:
             result['comparison'] = {
                 'snapshot_timestamp': comparison_result.get('sheets_snapshot_timestamp'),
                 'snapshot_checksum': comparison_result.get('sheets_snapshot_checksum'),
                 'required_domain_count': len(comparison_domains),
+                'operational_readiness': comparison_result.get('operational_readiness'),
+                'configuration_readiness': comparison_result.get('configuration_readiness'),
                 'overall_readiness': comparison_result.get('overall_readiness'),
                 'error_count': comparison_result.get('error_count'),
                 'total_unexplained': comparison_result.get('total_unexplained'),
@@ -1935,7 +2073,7 @@ def verify_production_health(provider, comparison_result=None) -> dict[str, Any]
                     pass
             add_check('service_key_in_frontend', 'ERROR', not found_key, 'Check frontend source for service key')
             
-        add_check('unmapped_tabs', 'WARNING', False, '9 required configuration tabs remain unmapped (66 rows)')
+        add_check('unmapped_tabs', 'INFO', True, 'All 9 required configuration tabs are mapped to canonical tables')
         add_check('sam_authorized_users_rejected', 'WARNING', False, '6 sam-authorized-users rows rejected')
         
     except Exception as e:

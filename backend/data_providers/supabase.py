@@ -218,7 +218,10 @@ class SupabaseDataProvider(DataProvider):
             "candidate_status_actions", "candidate_corrections", "extra_attempt_grants", "supervisor_transfers",
             "newbie_shift_requests", "newbie_shift_reschedules", "headset_catalog", "headset_reviews",
             "headset_review_actions", "pending_requests", "notifications", "notification_deliveries",
-            "activity_events", "synchronization_events"
+            "activity_events", "synchronization_events",
+            "caller_roster", "call_type_config", "call_fail_reason_config",
+            "supervisor_coaching_config", "supervisor_fail_reason_config",
+            "supervisor_reason_config", "show_schedule_config", "ai_prompt_config",
         }
         if table not in ALLOWED_WRITE_TABLES:
             raise ValueError(f"Unsupported Supabase write table: {table}")

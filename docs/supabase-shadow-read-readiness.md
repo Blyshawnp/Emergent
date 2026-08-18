@@ -1097,3 +1097,93 @@ Remote database row counts across all 14 tables were re-verified post-observatio
 #### 9. Status & disable decision
 - **Reconciliation Need**: `NO RECONCILIATION NEEDED` (0 unexplained differences, 0 new drift).
 - **Disable Decision**: `SHADOW REMAINS ENABLED` (all stability, isolation, security, and performance criteria satisfied).
+
+---
+
+## 2026-08-18 Configuration Domains Migration & 23-Domain Readiness Verification
+
+### 1. Architectural Summary
+
+All 9 previously unmapped configuration domains have been mapped to 8 relational canonical tables in schema `mts_sam`, deployed via forward migration `20260818030000_mts_sam_configuration_domains.sql`, and imported with 100% parity from authoritative Google Sheets data.
+
+### 2. Migration Details (`20260818030000_mts_sam_configuration_domains.sql`)
+
+- **Schema**: `mts_sam`
+- **Tables Created**:
+  1. `caller_roster` (uq: `category, first_name, last_name, phone`, index on `display_order`)
+  2. `call_type_config` (uq: `call_type`, index on `display_order`)
+  3. `call_fail_reason_config` (uq: `fail_reason`, index on `display_order`)
+  4. `supervisor_coaching_config` (uq: `label`, index on `display_order`)
+  5. `supervisor_fail_reason_config` (uq: `fail_reason`, index on `display_order`)
+  6. `supervisor_reason_config` (uq: `reason`, index on `display_order`)
+  7. `show_schedule_config` (uq: `show_name`, index on `display_order`)
+  8. `ai_prompt_config` (uq: `prompt_key`, index on `display_order`)
+- **Security & RLS**:
+  - Row Level Security (RLS) is enabled and forced on all 8 tables.
+  - Direct table access is revoked from `public`, `anon`, and `authenticated`.
+  - Administrative CRUD is granted to `service_role`.
+  - Client-safe read access is mediated by `mts_sam.get_shadow_domain_data(p_domain, p_limit, p_offset)` (Security Definer with empty `search_path`), granted to `anon`, `authenticated`, and `service_role`.
+
+### 3. Source Accounting & Import Audit
+
+| Domain | Canonical Table | Expected Source Rows | Hosted Rows | Duplicates | Missing | Extra | Value Mismatches | Status |
+|---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `callers` | `caller_roster` | 22 | 22 | 0 | 0 | 0 | 0 | **MATCH** |
+| `call_types` | `call_type_config` | 5 | 5 | 0 | 0 | 0 | 0 | **MATCH** |
+| `call_fail_reasons` | `call_fail_reason_config` | 8 | 8 | 0 | 0 | 0 | 0 | **MATCH** |
+| `supervisor_coaching` | `supervisor_coaching_config` | 8 | 8 | 0 | 0 | 0 | 0 | **MATCH** |
+| `supervisor_fail_reasons` | `supervisor_fail_reason_config` | 6 | 6 | 0 | 0 | 0 | 0 | **MATCH** |
+| `supervisor_reasons` | `supervisor_reason_config` | 7 | 7 | 0 | 0 | 0 | 0 | **MATCH** |
+| `shows` | `show_schedule_config` | 8 | 8 | 0 | 0 | 0 | 0 | **MATCH** |
+| `gemini_coaching_prompt` | `ai_prompt_config` | 1 | 1 | 0 | 0 | 0 | 0 | **MATCH** |
+| `gemini_fail_prompt` | `ai_prompt_config` | 1 | 1 | 0 | 0 | 0 | 0 | **MATCH** |
+| **Total Configuration** | **8 tables** | **66** | **66** | **0** | **0** | **0** | **0** | **MATCH** |
+
+- **Import-Once Verification**: Execution logs confirm exactly one hosted import execution succeeded (`task-2434`). Preceding commands were dry-runs or failed client-side validation before any database write.
+- **Duplicate Check**: 0 duplicate natural keys, 0 duplicate display orders, 0 duplicate prompt records.
+- **Exact Prompt Preservation**:
+  - `gemini_coaching_prompt`: Length 1,495 chars, SHA-256 `fd19e28a0f973312e26afa10921ab2b2f87a0899f434eec5857572457597b410` (100% exact match)
+  - `gemini_fail_prompt`: Length 934 chars, SHA-256 `6540b9823fe1db9634bd28914a4b5c9f64f08c95a47acbf698bec9aac5225f10` (100% exact match)
+
+### 4. 23-Domain Readiness State
+
+- **Operational Mapped Domains (14)**: `candidates`, `candidate_sessions`, `session_attempts`, `authoritative_candidate_status`, `candidate_tracking`, `history`, `headset_catalog`, `headset_reviews`, `supervisor_transfers`, `newbie_shift_requests`, `candidate_corrections`, `pending_requests`, `recent_activity`, `notifications` (`ready`, 0 unexplained differences, 0 errors).
+- **Configuration Mapped Domains (9)**: `callers`, `call_types`, `call_fail_reasons`, `supervisor_coaching`, `supervisor_fail_reasons`, `supervisor_reasons`, `shows`, `gemini_coaching_prompt`, `gemini_fail_prompt` (`ready`, 0 unexplained differences, 0 errors).
+- **Total Mapped Domains**: `23 / 23` (`overall_readiness = ready`, 0 unexplained differences, 0 errors).
+
+### 5. Operational Table Integrity
+
+Operational table row counts remain 100% identical to baseline (0 writes occurred):
+- `data_source_lineage`: 292
+- `candidates`: 58
+- `candidate_sessions`: 73
+- `session_attempts`: 145
+- `headset_catalog`: 98
+- `headset_reviews`: 12
+- `supervisor_transfers`: 15
+- `newbie_shift_requests`: 14
+- `candidate_corrections`: 7
+- `candidate_status_actions`: 1
+- `extra_attempt_grants`: 0
+- `notifications`: 4
+- `pending_requests`: 3
+- `reconciliation_batches`: 21
+- `reconciliation_plan_items`: 154
+- `reconciliation_before_images`: 17
+
+### 6. Packaged Backend Rebuild & Verification
+
+- **Stale Binary Detection**: Packaged `backend.exe` previously held hash `04a04e362168a75893d1918fdd7e95f51ecf7fbf7cab8bedb5b117c04c48e1ec`, which predated the configuration domain provider additions.
+- **Rebuild Executed**: Full clean rebuild via `dev-tools/clean-rebuild-all.ps1 -Mode all`.
+- **New `backend.exe` SHA-256**: `2ad40277b4a14e5d9af0b23ff401a8a4654d4a0fc4656e1a4c72e51efef98bd7` (52,525,171 bytes).
+- **Synchronized Locations**:
+  - `backend/dist/backend.exe`
+  - `desktop/dist/win-unpacked/resources/backend/backend.exe`
+  - `desktop/dist-notification-manager/win-unpacked/resources/backend/backend.exe`
+  - `production-ready/Mock Testing Suite 1.0.1/win-unpacked/resources/backend/backend.exe`
+  - `production-ready/ADMIN ONLY - SAM 1.0.1/notification-manager-win-unpacked/resources/backend/backend.exe`
+- **Packaged Isolation Verification**:
+  - MTS runtime launched on port 8600 (`/api/health: ok, ready, 1.0.1`).
+  - SAM runtime launched on port 8601 (`/api/health: ok, ready, 1.0.1`).
+  - Process termination of MTS leaves SAM fully operational; closing SAM terminates cleanly with 0 orphan listeners.
+- **Secrets Verification**: Packaged `runtime_config.json` contains only client-safe publishable configuration (`supabase_url`, `supabase_anon_key`). `SUPABASE_SERVICE_ROLE_KEY` is strictly absent.

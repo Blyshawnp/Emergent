@@ -17,6 +17,16 @@ RESOURCE_ACTIONS = {domain: "batchGetSheetRanges" for domain in (
     "headset_catalog", "headset_reviews", "supervisor_transfers",
     "newbie_shift_requests", "candidate_corrections", "pending_requests",
     "recent_activity", "notifications",
+    "callers", "caller_roster",
+    "call_types", "call-types", "call_type_config",
+    "call_fail_reasons", "call-fail-reasons", "call_fail_reason_config",
+    "supervisor_coaching", "sup_coaching", "sup-coaching", "supervisor_coaching_config",
+    "supervisor_fail_reasons", "sup_fail_reasons", "sup-fail-reasons", "supervisor_fail_reason_config",
+    "supervisor_reasons", "sup_reasons", "sup-reasons", "supervisor_reason_config",
+    "shows", "show_schedule", "show_schedule_config",
+    "gemini_coaching_prompt", "gemini-coaching-prompt",
+    "gemini_fail_prompt", "gemini-fail-prompt",
+    "ai_prompts", "ai_prompt_config",
 )}
 
 SNAPSHOT_TABS = (
@@ -28,6 +38,15 @@ SNAPSHOT_TABS = (
     "candidate-deletion-requests",
     "candidate-information-correction-requests",
     "sam-notifications",
+    "callers",
+    "call-types",
+    "call-fail-reasons",
+    "sup-coaching",
+    "sup-fail-reasons",
+    "sup-reasons",
+    "shows",
+    "gemini-coaching-prompt",
+    "gemini-fail-prompt",
 )
 
 SNAPSHOT_ACTIONS = ((
@@ -428,6 +447,104 @@ class SheetsDataProvider(DataProvider):
                 "action_text": row.get("ActionText"),
                 "action_url": row.get("ActionURL"),
             } for row in rows] if isinstance(rows, list) else []
+        if resource in ("callers", "caller_roster"):
+            rows = self._tab_rows("callers")
+            return [{
+                "id": _deterministic_uuid("caller", f"{_text(row.get('Category'))}:{_text(row.get('First'))}:{_text(row.get('Last'))}:{_text(row.get('Phone'))}"),
+                "category": _text(row.get("Category")),
+                "first_name": _text(row.get("First")),
+                "last_name": _text(row.get("Last")),
+                "address": _text(row.get("Address")),
+                "city": _text(row.get("City")),
+                "state": _text(row.get("State")),
+                "zip": _text(row.get("Zip")),
+                "phone": _text(row.get("Phone")),
+                "email": _text(row.get("Email")),
+                "display_order": index + 1,
+                "is_active": True,
+            } for index, row in enumerate(rows)] if isinstance(rows, list) else []
+        if resource in ("call_types", "call-types", "call_type_config"):
+            rows = self._tab_rows("call-types")
+            return [{
+                "id": _deterministic_uuid("call_type", _text(row.get("CallType"))),
+                "call_type": _text(row.get("CallType")),
+                "display_order": index + 1,
+                "is_active": True,
+            } for index, row in enumerate(rows)] if isinstance(rows, list) else []
+        if resource in ("call_fail_reasons", "call-fail-reasons", "call_fail_reason_config"):
+            rows = self._tab_rows("call-fail-reasons")
+            return [{
+                "id": _deterministic_uuid("call_fail_reason", _text(row.get("FailReason"))),
+                "fail_reason": _text(row.get("FailReason")),
+                "display_order": index + 1,
+                "is_active": True,
+            } for index, row in enumerate(rows)] if isinstance(rows, list) else []
+        if resource in ("supervisor_coaching", "sup_coaching", "sup-coaching", "supervisor_coaching_config"):
+            rows = self._tab_rows("sup-coaching")
+            return [{
+                "id": _deterministic_uuid("sup_coaching", _text(row.get("Label"))),
+                "label": _text(row.get("Label")),
+                "helper_text": _text(row.get("Helper")),
+                "children_pipe_delimited": _text(row.get("ChildrenPipeDelimited")),
+                "display_order": index + 1,
+                "is_active": True,
+            } for index, row in enumerate(rows)] if isinstance(rows, list) else []
+        if resource in ("supervisor_fail_reasons", "sup_fail_reasons", "sup-fail-reasons", "supervisor_fail_reason_config"):
+            rows = self._tab_rows("sup-fail-reasons")
+            return [{
+                "id": _deterministic_uuid("sup_fail_reason", _text(row.get("FailReason"))),
+                "fail_reason": _text(row.get("FailReason")),
+                "display_order": index + 1,
+                "is_active": True,
+            } for index, row in enumerate(rows)] if isinstance(rows, list) else []
+        if resource in ("supervisor_reasons", "sup_reasons", "sup-reasons", "supervisor_reason_config"):
+            rows = self._tab_rows("sup-reasons")
+            return [{
+                "id": _deterministic_uuid("sup_reason", _text(row.get("SupervisorReason"))),
+                "reason": _text(row.get("SupervisorReason")),
+                "display_order": index + 1,
+                "is_active": True,
+            } for index, row in enumerate(rows)] if isinstance(rows, list) else []
+        if resource in ("shows", "show_schedule", "show_schedule_config"):
+            rows = self._tab_rows("shows")
+            return [{
+                "id": _deterministic_uuid("show", _text(row.get("ShowName"))),
+                "show_name": _text(row.get("ShowName")),
+                "one_time_amount": _text(row.get("OneTimeAmount")),
+                "monthly_amount": _text(row.get("MonthlyAmount")),
+                "gift": _text(row.get("Gift")),
+                "notes": _text(row.get("Notes")),
+                "display_order": index + 1,
+                "is_active": True,
+            } for index, row in enumerate(rows)] if isinstance(rows, list) else []
+        if resource in ("gemini_coaching_prompt", "gemini-coaching-prompt"):
+            rows = self._tab_rows("gemini-coaching-prompt")
+            prompt_val = ""
+            if rows and isinstance(rows, list):
+                prompt_val = str(rows[0].get("prompt") or list(rows[0].values())[0] if rows[0] else "").strip()
+            return [{
+                "id": _deterministic_uuid("ai_prompt", "gemini_coaching_prompt"),
+                "prompt_key": "gemini_coaching_prompt",
+                "prompt_text": prompt_val,
+                "description": "Internal test call results summary prompt for management",
+                "display_order": 1,
+                "is_active": True,
+            }] if prompt_val else []
+        if resource in ("gemini_fail_prompt", "gemini-fail-prompt"):
+            rows = self._tab_rows("gemini-fail-prompt")
+            prompt_val = ""
+            if rows and isinstance(rows, list):
+                prompt_val = str(rows[0].get("prompt") or list(rows[0].values())[0] if rows[0] else "").strip()
+            return [{
+                "id": _deterministic_uuid("ai_prompt", "gemini_fail_prompt"),
+                "prompt_key": "gemini_fail_prompt",
+                "prompt_text": prompt_val,
+                "description": "Internal test call failure summary prompt for management",
+                "display_order": 2,
+                "is_active": True,
+            }] if prompt_val else []
+        if resource in ("ai_prompts", "ai_prompt_config"):
+            return self._project("gemini_coaching_prompt") + self._project("gemini_fail_prompt")
         raise ValueError(f"Sheets resource adapter is not available: {resource}")
 
     @staticmethod

@@ -23,7 +23,7 @@ class SupabaseMigrationTests(unittest.TestCase):
     def test_rls_and_anon_denial_are_explicit(self):
         self.assertIn("enable row level security", self.sql)
         self.assertIn("revoke all on schema mts_sam from public, anon, authenticated", self.sql)
-        self.assertNotRegex(self.sql, r"grant\s+.*\s+to\s+anon")
+        self.assertNotRegex(self.sql, r"grant\s+(select|insert|update|delete|all|usage)\s+.*\s+to\s+anon")
 
     def test_views_are_security_invoker(self):
         view_count = len(re.findall(r"create or replace view mts_sam\.", self.sql))

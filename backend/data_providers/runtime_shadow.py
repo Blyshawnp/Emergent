@@ -24,6 +24,14 @@ RUNTIME_SHADOW_DOMAINS = frozenset({
     "recent_activity", "notifications",
 })
 
+RUNTIME_CONFIG_DOMAINS = frozenset({
+    "callers", "call_types", "call_fail_reasons", "supervisor_coaching",
+    "supervisor_fail_reasons", "supervisor_reasons", "shows",
+    "gemini_coaching_prompt", "gemini_fail_prompt",
+})
+
+RUNTIME_ALL_DOMAINS = RUNTIME_SHADOW_DOMAINS | RUNTIME_CONFIG_DOMAINS
+
 
 class ReadOnlySupabaseShadowProvider:
     """Narrow facade: runtime shadow code has no Supabase mutation methods."""

@@ -12,7 +12,7 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from data_providers.sheets import SheetsDataProvider
+from data_providers.sheets import SheetsDataProvider, SNAPSHOT_TABS
 from tools.supabase_import.core import (
     REQUIRED_SHADOW_DOMAINS,
     SHADOW_DOMAIN_SPECS,
@@ -61,16 +61,8 @@ class StaticProvider:
 def _sheets(candidate_rows):
     provider = SheetsDataProvider(object())
     provider._snapshot = {}
-    provider._tabs = {
-        "Candidate Sessions": [dict(row) for row in candidate_rows],
-        "Pending Sup Transfers": [],
-        "headsets": [],
-        "headset-review-log": [],
-        "newbie-shift-requests": [],
-        "candidate-deletion-requests": [],
-        "candidate-information-correction-requests": [],
-        "sam-notifications": [],
-    }
+    provider._tabs = {tab: [] for tab in SNAPSHOT_TABS}
+    provider._tabs["Candidate Sessions"] = [dict(row) for row in candidate_rows]
     provider.snapshot_metadata = _snapshot_metadata()
     return provider
 

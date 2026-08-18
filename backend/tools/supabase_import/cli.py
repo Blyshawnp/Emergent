@@ -33,6 +33,7 @@ from tools.supabase_import.core import (  # noqa: E402
     rollback_batch,
     compare_shadow_provider,
     verify_production_health,
+    import_configuration_domains,
 )
 from tools.supabase_import.reconciliation import (  # noqa: E402
     EXECUTION_ACK_ENV,
@@ -480,6 +481,15 @@ def idempotency_check_cmd(args):
     return 0
 
 
+def import_configuration_cmd(args):
+    sheets = SheetsDataProvider(_sheets_client(), max_retries=2)
+    supabase = _supabase_client()
+    dry_run = not bool(getattr(args, "execute", False))
+    result = import_configuration_domains(sheets, supabase, dry_run=dry_run)
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("ok") else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="MTS/SAM Sheets-to-Supabase importer and shadow verification CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -526,6 +536,16 @@ def main(argv=None):
     )
     idempotency_parser.add_argument('--batch-id')
     idempotency_parser.set_defaults(func=idempotency_check_cmd)
+
+    # import-configuration
+    config_parser = subparsers.add_parser(
+        "import-configuration",
+        help="Import the 9 configuration domains from Google Sheets to canonical Supabase tables",
+    )
+    config_mode = config_parser.add_mutually_exclusive_group()
+    config_mode.add_argument("--dry-run", action="store_true", default=True, help="Run dry run accounting (default)")
+    config_mode.add_argument("--execute", action="store_true", help="Execute hosted import")
+    config_parser.set_defaults(func=import_configuration_cmd)
 
     # report
     report_parser = subparsers.add_parser("report")
