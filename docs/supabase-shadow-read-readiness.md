@@ -1,7 +1,9 @@
 # MTS/SAM Supabase shadow-read readiness
 
-Status: corrective shadow-read checkpoint in progress; shadow mode **NOT** activated.
-Google Sheets remains the authoritative data provider.
+Status: Least-privilege read-only shadow comparison ACTIVATED in production runtime.
+Google Sheets remains the authoritative data provider (`MTS_DATA_PROVIDER=sheets`).
+Dual writes remain disabled (`MTS_DUAL_WRITE_ENABLED=false`).
+
 
 ## 2026-08-08 execution-framework checkpoint
 
@@ -956,3 +958,61 @@ A least-privilege security architecture was designed, deployed, and verified to 
 7. **Clean Packaged Configuration**: `supabase_url` and `supabase_anon_key` are bundled in `backend/config/runtime_config.json` as public client metadata. The redundant `load_dotenv(ROOT_DIR.parent / '.env')` line was removed from `backend/server.py`.
 8. **Zero-Write Verification**: Remote database row counts confirmed 100% identical before and after hosted security and comparison tests across all 13 tables.
 9. **Production State**: Google Sheets remains authoritative (`MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=false`, `MTS_DUAL_WRITE_ENABLED=false`). Shadow mode remains off.
+
+### 2026-08-18 controlled production activation of least-privilege shadow comparison
+
+Controlled production activation of least-privilege read-only shadow comparison was completed and verified.
+
+#### 1. Scope & boundaries
+- **Authority**: Google Sheets remains 100% authoritative (`MTS_DATA_PROVIDER=sheets`).
+- **Shadow Mode**: Activated (`MTS_SHADOW_COMPARE=true`).
+- **Dual Writes**: Strictly disabled (`MTS_DUAL_WRITE_ENABLED=false`).
+- **Auth Migration**: Not performed.
+- **Provider Cutover**: Not performed.
+
+#### 2. Architecture & credentials
+- Packaged desktop runtime uses only `SUPABASE_URL` and `SUPABASE_ANON_KEY` loaded via `backend/config/runtime_config.json`.
+- `SUPABASE_SERVICE_ROLE_KEY` is not present in packaged runtime or client configuration.
+- Packaged binaries across all 5 runtime locations match SHA-256 `04A04E362168A75893D1918FDD7E95F51ECF7FBF7CAB8BEDB5B117C04C48E1EC`.
+
+#### 3. Hosted least-privilege verification
+- Direct table reads (`candidates`, `data_source_lineage`, etc.): DENIED (`401/403`).
+- Direct table mutations (`INSERT`, `UPDATE`, `DELETE`): DENIED (`401/403`).
+- Privileged mutation RPCs (`begin_reconciliation_execution`, `insert_lineage_if_absent`): DENIED (`401/403`).
+- Read-only shadow RPCs (`get_shadow_readiness_ping`, `get_shadow_domain_data`): ALLOWED (`200 OK`).
+
+#### 4. Baseline and post-activation zero-write verification
+Remote hosted database row counts across all 14 tables were captured pre-activation and verified 100% identical post-activation:
+- `data_source_lineage`: 292 (match = True)
+- `candidates`: 58 (match = True)
+- `candidate_sessions`: 73 (match = True)
+- `session_attempts`: 145 (match = True)
+- `headset_catalog`: 98 (match = True)
+- `headset_reviews`: 12 (match = True)
+- `supervisor_transfers`: 15 (match = True)
+- `newbie_shift_requests`: 14 (match = True)
+- `candidate_corrections`: 7 (match = True)
+- `pending_requests`: 3 (match = True)
+- `notifications`: 4 (match = True)
+- `reconciliation_batches`: 21 (match = True)
+- `reconciliation_plan_items`: 154 (match = True)
+- `reconciliation_before_images`: 17 (match = True)
+
+#### 5. 14-Domain shadow comparison & smoke verification
+- All 14 operational domains verified: `candidates`, `candidate_sessions`, `session_attempts`, `authoritative_candidate_status`, `candidate_tracking`, `history`, `headset_catalog`, `headset_reviews`, `supervisor_transfers`, `newbie_shift_requests`, `candidate_corrections`, `pending_requests`, `recent_activity`, `notifications`.
+- Status: 13 exact matches + 1 approved historical difference (10 historical standalone headset reviews accounted).
+- Unexplained differences: **0**.
+- Comparison errors: **0**.
+
+#### 6. Bounded runtime capacity & failure isolation
+- **Capacity Bounds**: 2 workers, 4 queue (max 6 admitted). Burst traffic exceeding capacity is safely skipped (`skipped_due_to_capacity`) with zero latency impact and zero failure to Sheets callers.
+- **Failure Isolation**: Simulated Supabase network failures, timeouts, mismatches, and capacity saturation never raise exceptions to caller code or alter Sheets responses.
+
+#### 7. Verification test suites
+- Backend unit tests: 493 passed (`Ran 493 tests in 4.132s, OK`).
+- Frontend test suites: 312 passed across 32 suites (`Done in 7.22s`).
+- Desktop node tests: 11 passed across 4 files (`tests 11, pass 11`).
+- Apps Script authorization tests: 36 passed (`tests 36, pass 36`).
+- Frontend production build: compiled successfully.
+- Python compilation: 0 errors/warnings across tracked backend files.
+- Remote database migrations: 14/14 in sync.
