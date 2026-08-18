@@ -44,6 +44,7 @@ from services.apps_script_api import apps_script_api_role
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR.parent / '.env')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

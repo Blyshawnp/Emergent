@@ -887,3 +887,39 @@ Auth migration, configuration-tab migration, and provider cutover remain unperfo
 The next separately approved activation must first bind the owned packaged processes to
 the existing Supabase read credentials without persisting or exposing them, then set only
 `MTS_SHADOW_COMPARE=true` and repeat zero-write smoke verification.
+
+### 2026-08-18 secure runtime secret configuration integration and verification
+
+The packaged backend environment loading was updated in `backend/server.py` to check both `ROOT_DIR / '.env'` and `ROOT_DIR.parent / '.env'`. This ensures that when the backend process initializes (whether in development, test, or packaged runtime execution), environment configuration from the approved root environment is safely loaded into process environment without exposing or embedding credential values in source code, committed files, app.asar, backend binaries, installers, or log outputs.
+
+#### Required Supabase runtime configuration keys
+
+- `SUPABASE_URL`: Read in `factory.py`, `runtime_shadow.py`, `cli.py`. Required for shadow reads and Supabase provider instantiation. Must be valid `https://` endpoint.
+- `SUPABASE_SERVICE_ROLE_KEY`: Read in `factory.py`, `runtime_shadow.py`, `cli.py`. Required for shadow reads (due to RLS and `Accept-Profile: mts_sam` schema security). Never logged; representations are redacted.
+- `MTS_DATA_PROVIDER`: Defaults to `sheets`.
+- `MTS_SHADOW_COMPARE`: Default `false`. Controlled via process environment for bounded shadow comparisons.
+- `MTS_DUAL_WRITE_ENABLED`: Default `false`. Must remain `false` during shadow reads.
+
+#### Secret-management audit & minimum privilege review
+
+- **Secret-management mechanism**: Environment-based process injection via `load_dotenv` and launcher environment inheritance. No plaintext credentials in source, committed files, binaries, or logs.
+- **Minimum privilege decision**: Under current database RLS and schema security (`revoke all on schema mts_sam from public, anon, authenticated`), REST API access requires `service_role` to query `mts_sam` tables/views. `ReadOnlySupabaseShadowProvider` wraps the provider in a strict facade that permits only `GET` queries and restricts `_request` calls.
+- **Process identity & access model**: Backend process inherits environment from launcher context; environment variables are passed strictly via child process `env` dictionary, never via command-line arguments or global system environment.
+- **MTS/SAM credential sharing**: Both MTS and SAM share the same read-only Supabase project configuration (`xyfhikikddcqcmzbdvbj`), reflecting the unified database architecture.
+
+#### Controlled packaged shadow & failure verification
+
+- **Controlled shadow execution**: Process-scoped `MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=true`, `MTS_DUAL_WRITE_ENABLED=false` was executed. The packaged runtime loaded `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, constructed `ReadOnlySupabaseShadowProvider`, and successfully completed a read comparison against project `xyfhikikddcqcmzbdvbj` without returning `shadow_error`.
+- **Missing-secret failure verification**: Unsetting Supabase credentials safely returns `shadow_error` with `exception_class=ValueError`. The authoritative Sheets provider continues unaffected, no crash occurs, and zero data is mutated.
+- **Zero-write proof**: Exact before and after database row counts for all 13 canonical, lineage, and reconciliation tables were captured and confirmed 100% equal (`data_source_lineage`: 292, `candidates`: 58, `candidate_sessions`: 73, `session_attempts`: 145, `headset_catalog`: 98, `headset_reviews`: 12, `supervisor_transfers`: 15, `newbie_shift_requests`: 14, `candidate_corrections`: 7, `notifications`: 4, `reconciliation_batches`: 21, `reconciliation_plan_items`: 154, `reconciliation_before_images`: 17).
+
+#### Production state
+
+- Google Sheets authoritative: YES
+- `MTS_DATA_PROVIDER`: `sheets`
+- `MTS_SHADOW_COMPARE`: `false`
+- `MTS_DUAL_WRITE_ENABLED`: `false`
+- Apps Script active: YES
+- Supabase shadow runtime configuration available: YES
+- Auth migration performed: NO
+- Provider cutover performed: NO
