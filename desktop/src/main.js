@@ -43,7 +43,11 @@ const APP_ID = 'com.acddirect.mocktestingsuite';
 const NOTIFICATION_MANAGER_APP_ID = 'com.acddirect.mocktestingsuite.notificationmanager';
 const isDev = !app.isPackaged;
 const isNotificationManagerMode = process.env.MTS_NOTIFICATION_MANAGER === '1';
-const BACKEND_PORT = isNotificationManagerMode ? 8601 : 8600;
+const PREFERRED_BACKEND_PORT = isNotificationManagerMode ? 8601 : 8600;
+const BACKEND_PORT = PREFERRED_BACKEND_PORT;
+const SAM_FALLBACK_PORT_RANGE = [8602, 8603, 8604, 8605, 8606, 8607, 8608, 8609, 8610];
+let selectedBackendPort = PREFERRED_BACKEND_PORT;
+let backendPortOccupantClassification = 'available';
 const DEFAULT_APP_VERSION = '1.0.1';
 const APP_DISPLAY_NAME = isNotificationManagerMode ? 'Smart Alert Manager' : 'Mock Testing Suite';
 const APP_RUNTIME_ID = isNotificationManagerMode ? NOTIFICATION_MANAGER_APP_ID : APP_ID;
@@ -536,13 +540,18 @@ function registerProcessCleanupHandlers() {
 function getBackendState() {
   return {
     mode: getAppModeName(),
-    port: BACKEND_PORT,
+    port: selectedBackendPort,
+    preferredPort: PREFERRED_BACKEND_PORT,
+    selectedPort: selectedBackendPort,
+    fallbackUsed: selectedBackendPort !== PREFERRED_BACKEND_PORT,
+    occupantClassification: backendPortOccupantClassification,
     status: backendConnectionStatus,
     startedByNotificationApp: Boolean(isNotificationManagerMode && backendStartedByThisApp),
     startedByThisApp: Boolean(backendStartedByThisApp),
     usingExternalBackend: Boolean(usingExternalBackend),
     retryCount: isNotificationManagerMode ? backendRetryAttemptCount : backendReadyRetryCount,
     pid: backendProcess?.pid || 0,
+    ownedBackendPid: backendProcess?.pid || 0,
     command: backendCommandLabel,
     lastError: backendLastError,
   };
@@ -610,7 +619,7 @@ function startBackend() {
         cwd: backendCwd,
         env: {
           ...backendStorageEnvironment,
-          BACKEND_PORT: String(BACKEND_PORT),
+          BACKEND_PORT: String(selectedBackendPort),
           BACKEND_LOG_DIR: packagedBackendLogDir || getBackendLogDir(),
           BACKEND_RUNTIME_CONFIG_FILE: backendRuntimeConfigPath,
           BROWSER_DRIVER_DIR: driverDir,
@@ -701,7 +710,7 @@ function startBackend() {
 
   backendLaunchError = null;
   backendLogTail = [];
-  backendCommandLabel = `${launcher.label} -m uvicorn server:app --host 127.0.0.1 --port ${BACKEND_PORT}`;
+  backendCommandLabel = `${launcher.label} -m uvicorn server:app --host 127.0.0.1 --port ${selectedBackendPort}`;
 
   const backendStorageEnvironment = buildBackendStorageEnvironment({
     env: process.env,
@@ -712,7 +721,7 @@ function startBackend() {
     ...pythonArgs,
     '-m', 'uvicorn', 'server:app',
     '--host', '127.0.0.1',
-    '--port', String(BACKEND_PORT),
+    '--port', String(selectedBackendPort),
     '--log-level', 'warning'
   ], {
     cwd: backendDir,
@@ -950,14 +959,14 @@ function getTcpPortListeningPids(port) {
   return [];
 }
 
-function reconcileBackendListenerOwnership(reason = 'ready') {
+function reconcileBackendListenerOwnership(reason = 'ready', port = selectedBackendPort) {
   if (usingExternalBackend) {
     return 0;
   }
 
-  const listenerPids = getTcpPortListeningPids(BACKEND_PORT);
+  const listenerPids = getTcpPortListeningPids(port);
   if (listenerPids.length !== 1) {
-    console.warn(`[BACKEND] Expected one listener on port ${BACKEND_PORT} during ${reason}; found ${listenerPids.length}.`);
+    console.warn(`[BACKEND] Expected one listener on port ${port} during ${reason}; found ${listenerPids.length}.`);
     return 0;
   }
 
@@ -971,16 +980,16 @@ function reconcileBackendListenerOwnership(reason = 'ready') {
       pid: listenerPid,
     });
   }
-  writeBackendOwner(listenerPid);
-  console.log(`[BACKEND] Registered listener PID ${listenerPid} for port ${BACKEND_PORT} (${reason}).`);
+  writeBackendOwner(listenerPid, port);
+  console.log(`[BACKEND] Registered listener PID ${listenerPid} for port ${port} (${reason}).`);
   return listenerPid;
 }
 
-function probeBackend() {
+function probeBackend(port = selectedBackendPort) {
   return new Promise((resolve) => {
     const req = http.get({
       hostname: '127.0.0.1',
-      port: BACKEND_PORT,
+      port,
       path: '/api/health',
       timeout: BACKEND_READY_REQUEST_TIMEOUT_MS,
     }, (res) => {
@@ -998,7 +1007,7 @@ function probeBackend() {
   });
 }
 
-function inspectBackendListenerOwnership(listeningPids = getTcpPortListeningPids(BACKEND_PORT)) {
+function inspectBackendListenerOwnership(listeningPids = getTcpPortListeningPids(selectedBackendPort), port = selectedBackendPort) {
   const owner = readBackendOwner();
   const ownerProcessPid = Number(owner?.ownerPid || 0);
   return classifyBackendListenerOwnership({
@@ -1011,7 +1020,10 @@ function inspectBackendListenerOwnership(listeningPids = getTcpPortListeningPids
   });
 }
 
-function backendPortConflictMessage() {
+function backendPortConflictMessage(port = selectedBackendPort) {
+  if (isNotificationManagerMode) {
+    return `${APP_DISPLAY_NAME} could not start because ports 8601-8610 are occupied (or port ${BACKEND_PORT} is occupied by an unverified local process). Close conflicting applications and retry.`;
+  }
   return `${APP_DISPLAY_NAME} could not start because port ${BACKEND_PORT} is occupied by an unverified local process. Close that process and retry.`;
 }
 
@@ -1040,7 +1052,7 @@ function killStaleOwnedBackend(ownership = inspectBackendListenerOwnership()) {
   return false;
 }
 
-function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
+function waitForBackend(retries = BACKEND_STARTUP_RETRIES, port = selectedBackendPort) {
   return new Promise((resolve, reject) => {
     const attempt = (remaining) => {
       backendReadyRetryCount = Math.max(0, retries - remaining);
@@ -1069,13 +1081,13 @@ function waitForBackend(retries = BACKEND_STARTUP_RETRIES) {
 
       const req = http.get({
         hostname: '127.0.0.1',
-        port: BACKEND_PORT,
+        port,
         path: '/api/health',
       }, (res) => {
         if (res.statusCode === 200) {
           backendReadyRetryCount = Math.max(0, retries - remaining);
           setBackendConnectionStatus('connected');
-          reconcileBackendListenerOwnership('startup-ready');
+          reconcileBackendListenerOwnership('startup-ready', port);
           resolve();
         } else {
           setTimeout(() => attempt(remaining - 1), BACKEND_STARTUP_RETRY_DELAY_MS);
@@ -1095,47 +1107,90 @@ function ensureBackendAvailable() {
   setBackendConnectionStatus('checking');
 
   return (async () => {
-    if (isTcpPortListening(BACKEND_PORT)) {
-      console.log(`[BACKEND] Port ${BACKEND_PORT} is already listening`);
-      if (await probeBackend()) {
-        const ownership = inspectBackendListenerOwnership();
-        if (ownership.classification === 'stale-owned') {
-          console.warn(`[BACKEND] Healthy listener PID ${ownership.backendPid} belongs to a stale ${getAppModeName()} owner; restarting it.`);
-          if (!killStaleOwnedBackend(ownership)) {
-            throw new Error(`Port ${BACKEND_PORT} is held by a stale backend that could not be stopped. Please retry.`);
-          }
-          await sleep(1000);
-          if (isTcpPortListening(BACKEND_PORT)) {
-            throw new Error(`Port ${BACKEND_PORT} is still in use after stopping the stale backend. Please retry.`);
-          }
-        } else if (ownership.classification === 'unmanaged') {
-          throw new Error(backendPortConflictMessage());
-        } else {
-          usingExternalBackend = true;
-          backendStartedByThisApp = false;
-          backendReadyRetryCount = 0;
-          backendRetryAttemptCount = 0;
-          setBackendConnectionStatus('connected');
-          console.log(`[APP] Reusing existing backend on port ${BACKEND_PORT}`);
-          return;
-        }
+    const candidatePorts = isNotificationManagerMode
+      ? [PREFERRED_BACKEND_PORT, ...SAM_FALLBACK_PORT_RANGE]
+      : [PREFERRED_BACKEND_PORT];
+
+    let chosenPort = null;
+    let reuseActiveBackend = false;
+
+    for (const portCandidate of candidatePorts) {
+      if (!isTcpPortListening(portCandidate)) {
+        chosenPort = portCandidate;
+        backendPortOccupantClassification = 'available';
+        console.log(`[BACKEND] Selected available port ${chosenPort}`);
+        break;
       }
 
-      if (isTcpPortListening(BACKEND_PORT)) {
-        console.warn(`[BACKEND] Port ${BACKEND_PORT} is listening but /api/health failed. Killing a proven stale owned backend if present.`);
-        killStaleOwnedBackend();
-        await sleep(1000);
-        if (isTcpPortListening(BACKEND_PORT)) {
-          throw new Error(backendPortConflictMessage());
+      console.log(`[BACKEND] Port ${portCandidate} is already listening`);
+      const listeningPids = getTcpPortListeningPids(portCandidate);
+      const isHealthy = await probeBackend(portCandidate);
+
+      if (isHealthy) {
+        const ownership = inspectBackendListenerOwnership(listeningPids, portCandidate);
+        backendPortOccupantClassification = ownership.classification;
+
+        if (ownership.classification === 'stale-owned') {
+          console.warn(`[BACKEND] Healthy listener PID ${ownership.backendPid} on port ${portCandidate} belongs to a stale ${getAppModeName()} owner; restarting it.`);
+          if (killStaleOwnedBackend(ownership)) {
+            await sleep(1000);
+            if (!isTcpPortListening(portCandidate)) {
+              chosenPort = portCandidate;
+              break;
+            }
+          }
+          console.warn(`[BACKEND] Port ${portCandidate} remained busy after stopping stale backend; evaluating fallback.`);
+        } else if (ownership.classification === 'unmanaged') {
+          console.warn(`[BACKEND] Port ${portCandidate} is occupied by an unmanaged process; evaluating fallback.`);
+        } else {
+          // active-owned
+          chosenPort = portCandidate;
+          reuseActiveBackend = true;
+          console.log(`[APP] Reusing existing backend on port ${chosenPort}`);
+          break;
+        }
+      } else {
+        // Port is listening but /api/health failed
+        const ownership = inspectBackendListenerOwnership(listeningPids, portCandidate);
+        backendPortOccupantClassification = ownership.classification;
+
+        if (ownership.classification === 'stale-owned') {
+          console.warn(`[BACKEND] Port ${portCandidate} is listening but /api/health failed. Killing proven stale owned backend PID ${ownership.backendPid}.`);
+          if (killStaleOwnedBackend(ownership)) {
+            await sleep(1000);
+            if (!isTcpPortListening(portCandidate)) {
+              chosenPort = portCandidate;
+              break;
+            }
+          }
+        } else {
+          console.warn(`[BACKEND] Port ${portCandidate} is occupied by unmanaged process without healthy backend; evaluating fallback.`);
         }
       }
+    }
+
+    if (!chosenPort) {
+      backendPortOccupantClassification = 'exhausted';
+      throw new Error(backendPortConflictMessage());
+    }
+
+    selectedBackendPort = chosenPort;
+
+    if (reuseActiveBackend) {
+      usingExternalBackend = true;
+      backendStartedByThisApp = false;
+      backendReadyRetryCount = 0;
+      backendRetryAttemptCount = 0;
+      setBackendConnectionStatus('connected');
+      console.log(`[APP] Reusing existing backend on port ${selectedBackendPort}`);
+      return;
     }
 
     usingExternalBackend = false;
     startBackend();
     await waitForBackend();
     backendRetryAttemptCount = 0;
-    console.log('[APP] Backend is ready');
+    console.log(`[APP] Backend is ready on port ${selectedBackendPort}`);
   })();
 }
 
@@ -1504,7 +1559,7 @@ ipcMain.on('app:getRuntimeFlags', (event) => {
 });
 
 ipcMain.on('backend:getUrl', (event) => {
-  event.returnValue = `http://127.0.0.1:${BACKEND_PORT}`;
+  event.returnValue = `http://127.0.0.1:${selectedBackendPort}`;
 });
 
 ipcMain.on('app:getAdminToken', (event) => {
@@ -1971,7 +2026,7 @@ function fetchUpdateMetadataFromBackend() {
     const appKey = isNotificationManagerMode ? 'sam' : 'mts';
     const request = http.get({
       hostname: '127.0.0.1',
-      port: BACKEND_PORT,
+      port: selectedBackendPort,
       path: `/api/update?app=${encodeURIComponent(appKey)}`,
       timeout: 10000,
       headers: { [ADMIN_TOKEN_HEADER]: getSharedAdminToken() },
