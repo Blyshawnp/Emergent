@@ -173,11 +173,99 @@ test('Supabase sign-in fails gracefully on invalid credentials', async () => {
     await flushPromises();
   });
 
-  expect(view.container.textContent).toContain('Invalid email or password.');
+  expect(view.container.textContent).toContain('Email or password is incorrect.');
+  expect(view.container.textContent).not.toContain('500');
 });
 
-test('Forgot password mode requests recovery link', async () => {
+test('Supabase sign-in displays clean network error on connection failure', async () => {
+  signInWithPassword.mockRejectedValueOnce(Object.assign(new Error('Network error'), { code: 'network_failure' }));
+
+  const view = await renderWizard();
+  const [emailInput, passwordInput] = view.container.querySelectorAll('input');
+
+  await act(async () => {
+    changeInput(emailInput, 'shawn@example.com');
+    changeInput(passwordInput, 'correctpassword');
+  });
+
+  await act(async () => {
+    view.container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('Unable to reach the sign-in service.');
+  expect(view.container.textContent).not.toContain('500');
+});
+
+test('Supabase sign-in displays clean error on inactive account', async () => {
+  mockVerifySamAuth.mockResolvedValueOnce({
+    ok: false,
+    error_code: 'inactive_account',
+    error: 'This SAM account is inactive.',
+  });
+
+  const view = await renderWizard();
+  const [emailInput, passwordInput] = view.container.querySelectorAll('input');
+
+  await act(async () => {
+    changeInput(emailInput, 'inactive@example.com');
+    changeInput(passwordInput, 'correctpassword');
+  });
+
+  await act(async () => {
+    view.container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('This SAM account is inactive.');
+});
+
+test('Supabase sign-in displays clean error on unlinked account', async () => {
+  mockVerifySamAuth.mockResolvedValueOnce({
+    ok: false,
+    error_code: 'unauthorized_account',
+    error: 'This account is not authorized for Smart Alert Manager.',
+  });
+
+  const view = await renderWizard();
+  const [emailInput, passwordInput] = view.container.querySelectorAll('input');
+
+  await act(async () => {
+    changeInput(emailInput, 'unlinked@example.com');
+    changeInput(passwordInput, 'correctpassword');
+  });
+
+  await act(async () => {
+    view.container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('This account is not authorized for Smart Alert Manager.');
+});
+
+test('Supabase sign-in converts unexpected 500 error to user-safe message', async () => {
+  mockVerifySamAuth.mockRejectedValueOnce(new Error('Request failed with status code 500'));
+
+  const view = await renderWizard();
+  const [emailInput, passwordInput] = view.container.querySelectorAll('input');
+
+  await act(async () => {
+    changeInput(emailInput, 'shawn@example.com');
+    changeInput(passwordInput, 'correctpassword');
+  });
+
+  await act(async () => {
+    view.container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('Sign in could not be completed. Please try again.');
+  expect(view.container.textContent).not.toContain('Request failed with status code 500');
+});
+
+test('Forgot password mode requests recovery link and shows privacy-safe message', async () => {
   const { resetPasswordForEmail } = require('./utils/supabaseAuth');
+  resetPasswordForEmail.mockResolvedValueOnce({ ok: true, code: 'RECOVERY_REQUEST_ACCEPTED' });
   const view = await renderWizard();
 
   // Click Forgot Password link
@@ -206,7 +294,32 @@ test('Forgot password mode requests recovery link', async () => {
     'mock-anon-key',
     'shawn@example.com'
   );
-  expect(view.container.textContent).toContain('password reset instructions have been sent');
+  expect(view.container.textContent).toContain('If an account exists for this email, password reset instructions have been sent.');
+});
+
+test('Forgot password mode displays clean network error on offline failure', async () => {
+  const { resetPasswordForEmail } = require('./utils/supabaseAuth');
+  resetPasswordForEmail.mockRejectedValueOnce(Object.assign(new Error('Network error'), { code: 'RECOVERY_REQUEST_FAILED' }));
+  const view = await renderWizard();
+
+  // Click Forgot Password link
+  const forgotBtn = Array.from(view.container.querySelectorAll('button')).find((b) => b.textContent.includes('Forgot Password?'));
+  await act(async () => {
+    forgotBtn.click();
+    await flushPromises();
+  });
+
+  const emailInput = view.container.querySelector('input[type="email"]');
+  await act(async () => {
+    changeInput(emailInput, 'shawn@example.com');
+  });
+
+  await act(async () => {
+    view.container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('Unable to reach the sign-in service.');
 });
 
 test('Mode switch to legacy PIN setup renders name and pin fields', async () => {

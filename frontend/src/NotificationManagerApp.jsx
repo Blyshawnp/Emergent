@@ -644,7 +644,7 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
   const samTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.sam, 'sam'), [helpContent]);
 
   return (
-    <div className="nm-modal-backdrop">
+    <div className="nm-modal-backdrop" onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}>
       <section className="nm-help-modal" role="dialog" aria-modal="true" aria-labelledby="sam-help-title">
         <div className="nm-help-header">
           <div>
@@ -656,7 +656,7 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
         </div>
 
         {/* Modal Navigation Tabs */}
-        <div className="nm-view-tabs" role="tablist" aria-label="Settings sections" style={{ marginBottom: 20 }}>
+        <div className="nm-view-tabs" role="tablist" aria-label="Settings sections">
           <button
             type="button"
             role="tab"
@@ -686,316 +686,330 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
           </button>
         </div>
 
-        {modalTab === 'preferences' && (
-          <>
-            <div className="nm-help-settings" id="sam-help-settings">
-              <div className="nm-help-settings-copy">
-                <div className="nm-overline">SAM SETTINGS</div>
-                <h3>Local preferences</h3>
-                <p>These settings apply on this device and take effect immediately.</p>
-                <p className="nm-meta">Version {version} - Powered by MTS</p>
+        <div className="nm-help-modal-body">
+          {modalTab === 'preferences' && (
+            <>
+              <div className="nm-help-settings" id="sam-help-settings">
+                <div className="nm-help-settings-copy">
+                  <div className="nm-overline">SAM SETTINGS</div>
+                  <h3>Local preferences</h3>
+                  <p>These settings apply on this device and take effect immediately.</p>
+                  <p className="nm-meta">Version {version} - Powered by MTS</p>
+                </div>
+                <label className="nm-field">
+                  <span>SAM sounds</span>
+                  <select value={settings.soundVolume} onChange={(event) => updateSetting({ soundVolume: event.target.value })}>
+                    {SAM_SOUND_VOLUME_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </label>
+                <label className="nm-field">
+                  <span>Success banner duration</span>
+                  <select value={settings.statusBannerDurationSeconds} onChange={(event) => updateSetting({ statusBannerDurationSeconds: Number(event.target.value) })}>
+                    {SAM_BANNER_DURATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </label>
+                <label className="nm-field">
+                  <span>Default candidate filter</span>
+                  <select value={settings.defaultCandidateView} onChange={(event) => updateSetting({ defaultCandidateView: event.target.value })}>
+                    {Object.entries(CANDIDATE_VIEW_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                </label>
+                <label className="nm-checkbox nm-help-toggle">
+                  <input
+                    type="checkbox"
+                    checked={settings.includeArchivedInSearchDefault}
+                    onChange={(event) => updateSetting({ includeArchivedInSearchDefault: event.target.checked })}
+                  />
+                  Include archived candidates in search by default
+                </label>
+                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => onCheckForUpdates?.()}>Check for Updates</button>
               </div>
-              <label className="nm-field">
-                <span>SAM sounds</span>
-                <select value={settings.soundVolume} onChange={(event) => updateSetting({ soundVolume: event.target.value })}>
-                  {SAM_SOUND_VOLUME_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="nm-field">
-                <span>Success banner duration</span>
-                <select value={settings.statusBannerDurationSeconds} onChange={(event) => updateSetting({ statusBannerDurationSeconds: Number(event.target.value) })}>
-                  {SAM_BANNER_DURATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                </select>
-              </label>
-              <label className="nm-field">
-                <span>Default candidate filter</span>
-                <select value={settings.defaultCandidateView} onChange={(event) => updateSetting({ defaultCandidateView: event.target.value })}>
-                  {Object.entries(CANDIDATE_VIEW_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                </select>
-              </label>
-              <label className="nm-checkbox nm-help-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.includeArchivedInSearchDefault}
-                  onChange={(event) => updateSetting({ includeArchivedInSearchDefault: event.target.checked })}
-                />
-                Include archived candidates in search by default
-              </label>
-              <button type="button" className="nm-btn nm-btn-secondary" onClick={() => onCheckForUpdates?.()}>Check for Updates</button>
-            </div>
 
-            <div className="nm-help-toc" aria-label="SAM help sections">
-              <label className="nm-field">
-                <span>Search Help</span>
-                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dashboard, requests, reports..." data-testid="sam-help-search" />
-              </label>
-              {visibleSections.map((section) => (
-                <button key={section.id} type="button" className="nm-help-toc-button" onClick={() => jumpToSection(section.id)}>
-                  {section.title}
+              <div className="nm-help-toc" aria-label="SAM help sections">
+                <label className="nm-field">
+                  <span>Search Help</span>
+                  <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dashboard, requests, reports..." data-testid="sam-help-search" />
+                </label>
+                {visibleSections.map((section) => (
+                  <button key={section.id} type="button" className="nm-help-toc-button" onClick={() => jumpToSection(section.id)}>
+                    {section.title}
+                  </button>
+                ))}
+                <button type="button" className="nm-help-toc-button" onClick={() => document.getElementById('sam-tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })}>
+                  Tutorial Videos
                 </button>
-              ))}
-              <button type="button" className="nm-help-toc-button" onClick={() => document.getElementById('sam-tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })}>
-                Tutorial Videos
-              </button>
-            </div>
+              </div>
 
-            <div className="nm-help-grid">
-              {visibleSections.map((section) => (
-                <article
-                  key={section.id}
-                  id={`sam-help-${section.id}`}
-                  className="nm-help-card"
-                  ref={(node) => { sectionRefs.current[section.id] = node; }}
+              <div className="nm-help-grid">
+                {visibleSections.map((section) => (
+                  <article
+                    key={section.id}
+                    id={`sam-help-${section.id}`}
+                    className="nm-help-card"
+                    ref={(node) => { sectionRefs.current[section.id] = node; }}
+                  >
+                    <h3>{section.title}</h3>
+                    <h4>What this is</h4><p>{section.body}</p>
+                    <h4>When to use it</h4><p>Use this topic when you are working in {section.title} or deciding which administrator action is appropriate.</p>
+                    <h4>Steps</h4><ol><li>Open {section.title} from SAM.</li><li>Review the visible status and selected record.</li><li>Choose the applicable action and confirm the result.</li></ol>
+                    <h4>What happens next</h4><p>SAM refreshes the applicable view and keeps unresolved work visible until it is completed.</p>
+                    <h4>Common mistakes</h4><p>Do not treat Dismiss as a decision, approve without reviewing details, or deny a Pending Request without a clear reason.</p>
+                    <h4>Related topics</h4><p>Dashboard · Troubleshooting · Tutorial Videos</p>
+                    {section.id === 'support' && (
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          className="nm-btn nm-btn-secondary"
+                          onClick={handleRequestSupport}
+                          data-testid="support-request-btn"
+                        >
+                          Request App Support
+                        </button>
+                        {supportError && <p className="nm-meta" style={{ color: '#ff4d4d', marginTop: 8 }}>{supportError}</p>}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+              <div className="nm-help-grid">
+                <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" loadError={helpLoadError} onRetry={retryHelpContent} />
+              </div>
+            </>
+          )}
+
+          {modalTab === 'account' && (
+            <div className="nm-help-settings" style={{ gridTemplateColumns: '1fr', gap: 16 }}>
+              <div className="nm-help-settings-copy">
+                <div className="nm-overline">ACCOUNT PROFILE</div>
+                <h3>Administrator Identity</h3>
+                <p>Your identity is verified with server-side authorization on every session.</p>
+              </div>
+
+              <div className="nm-account-profile-grid">
+                <div className="nm-account-profile-card">
+                  <span className="nm-account-profile-label">Signed In As</span>
+                  <strong className="nm-account-profile-value">{samSetupStatus?.userName || 'Administrator'}</strong>
+                </div>
+                <div className="nm-account-profile-card">
+                  <span className="nm-account-profile-label">Email Address</span>
+                  <span className="nm-account-profile-value" style={{ fontSize: 14, color: '#cbd5e1' }}>{samSetupStatus?.userEmail || 'Assigned local session'}</span>
+                </div>
+                <div className="nm-account-profile-card">
+                  <span className="nm-account-profile-label">Assigned Role</span>
+                  <span className="nm-account-profile-value" style={{ fontSize: 14, textTransform: 'capitalize', color: '#7dd3fc' }}>{samSetupStatus?.userRole || 'Administrator'}</span>
+                </div>
+                <div className="nm-account-profile-card">
+                  <span className="nm-account-profile-label">Account Status</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: 'rgba(34, 197, 94, 0.15)', color: '#4ade80', border: '1px solid rgba(34, 197, 94, 0.3)', width: 'fit-content' }}>
+                    Active
+                  </span>
+                </div>
+              </div>
+
+              {accountSuccess && (
+                <div className="nm-status-card is-success">
+                  <strong>Success</strong>
+                  <span>{accountSuccess}</span>
+                </div>
+              )}
+
+              {accountError && (
+                <div className="nm-status-card is-warning">
+                  <strong>Action Failed</strong>
+                  <span>{accountError}</span>
+                </div>
+              )}
+
+              <div className="nm-account-actions-bar">
+                <button
+                  type="button"
+                  className="nm-btn nm-btn-secondary"
+                  onClick={() => { setShowPasswordForm(!showPasswordForm); setShowEmailForm(false); setAccountError(''); setAccountSuccess(''); }}
                 >
-                  <h3>{section.title}</h3>
-                  <h4>What this is</h4><p>{section.body}</p>
-                  <h4>When to use it</h4><p>Use this topic when you are working in {section.title} or deciding which administrator action is appropriate.</p>
-                  <h4>Steps</h4><ol><li>Open {section.title} from SAM.</li><li>Review the visible status and selected record.</li><li>Choose the applicable action and confirm the result.</li></ol>
-                  <h4>What happens next</h4><p>SAM refreshes the applicable view and keeps unresolved work visible until it is completed.</p>
-                  <h4>Common mistakes</h4><p>Do not treat Dismiss as a decision, approve without reviewing details, or deny a Pending Request without a clear reason.</p>
-                  <h4>Related topics</h4><p>Dashboard · Troubleshooting · Tutorial Videos</p>
-                  {section.id === 'support' && (
-                    <div style={{ marginTop: 12 }}>
-                      <button
-                        type="button"
-                        className="nm-btn nm-btn-secondary"
-                        onClick={handleRequestSupport}
-                        data-testid="support-request-btn"
-                      >
-                        Request App Support
-                      </button>
-                      {supportError && <p className="nm-meta" style={{ color: '#ff4d4d', marginTop: 8 }}>{supportError}</p>}
-                    </div>
-                  )}
-                </article>
-              ))}
-            </div>
-            <div className="nm-help-grid">
-              <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" loadError={helpLoadError} onRetry={retryHelpContent} />
-            </div>
-          </>
-        )}
-
-        {modalTab === 'account' && (
-          <div className="nm-help-settings" style={{ gridTemplateColumns: '1fr', gap: 20 }}>
-            <div className="nm-help-settings-copy">
-              <div className="nm-overline">ACCOUNT PROFILE</div>
-              <h3>Administrator Identity</h3>
-              <p>Your identity is verified with server-side authorization on every session.</p>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, background: 'rgba(2, 6, 23, 0.4)', padding: 18, borderRadius: 12, border: '1px solid rgba(148, 163, 184, 0.15)' }}>
-              <div>
-                <div style={{ fontSize: 12, color: 'var(--nm-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Signed In As</div>
-                <strong style={{ fontSize: 16, color: '#f8fafc' }}>{samSetupStatus?.userName || 'Administrator'}</strong>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: 'var(--nm-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Email Address</div>
-                <span style={{ fontSize: 14, color: '#cbd5e1' }}>{samSetupStatus?.userEmail || 'Assigned local session'}</span>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: 'var(--nm-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Assigned Role</div>
-                <span style={{ fontSize: 14, textTransform: 'capitalize', color: '#7dd3fc', fontWeight: 600 }}>{samSetupStatus?.userRole || 'Administrator'}</span>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: 'var(--nm-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>Account Status</div>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: 'rgba(34, 197, 94, 0.15)', color: '#4ade80', border: '1px solid rgba(34, 197, 94, 0.3)' }}>
-                  Active
-                </span>
-              </div>
-            </div>
-
-            {accountSuccess && (
-              <div className="nm-status-card is-success">
-                <strong>Success</strong>
-                <span>{accountSuccess}</span>
-              </div>
-            )}
-
-            {accountError && (
-              <div className="nm-status-card is-warning">
-                <strong>Action Failed</strong>
-                <span>{accountError}</span>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
-              <button
-                type="button"
-                className="nm-btn nm-btn-secondary"
-                onClick={() => { setShowPasswordForm(!showPasswordForm); setShowEmailForm(false); setAccountError(''); setAccountSuccess(''); }}
-              >
-                {showPasswordForm ? 'Cancel Password Change' : 'Change Password'}
-              </button>
-              <button
-                type="button"
-                className="nm-btn nm-btn-secondary"
-                onClick={() => { setShowEmailForm(!showEmailForm); setShowPasswordForm(false); setAccountError(''); setAccountSuccess(''); }}
-              >
-                {showEmailForm ? 'Cancel Email Change' : 'Change Email'}
-              </button>
-              <button
-                type="button"
-                className="nm-btn nm-btn-danger"
-                style={{ marginLeft: 'auto' }}
-                onClick={() => {
-                  if (window.confirm('Are you sure you want to log out of SAM?')) {
-                    onLogout?.();
-                  }
-                }}
-              >
-                <LogOut size={14} style={{ marginRight: 6 }} /> Log Out
-              </button>
-            </div>
-
-            {showPasswordForm && (
-              <form onSubmit={handleUpdatePassword} style={{ display: 'grid', gap: 12, background: 'rgba(15, 23, 42, 0.6)', padding: 18, borderRadius: 12, border: '1px solid rgba(148, 163, 184, 0.2)' }}>
-                <div className="nm-overline">UPDATE PASSWORD</div>
-                <label className="nm-field">
-                  <span>New Password</span>
-                  <input
-                    type="password"
-                    value={accountPassword}
-                    onChange={(e) => setAccountPassword(e.target.value)}
-                    placeholder="Enter at least 6 characters"
-                    required
-                  />
-                </label>
-                <label className="nm-field">
-                  <span>Confirm New Password</span>
-                  <input
-                    type="password"
-                    value={accountConfirmPassword}
-                    onChange={(e) => setAccountConfirmPassword(e.target.value)}
-                    placeholder="Repeat new password"
-                    required
-                  />
-                </label>
-                <button type="submit" className="nm-btn nm-btn-primary" disabled={accountLoading || !accountPassword || !accountConfirmPassword}>
-                  {accountLoading ? 'Updating...' : 'Save New Password'}
+                  {showPasswordForm ? 'Close Password Change' : 'Change Password'}
                 </button>
-              </form>
-            )}
-
-            {showEmailForm && (
-              <form onSubmit={handleUpdateEmail} style={{ display: 'grid', gap: 12, background: 'rgba(15, 23, 42, 0.6)', padding: 18, borderRadius: 12, border: '1px solid rgba(148, 163, 184, 0.2)' }}>
-                <div className="nm-overline">UPDATE EMAIL ADDRESS</div>
-                <label className="nm-field">
-                  <span>New Email Address</span>
-                  <input
-                    type="email"
-                    value={accountEmail}
-                    onChange={(e) => setAccountEmail(e.target.value)}
-                    placeholder="admin@example.com"
-                    required
-                  />
-                </label>
-                <button type="submit" className="nm-btn nm-btn-primary" disabled={accountLoading || !accountEmail}>
-                  {accountLoading ? 'Updating...' : 'Save New Email'}
+                <button
+                  type="button"
+                  className="nm-btn nm-btn-secondary"
+                  onClick={() => { setShowEmailForm(!showEmailForm); setShowPasswordForm(false); setAccountError(''); setAccountSuccess(''); }}
+                >
+                  {showEmailForm ? 'Close Email Change' : 'Change Email'}
                 </button>
-              </form>
-            )}
-          </div>
-        )}
-
-        {modalTab === 'users' && (
-          <div className="nm-help-settings" style={{ gridTemplateColumns: '1fr', gap: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-              <div className="nm-help-settings-copy">
-                <div className="nm-overline">USER MANAGEMENT</div>
-                <h3>Authorized SAM Operators</h3>
-                <p>Manage access and view enrollment status for all authorized administrators.</p>
+                <button
+                  type="button"
+                  className="nm-btn nm-btn-danger"
+                  style={{ marginLeft: 'auto' }}
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to log out of SAM?')) {
+                      onLogout?.();
+                    }
+                  }}
+                >
+                  <LogOut size={14} style={{ marginRight: 6 }} /> Log Out
+                </button>
               </div>
-              <button type="button" className="nm-btn nm-btn-secondary" onClick={() => loadUserManagementList()} disabled={usersLoading}>
-                <RefreshCw size={14} className={usersLoading ? 'is-spinning' : ''} style={{ marginRight: 6 }} /> Refresh
-              </button>
+
+              {showPasswordForm && (
+                <form onSubmit={handleUpdatePassword} className="nm-account-subform-card">
+                  <div className="nm-overline">UPDATE PASSWORD</div>
+                  <label className="nm-field">
+                    <span>New Password</span>
+                    <input
+                      type="password"
+                      value={accountPassword}
+                      onChange={(e) => setAccountPassword(e.target.value)}
+                      placeholder="Enter at least 6 characters"
+                      autoFocus
+                      required
+                    />
+                  </label>
+                  <label className="nm-field">
+                    <span>Confirm New Password</span>
+                    <input
+                      type="password"
+                      value={accountConfirmPassword}
+                      onChange={(e) => setAccountConfirmPassword(e.target.value)}
+                      placeholder="Repeat new password"
+                      required
+                    />
+                  </label>
+                  <div className="nm-account-subform-actions">
+                    <button type="submit" className="nm-btn nm-btn-primary" disabled={accountLoading || !accountPassword || !accountConfirmPassword}>
+                      {accountLoading ? 'Updating...' : 'Save New Password'}
+                    </button>
+                    <button type="button" className="nm-btn nm-btn-secondary" onClick={() => { setShowPasswordForm(false); setAccountError(''); }}>
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {showEmailForm && (
+                <form onSubmit={handleUpdateEmail} className="nm-account-subform-card">
+                  <div className="nm-overline">UPDATE EMAIL ADDRESS</div>
+                  <label className="nm-field">
+                    <span>New Email Address</span>
+                    <input
+                      type="email"
+                      value={accountEmail}
+                      onChange={(e) => setAccountEmail(e.target.value)}
+                      placeholder="admin@example.com"
+                      autoFocus
+                      required
+                    />
+                  </label>
+                  <div className="nm-account-subform-actions">
+                    <button type="submit" className="nm-btn nm-btn-primary" disabled={accountLoading || !accountEmail}>
+                      {accountLoading ? 'Updating...' : 'Save New Email'}
+                    </button>
+                    <button type="button" className="nm-btn nm-btn-secondary" onClick={() => { setShowEmailForm(false); setAccountError(''); }}>
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
+          )}
 
-            {usersSuccess && (
-              <div className="nm-status-card is-success">
-                <strong>Success</strong>
-                <span>{usersSuccess}</span>
+          {modalTab === 'users' && (
+            <div className="nm-help-settings" style={{ gridTemplateColumns: '1fr', gap: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                <div className="nm-help-settings-copy">
+                  <div className="nm-overline">USER MANAGEMENT</div>
+                  <h3>Authorized SAM Operators</h3>
+                  <p>Manage access and view enrollment status for all authorized administrators.</p>
+                </div>
+                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => loadUserManagementList()} disabled={usersLoading}>
+                  <RefreshCw size={14} className={usersLoading ? 'is-spinning' : ''} style={{ marginRight: 6 }} /> Refresh
+                </button>
               </div>
-            )}
 
-            {usersError && (
-              <div className="nm-status-card is-warning">
-                <strong>Notice</strong>
-                <span>{usersError}</span>
-              </div>
-            )}
+              {usersSuccess && (
+                <div className="nm-status-card is-success">
+                  <strong>Success</strong>
+                  <span>{usersSuccess}</span>
+                </div>
+              )}
 
-            <div className="nm-table-wrap">
-              <table className="nm-table">
-                <thead>
-                  <tr>
-                    <th>Administrator</th>
-                    <th>Role</th>
-                    <th>Auth Link</th>
-                    <th>Status</th>
-                    {callerIsOwner && <th>Action</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {userList.map((u) => (
-                    <tr key={u.id}>
-                      <td>
-                        <strong>{u.display_name}</strong>
-                        {u.is_owner && <span style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(234, 179, 8, 0.15)', color: '#facc15', border: '1px solid rgba(234, 179, 8, 0.3)' }}>Owner</span>}
-                      </td>
-                      <td style={{ textTransform: 'capitalize' }}>{u.role || 'administrator'}</td>
-                      <td>
-                        {u.is_linked ? (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#4ade80', fontSize: 13 }}>
-                            <CheckCircle size={14} /> Linked
-                          </span>
-                        ) : (
-                          <span style={{ color: 'var(--nm-muted)', fontSize: 13 }}>Not enrolled</span>
-                        )}
-                      </td>
-                      <td>
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          padding: '2px 8px',
-                          borderRadius: 999,
-                          fontSize: 12,
-                          fontWeight: 700,
-                          background: u.active ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                          color: u.active ? '#4ade80' : '#f87171',
-                          border: `1px solid ${u.active ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                        }}>
-                          {u.active ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      {callerIsOwner && (
-                        <td>
-                          <button
-                            type="button"
-                            className={`nm-btn nm-btn-table ${u.active ? 'nm-btn-danger' : 'nm-btn-primary'}`}
-                            onClick={() => handleToggleUserActive(u)}
-                            disabled={usersLoading}
-                          >
-                            {u.active ? 'Deactivate' : 'Activate'}
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                  {!userList.length && !usersLoading && (
+              {usersError && (
+                <div className="nm-status-card is-warning">
+                  <strong>Notice</strong>
+                  <span>{usersError}</span>
+                </div>
+              )}
+
+              <div className="nm-table-wrap">
+                <table className="nm-table">
+                  <thead>
                     <tr>
-                      <td colSpan={callerIsOwner ? 5 : 4} style={{ textAlign: 'center', color: 'var(--nm-muted)' }}>
-                        No authorized users loaded.
-                      </td>
+                      <th>Administrator</th>
+                      <th>Role</th>
+                      <th>Auth Link</th>
+                      <th>Status</th>
+                      {callerIsOwner && <th>Action</th>}
                     </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {userList.map((u) => (
+                      <tr key={u.id}>
+                        <td>
+                          <strong>{u.display_name}</strong>
+                          {u.is_owner && <span style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(234, 179, 8, 0.15)', color: '#facc15', border: '1px solid rgba(234, 179, 8, 0.3)' }}>Owner</span>}
+                        </td>
+                        <td style={{ textTransform: 'capitalize' }}>{u.role || 'administrator'}</td>
+                        <td>
+                          {u.is_linked ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#4ade80', fontSize: 13 }}>
+                              <CheckCircle size={14} /> Linked
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--nm-muted)', fontSize: 13 }}>Not enrolled</span>
+                          )}
+                        </td>
+                        <td>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            background: u.active ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                            color: u.active ? '#4ade80' : '#f87171',
+                            border: `1px solid ${u.active ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                          }}>
+                            {u.active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        {callerIsOwner && (
+                          <td>
+                            <button
+                              type="button"
+                              className={`nm-btn nm-btn-table ${u.active ? 'nm-btn-danger' : 'nm-btn-primary'}`}
+                              onClick={() => handleToggleUserActive(u)}
+                              disabled={usersLoading}
+                            >
+                              {u.active ? 'Deactivate' : 'Activate'}
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                    {!userList.length && !usersLoading && (
+                      <tr>
+                        <td colSpan={callerIsOwner ? 5 : 4} style={{ textAlign: 'center', color: 'var(--nm-muted)' }}>
+                          No authorized users loaded.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        <div className="nm-help-actions">
+        <div className="nm-help-modal-footer">
           {modalTab === 'preferences' && (
             <>
               <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayQuickStart}>Quick Start Choices</button>
@@ -1315,24 +1329,30 @@ export function SamSetupWizard({ status, onComplete }) {
       const supabaseUrl = configRes?.supabase_url;
       const anonKey = configRes?.supabase_anon_key;
       if (!supabaseUrl || !anonKey) {
-        setError('Supabase authentication configuration is unavailable.');
+        setError('Unable to reach the sign-in service.');
         return;
       }
 
       const authSession = await signInWithPassword(supabaseUrl, anonKey, form.email.trim(), form.password);
-      // console.log('authSession result:', authSession);
       const authUser = authSession?.user || authSession;
       const authUid = authUser?.id;
       const authEmail = authUser?.email || form.email.trim();
       if (!authUid) {
-        setError('Authentication failed. Please verify your email and password.');
+        setError('Email or password is incorrect.');
         return;
       }
 
       // Server-side SAM authorization verification
       const verifyResult = await api.verifySamAuth(authUid);
       if (!verifyResult?.ok) {
-        setError(verifyResult?.error || 'Your account is not authorized for SAM access.');
+        const errCode = verifyResult?.error_code || verifyResult?.errorCode;
+        if (errCode === 'inactive_account') {
+          setError('This SAM account is inactive.');
+        } else if (errCode === 'unauthorized_account') {
+          setError('This account is not authorized for Smart Alert Manager.');
+        } else {
+          setError(verifyResult?.error || 'Sign in could not be completed. Please try again.');
+        }
         return;
       }
 
@@ -1359,9 +1379,21 @@ export function SamSetupWizard({ status, onComplete }) {
         session: authSession,
       });
     } catch (authError) {
-      const msg = String(authError?.message || 'Unable to sign in. Please check your credentials.');
-      const isCred = msg.toLowerCase().includes('invalid') || msg.toLowerCase().includes('credential');
-      setError(isCred ? 'Invalid email or password.' : msg);
+      const msg = String(authError?.message || '').toLowerCase();
+      const code = String(authError?.code || '').toLowerCase();
+      const status = authError?.status || authError?.response?.status;
+
+      if (code === 'invalid_credentials' || msg.includes('invalid') || msg.includes('credential') || status === 400) {
+        setError('Email or password is incorrect.');
+      } else if (code === 'network_failure' || msg.includes('network') || msg.includes('fetch') || msg.includes('econnrefused') || msg.includes('timeout')) {
+        setError('Unable to reach the sign-in service.');
+      } else if (code === 'inactive_account' || msg.includes('inactive')) {
+        setError('This SAM account is inactive.');
+      } else if (code === 'unauthorized_account' || msg.includes('not authorized') || msg.includes('unauthorized')) {
+        setError('This account is not authorized for Smart Alert Manager.');
+      } else {
+        setError('Sign in could not be completed. Please try again.');
+      }
     } finally {
       submitInFlightRef.current = false;
       setSubmitting(false);
@@ -1380,13 +1412,20 @@ export function SamSetupWizard({ status, onComplete }) {
       const supabaseUrl = configRes?.supabase_url;
       const anonKey = configRes?.supabase_anon_key;
       if (!supabaseUrl || !anonKey) {
-        setError('Supabase configuration is unavailable.');
+        setError('Unable to reach the sign-in service.');
         return;
       }
-      await resetPasswordForEmail(supabaseUrl, anonKey, form.email);
+      const res = await resetPasswordForEmail(supabaseUrl, anonKey, form.email.trim());
+      console.log('[SAM-AUTH] Password recovery status:', res?.code || 'RECOVERY_REQUEST_ACCEPTED');
       setInfoMessage('If an account exists for this email, password reset instructions have been sent.');
     } catch (resetErr) {
-      setError(resetErr?.message || 'Password reset request failed.');
+      console.warn('[SAM-AUTH] Password recovery failed:', resetErr?.code || 'RECOVERY_REQUEST_FAILED');
+      const msg = String(resetErr?.message || '').toLowerCase();
+      if (msg.includes('network') || msg.includes('fetch') || msg.includes('timeout')) {
+        setError('Unable to reach the sign-in service.');
+      } else {
+        setInfoMessage('If an account exists for this email, password reset instructions have been sent.');
+      }
     } finally {
       submitInFlightRef.current = false;
       setSubmitting(false);
@@ -1419,6 +1458,8 @@ export function SamSetupWizard({ status, onComplete }) {
                   onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
                   autoComplete="email"
                   placeholder="admin@example.com"
+                  data-testid="login-email-input"
+                  autoFocus
                   required
                 />
               </label>
@@ -1439,6 +1480,7 @@ export function SamSetupWizard({ status, onComplete }) {
                   onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
                   autoComplete="current-password"
                   placeholder="••••••••"
+                  data-testid="login-password-input"
                   required
                 />
               </label>
@@ -1457,7 +1499,7 @@ export function SamSetupWizard({ status, onComplete }) {
                 </div>
               ) : null}
 
-              <button type="submit" className="nm-btn nm-btn-primary" disabled={submitting || !form.email.trim() || !form.password.trim()}>
+              <button type="submit" className="nm-btn nm-btn-primary" disabled={submitting || !form.email.trim() || !form.password.trim()} data-testid="login-submit-btn">
                 {submitting ? 'Verifying Access...' : 'Sign In'}
               </button>
 
@@ -1490,6 +1532,8 @@ export function SamSetupWizard({ status, onComplete }) {
                   onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
                   autoComplete="email"
                   placeholder="admin@example.com"
+                  data-testid="forgot-password-email-input"
+                  autoFocus
                   required
                 />
               </label>
@@ -1508,7 +1552,7 @@ export function SamSetupWizard({ status, onComplete }) {
                 </div>
               ) : null}
 
-              <button type="submit" className="nm-btn nm-btn-primary" disabled={submitting || !form.email.trim()}>
+              <button type="submit" className="nm-btn nm-btn-primary" disabled={submitting || !form.email.trim()} data-testid="forgot-password-submit-btn">
                 {submitting ? 'Sending Instructions...' : 'Send Reset Link'}
               </button>
 
@@ -1533,6 +1577,8 @@ export function SamSetupWizard({ status, onComplete }) {
                   value={form.name}
                   onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                   autoComplete="name"
+                  data-testid="legacy-name-input"
+                  autoFocus
                   required
                 />
               </label>
@@ -1544,6 +1590,7 @@ export function SamSetupWizard({ status, onComplete }) {
                   value={form.pin}
                   onChange={(event) => setForm((current) => ({ ...current, pin: event.target.value }))}
                   autoComplete="one-time-code"
+                  data-testid="legacy-pin-input"
                   required
                 />
               </label>
@@ -1553,7 +1600,7 @@ export function SamSetupWizard({ status, onComplete }) {
                   <span>{error}</span>
                 </div>
               ) : null}
-              <button type="submit" className="nm-btn nm-btn-primary" disabled={submitting || !form.name.trim() || !form.pin.trim()}>
+              <button type="submit" className="nm-btn nm-btn-primary" disabled={submitting || !form.name.trim() || !form.pin.trim()} data-testid="legacy-submit-btn">
                 {submitting ? 'Verifying...' : 'Complete Setup'}
               </button>
 

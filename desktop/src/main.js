@@ -1346,8 +1346,6 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
   isHandlingCloseConfirmation = true;
 
   try {
-    let confirmed = false;
-
     if (parentWindow && !parentWindow.isDestroyed()) {
       if (parentWindow.isMinimized()) {
         parentWindow.restore();
@@ -1356,65 +1354,22 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
         parentWindow.show();
       }
       parentWindow.focus();
-
-      confirmed = await new Promise((resolve) => {
-        let settled = false;
-        let timeoutId = null;
-        const cleanup = () => {
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-            timeoutId = null;
-          }
-          parentWindow.removeListener('closed', handleRendererUnavailable);
-          parentWindow.webContents.removeListener('render-process-gone', handleRendererUnavailable);
-        };
-
-        const finish = (value) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          quitConfirmationResolver = null;
-          cleanup();
-          resolve(value);
-        };
-
-        const handleRendererUnavailable = () => {
-          finish(null);
-        };
-
-        quitConfirmationResolver = (value) => {
-          finish(Boolean(value));
-        };
-
-        parentWindow.once('closed', handleRendererUnavailable);
-        parentWindow.webContents.once('render-process-gone', handleRendererUnavailable);
-        sendAppEvent('app:confirm-quit', {
-          hasUnsavedChanges,
-        });
-        timeoutId = setTimeout(() => {
-          console.warn('[APP] Renderer did not acknowledge quit confirmation; using native fallback dialog.');
-          finish(null);
-        }, QUIT_CONFIRMATION_TIMEOUT_MS);
-      });
     }
 
-    if (confirmed === null || (!parentWindow || parentWindow.isDestroyed())) {
-      const { response } = await dialog.showMessageBox(parentWindow || null, {
-        type: 'question',
-        buttons: ['No', 'Yes'],
-        defaultId: 0,
-        cancelId: 0,
-        title: isNotificationManagerMode ? 'Exit Smart Alert Manager' : 'Close App',
-        message: isNotificationManagerMode
-          ? 'Are you sure you want to exit Smart Alert Manager?'
-          : (hasUnsavedChanges
-              ? 'You have unsaved work. Are you sure you want to close the app?'
-              : 'Are you sure you want to close the app?'),
-      });
-      confirmed = response === 1;
-    }
+    const { response } = await dialog.showMessageBox(parentWindow && !parentWindow.isDestroyed() ? parentWindow : null, {
+      type: 'question',
+      buttons: ['No', 'Yes'],
+      defaultId: 0,
+      cancelId: 0,
+      title: isNotificationManagerMode ? 'Exit Smart Alert Manager' : 'Close App',
+      message: isNotificationManagerMode
+        ? 'Are you sure you want to exit Smart Alert Manager?'
+        : (hasUnsavedChanges
+            ? 'You have unsaved work. Are you sure you want to close the app?'
+            : 'Are you sure you want to close the app?'),
+    });
 
+    const confirmed = response === 1;
     if (!confirmed) {
       return false;
     }

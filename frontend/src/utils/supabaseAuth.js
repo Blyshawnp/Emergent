@@ -5,24 +5,32 @@
 
 export async function signInWithPassword(supabaseUrl, anonKey, email, password) {
   const url = `${supabaseUrl.replace(/\/+$/, '')}/auth/v1/token?grant_type=password`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'apikey': anonKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      email: String(email || '').trim(),
-      password: String(password || ''),
-    }),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': anonKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: String(email || '').trim(),
+        password: String(password || ''),
+      }),
+    });
+  } catch (networkErr) {
+    const error = new Error('Unable to reach the sign-in service.');
+    error.code = 'network_failure';
+    throw error;
+  }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = data.error_description || data.msg || data.message || 'Invalid email or password.';
+    const isCred = response.status === 400 || (data.error_code === 'invalid_credentials');
+    const message = isCred ? 'Email or password is incorrect.' : (data.error_description || data.msg || data.message || 'Email or password is incorrect.');
     const error = new Error(message);
     error.status = response.status;
-    error.code = data.error_code || data.code;
+    error.code = data.error_code || (isCred ? 'invalid_credentials' : 'auth_error');
     throw error;
   }
   return data;
@@ -31,56 +39,75 @@ export async function signInWithPassword(supabaseUrl, anonKey, email, password) 
 export async function refreshAuthSession(supabaseUrl, anonKey, refreshToken) {
   if (!refreshToken) return null;
   const url = `${supabaseUrl.replace(/\/+$/, '')}/auth/v1/token?grant_type=refresh_token`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'apikey': anonKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': anonKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
 
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return null;
+    }
+    return data;
+  } catch (_networkErr) {
     return null;
   }
-  return data;
 }
 
 export async function resetPasswordForEmail(supabaseUrl, anonKey, email) {
   const url = `${supabaseUrl.replace(/\/+$/, '')}/auth/v1/recover`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'apikey': anonKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      email: String(email || '').trim(),
-    }),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': anonKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: String(email || '').trim(),
+      }),
+    });
+  } catch (networkErr) {
+    const error = new Error('Unable to reach the sign-in service.');
+    error.code = 'RECOVERY_REQUEST_FAILED';
+    throw error;
+  }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data.error_description || data.msg || data.message || 'Password reset request failed.';
     const error = new Error(message);
     error.status = response.status;
+    error.code = 'RECOVERY_REQUEST_FAILED';
     throw error;
   }
-  return { ok: true, message: 'Password recovery email sent if account exists.' };
+  return { ok: true, code: 'RECOVERY_REQUEST_ACCEPTED', message: 'If an account exists for this email, password reset instructions have been sent.' };
 }
 
 export async function updateUserAccount(supabaseUrl, anonKey, accessToken, updates) {
   const url = `${supabaseUrl.replace(/\/+$/, '')}/auth/v1/user`;
-  const response = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      'apikey': anonKey,
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(updates || {}),
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'apikey': anonKey,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates || {}),
+    });
+  } catch (networkErr) {
+    const error = new Error('Unable to reach the server.');
+    error.code = 'network_failure';
+    throw error;
+  }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {

@@ -1906,3 +1906,118 @@ button.nm-metric { cursor: pointer; font: inherit; color: inherit; width: 100%; 
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
+
+/* ══════════ SAM Form Inputs & Auth UI Polish ══════════ */
+.nm-setup-form input,
+.nm-help-settings input,
+.nm-help-modal input,
+.nm-field input,
+.nm-field-full input {
+  box-sizing: border-box !important;
+  color: #eff6ff !important;
+  -webkit-text-fill-color: #eff6ff !important;
+  caret-color: #38bdf8 !important;
+  background: #091424 !important;
+  border: 1px solid rgba(148, 163, 184, 0.35) !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  pointer-events: auto !important;
+  -webkit-app-region: no-drag !important;
+}
+
+.nm-setup-form input:hover,
+.nm-help-settings input:hover,
+.nm-help-modal input:hover,
+.nm-field input:hover,
+.nm-field-full input:hover {
+  border-color: rgba(125, 211, 252, 0.5) !important;
+  background: #0d1e34 !important;
+}
+
+.nm-setup-form input:focus,
+.nm-help-settings input:focus,
+.nm-help-modal input:focus,
+.nm-field input:focus,
+.nm-field-full input:focus {
+  outline: none !important;
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.28) !important;
+  background: #0d1e34 !important;
+}
+
+.nm-setup-form input::placeholder,
+.nm-help-settings input::placeholder,
+.nm-help-modal input::placeholder,
+.nm-field input::placeholder,
+.nm-field-full input::placeholder {
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+  opacity: 1 !important;
+}
+
+.nm-setup-form input:-webkit-autofill,
+.nm-setup-form input:-webkit-autofill:hover,
+.nm-setup-form input:-webkit-autofill:focus,
+.nm-help-settings input:-webkit-autofill,
+.nm-help-modal input:-webkit-autofill,
+.nm-field input:-webkit-autofill {
+  -webkit-text-fill-color: #eff6ff !important;
+  caret-color: #eff6ff !important;
+  box-shadow: 0 0 0 1000px #091424 inset !important;
+  border-color: #38bdf8 !important;
+  transition: background-color 9999s ease-out 0s;
+}
+
+/* Account Settings Polish */
+.nm-account-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  background: rgba(2, 6, 23, 0.45);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.nm-account-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nm-account-profile-label {
+  font-size: 11px;
+  color: var(--nm-muted, #94a3b8);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.nm-account-profile-value {
+  font-size: 15px;
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.nm-account-actions-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.nm-account-subform-card {
+  display: grid;
+  gap: 12px;
+  background: rgba(15, 23, 42, 0.65);
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.nm-account-subform-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}

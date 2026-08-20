@@ -25,6 +25,9 @@ from typing import Optional
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from zoneinfo import ZoneInfo
+import urllib.request
+import urllib.error
+import urllib.parse
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
 
@@ -13236,6 +13239,9 @@ async def get_sam_setup_status():
         "setupComplete": bool(settings_doc.get("sam_setup_complete")),
         "userName": settings_doc.get("sam_user_name") or "",
         "role": settings_doc.get("sam_user_role") or "",
+        "userEmail": settings_doc.get("sam_auth_email") or "",
+        "authUid": settings_doc.get("sam_auth_uid") or "",
+        "authProvider": settings_doc.get("sam_auth_provider") or "legacy",
     }
 
 
@@ -13279,7 +13285,7 @@ def _supabase_anon_rpc(rpc_name: str, body: dict = None):
         return {"ok": False, "error": "Supabase configuration is not available."}
     rpc_url = f"{url}/rest/v1/rpc/{rpc_name}"
     req_body = json.dumps(body or {}, separators=(",", ":")).encode("utf-8")
-    req = Request(
+    req = urllib.request.Request(
         rpc_url,
         data=req_body,
         headers={
@@ -13287,18 +13293,19 @@ def _supabase_anon_rpc(rpc_name: str, body: dict = None):
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "Content-Profile": "mts_sam",
             "Accept-Profile": "mts_sam",
         },
         method="POST",
     )
     try:
-        with urlopen(req, timeout=10.0) as resp:
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
             return json.loads(resp.read().decode("utf-8-sig"))
-    except HTTPError as exc:
+    except urllib.error.HTTPError as exc:
         try:
             err_text = exc.read().decode("utf-8-sig")
             err_json = json.loads(err_text)
-            return {"ok": False, "error": err_json.get("message") or err_text}
+            return {"ok": False, "error": err_json.get("message") or err_json.get("error") or err_text}
         except Exception:
             return {"ok": False, "error": f"HTTP {exc.code}"}
     except Exception as exc:

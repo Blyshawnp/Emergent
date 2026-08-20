@@ -101,13 +101,50 @@ body.notification-manager-body.nm-dialog-open {
 
 .nm-setup-form input {
   width: 100%;
-  min-height: 44px;
+  min-height: 46px;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  background: rgba(2, 6, 14, 0.72);
-  color: var(--nm-text);
-  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #091424;
+  color: #eff6ff !important;
+  -webkit-text-fill-color: #eff6ff !important;
+  caret-color: #38bdf8 !important;
+  padding: 10px 14px;
   font: inherit;
+  font-size: 15px;
+  box-sizing: border-box;
+  user-select: text;
+  -webkit-user-select: text;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.nm-setup-form input:hover {
+  border-color: rgba(125, 211, 252, 0.45);
+  background: #0c1c32;
+}
+
+.nm-setup-form input:focus {
+  outline: none;
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.28);
+  background: #0c1c32;
+}
+
+.nm-setup-form input::placeholder {
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+  opacity: 1;
+}
+
+.nm-setup-form input:-webkit-autofill,
+.nm-setup-form input:-webkit-autofill:hover,
+.nm-setup-form input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #eff6ff !important;
+  caret-color: #eff6ff !important;
+  box-shadow: 0 0 0 1000px #091424 inset !important;
+  border-color: #38bdf8 !important;
+  transition: background-color 9999s ease-out 0s;
 }
 
 .nm-hero,
@@ -1477,24 +1514,56 @@ body.notification-manager-body.nm-dialog-open {
 }
 
 .nm-help-modal {
-  width: min(980px, 100%);
-  max-height: min(82vh, 720px);
-  overflow: auto;
+  width: min(980px, calc(100vw - 48px));
+  max-height: min(85vh, 740px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 22px;
   border: 1px solid rgba(125, 211, 252, 0.28);
   background: #0b1626;
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.55);
-  padding: 24px;
+  padding: 24px 28px;
+  box-sizing: border-box;
+}
+
+.nm-help-modal .nm-help-header {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+
+.nm-help-modal .nm-view-tabs {
+  flex-shrink: 0;
+  margin-bottom: 16px !important;
+}
+
+.nm-help-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
   scrollbar-gutter: stable;
 }
-.nm-help-modal::-webkit-scrollbar { width: 12px; height: 12px; }
-.nm-help-modal::-webkit-scrollbar-thumb {
+
+.nm-help-modal-body::-webkit-scrollbar { width: 10px; height: 10px; }
+.nm-help-modal-body::-webkit-scrollbar-thumb {
   background: rgba(125, 211, 252, 0.32);
   border-radius: 10px;
-  border: 3px solid #0b1626;
+  border: 2px solid #0b1626;
 }
-.nm-help-modal::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.55); }
-.nm-help-modal::-webkit-scrollbar-track { background: transparent; }
+.nm-help-modal-body::-webkit-scrollbar-thumb:hover { background: rgba(125, 211, 252, 0.55); }
+.nm-help-modal-body::-webkit-scrollbar-track { background: transparent; }
+
+.nm-help-modal-footer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
 
 .nm-status-modal {
   width: min(520px, 100%);

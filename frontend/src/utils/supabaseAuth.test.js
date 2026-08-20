@@ -49,7 +49,7 @@ describe('supabaseAuth REST client', () => {
     });
 
     await expect(signInWithPassword(mockUrl, mockKey, 'test@example.com', 'wrong'))
-      .rejects.toThrow('Invalid login credentials');
+      .rejects.toThrow('Email or password is incorrect.');
   });
 
   test('refreshAuthSession success and failure', async () => {
