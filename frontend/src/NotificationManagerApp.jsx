@@ -1291,17 +1291,23 @@ export function SamSetupWizard({ status, onComplete }) {
     statusHasError ? getSamSetupErrorMessage(statusErrorCode) : '',
   );
 
-  const handleDeepLinkUrl = (rawUrl) => {
+  const handleDeepLinkUrl = useCallback(async (rawUrl) => {
     if (!rawUrl) return;
+    console.log('[SAM-AUTH] Processing recovery deep-link in setup wizard');
     const parsed = parseRecoveryUrl(rawUrl);
     if (!parsed.ok) {
+      console.warn('[SAM-AUTH] Recovery deep-link invalid or expired:', parsed.error || 'unknown');
       setError(parsed.message || 'This password-reset link is no longer valid. Request a new reset email.');
       setMode('reset_password_expired');
       setRecoverySession(null);
+      if (window.electronAPI?.consumePendingDeepLink) {
+        await window.electronAPI.consumePendingDeepLink().catch(() => {});
+      }
       return;
     }
 
     if (parsed.accessToken) {
+      console.log('[SAM-AUTH] Establishing password reset state from recovery deep-link');
       setRecoverySession({
         accessToken: parsed.accessToken,
         refreshToken: parsed.refreshToken,
@@ -1310,8 +1316,19 @@ export function SamSetupWizard({ status, onComplete }) {
       setError('');
       setInfoMessage('');
       setMode('reset_password');
+      if (window.electronAPI?.consumePendingDeepLink) {
+        await window.electronAPI.consumePendingDeepLink().catch(() => {});
+      }
+    } else {
+      console.warn('[SAM-AUTH] Recovery deep-link missing access token');
+      setError('The recovery link did not contain valid authentication credentials. Request a new reset email.');
+      setMode('reset_password_expired');
+      setRecoverySession(null);
+      if (window.electronAPI?.consumePendingDeepLink) {
+        await window.electronAPI.consumePendingDeepLink().catch(() => {});
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
     setError(statusHasError ? getSamSetupErrorMessage(statusErrorCode) : '');
@@ -1320,15 +1337,23 @@ export function SamSetupWizard({ status, onComplete }) {
   useEffect(() => {
     const handleAppEvent = (type, payload) => {
       if (type === 'auth:deep-link' && payload?.url) {
-        handleDeepLinkUrl(payload.url);
+        void handleDeepLinkUrl(payload.url);
       }
     };
     const unsubscribe = window.electronAPI?.onAppEvent?.(handleAppEvent);
 
-    if (window.electronAPI?.getPendingDeepLink) {
+    if (status?.pendingDeepLinkUrl) {
+      void handleDeepLinkUrl(status.pendingDeepLinkUrl);
+    } else if (window.electronAPI?.consumePendingDeepLink) {
+      window.electronAPI.consumePendingDeepLink().then((pendingUrl) => {
+        if (pendingUrl) {
+          void handleDeepLinkUrl(pendingUrl);
+        }
+      }).catch(() => {});
+    } else if (window.electronAPI?.getPendingDeepLink) {
       window.electronAPI.getPendingDeepLink().then((pendingUrl) => {
         if (pendingUrl) {
-          handleDeepLinkUrl(pendingUrl);
+          void handleDeepLinkUrl(pendingUrl);
         }
       }).catch(() => {});
     }
@@ -1336,7 +1361,7 @@ export function SamSetupWizard({ status, onComplete }) {
     return () => {
       if (unsubscribe) unsubscribe();
     };
-  }, []);
+  }, [handleDeepLinkUrl, status?.pendingDeepLinkUrl]);
 
   const submitLegacySetup = async (event) => {
     event.preventDefault();
@@ -4610,6 +4635,16 @@ export default function NotificationManagerApp() {
         }
         if (type === 'menu:replay-tutorial') {
           replayTutorial();
+          return;
+        }
+        if (type === 'auth:deep-link' && payload?.url) {
+          console.log('[SAM] Received recovery deep-link in main app handler');
+          setSamSetupStatus((current) => ({
+            ...current,
+            loading: false,
+            setupComplete: false,
+            pendingDeepLinkUrl: payload.url,
+          }));
           return;
         }
         if (type !== 'backend:state') return;

@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clear: () => ipcRenderer.invoke('authSession:clear'),
   },
   getPendingDeepLink: () => ipcRenderer.invoke('auth:getPendingDeepLink'),
+  consumePendingDeepLink: () => ipcRenderer.invoke('auth:consumePendingDeepLink'),
   onAppEvent: (callback) => {
     if (typeof callback !== 'function') {
       return () => {};

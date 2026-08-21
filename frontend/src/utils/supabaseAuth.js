@@ -97,8 +97,9 @@ export function parseRecoveryUrl(rawUrl) {
     return { ok: false, error: 'invalid_url', message: 'No recovery link provided.' };
   }
 
-  const trimmed = rawUrl.trim();
-  if (!/^(smartalertmanager|sam):\/\/reset-password/i.test(trimmed)) {
+  const trimmed = rawUrl.trim().replace(/^["']+|["']+$/g, '');
+  const validPattern = /^(smartalertmanager|sam):\/\/reset-password\/?([?#].*)?$/i;
+  if (!validPattern.test(trimmed)) {
     return { ok: false, error: 'invalid_protocol', message: 'Unrecognized recovery URL format.' };
   }
 

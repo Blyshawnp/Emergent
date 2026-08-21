@@ -152,12 +152,36 @@ describe('supabaseAuth REST client', () => {
     expect(parsed3.type).toBe('pkce_code');
     expect(parsed3.code).toBe('auth-code-123');
 
+    // Trailing slash with hash fragment
+    const url1WithSlash = 'smartalertmanager://reset-password/#access_token=token-abc&refresh_token=refresh-xyz&type=recovery';
+    const parsed1Slash = parseRecoveryUrl(url1WithSlash);
+    expect(parsed1Slash.ok).toBe(true);
+    expect(parsed1Slash.accessToken).toBe('token-abc');
+
+    // Quoted URL from Windows shell
+    const urlQuoted = '"smartalertmanager://reset-password/#access_token=token-abc&refresh_token=refresh-xyz&type=recovery"';
+    const parsedQuoted = parseRecoveryUrl(urlQuoted);
+    expect(parsedQuoted.ok).toBe(true);
+    expect(parsedQuoted.accessToken).toBe('token-abc');
+
+    // sam:// with trailing slash and query param
+    const url2WithSlash = 'sam://reset-password/?code=auth-code-456';
+    const parsed2Slash = parseRecoveryUrl(url2WithSlash);
+    expect(parsed2Slash.ok).toBe(true);
+    expect(parsed2Slash.code).toBe('auth-code-456');
+
     // Expired OTP in hash
     const url4 = 'smartalertmanager://reset-password#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired';
     const parsed4 = parseRecoveryUrl(url4);
     expect(parsed4.ok).toBe(false);
     expect(parsed4.isExpired).toBe(true);
     expect(parsed4.message).toContain('no longer valid');
+
+    // Expired OTP with trailing slash
+    const url4Slash = 'smartalertmanager://reset-password/#error=access_denied&error_code=otp_expired';
+    const parsed4Slash = parseRecoveryUrl(url4Slash);
+    expect(parsed4Slash.ok).toBe(false);
+    expect(parsed4Slash.isExpired).toBe(true);
 
     // Expired in query params
     const url5 = 'smartalertmanager://reset-password?error=access_denied&error_description=expired';

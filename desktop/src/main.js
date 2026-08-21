@@ -95,7 +95,7 @@ function extractDeepLinkUrl(argvList = []) {
   if (!Array.isArray(argvList)) return null;
   for (const arg of argvList) {
     if (typeof arg === 'string') {
-      const trimmed = arg.trim();
+      const trimmed = arg.trim().replace(/^["']+|["']+$/g, '');
       if (/^(smartalertmanager|sam):\/\//i.test(trimmed)) {
         return trimmed;
       }
@@ -106,12 +106,12 @@ function extractDeepLinkUrl(argvList = []) {
 
 function validateAndSanitizeDeepLink(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return null;
-  const trimmed = rawUrl.trim();
+  const trimmed = rawUrl.trim().replace(/^["']+|["']+$/g, '');
   if (trimmed.length > 4096) {
     console.warn('[DEEP-LINK] Rejected oversized deep-link URL');
     return null;
   }
-  const validPattern = /^(smartalertmanager|sam):\/\/reset-password(\/?|\?.*|#.*)?$/i;
+  const validPattern = /^(smartalertmanager|sam):\/\/reset-password\/?([?#].*)?$/i;
   if (!validPattern.test(trimmed)) {
     console.warn('[DEEP-LINK] Rejected unrecognized deep-link URL pattern');
     return null;
@@ -152,6 +152,7 @@ if (!hasSingleInstanceLock) {
     const deepLinkUrl = validateAndSanitizeDeepLink(extractDeepLinkUrl(commandLine));
     if (deepLinkUrl) {
       console.log('[DEEP-LINK] Forwarding deep-link to active instance');
+      pendingDeepLinkUrl = deepLinkUrl;
       sendAppEvent('auth:deep-link', { url: deepLinkUrl });
     }
   });
@@ -1290,13 +1291,12 @@ function createMainWindow() {
     mainWindow.setTitle(appWindowTitle);
     if (pendingDeepLinkUrl) {
       const link = pendingDeepLinkUrl;
-      pendingDeepLinkUrl = null;
       setTimeout(() => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           console.log('[DEEP-LINK] Delivering cold-start deep-link to renderer');
           sendAppEvent('auth:deep-link', { url: link });
         }
-      }, 300);
+      }, 600);
     }
   });
 
@@ -1752,6 +1752,10 @@ ipcMain.handle('authSession:clear', async () => {
 });
 
 ipcMain.handle('auth:getPendingDeepLink', () => {
+  return pendingDeepLinkUrl;
+});
+
+ipcMain.handle('auth:consumePendingDeepLink', () => {
   const link = pendingDeepLinkUrl;
   pendingDeepLinkUrl = null;
   return link;
