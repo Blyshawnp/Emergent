@@ -3959,10 +3959,22 @@ export default function NotificationManagerApp() {
   const confirmResolverRef = useRef(null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const exitConfirmResolverRef = useRef(null);
-  const requestExitConfirmation = useCallback(() => new Promise((resolve) => {
-    exitConfirmResolverRef.current = resolve;
-    setShowExitConfirm(true);
-  }), []);
+  const requestExitConfirmation = useCallback(() => {
+    if (exitConfirmResolverRef.current) {
+      return new Promise((resolve) => {
+        // If already pending, chain with existing resolver
+        const prevResolver = exitConfirmResolverRef.current;
+        exitConfirmResolverRef.current = (val) => {
+          if (prevResolver) prevResolver(val);
+          resolve(val);
+        };
+      });
+    }
+    return new Promise((resolve) => {
+      exitConfirmResolverRef.current = resolve;
+      setShowExitConfirm(true);
+    });
+  }, []);
   const resolveExitConfirm = useCallback((value) => {
     const resolver = exitConfirmResolverRef.current;
     exitConfirmResolverRef.current = null;
@@ -5075,11 +5087,8 @@ export default function NotificationManagerApp() {
         UpdatedAt: new Date().toISOString(),
       });
 
-      if (patch.EndDate && !currentDraft.EndDate && !patch.EndTime) {
-        next.EndTime = '12:00 AM';
-      }
-
       if (patch.EndDate === '') {
+        next.EndDate = '';
         next.EndTime = '';
       }
 
@@ -5407,15 +5416,17 @@ export default function NotificationManagerApp() {
     await loadPendingRequests({ silent: true });
   };
 
-  if (sheetState.backendReady && !samSetupStatus.loading && !samSetupStatus.setupComplete) {
-    return <SamSetupWizard status={samSetupStatus} onComplete={handleSamSetupComplete} />;
-  }
+  const isWizardActive = sheetState.backendReady && !samSetupStatus.loading && !samSetupStatus.setupComplete;
 
   return (
     <div className="nm-app">
-      <div className="nm-shell">
-        {/* ===== Operations Center topbar ===== */}
-        <header className="nm-ops-topbar">
+      {isWizardActive ? (
+        <SamSetupWizard status={samSetupStatus} onComplete={handleSamSetupComplete} />
+      ) : (
+        <>
+          <div className="nm-shell">
+            {/* ===== Operations Center topbar ===== */}
+            <header className="nm-ops-topbar">
           <div className="nm-ops-brand">
             <div className="nm-ops-mark" aria-hidden="true">
               {samBannerSrc ? <img src={samBannerSrc} alt="" /> : <span>SAM</span>}
@@ -5908,6 +5919,8 @@ export default function NotificationManagerApp() {
           onClose={closeTutorial}
         />
       ) : null}
+        </>
+      )}
       <CandidateSearchModal
         open={searchModalOpen}
         data={candidateTracking}
@@ -5952,7 +5965,7 @@ export default function NotificationManagerApp() {
                 className="nm-btn nm-btn-secondary"
                 onClick={() => resolveExitConfirm(false)}
               >
-                Cancel
+                No
               </button>
               <button
                 type="button"
@@ -5960,7 +5973,7 @@ export default function NotificationManagerApp() {
                 style={{ backgroundColor: '#ef4444', borderColor: '#ef4444' }}
                 onClick={() => resolveExitConfirm(true)}
               >
-                Exit App
+                Yes
               </button>
             </div>
           </section>

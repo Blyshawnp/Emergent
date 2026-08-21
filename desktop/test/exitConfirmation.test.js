@@ -1,43 +1,35 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-test('promptForQuitConfirmation shows immediate native dialog and handles No/Yes responses', async () => {
+test('promptForQuitConfirmation dispatches app:confirm-quit and handles No/Yes responses', async () => {
   let isHandlingCloseConfirmation = false;
+  let quitConfirmationResolver = null;
+  const events = [];
   const calls = [];
 
-  const mockDialog = {
-    showMessageBox: async (parent, options) => {
-      calls.push(['showMessageBox', options]);
-      return { response: options._mockResponse ?? 0 };
-    },
-  };
+  function sendAppEvent(type, payload) {
+    events.push({ type, payload });
+  }
 
   const mockRequestQuit = async (reason) => {
     calls.push(['requestApplicationQuit', reason]);
     return true;
   };
 
-  async function promptForQuitConfirmation(dialogResponse = 0, isNotificationManagerMode = true, hasUnsavedChanges = false) {
+  async function promptForQuitConfirmation(isNotificationManagerMode = true, hasUnsavedChanges = false) {
     if (isHandlingCloseConfirmation) {
       return false;
     }
     isHandlingCloseConfirmation = true;
     try {
-      const { response } = await mockDialog.showMessageBox(null, {
-        type: 'question',
-        buttons: ['No', 'Yes'],
-        defaultId: 0,
-        cancelId: 0,
-        title: isNotificationManagerMode ? 'Exit Smart Alert Manager' : 'Close App',
-        message: isNotificationManagerMode
-          ? 'Are you sure you want to exit Smart Alert Manager?'
-          : (hasUnsavedChanges
-              ? 'You have unsaved work. Are you sure you want to close the app?'
-              : 'Are you sure you want to close the app?'),
-        _mockResponse: dialogResponse,
+      const confirmed = await new Promise((resolve) => {
+        quitConfirmationResolver = resolve;
+        sendAppEvent('app:confirm-quit', {
+          isNotificationManagerMode,
+          hasUnsavedChanges,
+        });
       });
 
-      const confirmed = response === 1;
       if (!confirmed) {
         return false;
       }
@@ -45,55 +37,67 @@ test('promptForQuitConfirmation shows immediate native dialog and handles No/Yes
       await mockRequestQuit('confirmed-quit');
       return true;
     } finally {
+      quitConfirmationResolver = null;
       isHandlingCloseConfirmation = false;
     }
   }
 
-  // 1. User clicks No (0)
-  const resNo = await promptForQuitConfirmation(0);
-  assert.equal(resNo, false);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0][0], 'showMessageBox');
-  assert.deepEqual(calls[0][1].buttons, ['No', 'Yes']);
-  assert.equal(calls[0][1].title, 'Exit Smart Alert Manager');
+  function respondToQuit(confirmed) {
+    if (quitConfirmationResolver) {
+      quitConfirmationResolver(Boolean(confirmed));
+    }
+  }
 
-  // 2. User clicks Yes (1)
-  const resYes = await promptForQuitConfirmation(1);
+  // 1. User clicks No (false)
+  const promptPromiseNo = promptForQuitConfirmation(true, false);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'app:confirm-quit');
+  assert.equal(events[0].payload.isNotificationManagerMode, true);
+
+  respondToQuit(false);
+  const resNo = await promptPromiseNo;
+  assert.equal(resNo, false);
+  assert.equal(calls.length, 0); // Did not request application quit
+
+  // 2. User clicks Yes (true)
+  const promptPromiseYes = promptForQuitConfirmation(true, false);
+  assert.equal(events.length, 2);
+  assert.equal(events[1].type, 'app:confirm-quit');
+
+  respondToQuit(true);
+  const resYes = await promptPromiseYes;
   assert.equal(resYes, true);
-  assert.equal(calls.length, 3);
-  assert.equal(calls[1][0], 'showMessageBox');
-  assert.equal(calls[2][0], 'requestApplicationQuit');
-  assert.equal(calls[2][1], 'confirmed-quit');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'requestApplicationQuit');
+  assert.equal(calls[0][1], 'confirmed-quit');
 });
 
 test('promptForQuitConfirmation protects against re-entrant calls', async () => {
   let isHandlingCloseConfirmation = false;
-  let dialogResolver = null;
+  let quitConfirmationResolver = null;
 
-  const mockDialog = {
-    showMessageBox: () => new Promise((resolve) => {
-      dialogResolver = resolve;
-    }),
-  };
-
-  async function prompt(id) {
+  async function prompt() {
     if (isHandlingCloseConfirmation) {
       return false;
     }
     isHandlingCloseConfirmation = true;
     try {
-      const { response } = await mockDialog.showMessageBox();
-      return response === 1;
+      const confirmed = await new Promise((resolve) => {
+        quitConfirmationResolver = resolve;
+      });
+      return Boolean(confirmed);
     } finally {
+      quitConfirmationResolver = null;
       isHandlingCloseConfirmation = false;
     }
   }
 
-  const p1 = prompt(1);
-  const p2 = prompt(2); // concurrent / duplicate
+  const p1 = prompt();
+  const p2 = prompt(); // duplicate while first is open
 
   assert.equal(await p2, false); // rejected immediately by guard
 
-  dialogResolver({ response: 0 });
+  quitConfirmationResolver(false);
   assert.equal(await p1, false);
 });
+

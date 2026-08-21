@@ -741,7 +741,7 @@ test('SAM auto-refresh effect is declared after its callback dependencies initia
 test('exit confirmation actions render safe action before exit action', () => {
   const samExitStart = appSource.indexOf('<h2 className="sam-exit-title">Exit Smart Alert Manager</h2>');
   const samExitBlock = appSource.slice(samExitStart, appSource.indexOf('</section>', samExitStart));
-  expect(samExitBlock.indexOf('Cancel')).toBeLessThan(samExitBlock.indexOf('Exit App'));
+  expect(samExitBlock.indexOf('No')).toBeLessThan(samExitBlock.indexOf('Yes'));
   expect(appSource).toContain("if (event.key === 'Escape')");
   expect(appSource).toContain('resolveExitConfirm(false)');
 
@@ -749,11 +749,9 @@ test('exit confirmation actions render safe action before exit action', () => {
   const mtsExitBlock = mtsAppSource.slice(mtsExitStart, mtsAppSource.indexOf('respondToQuitConfirmation', mtsExitStart));
   expect(mtsExitBlock.indexOf("label: 'No'")).toBeLessThan(mtsExitBlock.indexOf("label: 'Yes'"));
 
-  expect(electronMain).toContain("buttons: ['No', 'Yes']");
-  expect(electronMain).toContain('defaultId: 0');
-  expect(electronMain).toContain('cancelId: 0');
-  expect(electronMain).toContain('confirmed = response === 1');
-  expect(electronMain).not.toContain("buttons: ['Yes', 'No']");
+  expect(electronMain).toContain("sendAppEvent('app:confirm-quit'");
+  expect(electronMain).toContain("ipcMain.handle('app:quit-response'");
+  expect(electronMain).not.toContain("dialog.showMessageBox");
 });
 
 test('SAM error boundary keeps internal runtime errors out of user-facing copy', () => {

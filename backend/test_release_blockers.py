@@ -168,5 +168,98 @@ class ReleaseBlockerTests(unittest.TestCase):
         self.assertIn("backend/config/apps-script-api-mts.json", ignore_source)
         self.assertIn("backend/config/apps-script-api-sam.json", ignore_source)
 
+    def test_notification_time_normalization(self):
+        self.assertEqual(server._normalize_notification_time("5:34 AM"), (5, 34, 0))
+        self.assertEqual(server._normalize_notification_time("5:34 PM"), (17, 34, 0))
+        self.assertEqual(server._normalize_notification_time("05:34"), (5, 34, 0))
+        self.assertEqual(server._normalize_notification_time("17:34"), (17, 34, 0))
+        self.assertEqual(server._normalize_notification_time("534am"), (5, 34, 0))
+        self.assertEqual(server._normalize_notification_time("534PM"), (17, 34, 0))
+        self.assertEqual(server._normalize_notification_time("12:00 AM"), (0, 0, 0))
+        self.assertEqual(server._normalize_notification_time("12:00 PM"), (12, 0, 0))
+
+    def test_notification_item_normalization_preserves_empty_expiration(self):
+        item = {
+            "Enabled": True,
+            "ID": "notif-1",
+            "Type": "info",
+            "Message": "Test",
+            "StartDate": "2026-08-21",
+            "StartTime": "5:34 AM",
+            "EndDate": "",
+            "EndTime": "",
+        }
+        normalized = server._normalize_notification_manager_item(item)
+        self.assertEqual(normalized["EndDate"], "")
+        self.assertEqual(normalized["EndTime"], "")
+
+    def test_notification_validation_no_expiration_and_disable(self):
+        item = {
+            "Enabled": False,
+            "ID": "notif-disable",
+            "Type": "info",
+            "Message": "Disabled notification",
+            "StartDate": "2026-08-21",
+            "StartTime": "5:34 AM",
+            "EndDate": "",
+            "EndTime": "",
+        }
+        validated = server._validate_notification_manager_item(item)
+        self.assertEqual(validated["errors"], [])
+        self.assertFalse(validated["item"]["Enabled"])
+
+    def test_notification_validation_partial_expiration_errors(self):
+        item_missing_time = {
+            "Enabled": True,
+            "ID": "notif-1",
+            "Type": "info",
+            "Message": "Missing time",
+            "StartDate": "2026-08-21",
+            "StartTime": "9:00 AM",
+            "EndDate": "2026-08-22",
+            "EndTime": "",
+        }
+        res1 = server._validate_notification_manager_item(item_missing_time)
+        self.assertIn("Enter an expiration time or choose No Expiration.", res1["errors"])
+
+        item_missing_date = {
+            "Enabled": True,
+            "ID": "notif-2",
+            "Type": "info",
+            "Message": "Missing date",
+            "StartDate": "2026-08-21",
+            "StartTime": "9:00 AM",
+            "EndDate": "",
+            "EndTime": "5:00 PM",
+        }
+        res2 = server._validate_notification_manager_item(item_missing_date)
+        self.assertIn("Enter an expiration date or choose No Expiration.", res2["errors"])
+
+    def test_notification_validation_ordering(self):
+        valid_item = {
+            "Enabled": True,
+            "ID": "notif-valid",
+            "Type": "info",
+            "Message": "Valid schedule",
+            "StartDate": "2026-08-21",
+            "StartTime": "9:00 AM",
+            "EndDate": "2026-08-21",
+            "EndTime": "5:00 PM",
+        }
+        self.assertEqual(server._validate_notification_manager_item(valid_item)["errors"], [])
+
+        invalid_item = {
+            "Enabled": True,
+            "ID": "notif-invalid",
+            "Type": "info",
+            "Message": "Invalid schedule",
+            "StartDate": "2026-08-21",
+            "StartTime": "5:00 PM",
+            "EndDate": "2026-08-21",
+            "EndTime": "9:00 AM",
+        }
+        self.assertIn("Expires At must be after Starts At.", server._validate_notification_manager_item(invalid_item)["errors"])
+
+
 if __name__ == "__main__":
     unittest.main()

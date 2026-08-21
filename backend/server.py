@@ -14275,12 +14275,21 @@ def _normalize_notification_time(value):
         except Exception:
             pass
 
-    for fmt in ("%I:%M %p", "%I:%M:%S %p", "%H:%M", "%H:%M:%S"):
+    for fmt in ("%I:%M %p", "%I:%M:%S %p", "%I:%M%p", "%I:%M:%S%p", "%H:%M", "%H:%M:%S", "%I%p"):
         try:
             parsed = datetime.strptime(text, fmt)
             return parsed.hour, parsed.minute, parsed.second
         except ValueError:
             continue
+
+    # Support compact formats like "534AM" -> 5:34 AM, "0534AM", "534"
+    match_compact = re.match(r"^(\d{1,2})(\d{2})\s*(AM|PM)$", text)
+    if match_compact:
+        try:
+            parsed = datetime.strptime(f"{match_compact.group(1)}:{match_compact.group(2)} {match_compact.group(3)}", "%I:%M %p")
+            return parsed.hour, parsed.minute, parsed.second
+        except ValueError:
+            pass
 
     return None
 
@@ -14305,12 +14314,15 @@ def _notification_now_local():
     return datetime.now()
 
 
-def _combine_notification_datetime(date_value, time_value, default_time):
+def _combine_notification_datetime(date_value, time_value, default_time=None):
     parsed_date = _normalize_notification_date(date_value)
     if not parsed_date:
         return None
 
     parsed_time = _normalize_notification_time(time_value) or default_time
+    if not parsed_time:
+        return None
+
     tz = _get_notification_zone()
     return datetime(
         parsed_date.year,
@@ -14361,6 +14373,8 @@ def _normalize_notification_manager_item(item):
     legacy_ticker_type = normalized_type == "ticker"
     if legacy_ticker_type:
         normalized_type = "info"
+    end_date = _normalize_notification_text(item.get("EndDate"))
+    end_time = _normalize_notification_text(item.get("EndTime"))
     normalized = {
         "Enabled": _normalize_notification_bool_with_default(item.get("Enabled"), False),
         "ID": _normalize_notification_text(item.get("ID")),
@@ -14373,16 +14387,14 @@ def _normalize_notification_manager_item(item):
         "Persistent": _normalize_notification_bool_with_default(item.get("Persistent"), False),
         "StartDate": _normalize_notification_text(item.get("StartDate")),
         "StartTime": _normalize_notification_text(item.get("StartTime")),
-        "EndDate": _normalize_notification_text(item.get("EndDate")),
-        "EndTime": _normalize_notification_text(item.get("EndTime")),
+        "EndDate": end_date,
+        "EndTime": end_time,
         "ActionText": _normalize_notification_text(item.get("ActionText")),
         "ActionURL": _normalize_notification_text(item.get("ActionURL")),
         "CreatedAt": created_at,
         "UpdatedAt": updated_at,
     }
     normalized["ID"] = _ensure_notification_id(normalized)
-    if normalized["EndDate"] and not normalized["EndTime"]:
-        normalized["EndTime"] = "12:00 AM"
     if not normalized["ActionURL"]:
         normalized["ActionText"] = ""
     return normalized
@@ -14530,21 +14542,34 @@ def _validate_notification_manager_item(item):
     if normalized["ActionText"] and not normalized["ActionURL"]:
         errors.append("Action URL is required when Action Text is filled.")
 
-    start_date = _combine_notification_datetime(
-        normalized["StartDate"],
-        normalized["StartTime"],
-        (0, 0, 0),
-    ) if normalized["StartDate"] else None
-    end_date = _combine_notification_datetime(
-        normalized["EndDate"],
-        normalized["EndTime"],
-        (0, 0, 0),
-    ) if normalized["EndDate"] else None
+    start_date = None
+    if normalized["StartDate"]:
+        if not normalized["StartTime"]:
+            errors.append("Enter a start time.")
+        else:
+            start_date = _combine_notification_datetime(
+                normalized["StartDate"],
+                normalized["StartTime"],
+            )
+            if not start_date:
+                errors.append("Starts At must use a valid Eastern date and time.")
 
-    if normalized["StartDate"] and not start_date:
-        errors.append("Starts At must use a valid Eastern date and time.")
-    if normalized["EndDate"] and not end_date:
-        errors.append("Expires At must use a valid Eastern date and time.")
+    end_date = None
+    has_end_date = bool(normalized["EndDate"])
+    has_end_time = bool(normalized["EndTime"])
+
+    if has_end_date and not has_end_time:
+        errors.append("Enter an expiration time or choose No Expiration.")
+    elif not has_end_date and has_end_time:
+        errors.append("Enter an expiration date or choose No Expiration.")
+    elif has_end_date and has_end_time:
+        end_date = _combine_notification_datetime(
+            normalized["EndDate"],
+            normalized["EndTime"],
+        )
+        if not end_date:
+            errors.append("Expires At must use a valid Eastern date and time.")
+
     if start_date and end_date and end_date <= start_date:
         errors.append("Expires At must be after Starts At.")
 

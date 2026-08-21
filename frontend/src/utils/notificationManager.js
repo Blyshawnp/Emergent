@@ -270,35 +270,48 @@ export function getEasternNowDefaults() {
 export function toTwelveHour(value) {
   const input = String(value || '').trim();
   if (!input) return '';
-  const match = input.match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return input;
-  const hours = Number(match[1]);
-  const minutes = match[2];
-  const normalized24 = hours === 24 ? 0 : hours;
-  const period = normalized24 >= 12 ? 'PM' : 'AM';
-  const normalizedHours = normalized24 % 12 || 12;
-  return `${normalizedHours}:${minutes} ${period}`;
+  const parsed = parseTimeForValidation(input);
+  if (!parsed) return input;
+  const hours24 = parsed.hours;
+  const period = hours24 >= 12 ? 'PM' : 'AM';
+  const hours12 = hours24 % 12 || 12;
+  const minutes = String(parsed.minutes).padStart(2, '0');
+  return `${hours12}:${minutes} ${period}`;
 }
 
-function parseTimeForValidation(value) {
-  const input = String(value || '').trim().toUpperCase();
+export function parseTimeForValidation(value) {
+  const input = String(value || '').trim().toUpperCase().replace(/\./g, '');
   if (!input) return null;
 
-  const match12 = input.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
-  if (match12) {
-    let hours = Number(match12[1]) % 12;
-    const minutes = Number(match12[2]);
+  // 1. Matches compact like "534AM", "0534 PM", "534PM"
+  const matchCompact = input.match(/^(\d{1,2})(\d{2})\s*(AM|PM)$/);
+  if (matchCompact) {
+    let hours = Number(matchCompact[1]) % 12;
+    const minutes = Number(matchCompact[2]);
     if (minutes > 59) return null;
-    if (match12[3] === 'PM') hours += 12;
-    return { hours, minutes };
+    if (matchCompact[3] === 'PM') hours += 12;
+    return { hours, minutes, seconds: 0 };
   }
 
-  const match24 = input.match(/^(\d{1,2}):(\d{2})$/);
+  // 2. Matches "5:34 PM", "05:34:00 PM", "5:34PM", "5PM"
+  const match12 = input.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(AM|PM)$/);
+  if (match12) {
+    let hours = Number(match12[1]) % 12;
+    const minutes = match12[2] ? Number(match12[2]) : 0;
+    const seconds = match12[3] ? Number(match12[3]) : 0;
+    if (minutes > 59 || seconds > 59) return null;
+    if (match12[4] === 'PM') hours += 12;
+    return { hours, minutes, seconds };
+  }
+
+  // 3. Matches "05:34", "17:34:00", "5:34"
+  const match24 = input.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (match24) {
     const hours = Number(match24[1]);
     const minutes = Number(match24[2]);
-    if (hours > 23 || minutes > 59) return null;
-    return { hours, minutes };
+    const seconds = match24[3] ? Number(match24[3]) : 0;
+    if (hours > 23 || minutes > 59 || seconds > 59) return null;
+    return { hours, minutes, seconds };
   }
 
   return null;
@@ -335,26 +348,30 @@ function getEasternOffsetMinutes(date) {
   return (asUtc - date.getTime()) / 60000;
 }
 
-function buildEasternDateTime(dateValue, timeValue, defaultToMidnight = false) {
-  if (!dateValue) return null;
+export function buildEasternDateTime(dateValue, timeValue, isExpiration = false) {
+  const dateText = String(dateValue || '').trim();
+  if (!dateText) return null;
 
-  const dateMatch = String(dateValue).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const dateMatch = dateText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!dateMatch) return null;
 
   const timeText = String(timeValue || '').trim();
-  const parsedTime = timeText ? parseTimeForValidation(timeText) : (defaultToMidnight ? { hours: 0, minutes: 0 } : { hours: 0, minutes: 0 });
+  if (!timeText) {
+    return isExpiration ? null : null;
+  }
+  const parsedTime = parseTimeForValidation(timeText);
   if (!parsedTime) return null;
   const year = Number(dateMatch[1]);
   const month = Number(dateMatch[2]) - 1;
   const day = Number(dateMatch[3]);
-  const utcGuess = new Date(Date.UTC(year, month, day, parsedTime.hours, parsedTime.minutes, 0, 0));
+  const utcGuess = new Date(Date.UTC(year, month, day, parsedTime.hours, parsedTime.minutes, parsedTime.seconds || 0, 0));
   const offset = getEasternOffsetMinutes(utcGuess);
   return new Date(utcGuess.getTime() - offset * 60000);
 }
 
 export function getNotificationExpiryDate(item) {
   const normalized = normalizeManagerNotification(item);
-  if (!normalized.EndDate) return null;
+  if (!normalized.EndDate || !normalized.EndTime) return null;
   return buildEasternDateTime(normalized.EndDate, normalized.EndTime, true);
 }
 
@@ -439,6 +456,8 @@ export function normalizeManagerNotification(item = {}) {
   const normalizedType = String(item.Type || base.Type || 'info').toLowerCase() === 'ticker'
     ? 'info'
     : String(item.Type || base.Type || 'info').toLowerCase();
+  const endDate = item.EndDate !== undefined && item.EndDate !== null ? String(item.EndDate || '') : '';
+  const endTime = item.EndTime !== undefined && item.EndTime !== null ? String(item.EndTime || '') : '';
   return {
     ...base,
     ...item,
@@ -450,8 +469,8 @@ export function normalizeManagerNotification(item = {}) {
     Persistent: normalizeSheetBoolean(item.Persistent, false),
     StartDate: hasStartDate ? String(item.StartDate || '') : base.StartDate,
     StartTime: hasStartTime ? String(item.StartTime || '') : base.StartTime,
-    EndDate: item.EndDate || '',
-    EndTime: item.EndTime || '',
+    EndDate: endDate,
+    EndTime: endTime,
     UpdatedAt: item.UpdatedAt || item.CreatedAt || base.UpdatedAt,
     CreatedAt: item.CreatedAt || base.CreatedAt,
   };
@@ -484,16 +503,31 @@ export function validateNotification(item, existingItems = []) {
     errors.push('Action URL is required when Action Text is filled.');
   }
 
-  const startsAt = buildEasternDateTime(normalized.StartDate, normalized.StartTime);
-  if (normalized.StartDate && !startsAt) {
-    errors.push('Starts At must use a valid Eastern date and time.');
+  let startsAt = null;
+  if (normalized.StartDate) {
+    if (!normalized.StartTime) {
+      errors.push('Enter a start time.');
+    } else {
+      startsAt = buildEasternDateTime(normalized.StartDate, normalized.StartTime, false);
+      if (!startsAt) {
+        errors.push('Starts At must use a valid Eastern date and time.');
+      }
+    }
   }
 
-  const expiresAt = normalized.EndDate
-    ? buildEasternDateTime(normalized.EndDate, normalized.EndTime, true)
-    : null;
-  if (normalized.EndDate && !expiresAt) {
-    errors.push('Expires At must use a valid Eastern date and time.');
+  let expiresAt = null;
+  const hasEndDate = Boolean(String(normalized.EndDate || '').trim());
+  const hasEndTime = Boolean(String(normalized.EndTime || '').trim());
+
+  if (hasEndDate && !hasEndTime) {
+    errors.push('Enter an expiration time or choose No Expiration.');
+  } else if (!hasEndDate && hasEndTime) {
+    errors.push('Enter an expiration date or choose No Expiration.');
+  } else if (hasEndDate && hasEndTime) {
+    expiresAt = buildEasternDateTime(normalized.EndDate, normalized.EndTime, true);
+    if (!expiresAt) {
+      errors.push('Expires At must use a valid Eastern date and time.');
+    }
   }
 
   if (startsAt && expiresAt && expiresAt <= startsAt) {
@@ -524,8 +558,8 @@ export function serializeNotificationsToCsv(items) {
         if (column === 'ID') {
           return encodeCsvCell(ensureNotificationId(item));
         }
-        if (column === 'EndTime' && item.EndDate && !item.EndTime) {
-          return encodeCsvCell('12:00 AM');
+        if (column === 'EndTime' && (!item.EndDate || !item.EndTime)) {
+          return encodeCsvCell('');
         }
         const value = item[column];
         if (column === 'Enabled' || column === 'ShowPopup' || column === 'ShowTicker' || column === 'ShowBanner' || column === 'Persistent') {

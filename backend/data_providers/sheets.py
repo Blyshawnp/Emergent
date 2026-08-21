@@ -189,7 +189,7 @@ class SheetsDataProvider(DataProvider):
                 return self._client.get(action, dict(params)), retries
             except Exception as exc:
                 text = str(exc).casefold()
-                retryable = any(token in text for token in ("429", "quota", "rate", "timeout", "temporarily"))
+                retryable = any(token in text for token in ("429", "quota", "rate", "timeout", "temporarily", "404", "502", "503", "504", "reset", "connection"))
                 if not retryable or attempt >= self._max_retries:
                     raise
                 retries += 1

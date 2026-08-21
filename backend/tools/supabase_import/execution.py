@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from .core import parse_boolean, parse_date
+from .core import parse_boolean, parse_date, parse_datetime
 from .reconciliation import SESSION_SOURCE_TO_CANONICAL, _canonical_uuid, _first, _normalized_uuid
 
 
@@ -219,6 +219,27 @@ def _payload(entity: str, item: Mapping[str, Any], raw: Mapping[str, Any]) -> di
                 "denial_reason": raw.get("denial_reason"), "created_at": parse_date(raw.get("request_created_at") or raw.get("created_at")),
                 "decision_at": parse_date(raw.get("admin_decision_at") or raw.get("decision_at")), "updated_at": parse_date(raw.get("updated_at")),
                 "source_checksum": checksum, "source_payload": dict(raw)}
+    if entity == "notifications":
+        return {
+            "id": entity_id,
+            "notification_id": raw.get("ID") or raw.get("notification_id"),
+            "enabled": parse_boolean(raw.get("Enabled", True)),
+            "notification_type": raw.get("Type") or raw.get("notification_type"),
+            "title": raw.get("Title") or raw.get("title") or "Notification",
+            "message": raw.get("Message") or raw.get("message") or "",
+            "show_ticker": parse_boolean(raw.get("ShowTicker", False) if "ShowTicker" in raw else raw.get("show_ticker", False)),
+            "show_popup": parse_boolean(raw.get("ShowPopup", False) if "ShowPopup" in raw else raw.get("show_popup", False)),
+            "show_banner": parse_boolean(raw.get("ShowBanner", False) if "ShowBanner" in raw else raw.get("show_banner", False)),
+            "persistent": parse_boolean(raw.get("Persistent", False) if "Persistent" in raw else raw.get("persistent", False)),
+            "starts_at": parse_datetime(raw.get("StartDate"), raw.get("StartTime")) if ("StartDate" in raw or "StartTime" in raw) else parse_date(raw.get("starts_at")),
+            "ends_at": parse_datetime(raw.get("EndDate"), raw.get("EndTime")) if ("EndDate" in raw or "EndTime" in raw) else parse_date(raw.get("ends_at")),
+            "action_text": raw.get("ActionText") or raw.get("action_text"),
+            "action_url": raw.get("ActionURL") or raw.get("action_url"),
+            "created_at": parse_date(raw.get("CreatedAt") or raw.get("created_at")),
+            "updated_at": parse_date(raw.get("UpdatedAt") or raw.get("updated_at")),
+            "source_checksum": checksum,
+            "source_payload": dict(raw),
+        }
     raise ValueError(f"unsupported_reconciliation_entity:{entity}")
 
 

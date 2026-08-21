@@ -1473,20 +1473,14 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
       parentWindow.focus();
     }
 
-    const { response } = await dialog.showMessageBox(parentWindow && !parentWindow.isDestroyed() ? parentWindow : null, {
-      type: 'question',
-      buttons: ['No', 'Yes'],
-      defaultId: 0,
-      cancelId: 0,
-      title: isNotificationManagerMode ? 'Exit Smart Alert Manager' : 'Close App',
-      message: isNotificationManagerMode
-        ? 'Are you sure you want to exit Smart Alert Manager?'
-        : (hasUnsavedChanges
-            ? 'You have unsaved work. Are you sure you want to close the app?'
-            : 'Are you sure you want to close the app?'),
+    const confirmed = await new Promise((resolve) => {
+      quitConfirmationResolver = resolve;
+      sendAppEvent('app:confirm-quit', {
+        isNotificationManagerMode,
+        hasUnsavedChanges,
+      });
     });
 
-    const confirmed = response === 1;
     if (!confirmed) {
       return false;
     }
@@ -1494,6 +1488,7 @@ async function promptForQuitConfirmation(parentWindow = mainWindow) {
     await requestApplicationQuit('confirmed-quit');
     return true;
   } finally {
+    quitConfirmationResolver = null;
     isHandlingCloseConfirmation = false;
   }
 }
