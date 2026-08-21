@@ -40,6 +40,8 @@ import {
   refreshAuthSession,
   resetPasswordForEmail,
   updateUserAccount,
+  updateUserPassword,
+  parseRecoveryUrl,
   signOutAuth,
 } from './utils/supabaseAuth';
 import PendingRequestAlert from './components/PendingRequestAlert';
@@ -1276,8 +1278,10 @@ function getSamDeviceName() {
 
 export function SamSetupWizard({ status, onComplete }) {
   const defaultMode = status?.initialMode || (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'test' && !status?.useSupabase ? 'legacy' : 'supabase');
-  const [mode, setMode] = useState(defaultMode); // 'supabase' | 'legacy' | 'forgot_password'
+  const [mode, setMode] = useState(defaultMode); // 'supabase' | 'legacy' | 'forgot_password' | 'reset_password' | 'reset_password_expired'
   const [form, setForm] = useState({ name: '', pin: '', email: '', password: '', showPassword: false });
+  const [resetForm, setResetForm] = useState({ newPassword: '', confirmPassword: '', showPassword: false });
+  const [recoverySession, setRecoverySession] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [infoMessage, setInfoMessage] = useState('');
   const submitInFlightRef = useRef(false);
@@ -1287,9 +1291,52 @@ export function SamSetupWizard({ status, onComplete }) {
     statusHasError ? getSamSetupErrorMessage(statusErrorCode) : '',
   );
 
+  const handleDeepLinkUrl = (rawUrl) => {
+    if (!rawUrl) return;
+    const parsed = parseRecoveryUrl(rawUrl);
+    if (!parsed.ok) {
+      setError(parsed.message || 'This password-reset link is no longer valid. Request a new reset email.');
+      setMode('reset_password_expired');
+      setRecoverySession(null);
+      return;
+    }
+
+    if (parsed.accessToken) {
+      setRecoverySession({
+        accessToken: parsed.accessToken,
+        refreshToken: parsed.refreshToken,
+      });
+      setResetForm({ newPassword: '', confirmPassword: '', showPassword: false });
+      setError('');
+      setInfoMessage('');
+      setMode('reset_password');
+    }
+  };
+
   useEffect(() => {
     setError(statusHasError ? getSamSetupErrorMessage(statusErrorCode) : '');
   }, [statusErrorCode, statusHasError]);
+
+  useEffect(() => {
+    const handleAppEvent = (type, payload) => {
+      if (type === 'auth:deep-link' && payload?.url) {
+        handleDeepLinkUrl(payload.url);
+      }
+    };
+    const unsubscribe = window.electronAPI?.onAppEvent?.(handleAppEvent);
+
+    if (window.electronAPI?.getPendingDeepLink) {
+      window.electronAPI.getPendingDeepLink().then((pendingUrl) => {
+        if (pendingUrl) {
+          handleDeepLinkUrl(pendingUrl);
+        }
+      }).catch(() => {});
+    }
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   const submitLegacySetup = async (event) => {
     event.preventDefault();
@@ -1415,7 +1462,9 @@ export function SamSetupWizard({ status, onComplete }) {
         setError('Unable to reach the sign-in service.');
         return;
       }
-      const res = await resetPasswordForEmail(supabaseUrl, anonKey, form.email.trim());
+      const res = await resetPasswordForEmail(supabaseUrl, anonKey, form.email.trim(), {
+        redirectTo: 'smartalertmanager://reset-password',
+      });
       console.log('[SAM-AUTH] Password recovery status:', res?.code || 'RECOVERY_REQUEST_ACCEPTED');
       setInfoMessage('If an account exists for this email, password reset instructions have been sent.');
     } catch (resetErr) {
@@ -1432,20 +1481,94 @@ export function SamSetupWizard({ status, onComplete }) {
     }
   };
 
+  const submitResetPassword = async (event) => {
+    event.preventDefault();
+    if (submitInFlightRef.current) return;
+    if (resetForm.newPassword.length < 6) {
+      setError('Password must be at least 6 characters long.');
+      return;
+    }
+    if (resetForm.newPassword !== resetForm.confirmPassword) {
+      setError('Passwords do not match. Please re-enter.');
+      return;
+    }
+    if (!recoverySession?.accessToken) {
+      setError('This password-reset link is no longer valid. Request a new reset email.');
+      setMode('reset_password_expired');
+      return;
+    }
+
+    submitInFlightRef.current = true;
+    setSubmitting(true);
+    setError('');
+    setInfoMessage('');
+
+    try {
+      const configRes = await api.getSamAuthConfig();
+      const supabaseUrl = configRes?.supabase_url;
+      const anonKey = configRes?.supabase_anon_key;
+      if (!supabaseUrl || !anonKey) {
+        setError('Unable to reach the sign-in service.');
+        return;
+      }
+
+      await updateUserPassword(supabaseUrl, anonKey, recoverySession.accessToken, resetForm.newPassword);
+
+      // Cleanly sign out the temporary recovery session so it does not linger
+      await signOutAuth(supabaseUrl, anonKey, recoverySession.accessToken);
+      setRecoverySession(null);
+      setResetForm({ newPassword: '', confirmPassword: '', showPassword: false });
+
+      // Return to normal login screen with clear confirmation
+      setMode('supabase');
+      setInfoMessage('Password updated successfully. Please sign in with your new password.');
+    } catch (resetErr) {
+      const msg = String(resetErr?.message || '').toLowerCase();
+      const code = String(resetErr?.code || '').toLowerCase();
+      if (code === 'otp_expired' || msg.includes('expired') || msg.includes('invalid')) {
+        setError('This password-reset link is no longer valid. Request a new reset email.');
+        setMode('reset_password_expired');
+      } else if (msg.includes('network') || msg.includes('fetch') || msg.includes('timeout')) {
+        setError('Unable to reach the sign-in service.');
+      } else {
+        setError(resetErr?.message || 'Failed to update password. Please try again.');
+      }
+    } finally {
+      submitInFlightRef.current = false;
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="nm-app nm-setup-app">
       <div className="nm-setup-shell">
         <section className="nm-setup-panel">
           <div className="nm-overline">
-            {mode === 'supabase' ? 'SAM AUTHENTICATION' : mode === 'forgot_password' ? 'PASSWORD RECOVERY' : 'SAM SETUP'}
+            {mode === 'supabase'
+              ? 'SAM AUTHENTICATION'
+              : mode === 'reset_password'
+                ? 'SAM AUTHENTICATION'
+                : mode === 'reset_password_expired' || mode === 'forgot_password'
+                  ? 'PASSWORD RECOVERY'
+                  : 'SAM SETUP'}
           </div>
-          <h1>{SAM_TITLE}</h1>
+          <h1>
+            {mode === 'reset_password'
+              ? 'Reset Password'
+              : mode === 'reset_password_expired'
+                ? 'Link Invalid or Expired'
+                : SAM_TITLE}
+          </h1>
           <p>
             {mode === 'supabase'
               ? 'Enter your administrator email and password to access Smart Alert Manager.'
-              : mode === 'forgot_password'
-                ? 'Enter your registered email address to receive password reset instructions.'
-                : 'Enter the administrator name and PIN assigned to you to enable Smart Alert Manager on this device.'}
+              : mode === 'reset_password'
+                ? 'Enter a new password for your Smart Alert Manager administrator account.'
+                : mode === 'reset_password_expired'
+                  ? 'This password-reset link is no longer valid. Request a new reset email below.'
+                  : mode === 'forgot_password'
+                    ? 'Enter your registered email address to receive password reset instructions.'
+                    : 'Enter the administrator name and PIN assigned to you to enable Smart Alert Manager on this device.'}
           </p>
 
           {mode === 'supabase' && (
@@ -1566,6 +1689,124 @@ export function SamSetupWizard({ status, onComplete }) {
                 </button>
               </div>
             </form>
+          )}
+
+          {mode === 'reset_password' && (
+            <form className="nm-setup-form" onSubmit={submitResetPassword}>
+              <label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>New Password</span>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: '#7dd3fc', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                    onClick={() => setResetForm((current) => ({ ...current, showPassword: !current.showPassword }))}
+                  >
+                    {resetForm.showPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                <input
+                  type={resetForm.showPassword ? 'text' : 'password'}
+                  value={resetForm.newPassword}
+                  onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))}
+                  autoComplete="new-password"
+                  placeholder="Enter new password (min. 6 characters)"
+                  data-testid="reset-new-password-input"
+                  autoFocus
+                  required
+                />
+              </label>
+
+              <label>
+                <span>Confirm New Password</span>
+                <input
+                  type={resetForm.showPassword ? 'text' : 'password'}
+                  value={resetForm.confirmPassword}
+                  onChange={(event) => setResetForm((current) => ({ ...current, confirmPassword: event.target.value }))}
+                  autoComplete="new-password"
+                  placeholder="Confirm new password"
+                  data-testid="reset-confirm-password-input"
+                  required
+                />
+              </label>
+
+              {error ? (
+                <div className="nm-status-card is-warning">
+                  <strong>Password Reset Blocked</strong>
+                  <span>{error}</span>
+                </div>
+              ) : null}
+
+              {infoMessage ? (
+                <div className="nm-status-card is-success">
+                  <strong>Notice</strong>
+                  <span>{infoMessage}</span>
+                </div>
+              ) : null}
+
+              <button
+                type="submit"
+                className="nm-btn nm-btn-primary"
+                disabled={submitting || !resetForm.newPassword.trim() || !resetForm.confirmPassword.trim()}
+                data-testid="reset-password-save-btn"
+              >
+                {submitting ? 'Saving New Password...' : 'Save New Password'}
+              </button>
+
+              <div style={{ textAlign: 'center', marginTop: 8 }}>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: '#7dd3fc', cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 13 }}
+                  onClick={() => {
+                    setRecoverySession(null);
+                    setMode('supabase');
+                    setError('');
+                    setInfoMessage('');
+                  }}
+                >
+                  Cancel and Return to Sign In
+                </button>
+              </div>
+            </form>
+          )}
+
+          {mode === 'reset_password_expired' && (
+            <div className="nm-setup-form">
+              {error ? (
+                <div className="nm-status-card is-warning">
+                  <strong>Link Invalid or Expired</strong>
+                  <span>{error}</span>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className="nm-btn nm-btn-primary"
+                onClick={() => {
+                  setRecoverySession(null);
+                  setMode('forgot_password');
+                  setError('');
+                  setInfoMessage('');
+                }}
+                data-testid="request-new-reset-btn"
+              >
+                Request New Reset Email
+              </button>
+
+              <div style={{ textAlign: 'center', marginTop: 8 }}>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: '#7dd3fc', cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 13 }}
+                  onClick={() => {
+                    setRecoverySession(null);
+                    setMode('supabase');
+                    setError('');
+                    setInfoMessage('');
+                  }}
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            </div>
           )}
 
           {mode === 'legacy' && (

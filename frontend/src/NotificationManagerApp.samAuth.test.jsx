@@ -21,13 +21,18 @@ jest.mock('./api', () => ({
   },
 }));
 
-jest.mock('./utils/supabaseAuth', () => ({
-  __esModule: true,
-  signInWithPassword: jest.fn(),
-  resetPasswordForEmail: jest.fn().mockResolvedValue({ ok: true }),
-  updateUserAccount: jest.fn().mockResolvedValue({ ok: true }),
-  signOutAuth: jest.fn().mockResolvedValue({ ok: true }),
-}));
+jest.mock('./utils/supabaseAuth', () => {
+  const actual = jest.requireActual('./utils/supabaseAuth');
+  return {
+    __esModule: true,
+    signInWithPassword: jest.fn(),
+    resetPasswordForEmail: jest.fn().mockResolvedValue({ ok: true }),
+    updateUserAccount: jest.fn().mockResolvedValue({ ok: true }),
+    updateUserPassword: jest.fn().mockResolvedValue({ ok: true }),
+    signOutAuth: jest.fn().mockResolvedValue({ ok: true }),
+    parseRecoveryUrl: actual.parseRecoveryUrl,
+  };
+});
 
 function flushPromises() {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -292,7 +297,8 @@ test('Forgot password mode requests recovery link and shows privacy-safe message
   expect(resetPasswordForEmail).toHaveBeenCalledWith(
     'https://xyfhikikddcqcmzbdvbj.supabase.co',
     'mock-anon-key',
-    'shawn@example.com'
+    'shawn@example.com',
+    { redirectTo: 'smartalertmanager://reset-password' }
   );
   expect(view.container.textContent).toContain('If an account exists for this email, password reset instructions have been sent.');
 });
@@ -339,4 +345,105 @@ test('Mode switch to legacy PIN setup renders name and pin fields', async () => 
   expect(inputs.length).toBe(2);
   expect(inputs[0].getAttribute('type')).toBe('text');
   expect(inputs[1].getAttribute('type')).toBe('password');
+});
+
+test('Receiving valid recovery deep link switches to Reset Password form and updates password successfully', async () => {
+  const { updateUserPassword, signOutAuth } = require('./utils/supabaseAuth');
+  let eventCallback = null;
+  window.electronAPI.onAppEvent = jest.fn((cb) => {
+    eventCallback = cb;
+    return () => {};
+  });
+
+  const view = await renderWizard();
+  expect(view.container.textContent).toContain('SAM AUTHENTICATION');
+
+  // Simulate receiving smartalertmanager:// deep link
+  await act(async () => {
+    eventCallback('auth:deep-link', {
+      url: 'smartalertmanager://reset-password#access_token=valid-recov-token&refresh_token=valid-refresh&type=recovery',
+    });
+    await flushPromises();
+  });
+
+  // Verify Reset Password mode is rendered
+  expect(view.container.textContent).toContain('Reset Password');
+  const newPassInput = view.container.querySelector('[data-testid="reset-new-password-input"]');
+  const confirmPassInput = view.container.querySelector('[data-testid="reset-confirm-password-input"]');
+  expect(newPassInput).toBeDefined();
+  expect(confirmPassInput).toBeDefined();
+
+  // Test password mismatch
+  await act(async () => {
+    changeInput(newPassInput, 'newpassword123');
+    changeInput(confirmPassInput, 'mismatch123');
+  });
+
+  await act(async () => {
+    view.container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('Passwords do not match');
+
+  // Fix password confirmation and submit
+  updateUserPassword.mockResolvedValueOnce({ ok: true, user: { id: 'user-1' } });
+  signOutAuth.mockResolvedValueOnce({ ok: true });
+
+  await act(async () => {
+    changeInput(confirmPassInput, 'newpassword123');
+  });
+
+  await act(async () => {
+    view.container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+  });
+
+  expect(updateUserPassword).toHaveBeenCalledWith(
+    'https://xyfhikikddcqcmzbdvbj.supabase.co',
+    'mock-anon-key',
+    'valid-recov-token',
+    'newpassword123'
+  );
+  expect(signOutAuth).toHaveBeenCalledWith(
+    'https://xyfhikikddcqcmzbdvbj.supabase.co',
+    'mock-anon-key',
+    'valid-recov-token'
+  );
+
+  // Verifies return to normal Sign In with success message
+  expect(view.container.textContent).toContain('Password updated successfully. Please sign in with your new password.');
+});
+
+test('Receiving expired recovery deep link displays Link Invalid or Expired with request reset option', async () => {
+  let eventCallback = null;
+  window.electronAPI.onAppEvent = jest.fn((cb) => {
+    eventCallback = cb;
+    return () => {};
+  });
+
+  const view = await renderWizard();
+
+  // Simulate receiving expired link
+  await act(async () => {
+    eventCallback('auth:deep-link', {
+      url: 'smartalertmanager://reset-password#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired',
+    });
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('Link Invalid or Expired');
+  expect(view.container.textContent).toContain('no longer valid');
+
+  const requestNewBtn = view.container.querySelector('[data-testid="request-new-reset-btn"]');
+  expect(requestNewBtn).toBeDefined();
+
+  // Click request new button -> moves to forgot password form
+  await act(async () => {
+    requestNewBtn.click();
+    await flushPromises();
+  });
+
+  expect(view.container.textContent).toContain('PASSWORD RECOVERY');
+  expect(view.container.querySelector('[data-testid="forgot-password-email-input"]')).toBeDefined();
 });

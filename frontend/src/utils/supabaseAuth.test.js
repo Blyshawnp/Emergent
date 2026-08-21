@@ -69,14 +69,24 @@ describe('supabaseAuth REST client', () => {
     expect(failed).toBeNull();
   });
 
-  test('resetPasswordForEmail', async () => {
+  test('resetPasswordForEmail with custom redirectTo', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({}),
     });
 
-    const res = await resetPasswordForEmail(mockUrl, mockKey, 'test@example.com');
+    const res = await resetPasswordForEmail(mockUrl, mockKey, 'test@example.com', {
+      redirectTo: 'smartalertmanager://reset-password',
+    });
     expect(res.ok).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://mock.supabase.co/auth/v1/recover?redirect_to=smartalertmanager%3A%2F%2Freset-password',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'apikey': mockKey }),
+        body: JSON.stringify({ email: 'test@example.com' }),
+      })
+    );
   });
 
   test('updateUserAccount', async () => {
@@ -87,6 +97,89 @@ describe('supabaseAuth REST client', () => {
 
     const res = await updateUserAccount(mockUrl, mockKey, 'at-123', { email: 'new@example.com' });
     expect(res.email).toBe('new@example.com');
+  });
+
+  test('updateUserPassword success and validation', async () => {
+    const { updateUserPassword } = require('./supabaseAuth');
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'u-1' }),
+    });
+
+    const res = await updateUserPassword(mockUrl, mockKey, 'recov-token-123', 'newsecurepass');
+    expect(res.ok).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://mock.supabase.co/auth/v1/user',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({
+          'apikey': mockKey,
+          'Authorization': 'Bearer recov-token-123',
+        }),
+        body: JSON.stringify({ password: 'newsecurepass' }),
+      })
+    );
+
+    await expect(updateUserPassword(mockUrl, mockKey, 'recov-token-123', '123'))
+      .rejects.toThrow('Password must be at least 6 characters long.');
+
+    await expect(updateUserPassword(mockUrl, mockKey, null, 'newsecurepass'))
+      .rejects.toThrow('No active recovery session. Please request a new reset email.');
+  });
+
+  test('parseRecoveryUrl handles valid hash and query params for smartalertmanager and sam', () => {
+    const { parseRecoveryUrl } = require('./supabaseAuth');
+
+    // smartalertmanager:// with hash fragment
+    const url1 = 'smartalertmanager://reset-password#access_token=token-abc&refresh_token=refresh-xyz&type=recovery&expires_in=3600';
+    const parsed1 = parseRecoveryUrl(url1);
+    expect(parsed1.ok).toBe(true);
+    expect(parsed1.accessToken).toBe('token-abc');
+    expect(parsed1.refreshToken).toBe('refresh-xyz');
+    expect(parsed1.type).toBe('recovery');
+
+    // sam:// with hash fragment
+    const url2 = 'sam://reset-password#access_token=token-def&refresh_token=refresh-uvw&type=recovery';
+    const parsed2 = parseRecoveryUrl(url2);
+    expect(parsed2.ok).toBe(true);
+    expect(parsed2.accessToken).toBe('token-def');
+    expect(parsed2.refreshToken).toBe('refresh-uvw');
+
+    // PKCE code in query param
+    const url3 = 'smartalertmanager://reset-password?code=auth-code-123';
+    const parsed3 = parseRecoveryUrl(url3);
+    expect(parsed3.ok).toBe(true);
+    expect(parsed3.type).toBe('pkce_code');
+    expect(parsed3.code).toBe('auth-code-123');
+
+    // Expired OTP in hash
+    const url4 = 'smartalertmanager://reset-password#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired';
+    const parsed4 = parseRecoveryUrl(url4);
+    expect(parsed4.ok).toBe(false);
+    expect(parsed4.isExpired).toBe(true);
+    expect(parsed4.message).toContain('no longer valid');
+
+    // Expired in query params
+    const url5 = 'smartalertmanager://reset-password?error=access_denied&error_description=expired';
+    const parsed5 = parseRecoveryUrl(url5);
+    expect(parsed5.ok).toBe(false);
+    expect(parsed5.isExpired).toBe(true);
+
+    // Invalid scheme / protocol
+    const url6 = 'https://evil.com/reset-password#access_token=token-abc';
+    const parsed6 = parseRecoveryUrl(url6);
+    expect(parsed6.ok).toBe(false);
+    expect(parsed6.error).toBe('invalid_protocol');
+
+    // Invalid path
+    const url7 = 'smartalertmanager://execute-command?cmd=calc';
+    const parsed7 = parseRecoveryUrl(url7);
+    expect(parsed7.ok).toBe(false);
+    expect(parsed7.error).toBe('invalid_protocol');
+
+    // Empty / null
+    expect(parseRecoveryUrl(null).ok).toBe(false);
+    expect(parseRecoveryUrl('').ok).toBe(false);
   });
 
   test('signOutAuth handles offline gracefully', async () => {

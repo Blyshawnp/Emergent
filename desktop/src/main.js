@@ -90,6 +90,53 @@ const store = new Store({
 const SINGLE_INSTANCE_MESSAGE = isNotificationManagerMode
   ? 'Smart Alert Manager is already open.'
   : 'Mock Testing Suite is already open.';
+
+function extractDeepLinkUrl(argvList = []) {
+  if (!Array.isArray(argvList)) return null;
+  for (const arg of argvList) {
+    if (typeof arg === 'string') {
+      const trimmed = arg.trim();
+      if (/^(smartalertmanager|sam):\/\//i.test(trimmed)) {
+        return trimmed;
+      }
+    }
+  }
+  return null;
+}
+
+function validateAndSanitizeDeepLink(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (trimmed.length > 4096) {
+    console.warn('[DEEP-LINK] Rejected oversized deep-link URL');
+    return null;
+  }
+  const validPattern = /^(smartalertmanager|sam):\/\/reset-password(\/?|\?.*|#.*)?$/i;
+  if (!validPattern.test(trimmed)) {
+    console.warn('[DEEP-LINK] Rejected unrecognized deep-link URL pattern');
+    return null;
+  }
+  return trimmed;
+}
+
+function registerProtocolClients() {
+  const schemes = isNotificationManagerMode ? ['smartalertmanager', 'sam'] : ['mocktestingsuite', 'mts'];
+  for (const scheme of schemes) {
+    try {
+      if (process.defaultApp && process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
+      } else {
+        app.setAsDefaultProtocolClient(scheme);
+      }
+      console.log(`[PROTOCOL] Registered protocol client for '${scheme}'`);
+    } catch (err) {
+      console.warn(`[PROTOCOL] Failed to register protocol client for '${scheme}':`, err.message);
+    }
+  }
+}
+
+let pendingDeepLinkUrl = validateAndSanitizeDeepLink(extractDeepLinkUrl(process.argv));
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock({
   appMode: isNotificationManagerMode ? 'notification-manager' : 'main',
   appRuntimeId: APP_RUNTIME_ID,
@@ -99,9 +146,14 @@ if (!hasSingleInstanceLock) {
   console.log(`[APP] ${SINGLE_INSTANCE_MESSAGE}`);
   app.exit(0);
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, commandLine) => {
     console.log(`[APP] ${SINGLE_INSTANCE_MESSAGE}`);
     focusExistingWindow();
+    const deepLinkUrl = validateAndSanitizeDeepLink(extractDeepLinkUrl(commandLine));
+    if (deepLinkUrl) {
+      console.log('[DEEP-LINK] Forwarding deep-link to active instance');
+      sendAppEvent('auth:deep-link', { url: deepLinkUrl });
+    }
   });
 }
 
@@ -1236,6 +1288,16 @@ function createMainWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.setTitle(appWindowTitle);
+    if (pendingDeepLinkUrl) {
+      const link = pendingDeepLinkUrl;
+      pendingDeepLinkUrl = null;
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          console.log('[DEEP-LINK] Delivering cold-start deep-link to renderer');
+          sendAppEvent('auth:deep-link', { url: link });
+        }
+      }, 300);
+    }
   });
 
   // Load the frontend
@@ -1687,6 +1749,12 @@ ipcMain.handle('authSession:clear', async () => {
   } catch (_err) {
     return false;
   }
+});
+
+ipcMain.handle('auth:getPendingDeepLink', () => {
+  const link = pendingDeepLinkUrl;
+  pendingDeepLinkUrl = null;
+  return link;
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -2413,6 +2481,7 @@ app.whenReady().then(async () => {
   if (process.platform === 'win32') {
     app.setAppUserModelId(APP_RUNTIME_ID);
   }
+  registerProtocolClients();
   reconcileStoredUpdateState();
   registerProcessCleanupHandlers();
   startHeartbeat();

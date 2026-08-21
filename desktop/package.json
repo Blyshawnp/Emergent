@@ -111,6 +111,15 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Mock Testing Suite"
-    }
+    },
+    "protocols": [
+      {
+        "name": "Mock Testing Suite Deep Link",
+        "schemes": [
+          "mocktestingsuite",
+          "mts"
+        ]
+      }
+    ]
   }
 }
