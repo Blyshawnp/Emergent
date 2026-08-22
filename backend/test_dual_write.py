@@ -15,8 +15,10 @@ from data_providers.dual_write import (
     NotificationsAdapter,
     HeadsetReviewsAdapter,
     CandidateSessionsAdapter,
+    active_dual_write_domains,
     build_operation_id,
     compute_payload_digest,
+    is_domain_dual_write_enabled,
     is_dual_write_enabled,
 )
 from data_providers.supabase import SupabaseProviderError
@@ -49,13 +51,46 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.mock_supabase.delete_rows.assert_not_called()
         self.assertTrue(dw_res.authoritative_success)
         self.assertFalse(dw_res.mirror_attempted)
-        self.assertEqual(dw_res.mirror_status, "skipped_flag_disabled")
+        self.assertEqual(dw_res.mirror_status, "skipped_domain_not_allowlisted")
         self.assertEqual(self.tracker.pending_count(), 0)
 
-    # 2. Authoritative Failure Rule (Section 9 & 35)
+    # 2. Per-Domain Runtime Activation Gate (Section 6 & 7)
+    def test_per_domain_gate_semantics(self):
+        # Global OFF -> 0 active domains
+        self.assertEqual(active_dual_write_domains({"MTS_DUAL_WRITE_ENABLED": "false", "MTS_DUAL_WRITE_DOMAINS": "notifications"}), frozenset())
+
+        # Global ON, but empty domains -> fails closed (0 active domains)
+        self.assertEqual(active_dual_write_domains({"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": ""}), frozenset())
+
+        # Global ON, notifications only
+        env = {"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
+        self.assertEqual(active_dual_write_domains(env), frozenset({"notifications"}))
+        self.assertTrue(is_domain_dual_write_enabled("notifications", env))
+        self.assertFalse(is_domain_dual_write_enabled("headset_reviews", env))
+        self.assertFalse(is_domain_dual_write_enabled("candidate_sessions", env))
+
+    def test_other_domain_write_blocked_when_only_notifications_allowlisted(self):
+        auth_write_mock = Mock(return_value={"ok": True, "id": "hr-1"})
+        env = {"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
+
+        auth_res, dw_res = self.manager.execute_dual_write(
+            domain="headset_reviews",
+            mutation_type="action",
+            authoritative_payload={"id": "hr-1", "status": "approved"},
+            authoritative_write_fn=auth_write_mock,
+            environ=env,
+        )
+
+        auth_write_mock.assert_called_once()
+        self.mock_supabase.upsert_rows.assert_not_called()
+        self.assertTrue(dw_res.authoritative_success)
+        self.assertFalse(dw_res.mirror_attempted)
+        self.assertEqual(dw_res.mirror_status, "skipped_domain_not_allowlisted")
+
+    # 3. Authoritative Failure Rule (Section 9 & 35)
     def test_authoritative_failure_prevents_supabase_mirror(self):
         auth_write_mock = Mock(return_value={"ok": False, "error": "Sheets quota exceeded"})
-        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true"}
+        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
 
         auth_res, dw_res = self.manager.execute_dual_write(
             domain="notifications",
@@ -74,7 +109,7 @@ class DualWriteFrameworkTests(unittest.TestCase):
 
     def test_authoritative_exception_prevents_supabase_mirror_and_raises(self):
         auth_write_mock = Mock(side_effect=RuntimeError("Network disconnect"))
-        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true"}
+        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
 
         with self.assertRaises(RuntimeError):
             self.manager.execute_dual_write(
@@ -88,10 +123,10 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.mock_supabase.upsert_rows.assert_not_called()
         self.assertEqual(self.tracker.pending_count(), 0)
 
-    # 3. Controlled Flag ON - Success Path (Section 27 & 41)
+    # 4. Controlled Flag ON - Success Path (Section 27 & 41)
     def test_controlled_flag_on_executes_and_verifies_supabase_mirror(self):
         auth_write_mock = Mock(return_value={"ok": True, "id": "notif-1"})
-        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true"}
+        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
 
         # Mock successful list_resource read-back
         self.mock_supabase.list_resource.return_value = [{
@@ -128,10 +163,10 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertEqual(dw_res.failure_class, DualWriteFailureClass.SUCCESS)
         self.assertEqual(self.tracker.pending_count(), 0)
 
-    # 4. Mirror Failure Rule - Sheets Up / Supabase Down (Section 10 & 36)
+    # 5. Mirror Failure Rule - Sheets Up / Supabase Down (Section 10 & 36)
     def test_supabase_mirror_failure_records_divergence_without_failing_authoritative_action(self):
         auth_write_mock = Mock(return_value={"ok": True, "id": "notif-1"})
-        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true"}
+        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
 
         # Supabase raises connection error
         self.mock_supabase.upsert_rows.side_effect = SupabaseProviderError("Supabase connection refused 503")
@@ -158,10 +193,10 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertEqual(divergences[0]["domain"], "notifications")
         self.assertEqual(divergences[0]["failure_class"], "TRANSIENT_FAILURE")
 
-    # 5. Post-Write Mismatch Test (Section 11 & 37)
+    # 6. Post-Write Mismatch Test (Section 11 & 37)
     def test_post_write_mismatch_fails_verification_and_records_divergence(self):
         auth_write_mock = Mock(return_value={"ok": True, "id": "notif-1"})
-        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true"}
+        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
 
         # Supabase returns mismatched state upon read-back
         self.mock_supabase.list_resource.return_value = [{
@@ -186,7 +221,7 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertEqual(dw_res.failure_class, DualWriteFailureClass.POST_WRITE_MISMATCH)
         self.assertEqual(self.tracker.pending_count(), 1)
 
-    # 6. Retry Idempotency & Duplicate Protection (Section 13 & 38)
+    # 7. Retry Idempotency & Duplicate Protection (Section 13 & 38)
     def test_retry_same_operation_uses_identical_operation_id_and_updates_divergence(self):
         payload = {"ID": "notif-idemp", "Title": "Title", "Message": "Msg"}
         digest1 = compute_payload_digest(payload)
@@ -197,7 +232,7 @@ class DualWriteFrameworkTests(unittest.TestCase):
         op_id_2 = build_operation_id("notifications", "insert", "notif-idemp", digest2)
         self.assertEqual(op_id_1, op_id_2)
 
-        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true"}
+        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
 
         # First attempt fails
         self.mock_supabase.upsert_rows.side_effect = SupabaseProviderError("Timeout")
@@ -222,7 +257,7 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertEqual(self.tracker.pending_count(), 1)
         self.assertEqual(self.tracker.list_divergences()[0]["retry_count"], 1)
 
-    # 7. Notification Null Expiration Semantics (Section 18)
+    # 8. Notification Null Expiration Semantics (Section 18)
     def test_notifications_adapter_preserves_null_expiration(self):
         adapter = NotificationsAdapter()
         payload = {
@@ -236,14 +271,13 @@ class DualWriteFrameworkTests(unittest.TestCase):
         }
         transformed = adapter.transform_payload(payload)
         self.assertEqual(transformed["notification_id"], "notif-no-exp")
-        self.assertIsNone(transformed["end_date"])
-        self.assertIsNone(transformed["end_time"])
-        self.assertIsNone(transformed["expires_at"])
+        self.assertEqual(transformed["starts_at"], "2026-08-22T10:00:00+00:00")
+        self.assertIsNone(transformed["ends_at"])
 
-    # 8. Domain Allowlist & Excluded Domains (Section 14 & 46)
+    # 9. Domain Allowlist & Excluded Domains (Section 14 & 46)
     def test_unsupported_domain_skips_mirror_cleanly(self):
         auth_write_mock = Mock(return_value={"ok": True})
-        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true"}
+        environ = {"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"}
 
         auth_res, dw_res = self.manager.execute_dual_write(
             domain="callers",  # callers is config-only, excluded from runtime dual-write
@@ -258,7 +292,7 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertFalse(dw_res.mirror_attempted)
         self.assertEqual(dw_res.failure_class, DualWriteFailureClass.UNSUPPORTED_DOMAIN)
 
-    # 9. Headset Reviews Adapter
+    # 10. Headset Reviews Adapter
     def test_headset_reviews_adapter_transformation(self):
         adapter = HeadsetReviewsAdapter()
         payload = {
@@ -277,7 +311,7 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertEqual(transformed["status"], "approved")
         self.assertEqual(transformed["source_session_id"], "sess-123")
 
-    # 10. Candidate Sessions Adapter
+    # 11. Candidate Sessions Adapter
     def test_candidate_sessions_adapter_transformation(self):
         adapter = CandidateSessionsAdapter()
         payload = {
@@ -294,11 +328,16 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertEqual(transformed["raw_status"], "Pass")
         self.assertTrue(transformed["final_attempt"])
 
-    # 11. Readiness Report (Section 45)
+    # 12. Readiness Report (Section 45)
     def test_readiness_report_structure(self):
-        report = self.tracker.get_readiness_report({"MTS_DATA_PROVIDER": "sheets", "MTS_DUAL_WRITE_ENABLED": "false"})
+        report = self.tracker.get_readiness_report({
+            "MTS_DATA_PROVIDER": "sheets",
+            "MTS_DUAL_WRITE_ENABLED": "true",
+            "MTS_DUAL_WRITE_DOMAINS": "notifications",
+        })
         self.assertTrue(report["dual_write_implementation_ready"])
-        self.assertFalse(report["dual_write_enabled"])
+        self.assertTrue(report["dual_write_enabled"])
+        self.assertEqual(report["active_domains"], ["notifications"])
         self.assertEqual(report["pending_divergences"], 0)
         self.assertTrue(report["idempotency_ready"])
         self.assertTrue(report["repair_tracking_ready"])

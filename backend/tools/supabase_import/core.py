@@ -1273,7 +1273,7 @@ SHADOW_DOMAIN_SPECS = {
     ),
     "notifications": ShadowDomainSpec(
         identity=(("notification_id", "ID"),),
-        values=(("notification_type", "Type"), ("title", "Title"), ("message", "Message"), ("starts_at", "StartDate"), ("ends_at", "EndDate"), ("action_text", "ActionText"), ("action_url", "ActionURL")),
+        values=(("notification_type", "Type"), ("title", "Title"), ("message", "Message"), ("action_text", "ActionText"), ("action_url", "ActionURL")),
         statuses=(("enabled", "Enabled"), ("show_ticker", "ShowTicker"), ("show_popup", "ShowPopup"), ("show_banner", "ShowBanner"), ("persistent", "Persistent")),
     ),
     "callers": ShadowDomainSpec(

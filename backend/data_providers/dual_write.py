@@ -108,6 +108,24 @@ def is_dual_write_enabled(environ: Mapping[str, str] | None = None) -> bool:
     )
 
 
+def active_dual_write_domains(environ: Mapping[str, str] | None = None) -> frozenset[str]:
+    env = os.environ if environ is None else environ
+    if not is_dual_write_enabled(env):
+        return frozenset()
+    raw_domains = str(env.get("MTS_DUAL_WRITE_DOMAINS", "")).strip()
+    if not raw_domains:
+        # If MTS_DUAL_WRITE_DOMAINS is not specified or empty, fail closed (0 domains active)
+        return frozenset()
+    if raw_domains.strip().casefold() in ("*", "all"):
+        return DUAL_WRITE_ELIGIBLE_DOMAINS
+    configured = {d.strip().lower() for d in raw_domains.split(",") if d.strip()}
+    return frozenset(configured & DUAL_WRITE_ELIGIBLE_DOMAINS)
+
+
+def is_domain_dual_write_enabled(domain: str, environ: Mapping[str, str] | None = None) -> bool:
+    return domain in active_dual_write_domains(environ)
+
+
 def compute_payload_digest(payload: Mapping[str, Any]) -> str:
     cleaned = {k: v for k, v in payload.items() if not k.startswith("_")}
     raw = json.dumps(cleaned, sort_keys=True, separators=(",", ":"), default=str)
@@ -117,6 +135,48 @@ def compute_payload_digest(payload: Mapping[str, Any]) -> str:
 def build_operation_id(domain: str, mutation_type: str, business_key: str, payload_digest: str) -> str:
     safe_key = re.sub(r"[^a-zA-Z0-9_-]", "_", str(business_key or "unknown"))
     return f"dw-{domain}-{mutation_type}-{safe_key}-{payload_digest}"
+
+
+def _normalize_notif_datetime(date_val: Any, time_val: Any) -> str | None:
+    if not date_val or str(date_val).strip() == "":
+        return None
+    d_str = str(date_val).strip()
+    if "T" in d_str:
+        date_part = d_str.split("T")[0]
+    elif "t" in d_str:
+        date_part = d_str.split("t")[0]
+    else:
+        date_part = d_str
+
+    t_str = str(time_val or "").strip()
+    hours = 0
+    minutes = 0
+    seconds = 0
+    if t_str:
+        if "T" in t_str or "t" in t_str:
+            t_sub = (t_str.split("T")[1] if "T" in t_str else t_str.split("t")[1]).replace("Z", "").replace("z", "")
+            parts = t_sub.split(":")
+            if len(parts) >= 2:
+                try:
+                    hours = int(parts[0])
+                    minutes = int(parts[1])
+                    seconds = int(float(parts[2])) if len(parts) >= 3 else 0
+                except (ValueError, TypeError):
+                    pass
+        else:
+            match = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?", t_str, re.IGNORECASE)
+            if match:
+                h = int(match.group(1))
+                m = int(match.group(2))
+                s = int(match.group(3)) if match.group(3) else 0
+                meridiem = (match.group(4) or "").upper()
+                if meridiem == "PM" and h < 12:
+                    h += 12
+                elif meridiem == "AM" and h == 12:
+                    h = 0
+                hours, minutes, seconds = h, m, s
+
+    return f"{date_part}T{hours:02d}:{minutes:02d}:{seconds:02d}+00:00"
 
 
 class DualWriteDivergenceTracker:
@@ -203,6 +263,7 @@ class DualWriteDivergenceTracker:
             return {
                 "dual_write_implementation_ready": True,
                 "dual_write_enabled": is_dual_write_enabled(environ),
+                "active_domains": sorted(active_dual_write_domains(environ)),
                 "eligible_domains": sorted(DUAL_WRITE_ELIGIBLE_DOMAINS),
                 "implemented_domains": sorted(DUAL_WRITE_ELIGIBLE_DOMAINS),
                 "tested_domains": sorted(DUAL_WRITE_ELIGIBLE_DOMAINS),
@@ -253,12 +314,20 @@ class NotificationsAdapter(DomainDualWriteAdapter):
         else:
             enabled = bool(enabled_val)
 
-        raw_start_date = str(payload.get("StartDate") or payload.get("start_date") or "").strip()
-        raw_start_time = str(payload.get("StartTime") or payload.get("start_time") or "").strip()
-        raw_end_date = str(payload.get("EndDate") or payload.get("end_date") or "").strip()
-        raw_end_time = str(payload.get("EndTime") or payload.get("end_time") or "").strip()
+        raw_start_date = payload.get("StartDate") or payload.get("start_date") or ""
+        raw_start_time = payload.get("StartTime") or payload.get("start_time") or ""
+        raw_end_date = payload.get("EndDate") or payload.get("end_date") or ""
+        raw_end_time = payload.get("EndTime") or payload.get("end_time") or ""
 
-        has_expiration = bool(raw_end_date)
+        has_expiration = bool(str(raw_end_date or "").strip())
+        starts_at = _normalize_notif_datetime(raw_start_date, raw_start_time)
+        ends_at = _normalize_notif_datetime(raw_end_date, raw_end_time) if has_expiration else None
+
+        checksum = hashlib.sha256(
+            json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        created_at_raw = payload.get("CreatedAt") or payload.get("created_at") or None
+
         return {
             "notification_id": notif_id,
             "enabled": enabled,
@@ -269,14 +338,14 @@ class NotificationsAdapter(DomainDualWriteAdapter):
             "show_popup": bool(payload.get("ShowPopup", payload.get("show_popup", False))),
             "show_banner": bool(payload.get("ShowBanner", payload.get("show_banner", False))),
             "persistent": bool(payload.get("Persistent", payload.get("persistent", False))),
-            "action_text": payload.get("ActionText") or payload.get("action_text") or None,
-            "action_url": payload.get("ActionURL") or payload.get("action_url") or None,
-            "start_date": raw_start_date or None,
-            "start_time": raw_start_time or None,
-            "end_date": raw_end_date if has_expiration else None,
-            "end_time": raw_end_time if has_expiration else None,
-            "expires_at": None,
+            "action_text": str(payload.get("ActionText") or payload.get("action_text") or ""),
+            "action_url": str(payload.get("ActionURL") or payload.get("action_url") or ""),
+            "starts_at": starts_at,
+            "ends_at": ends_at,
+            "created_at": created_at_raw or datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source_checksum": checksum,
+            "source_payload": dict(payload),
         }
 
     def verify_persisted_state(
@@ -295,7 +364,7 @@ class NotificationsAdapter(DomainDualWriteAdapter):
             return False
         if str(row.get("message") or "").strip() != str(expected_payload.get("message") or "").strip():
             return False
-        if not expected_payload.get("end_date") and row.get("end_date") not in (None, ""):
+        if expected_payload.get("ends_at") is None and row.get("ends_at") is not None:
             return False
         return True
 
@@ -509,17 +578,17 @@ class DualWriteManager:
                 raise authoritative_error
             return authoritative_result, result
 
-        # 2. Check if Dual Write feature flag is ON
-        if not is_dual_write_enabled(environ):
+        # 2. Check if Dual Write feature flag and per-domain gate are ON
+        if not is_domain_dual_write_enabled(domain, environ):
             duration = round((time.perf_counter() - start_time) * 1000, 2)
             result = DualWriteResult(
-                operation_id=f"dw-{domain}-{mutation_type}-flag-off",
+                operation_id=f"dw-{domain}-{mutation_type}-domain-disabled",
                 domain=domain,
                 mutation_type=mutation_type,
                 authoritative_success=True,
                 authoritative_reference=str(authoritative_result.get("id") if isinstance(authoritative_result, dict) else ""),
                 mirror_attempted=False,
-                mirror_status="skipped_flag_disabled",
+                mirror_status="skipped_domain_not_allowlisted",
                 duration_ms=duration,
                 failure_class=DualWriteFailureClass.SUCCESS,
             )

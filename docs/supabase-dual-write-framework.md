@@ -133,3 +133,31 @@ Repeated invocations with identical payloads yield the exact same operation iden
 - **Service Role Key Isolation**: Supabase mutations use the trusted backend service role key executed purely on the server.
 - **Client Protection**: The packaged Electron/React client never receives or stores `SUPABASE_SERVICE_ROLE_KEY`.
 - **Least Privilege**: Client interactions continue to route through standard backend REST API endpoints (`/notifications/manage`, `/headsets/reviews/action`, etc.).
+
+---
+
+## 8. Per-Domain Runtime Activation Gate
+
+To guarantee strict canary isolation, runtime dual-write mirroring requires both the global flag AND the per-domain allowlist:
+- `MTS_DUAL_WRITE_ENABLED=true`
+- `MTS_DUAL_WRITE_DOMAINS=notifications` (comma-separated list of enabled domains)
+
+If `MTS_DUAL_WRITE_DOMAINS` is not set or empty, all domains fail closed with `mirror_attempted=false` and `mirror_status='skipped_domain_not_allowlisted'`. When set to a specific domain (such as `notifications`), any write to other domains (e.g. `headset_reviews`, `candidate_sessions`) returns `mirror_attempted=false` immediately without touching Supabase.
+
+---
+
+## 9. Live Notification Canary Verification
+
+The live canary test confirmed end-to-end mirror synchronization with live Google Sheets authority and hosted Supabase target `xyfhikikddcqcmzbdvbj`:
+
+| Canary Step | Authoritative Write (Sheets) | Supabase Mirror | Post-Write Verification | Verified Semantics |
+|---|:---:|:---:|:---:|---|
+| **Canary 1: Low-Risk Edit** | SUCCESS | SUCCESS | SUCCESS | Title & message update mirrored cleanly |
+| **Canary 2: Schedule / Time Edit** | SUCCESS | SUCCESS | SUCCESS | Local Eastern time normalized to `starts_at` timestamptz |
+| **Canary 3: No Expiration** | SUCCESS | SUCCESS | SUCCESS | `EndDate=''` mapped to `ends_at = NULL` |
+| **Canary 4: Disable Notification** | SUCCESS | SUCCESS | SUCCESS | `Enabled=False` mirrored with schedule preserved |
+| **Canary 5: Re-Enable Notification** | SUCCESS | SUCCESS | SUCCESS | Restored active state with canonical properties |
+| **Idempotency Check** | N/A | SUCCESS | SUCCESS | Replay created 0 duplicate rows |
+| **Single-Domain Isolation** | SUCCESS | SKIPPED | N/A | Non-allowlisted domains had `mirror_attempted=False` |
+| **Other Domain Integrity** | UNTOUCHED | UNTOUCHED | SUCCESS | Deltas across all 8 other operational tables = 0 |
+
