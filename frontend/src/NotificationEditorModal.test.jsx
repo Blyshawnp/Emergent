@@ -36,8 +36,8 @@ describe('NotificationEditorModal Component Tests', () => {
       Message: 'This is a test notice',
       Enabled: true,
       Type: 'info',
-      StartDate: '2026-05-01T04:00:00.000Z',
-      StartTime: '1899-12-31T04:03:00.000Z',
+      StartDate: '2026-05-01',
+      StartTime: '4:03 AM',
       EndDate: '',
       EndTime: '',
     };
@@ -85,8 +85,8 @@ describe('NotificationEditorModal Component Tests', () => {
       Message: 'Active indefinitely',
       Enabled: true,
       Type: 'info',
-      StartDate: '2026-05-01T04:00:00.000Z',
-      StartTime: '1899-12-31T04:03:00.000Z',
+      StartDate: '2026-05-01',
+      StartTime: '4:03 AM',
       EndDate: '',
       EndTime: '',
     };
@@ -136,10 +136,10 @@ describe('NotificationEditorModal Component Tests', () => {
       Message: 'Expires soon',
       Enabled: true,
       Type: 'warning',
-      StartDate: '2026-08-21T04:00:00.000Z',
-      StartTime: '1899-12-30T09:18:00.000Z',
-      EndDate: '2026-08-22T04:00:00.000Z',
-      EndTime: '1899-12-30T17:45:00.000Z',
+      StartDate: '2026-08-21',
+      StartTime: '9:18 AM',
+      EndDate: '2026-08-22',
+      EndTime: '5:45 PM',
     };
 
     const normalized = normalizeManagerNotification(rawApiItem);

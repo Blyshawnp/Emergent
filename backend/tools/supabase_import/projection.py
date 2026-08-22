@@ -170,6 +170,16 @@ def project_reconciliation_plan(sheets_provider, supabase_provider, plan):
             if target is None:
                 raise ValueError("projected_update_target_missing")
             target["candidate_id"] = raw.get("candidate_id")
+        elif entity == "notifications":
+            target_id = str(item.get("canonical_entity_id") or "")
+            target = next(
+                (row for row in resources[entity] if str(row.get("id") or "") == target_id or str(row.get("notification_id") or "") == str(raw.get("ID") or raw.get("notification_id") or "")),
+                None,
+            )
+            if target is None:
+                raise ValueError("projected_update_target_missing")
+            payload = _hosted_timestamp_values(_payload(entity, item, raw))
+            target.update(payload)
         elif operation == "update":
             raise ValueError(f"projected_update_entity_not_supported:{entity}")
 

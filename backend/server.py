@@ -43,6 +43,7 @@ from data_providers.runtime_shadow import (
     ShadowComparisonRuntime,
     build_runtime_shadow_providers,
 )
+from data_providers.dual_write import get_dual_write_manager
 from services.apps_script_api import apps_script_api_role
 
 ROOT_DIR = Path(__file__).parent
@@ -13210,7 +13211,16 @@ async def get_shared_admin_snapshot(request: Request):
 @api_router.post("/shared/admin/candidates/action")
 async def post_shared_admin_candidate_action(payload: dict, request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_shared_admin_candidate_action, payload or {})
+    auth_payload = payload or {}
+    auth_result, _ = await asyncio.to_thread(
+        get_dual_write_manager().execute_dual_write,
+        domain="candidate_sessions",
+        mutation_type="action",
+        authoritative_payload=auth_payload,
+        authoritative_write_fn=lambda: _shared_admin_candidate_action(auth_payload),
+        actor=str(request.headers.get("x-sam-user") or "admin"),
+    )
+    return auth_result
 
 
 @api_router.get("/shared/admin/pending-requests")
@@ -13227,7 +13237,22 @@ async def get_shared_admin_pending_requests(request: Request):
 @api_router.post("/shared/admin/pending-requests/action")
 async def post_shared_admin_pending_request_action(payload: dict, request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_shared_pending_request_action, payload or {})
+    auth_payload = payload or {}
+    category = str(auth_payload.get("category") or "").strip().lower()
+    target_domain = (
+        "newbie_shift_requests" if "newbie" in category
+        else "candidate_corrections" if "correction" in category
+        else "pending_requests"
+    )
+    auth_result, _ = await asyncio.to_thread(
+        get_dual_write_manager().execute_dual_write,
+        domain=target_domain,
+        mutation_type="action",
+        authoritative_payload=auth_payload,
+        authoritative_write_fn=lambda: _shared_pending_request_action(auth_payload),
+        actor=str(request.headers.get("x-sam-user") or "admin"),
+    )
+    return auth_result
 
 
 @api_router.get("/sam/setup/status")
@@ -16188,14 +16213,30 @@ async def get_notifications_manage(request: Request):
 @api_router.post("/notifications/manage")
 async def save_notification_manage(payload: dict, request: Request):
     _require_admin_token(request)
-    result = await asyncio.to_thread(_save_notification_to_google_sheet, (payload or {}).get("item") or payload or {})
-    return result
+    item_payload = (payload or {}).get("item") or payload or {}
+    auth_result, _ = await asyncio.to_thread(
+        get_dual_write_manager().execute_dual_write,
+        domain="notifications",
+        mutation_type="update" if item_payload.get("ID") else "insert",
+        authoritative_payload=item_payload,
+        authoritative_write_fn=lambda: _save_notification_to_google_sheet(item_payload),
+        actor=str(request.headers.get("x-sam-user") or "admin"),
+    )
+    return auth_result
 
 
 @api_router.delete("/notifications/manage/{notification_id:path}")
 async def delete_notification_manage(notification_id: str, request: Request):
     _require_admin_token(request)
-    return await asyncio.to_thread(_delete_notification_from_google_sheet, notification_id)
+    auth_result, _ = await asyncio.to_thread(
+        get_dual_write_manager().execute_dual_write,
+        domain="notifications",
+        mutation_type="delete",
+        authoritative_payload={"ID": notification_id},
+        authoritative_write_fn=lambda: _delete_notification_from_google_sheet(notification_id),
+        actor=str(request.headers.get("x-sam-user") or "admin"),
+    )
+    return auth_result
 
 
 async def _fetch_approved_headsets(force=False):
@@ -16349,9 +16390,18 @@ async def _propagate_headset_review_edit_to_local_records(result, payload):
 @api_router.post("/headsets/reviews/action")
 async def post_headset_review_action(payload: dict, request: Request):
     _require_admin_token(request)
-    result = await asyncio.to_thread(_headset_review_action, payload or {})
-    result["local_records_updated"] = await _propagate_headset_review_edit_to_local_records(result, payload or {})
-    return result
+    auth_payload = payload or {}
+    auth_result, _ = await asyncio.to_thread(
+        get_dual_write_manager().execute_dual_write,
+        domain="headset_reviews",
+        mutation_type="action",
+        authoritative_payload=auth_payload,
+        authoritative_write_fn=lambda: _headset_review_action(auth_payload),
+        actor=str(request.headers.get("x-sam-user") or "admin"),
+    )
+    if isinstance(auth_result, dict):
+        auth_result["local_records_updated"] = await _propagate_headset_review_edit_to_local_records(auth_result, auth_payload)
+    return auth_result
 
 
 # ══════════════════════════════════════════════════════════════════
