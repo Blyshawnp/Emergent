@@ -372,22 +372,48 @@ class NotificationsAdapter(DomainDualWriteAdapter):
 class HeadsetReviewsAdapter(DomainDualWriteAdapter):
     domain = "headset_reviews"
     target_table = "headset_reviews"
-    conflict_key = "id"
+    conflict_key = "review_id"
 
     def extract_business_key(self, payload: Mapping[str, Any]) -> str:
-        return str(payload.get("id") or payload.get("review_id") or "")
+        return str(payload.get("review_id") or payload.get("ReviewID") or payload.get("id") or "")
 
     def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        review_id = self.extract_business_key(payload)
+        brand = str(payload.get("brand") or payload.get("Brand") or payload.get("headset_brand") or "").strip()
+        model = str(payload.get("model") or payload.get("Model") or payload.get("headset_model") or "").strip()
+        status_val = str(payload.get("status") or payload.get("Status") or "pending").strip().lower()
+        if status_val not in {"approved", "denied", "archived", "deleted", "inactive", "pending", "unknown"}:
+            status_val = "pending"
+
+        note_val = payload.get("note") or payload.get("Note") or payload.get("notes") or payload.get("Notes") or None
+        denial_reason = payload.get("denial_reason") or payload.get("reason") or None
+        decision_by = payload.get("decision_by") or payload.get("actor") or payload.get("admin") or None
+        decision_at_raw = payload.get("decision_at")
+        decision_at = str(decision_at_raw).strip() if decision_at_raw else (datetime.datetime.now(datetime.timezone.utc).isoformat() if status_val in ("approved", "denied") else None)
+        created_at_raw = payload.get("created_at") or payload.get("CreatedAt")
+        created_at = str(created_at_raw).strip() if created_at_raw else datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        checksum = hashlib.sha256(
+            json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+
         return {
-            "id": self.extract_business_key(payload) or None,
-            "headset_brand": str(payload.get("brand") or payload.get("headset_brand") or "").strip(),
-            "headset_model": str(payload.get("model") or payload.get("headset_model") or "").strip(),
-            "status": str(payload.get("status") or "pending").lower(),
-            "notes": payload.get("notes") or payload.get("review_notes") or "",
-            "tester_name": payload.get("tester_name") or payload.get("tester") or "",
-            "candidate_name": payload.get("candidate_name") or "",
+            "review_id": review_id,
             "source_session_id": payload.get("source_session_id") or payload.get("session_id") or None,
+            "candidate_name": payload.get("candidate_name") or None,
+            "tester_name": payload.get("tester_name") or payload.get("tester") or None,
+            "brand": brand or None,
+            "model": model or None,
+            "status": status_val,
+            "note": note_val,
+            "denial_reason": denial_reason,
+            "decision_by": decision_by,
+            "decision_at": decision_at,
+            "normalization_status": "canonical" if (brand and model) else "deterministic_catalog_match",
+            "created_at": created_at,
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source_checksum": checksum,
+            "source_payload": dict(payload),
         }
 
     def verify_persisted_state(
@@ -397,12 +423,18 @@ class HeadsetReviewsAdapter(DomainDualWriteAdapter):
         expected_payload: Mapping[str, Any],
     ) -> bool:
         if not business_key:
-            return True
-        rows = supabase_provider.list_resource("headset_reviews", filters={"id": business_key})
+            return False
+        rows = supabase_provider.list_resource("headset_reviews", filters={"review_id": business_key})
         if not rows:
             return False
         row = rows[0]
         if expected_payload.get("status") and str(row.get("status")).lower() != str(expected_payload.get("status")).lower():
+            return False
+        if expected_payload.get("brand") and str(row.get("brand") or "").strip() != str(expected_payload.get("brand") or "").strip():
+            return False
+        if expected_payload.get("model") and str(row.get("model") or "").strip() != str(expected_payload.get("model") or "").strip():
+            return False
+        if expected_payload.get("note") is not None and str(row.get("note") or "").strip() != str(expected_payload.get("note") or "").strip():
             return False
         return True
 

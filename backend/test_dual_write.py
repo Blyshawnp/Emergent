@@ -296,7 +296,7 @@ class DualWriteFrameworkTests(unittest.TestCase):
     def test_headset_reviews_adapter_transformation(self):
         adapter = HeadsetReviewsAdapter()
         payload = {
-            "id": "hr-1",
+            "review_id": "hr-1",
             "brand": "Logitech",
             "model": "H390",
             "status": "Approved",
@@ -305,11 +305,77 @@ class DualWriteFrameworkTests(unittest.TestCase):
             "session_id": "sess-123",
         }
         transformed = adapter.transform_payload(payload)
-        self.assertEqual(transformed["id"], "hr-1")
-        self.assertEqual(transformed["headset_brand"], "Logitech")
-        self.assertEqual(transformed["headset_model"], "H390")
+        self.assertEqual(transformed["review_id"], "hr-1")
+        self.assertEqual(transformed["brand"], "Logitech")
+        self.assertEqual(transformed["model"], "H390")
         self.assertEqual(transformed["status"], "approved")
         self.assertEqual(transformed["source_session_id"], "sess-123")
+        self.assertIsNotNone(transformed["source_checksum"])
+
+    # 11. Section 13 Gate Test Cases (A through E)
+    def test_section_13_gate_cases(self):
+        auth_mock = Mock(return_value={"ok": True, "id": "test-1"})
+
+        # Case A: MTS_DUAL_WRITE_ENABLED=false -> headset review mirror NO
+        _, res_a = self.manager.execute_dual_write(
+            domain="headset_reviews",
+            mutation_type="action",
+            authoritative_payload={"review_id": "hr-1", "brand": "B", "model": "M"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "false", "MTS_DUAL_WRITE_DOMAINS": "headset_reviews"},
+        )
+        self.assertFalse(res_a.mirror_attempted)
+
+        # Case B: MTS_DUAL_WRITE_ENABLED=true, MTS_DUAL_WRITE_DOMAINS=notifications -> headset review mirror NO
+        _, res_b = self.manager.execute_dual_write(
+            domain="headset_reviews",
+            mutation_type="action",
+            authoritative_payload={"review_id": "hr-1", "brand": "B", "model": "M"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"},
+        )
+        self.assertFalse(res_b.mirror_attempted)
+
+        # Case C: MTS_DUAL_WRITE_ENABLED=true, MTS_DUAL_WRITE_DOMAINS=headset_reviews -> headset review mirror YES
+        self.mock_supabase.list_resource.return_value = [{"review_id": "hr-1", "brand": "B", "model": "M", "status": "pending"}]
+        _, res_c = self.manager.execute_dual_write(
+            domain="headset_reviews",
+            mutation_type="action",
+            authoritative_payload={"review_id": "hr-1", "brand": "B", "model": "M"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "headset_reviews"},
+        )
+        self.assertTrue(res_c.mirror_attempted)
+        self.assertTrue(res_c.mirror_success)
+
+        # Case D: MTS_DUAL_WRITE_ENABLED=true, MTS_DUAL_WRITE_DOMAINS=headset_reviews -> notification mirror NO
+        _, res_d = self.manager.execute_dual_write(
+            domain="notifications",
+            mutation_type="update",
+            authoritative_payload={"ID": "notif-1", "Title": "T"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "headset_reviews"},
+        )
+        self.assertFalse(res_d.mirror_attempted)
+
+        # Case E: candidate/session mutation under headset_reviews gate -> mirror NO
+        _, res_e1 = self.manager.execute_dual_write(
+            domain="candidates",
+            mutation_type="update",
+            authoritative_payload={"source_candidate_id": "c-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "headset_reviews"},
+        )
+        self.assertFalse(res_e1.mirror_attempted)
+
+        _, res_e2 = self.manager.execute_dual_write(
+            domain="candidate_sessions",
+            mutation_type="update",
+            authoritative_payload={"session_id": "s-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "headset_reviews"},
+        )
+        self.assertFalse(res_e2.mirror_attempted)
 
     # 11. Candidate Sessions Adapter
     def test_candidate_sessions_adapter_transformation(self):

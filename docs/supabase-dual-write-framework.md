@@ -161,3 +161,38 @@ The live canary test confirmed end-to-end mirror synchronization with live Googl
 | **Single-Domain Isolation** | SUCCESS | SKIPPED | N/A | Non-allowlisted domains had `mirror_attempted=False` |
 | **Other Domain Integrity** | UNTOUCHED | UNTOUCHED | SUCCESS | Deltas across all 8 other operational tables = 0 |
 
+---
+
+## 10. Live Headset Review Canary Verification
+
+The second live single-domain canary test confirmed end-to-end mirror synchronization for `headset_reviews` with live Google Sheets authority and hosted Supabase target `xyfhikikddcqcmzbdvbj`:
+
+| Canary Step | Authoritative Write (Sheets) | Supabase Mirror | Post-Write Verification | Verified Semantics |
+|---|:---:|:---:|:---:|---|
+| **Canary 1: Note Edit** | SUCCESS (`ok=True`) | SUCCESS | SUCCESS | Updated note on pending review mirrored to PostgreSQL `mts_sam.headset_reviews` |
+| **Canary 2: Second Note Edit** | SUCCESS (`ok=True`) | SUCCESS | SUCCESS | Reversible field modification mirrored accurately |
+| **Restoration: Restore State** | SUCCESS (`ok=True`) | SUCCESS | SUCCESS | Empty note restored, pending status preserved |
+| **Idempotency Check** | N/A | SUCCESS | SUCCESS | Replay of identical operation produced 0 duplicate records |
+| **Single-Domain Isolation** | SUCCESS (`ok=True`) | SKIPPED | N/A | Notifications & Candidate Sessions had `mirror_attempted=False` under `MTS_DUAL_WRITE_DOMAINS=headset_reviews` |
+| **Other Domain Integrity** | UNTOUCHED | UNTOUCHED | SUCCESS | Deltas across all 8 other operational tables = 0 |
+| **Historical Exception Safety** | UNTOUCHED | UNTOUCHED | SUCCESS | Approved historical relationship exception preserved without regression |
+
+---
+
+## 11. Dual-Write Verification Status Matrix
+
+| Domain Name | Status | Dual-Write Eligible | Target Table | Conflict Key |
+|---|:---:|:---:|---|---|
+| `notifications` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.notifications` | `notification_id` |
+| `headset_reviews` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.headset_reviews` | `review_id` |
+| `candidate_sessions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_sessions` | `session_id` |
+| `candidates` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidates` | `source_candidate_id` |
+| `session_attempts` | FRAMEWORK-TESTED | **YES** | `mts_sam.session_attempts` | `id` |
+| `supervisor_transfers` | FRAMEWORK-TESTED | **YES** | `mts_sam.supervisor_transfers` | `transfer_id` |
+| `newbie_shift_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.newbie_shift_requests` | `request_id` |
+| `candidate_corrections` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_corrections` | `request_id` |
+| `pending_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.pending_requests` | `request_id` |
+| `candidate_status_actions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_status_actions` | `id` |
+| `extra_attempt_grants` | FRAMEWORK-TESTED | **YES** | `mts_sam.extra_attempt_grants` | `id` |
+
+
