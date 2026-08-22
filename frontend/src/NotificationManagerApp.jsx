@@ -3361,7 +3361,7 @@ function ModalPortal({ children }) {
   return createPortal(children, mountNode);
 }
 
-function NotificationEditorModal({
+export function NotificationEditorModal({
   open,
   selectedItem,
   validation,
@@ -3463,19 +3463,19 @@ function NotificationEditorModal({
                   <div className="nm-field-grid">
                     <div className="nm-field">
                       <label htmlFor="nm-start-date">Starts At Date</label>
-                      <input id="nm-start-date" type="date" value={selectedItem.StartDate} onChange={(event) => updateSelected({ StartDate: event.target.value })} />
+                      <input id="nm-start-date" type="date" value={selectedItem.StartDate || ''} onChange={(event) => updateSelected({ StartDate: event.target.value })} />
                     </div>
                     <div className="nm-field">
                       <label htmlFor="nm-start-time">Starts At Time</label>
-                      <input id="nm-start-time" type="text" value={selectedItem.StartTime} onChange={(event) => updateSelected({ StartTime: event.target.value })} placeholder={toTwelveHour('09:00')} />
+                      <input id="nm-start-time" type="text" value={selectedItem.StartTime || ''} onChange={(event) => updateSelected({ StartTime: event.target.value })} placeholder="9:00 AM" />
                     </div>
                     <div className="nm-field">
                       <label htmlFor="nm-end-date">Expires At Date (Optional)</label>
-                      <input id="nm-end-date" type="date" value={selectedItem.EndDate} onChange={(event) => updateSelected({ EndDate: event.target.value })} />
+                      <input id="nm-end-date" type="date" value={selectedItem.EndDate || ''} onChange={(event) => updateSelected({ EndDate: event.target.value })} />
                     </div>
                     <div className="nm-field">
                       <label htmlFor="nm-end-time">Expires At Time (Optional)</label>
-                      <input id="nm-end-time" type="text" value={selectedItem.EndTime} onChange={(event) => updateSelected({ EndTime: event.target.value })} placeholder="12:00 AM" />
+                      <input id="nm-end-time" type="text" value={selectedItem.EndTime || ''} onChange={(event) => updateSelected({ EndTime: event.target.value })} placeholder="e.g. 5:00 PM" />
                     </div>
                   </div>
 
@@ -3484,10 +3484,15 @@ function NotificationEditorModal({
                       type="button"
                       className="nm-btn nm-btn-secondary nm-btn-inline"
                       onClick={() => updateSelected({ EndDate: '', EndTime: '' })}
+                      data-testid="nm-no-expiration-btn"
                     >
                       No Expiration
                     </button>
-                    <span className="nm-inline-note">End date and time are optional. Clear them if this notification should stay active until you disable or remove it.</span>
+                    <span className="nm-inline-note">
+                      {!selectedItem.EndDate && !selectedItem.EndTime
+                        ? 'No expiration set. This notification stays active until disabled or removed.'
+                        : 'End date and time are optional. Click "No Expiration" to clear them.'}
+                    </span>
                   </div>
                   </section>
 
@@ -3519,8 +3524,8 @@ function NotificationEditorModal({
                   <ul>
                     <li>Start date defaults to today in Eastern Time.</li>
                     <li>Start time defaults to the current Eastern time.</li>
-                    <li>Expiration stays blank until you choose an end date.</li>
-                    <li>When an end date is set without a time, SAM uses 12:00 AM.</li>
+                    <li>Expiration stays blank until you choose an end date and time.</li>
+                    <li>Choose No Expiration if this notification should stay active indefinitely.</li>
                     <li>SAM assigns and preserves the internal notification ID automatically.</li>
                     <li>Ticker speed is controlled in Mock Testing Suite Settings, not here.</li>
                   </ul>

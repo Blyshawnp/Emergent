@@ -267,7 +267,44 @@ export function getEasternNowDefaults() {
   };
 }
 
-export function toTwelveHour(value) {
+export function canonicalizeNotificationDate(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.includes('T') && (text.endsWith('Z') || text.includes('+') || text.includes('-0') || text.includes('-1'))) {
+    try {
+      const parsedDate = new Date(text);
+      if (!Number.isNaN(parsedDate.getTime())) {
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+          timeZone: EASTERN_TIME_ZONE,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        });
+        const parts = Object.fromEntries(
+          formatter.formatToParts(parsedDate).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value]),
+        );
+        return `${parts.year}-${parts.month}-${parts.day}`;
+      }
+    } catch {
+      // fallback
+    }
+  }
+  if (text.includes('T')) {
+    const part = text.split('T')[0];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(part)) return part;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) {
+    const month = match[1].padStart(2, '0');
+    const day = match[2].padStart(2, '0');
+    const year = match[3];
+    return `${year}-${month}-${day}`;
+  }
+  return text;
+}
+
+export function canonicalizeNotificationTime(value) {
   const input = String(value || '').trim();
   if (!input) return '';
   const parsed = parseTimeForValidation(input);
@@ -279,11 +316,53 @@ export function toTwelveHour(value) {
   return `${hours12}:${minutes} ${period}`;
 }
 
-export function parseTimeForValidation(value) {
-  const input = String(value || '').trim().toUpperCase().replace(/\./g, '');
-  if (!input) return null;
+export function toTwelveHour(value) {
+  return canonicalizeNotificationTime(value);
+}
 
-  // 1. Matches compact like "534AM", "0534 PM", "534PM"
+export function parseTimeForValidation(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  // 1. Matches ISO datetime like "1899-12-30T20:45:00.000Z" (convert from UTC to Eastern Time)
+  if (raw.includes('T') && (raw.endsWith('Z') || raw.includes('+') || raw.includes('-0') || raw.includes('-1'))) {
+    try {
+      const parsedDate = new Date(raw);
+      if (!Number.isNaN(parsedDate.getTime())) {
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+          timeZone: EASTERN_TIME_ZONE,
+          hour: 'numeric',
+          minute: 'numeric',
+          second: 'numeric',
+          hourCycle: 'h23',
+        });
+        const parts = Object.fromEntries(
+          formatter.formatToParts(parsedDate).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value]),
+        );
+        const hours = parts.hour === '24' ? 0 : Number(parts.hour);
+        const minutes = Number(parts.minute);
+        const seconds = Number(parts.second || 0);
+        return { hours, minutes, seconds };
+      }
+    } catch {
+      // Fall through to regex
+    }
+  }
+
+  // 2. Simple T match without timezone
+  const isoMatch = raw.match(/T(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (isoMatch) {
+    const hours = Number(isoMatch[1]);
+    const minutes = Number(isoMatch[2]);
+    const seconds = isoMatch[3] ? Number(isoMatch[3]) : 0;
+    if (hours <= 23 && minutes <= 59 && seconds <= 59) {
+      return { hours, minutes, seconds };
+    }
+  }
+
+  const input = raw.toUpperCase().replace(/\./g, '');
+
+  // 2. Matches compact like "534AM", "0534 PM", "534PM"
   const matchCompact = input.match(/^(\d{1,2})(\d{2})\s*(AM|PM)$/);
   if (matchCompact) {
     let hours = Number(matchCompact[1]) % 12;
@@ -293,7 +372,7 @@ export function parseTimeForValidation(value) {
     return { hours, minutes, seconds: 0 };
   }
 
-  // 2. Matches "5:34 PM", "05:34:00 PM", "5:34PM", "5PM"
+  // 3. Matches "5:34 PM", "05:34:00 PM", "5:34PM", "5PM"
   const match12 = input.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?\s*(AM|PM)$/);
   if (match12) {
     let hours = Number(match12[1]) % 12;
@@ -304,7 +383,7 @@ export function parseTimeForValidation(value) {
     return { hours, minutes, seconds };
   }
 
-  // 3. Matches "05:34", "17:34:00", "5:34"
+  // 4. Matches "05:34", "17:34:00", "5:34"
   const match24 = input.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (match24) {
     const hours = Number(match24[1]);
@@ -456,8 +535,27 @@ export function normalizeManagerNotification(item = {}) {
   const normalizedType = String(item.Type || base.Type || 'info').toLowerCase() === 'ticker'
     ? 'info'
     : String(item.Type || base.Type || 'info').toLowerCase();
-  const endDate = item.EndDate !== undefined && item.EndDate !== null ? String(item.EndDate || '') : '';
-  const endTime = item.EndTime !== undefined && item.EndTime !== null ? String(item.EndTime || '') : '';
+  const rawStartDate = hasStartDate ? (item.StartDate !== undefined && item.StartDate !== null ? String(item.StartDate) : '') : base.StartDate;
+  const rawStartTime = hasStartTime ? (item.StartTime !== undefined && item.StartTime !== null ? String(item.StartTime) : '') : base.StartTime;
+  const rawEndDate = item.EndDate !== undefined && item.EndDate !== null ? String(item.EndDate) : '';
+  const rawEndTime = item.EndTime !== undefined && item.EndTime !== null ? String(item.EndTime) : '';
+
+  const startDate = canonicalizeNotificationDate(rawStartDate);
+  const startTime = rawStartTime ? canonicalizeNotificationTime(rawStartTime) : '';
+  const endDate = canonicalizeNotificationDate(rawEndDate);
+
+  let endTime = '';
+  if (!endDate) {
+    const parsedEndT = rawEndTime ? canonicalizeNotificationTime(rawEndTime) : '';
+    if (parsedEndT && parsedEndT !== '12:00 AM') {
+      endTime = parsedEndT;
+    } else {
+      endTime = '';
+    }
+  } else {
+    endTime = rawEndTime ? canonicalizeNotificationTime(rawEndTime) : '';
+  }
+
   return {
     ...base,
     ...item,
@@ -467,8 +565,8 @@ export function normalizeManagerNotification(item = {}) {
     ShowTicker: normalizeSheetBoolean(item.ShowTicker, false),
     ShowBanner: normalizeSheetBoolean(item.ShowBanner, false),
     Persistent: normalizeSheetBoolean(item.Persistent, false),
-    StartDate: hasStartDate ? String(item.StartDate || '') : base.StartDate,
-    StartTime: hasStartTime ? String(item.StartTime || '') : base.StartTime,
+    StartDate: startDate,
+    StartTime: startTime,
     EndDate: endDate,
     EndTime: endTime,
     UpdatedAt: item.UpdatedAt || item.CreatedAt || base.UpdatedAt,

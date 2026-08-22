@@ -14235,7 +14235,21 @@ def _normalize_notification_date(value, end_of_day=False):
         return None
 
     parsed = None
-    if "T" in text:
+    if "T" in text and ("Z" in text or "+" in text):
+        try:
+            iso_str = text.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso_str)
+            tz = _get_notification_zone()
+            if tz and dt.tzinfo:
+                dt = dt.astimezone(tz)
+            parsed = datetime(dt.year, dt.month, dt.day)
+        except Exception:
+            try:
+                clean_date = text.split("T")[0]
+                parsed = datetime.strptime(clean_date, "%Y-%m-%d")
+            except ValueError:
+                parsed = None
+    elif "T" in text:
         try:
             clean_date = text.split("T")[0]
             parsed = datetime.strptime(clean_date, "%Y-%m-%d")
@@ -14263,17 +14277,31 @@ def _normalize_notification_date(value, end_of_day=False):
 
 
 def _normalize_notification_time(value):
-    text = _normalize_notification_text(value).upper().replace(".", "").strip()
-    if not text:
+    raw_str = _normalize_notification_text(value).strip()
+    if not raw_str:
         return None
 
-    if "T" in text:
+    # Handle ISO datetime strings like "1899-12-30T20:45:00.000Z" (from Google Sheets / Apps Script)
+    if "T" in raw_str and ("Z" in raw_str or "+" in raw_str):
         try:
-            time_part = text.split("T")[1].split(".")[0].split("Z")[0].strip()
-            parsed = datetime.strptime(time_part, "%H:%M:%S")
-            return parsed.hour, parsed.minute, parsed.second
+            iso_str = raw_str.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso_str)
+            tz = _get_notification_zone()
+            if tz and dt.tzinfo:
+                dt = dt.astimezone(tz)
+            return dt.hour, dt.minute, dt.second
         except Exception:
             pass
+
+    iso_match = re.search(r"T(\d{1,2}):(\d{2})(?::(\d{2}))?", raw_str)
+    if iso_match:
+        h = int(iso_match.group(1))
+        m = int(iso_match.group(2))
+        s = int(iso_match.group(3)) if iso_match.group(3) else 0
+        if h <= 23 and m <= 59 and s <= 59:
+            return h, m, s
+
+    text = raw_str.upper().replace(".", "").strip()
 
     for fmt in ("%I:%M %p", "%I:%M:%S %p", "%I:%M%p", "%I:%M:%S%p", "%H:%M", "%H:%M:%S", "%I%p"):
         try:
@@ -14292,6 +14320,28 @@ def _normalize_notification_time(value):
             pass
 
     return None
+
+
+def _canonicalize_notification_date_str(value):
+    dt = _normalize_notification_date(value)
+    if dt:
+        return dt.strftime("%Y-%m-%d")
+    text = _normalize_notification_text(value)
+    if not text:
+        return ""
+    if "T" in text and re.match(r"^\d{4}-\d{2}-\d{2}", text):
+        return text.split("T")[0]
+    return text
+
+
+def _canonicalize_notification_time_str(value):
+    t = _normalize_notification_time(value)
+    if t:
+        h, m, _ = t
+        period = "PM" if h >= 12 else "AM"
+        h12 = h % 12 or 12
+        return f"{h12}:{m:02d} {period}"
+    return _normalize_notification_text(value)
 
 
 @lru_cache(maxsize=1)
@@ -14373,8 +14423,23 @@ def _normalize_notification_manager_item(item):
     legacy_ticker_type = normalized_type == "ticker"
     if legacy_ticker_type:
         normalized_type = "info"
-    end_date = _normalize_notification_text(item.get("EndDate"))
-    end_time = _normalize_notification_text(item.get("EndTime"))
+
+    raw_start_date = item.get("StartDate")
+    raw_start_time = item.get("StartTime")
+    raw_end_date = item.get("EndDate")
+    raw_end_time = item.get("EndTime")
+
+    start_date = _canonicalize_notification_date_str(raw_start_date)
+    start_time = _canonicalize_notification_time_str(raw_start_time) if _normalize_notification_text(raw_start_time) else ""
+    end_date = _canonicalize_notification_date_str(raw_end_date)
+
+    if not end_date:
+        end_time = _canonicalize_notification_time_str(raw_end_time) if _normalize_notification_text(raw_end_time) else ""
+        if end_time in {"12:00 AM", "12:00:00 AM", "0:00 AM"}:
+            end_time = ""
+    else:
+        end_time = _canonicalize_notification_time_str(raw_end_time) if _normalize_notification_text(raw_end_time) else ""
+
     normalized = {
         "Enabled": _normalize_notification_bool_with_default(item.get("Enabled"), False),
         "ID": _normalize_notification_text(item.get("ID")),
@@ -14385,8 +14450,8 @@ def _normalize_notification_manager_item(item):
         "ShowPopup": _normalize_notification_bool_with_default(item.get("ShowPopup"), False),
         "ShowBanner": _normalize_notification_bool_with_default(item.get("ShowBanner"), False),
         "Persistent": _normalize_notification_bool_with_default(item.get("Persistent"), False),
-        "StartDate": _normalize_notification_text(item.get("StartDate")),
-        "StartTime": _normalize_notification_text(item.get("StartTime")),
+        "StartDate": start_date,
+        "StartTime": start_time,
         "EndDate": end_date,
         "EndTime": end_time,
         "ActionText": _normalize_notification_text(item.get("ActionText")),
