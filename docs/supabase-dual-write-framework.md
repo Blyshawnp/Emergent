@@ -265,7 +265,29 @@ On August 23, 2026, the core coupled certification domains (`candidates`, `candi
 
 ---
 
-## 17. Dual-Write Verification Status Matrix
+## 17. Limited Candidate Lifecycle Dual-Write Soak (Multi-Domain Evaluation)
+
+On August 24, 2026, a limited organic dual-write soak evaluation was initiated for the core candidate lifecycle domains (`candidates`, `candidate_sessions`, `session_attempts`):
+- **Activation Scope**: `MTS_DUAL_WRITE_DOMAINS=candidates,candidate_sessions,session_attempts`, `MTS_DATA_PROVIDER=sheets`, `MTS_SHADOW_COMPARE=true`.
+- **Pre-Soak Hosted Baseline**:
+  - `candidates`: 58
+  - `candidate_sessions`: 73
+  - `session_attempts`: 145
+  - `notifications`: 5
+  - `headset_reviews`: 12
+  - `supervisor_transfers`: 15
+  - `newbie_shift_requests`: 14
+  - `candidate_corrections`: 7
+  - `extra_attempt_grants`: 0
+  - `status_actions`: 1
+  - `data_source_lineage`: 292 entries (0 orphans, 0 unresolved mappings).
+- **Organic Traffic Observation**: Evaluated during an off-peak testing window where 0 real candidates completed active certification flows. In accordance with strict safety rules against fabricating production test data, dual-write runtime was returned to fail-closed state (`MTS_DUAL_WRITE_ENABLED=false`, `MTS_DUAL_WRITE_DOMAINS=[]`).
+- **Controlled Fixture Verification**: Re-verified all multi-domain orchestration paths (new candidate creation, existing candidate identity reuse, attempt numbering, partial mirror failure handling, and divergence repair). All 29/29 dual-write tests and 534/534 backend tests passed cleanly.
+- **Fail-Closed Default Preserved**: Authoritative writes remain 100% on Google Sheets / Apps Script with zero unresolved divergences.
+
+---
+
+## 18. Dual-Write Verification Status Matrix
 
 | Domain Name | Status | Dual-Write Eligible | Target Table | Conflict Key |
 |---|:---:|:---:|---|---|
@@ -280,6 +302,7 @@ On August 23, 2026, the core coupled certification domains (`candidates`, `candi
 | `candidate_sessions` | **FRAMEWORK & WORKFLOW READY** (Awaiting Session) | **YES** | `mts_sam.candidate_sessions` | `session_id` |
 | `session_attempts` | **FRAMEWORK & WORKFLOW READY** (Awaiting Session) | **YES** | `mts_sam.session_attempts` | `source_action_id` |
 | `pending_requests` | DERIVED VIEW (No Direct Mirror) | **NO** | `mts_sam.pending_requests_view` | `request_id` |
+
 
 
 
