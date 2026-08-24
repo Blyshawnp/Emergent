@@ -701,6 +701,60 @@ class SupervisorTransfersAdapter(DomainDualWriteAdapter):
         return True
 
 
+class ExtraAttemptGrantsAdapter(DomainDualWriteAdapter):
+    domain = "extra_attempt_grants"
+    target_table = "extra_attempt_grants"
+    conflict_key = "action_id"
+
+    def extract_business_key(self, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("action_id") or payload.get("id") or payload.get("grant_id") or "")
+
+    def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        action_id = self.extract_business_key(payload)
+        source_session_id = str(payload.get("source_session_id") or payload.get("session_id") or "").strip()
+        granted_count = max(1, int(payload.get("granted_count") or 1))
+        resulting_allowed = max(1, int(payload.get("resulting_allowed_attempt_count") or payload.get("allowed_attempt_count") or (3 + granted_count)))
+        reason = payload.get("reason") or payload.get("extra_attempt_reason") or None
+        granted_by = payload.get("granted_by") or payload.get("extra_attempt_granted_by") or payload.get("actor") or None
+
+        granted_at_raw = payload.get("granted_at") or payload.get("extra_attempt_granted_at") or payload.get("occurred_at")
+        granted_at = str(granted_at_raw).strip() if granted_at_raw else datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        session_uuid = payload.get("session_uuid") or payload.get("canonical_session_id") or payload.get("session_id")
+
+        data = {
+            "action_id": action_id,
+            "source_session_id": source_session_id,
+            "granted_count": granted_count,
+            "resulting_allowed_attempt_count": resulting_allowed,
+            "reason": reason,
+            "granted_by": granted_by,
+            "granted_at": granted_at,
+            "source_provider": str(payload.get("source_provider") or "sheets"),
+        }
+        if session_uuid:
+            data["session_id"] = str(session_uuid)
+        return data
+
+    def verify_persisted_state(
+        self,
+        supabase_provider: SupabaseDataProvider,
+        business_key: str,
+        expected_payload: Mapping[str, Any],
+    ) -> bool:
+        if not business_key:
+            return False
+        rows = supabase_provider.list_resource("extra_attempt_grants", filters={"action_id": business_key})
+        if not rows:
+            return False
+        row = rows[0]
+        if expected_payload.get("source_session_id") and str(row.get("source_session_id") or "").strip() != str(expected_payload.get("source_session_id") or "").strip():
+            return False
+        if expected_payload.get("resulting_allowed_attempt_count") and int(row.get("resulting_allowed_attempt_count") or 0) != int(expected_payload.get("resulting_allowed_attempt_count")):
+            return False
+        return True
+
+
 class GenericOperationalAdapter(DomainDualWriteAdapter):
     def __init__(self, domain: str, target_table: str, conflict_key: str):
         self.domain = domain
@@ -738,7 +792,7 @@ ADAPTER_REGISTRY: dict[str, DomainDualWriteAdapter] = {
     "candidate_corrections": CandidateCorrectionsAdapter(),
     "pending_requests": GenericOperationalAdapter("pending_requests", "pending_requests", "request_id"),
     "candidate_status_actions": GenericOperationalAdapter("candidate_status_actions", "candidate_status_actions", "id"),
-    "extra_attempt_grants": GenericOperationalAdapter("extra_attempt_grants", "extra_attempt_grants", "id"),
+    "extra_attempt_grants": ExtraAttemptGrantsAdapter(),
 }
 
 

@@ -222,7 +222,19 @@ On August 23, 2026, the `supervisor_transfers` domain successfully completed liv
 
 ---
 
-## 14. Dual-Write Verification Status Matrix
+## 14. Extra Attempt Grants Dual-Write Readiness & Isolation
+
+On August 23, 2026, the `extra_attempt_grants` domain was verified for dual-write readiness and runtime gate isolation:
+- **Adapter**: `ExtraAttemptGrantsAdapter` in `backend/data_providers/dual_write.py`.
+- **Target Table**: `mts_sam.extra_attempt_grants`.
+- **Conflict Key**: `action_id` (deterministic unique grant action identifier, e.g. `extra-{session_id}-{count}`).
+- **Semantics**: Captures `action_id`, `session_id`, `source_session_id`, `granted_count`, `resulting_allowed_attempt_count`, `reason`, `granted_by`, `granted_at`, and `source_provider`.
+- **Live Event Availability**: 0 active production candidates currently requiring an extra attempt during normal operations. Under strict Section 16 & 17 safety rules ("NEVER CREATE FAKE ENTITLEMENTS"), no artificial production grants were created solely for canary testing. Status set to `FRAMEWORK & ADAPTER READY (Awaiting Event)`.
+- **Fail-Closed Isolation**: All 13 Section 19 gate cases verified (Cases A through M); non-allowlisted domains (`notifications`, `headset_reviews`, `newbie_shift_requests`, `supervisor_transfers`, `candidate_corrections`, `candidates`, `candidate_sessions`, `session_attempts`, `pending_requests`, `candidate_status_actions`) returned `mirror_attempted=False` with status `skipped_domain_not_allowlisted`.
+
+---
+
+## 15. Dual-Write Verification Status Matrix
 
 | Domain Name | Status | Dual-Write Eligible | Target Table | Conflict Key |
 |---|:---:|:---:|---|---|
@@ -231,12 +243,13 @@ On August 23, 2026, the `supervisor_transfers` domain successfully completed liv
 | `newbie_shift_requests` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.newbie_shift_requests` | `request_id` |
 | `supervisor_transfers` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.supervisor_transfers` | `transfer_id` |
 | `candidate_corrections` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.candidate_corrections` | `request_id` |
+| `extra_attempt_grants` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.extra_attempt_grants` | `action_id` |
 | `candidate_sessions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_sessions` | `session_id` |
 | `candidates` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidates` | `source_candidate_id` |
 | `session_attempts` | FRAMEWORK-TESTED | **YES** | `mts_sam.session_attempts` | `id` |
 | `pending_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.pending_requests` | `request_id` |
 | `candidate_status_actions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_status_actions` | `id` |
-| `extra_attempt_grants` | FRAMEWORK-TESTED | **YES** | `mts_sam.extra_attempt_grants` | `id` |
+
 
 
 
