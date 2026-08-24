@@ -755,6 +755,61 @@ class ExtraAttemptGrantsAdapter(DomainDualWriteAdapter):
         return True
 
 
+class CandidateStatusActionsAdapter(DomainDualWriteAdapter):
+    domain = "candidate_status_actions"
+    target_table = "candidate_status_actions"
+    conflict_key = "action_id"
+
+    def extract_business_key(self, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("action_id") or payload.get("id") or "")
+
+    def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        action_id = self.extract_business_key(payload)
+        session_uuid = payload.get("session_uuid") or payload.get("canonical_session_id") or payload.get("session_id")
+        action_type = str(payload.get("action_type") or payload.get("action") or "readiness_override").strip()
+        result = payload.get("result") or payload.get("status") or None
+        reason = payload.get("reason") or None
+        actor_name = payload.get("actor_name") or payload.get("actor") or "system"
+        before_state = payload.get("before_state")
+        after_state = payload.get("after_state")
+        occurred_at_raw = payload.get("occurred_at") or payload.get("created_at") or payload.get("timestamp")
+        occurred_at = str(occurred_at_raw).strip() if occurred_at_raw else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        source_provider = str(payload.get("source_provider") or "sheets")
+
+        data = {
+            "action_id": action_id,
+            "action_type": action_type,
+            "result": result,
+            "reason": reason,
+            "actor_name": actor_name,
+            "before_state": before_state if isinstance(before_state, (dict, list)) else None,
+            "after_state": after_state if isinstance(after_state, (dict, list)) else None,
+            "occurred_at": occurred_at,
+            "source_provider": source_provider,
+        }
+        if session_uuid:
+            data["session_id"] = str(session_uuid)
+        return data
+
+    def verify_persisted_state(
+        self,
+        supabase_provider: SupabaseDataProvider,
+        business_key: str,
+        expected_payload: Mapping[str, Any],
+    ) -> bool:
+        if not business_key:
+            return False
+        rows = supabase_provider.list_resource("candidate_status_actions", filters={"action_id": business_key})
+        if not rows:
+            return False
+        row = rows[0]
+        if expected_payload.get("action_type") and str(row.get("action_type") or "").strip() != str(expected_payload.get("action_type") or "").strip():
+            return False
+        if expected_payload.get("result") and str(row.get("result") or "").strip() != str(expected_payload.get("result") or "").strip():
+            return False
+        return True
+
+
 class GenericOperationalAdapter(DomainDualWriteAdapter):
     def __init__(self, domain: str, target_table: str, conflict_key: str):
         self.domain = domain
@@ -791,7 +846,7 @@ ADAPTER_REGISTRY: dict[str, DomainDualWriteAdapter] = {
     "newbie_shift_requests": NewbieShiftRequestsAdapter(),
     "candidate_corrections": CandidateCorrectionsAdapter(),
     "pending_requests": GenericOperationalAdapter("pending_requests", "pending_requests", "request_id"),
-    "candidate_status_actions": GenericOperationalAdapter("candidate_status_actions", "candidate_status_actions", "id"),
+    "candidate_status_actions": CandidateStatusActionsAdapter(),
     "extra_attempt_grants": ExtraAttemptGrantsAdapter(),
 }
 

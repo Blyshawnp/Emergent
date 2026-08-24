@@ -234,7 +234,20 @@ On August 23, 2026, the `extra_attempt_grants` domain was verified for dual-writ
 
 ---
 
-## 15. Dual-Write Verification Status Matrix
+## 15. Candidate Status Actions Dual-Write Readiness & Isolation
+
+On August 23, 2026, the `candidate_status_actions` domain was verified for dual-write readiness, adapter transformation, and runtime gate isolation:
+- **Adapter**: `CandidateStatusActionsAdapter` in `backend/data_providers/dual_write.py`.
+- **Target Table**: `mts_sam.candidate_status_actions`.
+- **Conflict Key**: `action_id` (deterministic unique audit action identifier).
+- **Semantics**: Captures `action_id`, `session_id`, `action_type` (`mark_passed`, `mark_failed`, `readiness_override`, `clear_readiness_override`), `result`, `reason`, `actor_name`, `before_state`, `after_state`, `occurred_at`, and `source_provider`.
+- **Immutability & Domain Model**: The underlying table `mts_sam.candidate_status_actions` is protected by `candidate_status_actions_immutable` trigger (`mts_sam.prevent_historical_mutation()`). It is an append-only transaction audit log.
+- **Live Event Availability**: 0 active production candidates requiring an immediate terminal status decision during normal operations. Under strict Section 15 & 16 safety rules ("DO NOT CREATE FAKE AUDIT HISTORY"), creating an artificial status decision solely for canary testing is prohibited. Status set to `FRAMEWORK & ADAPTER READY (Awaiting Event)`.
+- **Fail-Closed Isolation**: All 13 Section 18 gate cases verified (Cases A through M); non-allowlisted domains (`notifications`, `headset_reviews`, `newbie_shift_requests`, `supervisor_transfers`, `candidate_corrections`, `extra_attempt_grants`, `candidates`, `candidate_sessions`, `session_attempts`, `pending_requests`) returned `mirror_attempted=False` with status `skipped_domain_not_allowlisted`.
+
+---
+
+## 16. Dual-Write Verification Status Matrix
 
 | Domain Name | Status | Dual-Write Eligible | Target Table | Conflict Key |
 |---|:---:|:---:|---|---|
@@ -244,11 +257,12 @@ On August 23, 2026, the `extra_attempt_grants` domain was verified for dual-writ
 | `supervisor_transfers` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.supervisor_transfers` | `transfer_id` |
 | `candidate_corrections` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.candidate_corrections` | `request_id` |
 | `extra_attempt_grants` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.extra_attempt_grants` | `action_id` |
+| `candidate_status_actions` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.candidate_status_actions` | `action_id` |
 | `candidate_sessions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_sessions` | `session_id` |
 | `candidates` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidates` | `source_candidate_id` |
 | `session_attempts` | FRAMEWORK-TESTED | **YES** | `mts_sam.session_attempts` | `id` |
 | `pending_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.pending_requests` | `request_id` |
-| `candidate_status_actions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_status_actions` | `id` |
+
 
 
 

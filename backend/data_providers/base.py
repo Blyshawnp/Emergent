@@ -19,6 +19,7 @@ RESOURCE_TABLES = {
     "newbie_shifts": "newbie_shift_requests",
     "candidate_corrections": "candidate_corrections",
     "status_actions": "candidate_status_actions",
+    "candidate_status_actions": "candidate_status_actions",
     "extra_attempts": "extra_attempt_grants",
     "extra_attempt_grants": "extra_attempt_grants",
     "notifications": "notifications",
