@@ -179,20 +179,34 @@ The second live single-domain canary test confirmed end-to-end mirror synchroniz
 
 ---
 
-## 11. Dual-Write Verification Status Matrix
+## 11. Candidate Corrections Dual-Write Adapter & Readiness
+
+The `candidate_corrections` domain has been implemented and tested:
+- **Adapter**: `CandidateCorrectionsAdapter` in `backend/data_providers/dual_write.py`.
+- **Target Table**: `mts_sam.candidate_corrections`.
+- **Conflict Key**: `request_id` (deterministic unique business identifier).
+- **Semantics**: Captures `source_session_id`, `changes` (JSON), `reason`, `status` (`pending`, `approved`, `denied`), `requested_by`, `decided_by`, `denial_reason`, `created_at`, `decision_at`, `source_checksum`, and `source_payload`.
+- **Relationship Safety**: Request submission does NOT mutate `candidates` canonical records directly.
+- **Fail-Closed Gate**: Passes all Section 13 cases (A through G), blocking cross-domain writes into notifications, headset reviews, candidates, and pending requests when `MTS_DUAL_WRITE_DOMAINS=candidate_corrections`.
+- **Production Event Status**: All 7 historical candidate correction requests in production are in terminal/resolved states (`approved`/`denied`). No pending request currently exists. Ready for live dual-write canary execution upon the occurrence of a legitimate candidate correction event without fabricating artificial business history.
+
+---
+
+## 12. Dual-Write Verification Status Matrix
 
 | Domain Name | Status | Dual-Write Eligible | Target Table | Conflict Key |
 |---|:---:|:---:|---|---|
 | `notifications` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.notifications` | `notification_id` |
 | `headset_reviews` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.headset_reviews` | `review_id` |
+| `candidate_corrections` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.candidate_corrections` | `request_id` |
 | `candidate_sessions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_sessions` | `session_id` |
 | `candidates` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidates` | `source_candidate_id` |
 | `session_attempts` | FRAMEWORK-TESTED | **YES** | `mts_sam.session_attempts` | `id` |
 | `supervisor_transfers` | FRAMEWORK-TESTED | **YES** | `mts_sam.supervisor_transfers` | `transfer_id` |
 | `newbie_shift_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.newbie_shift_requests` | `request_id` |
-| `candidate_corrections` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_corrections` | `request_id` |
 | `pending_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.pending_requests` | `request_id` |
 | `candidate_status_actions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_status_actions` | `id` |
 | `extra_attempt_grants` | FRAMEWORK-TESTED | **YES** | `mts_sam.extra_attempt_grants` | `id` |
+
 
 

@@ -15,6 +15,7 @@ from data_providers.dual_write import (
     NotificationsAdapter,
     HeadsetReviewsAdapter,
     CandidateSessionsAdapter,
+    CandidateCorrectionsAdapter,
     active_dual_write_domains,
     build_operation_id,
     compute_payload_digest,
@@ -394,16 +395,112 @@ class DualWriteFrameworkTests(unittest.TestCase):
         self.assertEqual(transformed["raw_status"], "Pass")
         self.assertTrue(transformed["final_attempt"])
 
-    # 12. Readiness Report (Section 45)
+    # 12. Candidate Corrections Adapter
+    def test_candidate_corrections_adapter_transformation(self):
+        adapter = CandidateCorrectionsAdapter()
+        payload = {
+            "request_id": "corr-123",
+            "source_session_id": "sess-abc",
+            "status": "pending",
+            "reason": "Name correction",
+            "changes": {"candidate_name": "Jane Doe"},
+            "requested_by": "Tester 1",
+        }
+        transformed = adapter.transform_payload(payload)
+        self.assertEqual(transformed["request_id"], "corr-123")
+        self.assertEqual(transformed["source_session_id"], "sess-abc")
+        self.assertEqual(transformed["status"], "pending")
+        self.assertEqual(transformed["reason"], "Name correction")
+        self.assertEqual(transformed["changes"], {"candidate_name": "Jane Doe"})
+        self.assertEqual(transformed["requested_by"], "Tester 1")
+        self.assertIsNotNone(transformed["source_checksum"])
+
+    # 13. Candidate Corrections Section 13 Gate Test Cases (A through G)
+    def test_candidate_corrections_section_13_gate_cases(self):
+        auth_mock = Mock(return_value={"ok": True, "request_id": "corr-1"})
+
+        # Case A: MTS_DUAL_WRITE_ENABLED=false -> candidate_corrections mirror NO
+        _, res_a = self.manager.execute_dual_write(
+            domain="candidate_corrections",
+            mutation_type="action",
+            authoritative_payload={"request_id": "corr-1", "status": "approved"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "false", "MTS_DUAL_WRITE_DOMAINS": "candidate_corrections"},
+        )
+        self.assertFalse(res_a.mirror_attempted)
+
+        # Case B: MTS_DUAL_WRITE_ENABLED=true, MTS_DUAL_WRITE_DOMAINS=notifications -> candidate_corrections mirror NO
+        _, res_b = self.manager.execute_dual_write(
+            domain="candidate_corrections",
+            mutation_type="action",
+            authoritative_payload={"request_id": "corr-1", "status": "approved"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"},
+        )
+        self.assertFalse(res_b.mirror_attempted)
+
+        # Case C: MTS_DUAL_WRITE_ENABLED=true, MTS_DUAL_WRITE_DOMAINS=candidate_corrections -> candidate_corrections mirror YES
+        self.mock_supabase.list_resource.return_value = [{"request_id": "corr-1", "status": "approved", "source_session_id": "s-1", "reason": "R"}]
+        _, res_c = self.manager.execute_dual_write(
+            domain="candidate_corrections",
+            mutation_type="action",
+            authoritative_payload={"request_id": "corr-1", "status": "approved", "source_session_id": "s-1", "reason": "R"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "candidate_corrections"},
+        )
+        self.assertTrue(res_c.mirror_attempted)
+        self.assertTrue(res_c.mirror_success)
+
+        # Case D: same configuration -> notifications mirror NO
+        _, res_d = self.manager.execute_dual_write(
+            domain="notifications",
+            mutation_type="update",
+            authoritative_payload={"ID": "notif-1", "Title": "T"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "candidate_corrections"},
+        )
+        self.assertFalse(res_d.mirror_attempted)
+
+        # Case E: same configuration -> headset_reviews mirror NO
+        _, res_e = self.manager.execute_dual_write(
+            domain="headset_reviews",
+            mutation_type="action",
+            authoritative_payload={"review_id": "hr-1", "brand": "B", "model": "M"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "candidate_corrections"},
+        )
+        self.assertFalse(res_e.mirror_attempted)
+
+        # Case F: same configuration -> candidates mirror NO
+        _, res_f = self.manager.execute_dual_write(
+            domain="candidates",
+            mutation_type="update",
+            authoritative_payload={"source_candidate_id": "c-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "candidate_corrections"},
+        )
+        self.assertFalse(res_f.mirror_attempted)
+
+        # Case G: same configuration -> pending_requests mirror NO
+        _, res_g = self.manager.execute_dual_write(
+            domain="pending_requests",
+            mutation_type="action",
+            authoritative_payload={"request_id": "req-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "candidate_corrections"},
+        )
+        self.assertFalse(res_g.mirror_attempted)
+
+    # 14. Readiness Report (Section 45)
     def test_readiness_report_structure(self):
         report = self.tracker.get_readiness_report({
             "MTS_DATA_PROVIDER": "sheets",
             "MTS_DUAL_WRITE_ENABLED": "true",
-            "MTS_DUAL_WRITE_DOMAINS": "notifications",
+            "MTS_DUAL_WRITE_DOMAINS": "candidate_corrections",
         })
         self.assertTrue(report["dual_write_implementation_ready"])
         self.assertTrue(report["dual_write_enabled"])
-        self.assertEqual(report["active_domains"], ["notifications"])
+        self.assertEqual(report["active_domains"], ["candidate_corrections"])
         self.assertEqual(report["pending_divergences"], 0)
         self.assertTrue(report["idempotency_ready"])
         self.assertTrue(report["repair_tracking_ready"])
