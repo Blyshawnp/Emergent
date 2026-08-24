@@ -15,6 +15,8 @@ from data_providers.dual_write import (
     NotificationsAdapter,
     HeadsetReviewsAdapter,
     CandidateSessionsAdapter,
+    CandidatesAdapter,
+    SessionAttemptsAdapter,
     CandidateCorrectionsAdapter,
     NewbieShiftRequestsAdapter,
     SupervisorTransfersAdapter,
@@ -1072,16 +1074,223 @@ class DualWriteFrameworkTests(unittest.TestCase):
         )
         self.assertFalse(res_m.mirror_attempted)
 
-    # 22. Readiness Report (Section 45)
+    # 22. Candidates Adapter & Session Attempts Adapter Transformation
+    def test_candidates_adapter_transformation(self):
+        adapter = CandidatesAdapter()
+        payload = {
+            "source_candidate_id": "cand-123",
+            "display_name": "Jordan Harris",
+            "status": "active",
+        }
+        transformed = adapter.transform_payload(payload)
+        self.assertEqual(transformed["source_candidate_id"], "cand-123")
+        self.assertEqual(transformed["display_name"], "Jordan Harris")
+        self.assertEqual(transformed["normalized_name"], "jordan harris")
+        self.assertEqual(transformed["current_status"], "active")
+        self.assertIsNotNone(transformed["updated_at"])
+
+    def test_session_attempts_adapter_transformation(self):
+        adapter = SessionAttemptsAdapter()
+        payload = {
+            "source_action_id": "att-sess-1-1",
+            "session_id": "sess-1",
+            "attempt_number": 1,
+            "attempt_type": "mock_call",
+            "result": "Pass",
+            "details": {"score": 95},
+        }
+        transformed = adapter.transform_payload(payload)
+        self.assertEqual(transformed["source_action_id"], "att-sess-1-1")
+        self.assertEqual(transformed["session_id"], "sess-1")
+        self.assertEqual(transformed["attempt_number"], 1)
+        self.assertEqual(transformed["attempt_type"], "mock_call")
+        self.assertEqual(transformed["result"], "Pass")
+        self.assertEqual(transformed["details"], {"score": 95})
+
+    # 23. Multi-Domain Gate Verification for Candidate Lifecycle Group (Section 24 & 25)
+    def test_candidate_lifecycle_multi_domain_gate_cases(self):
+        auth_mock = Mock(return_value={"ok": True})
+        multi_domain_env = {
+            "MTS_DUAL_WRITE_ENABLED": "true",
+            "MTS_DUAL_WRITE_DOMAINS": "candidates,candidate_sessions,session_attempts",
+        }
+
+        # Case 1: GLOBAL OFF -> all 3 blocked
+        for dom in ["candidates", "candidate_sessions", "session_attempts"]:
+            _, res = self.manager.execute_dual_write(
+                domain=dom,
+                mutation_type="update",
+                authoritative_payload={"id": "x"},
+                authoritative_write_fn=auth_mock,
+                environ={"MTS_DUAL_WRITE_ENABLED": "false", "MTS_DUAL_WRITE_DOMAINS": "candidates,candidate_sessions,session_attempts"},
+            )
+            self.assertFalse(res.mirror_attempted)
+
+        # Case 2: GLOBAL ON + only candidates -> candidate YES, session NO, attempt NO
+        cand_only_env = {"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "candidates"}
+        self.mock_supabase.list_resource.return_value = [{"source_candidate_id": "c1", "display_name": "N"}]
+        _, res_cand = self.manager.execute_dual_write(
+            domain="candidates",
+            mutation_type="create",
+            authoritative_payload={"source_candidate_id": "c1", "display_name": "N"},
+            authoritative_write_fn=auth_mock,
+            environ=cand_only_env,
+        )
+        self.assertTrue(res_cand.mirror_attempted)
+        self.assertTrue(res_cand.mirror_success)
+
+        _, res_sess = self.manager.execute_dual_write(
+            domain="candidate_sessions",
+            mutation_type="create",
+            authoritative_payload={"session_id": "s1"},
+            authoritative_write_fn=auth_mock,
+            environ=cand_only_env,
+        )
+        self.assertFalse(res_sess.mirror_attempted)
+
+        _, res_att = self.manager.execute_dual_write(
+            domain="session_attempts",
+            mutation_type="create",
+            authoritative_payload={"source_action_id": "a1"},
+            authoritative_write_fn=auth_mock,
+            environ=cand_only_env,
+        )
+        self.assertFalse(res_att.mirror_attempted)
+
+        # Case 3: Approved 3-domain group -> all 3 mirror YES
+        self.mock_supabase.list_resource.side_effect = [
+            [{"source_candidate_id": "c1", "display_name": "N"}],
+            [{"session_id": "s1", "raw_status": "in_progress", "status": "in_progress"}],
+            [{"source_action_id": "a1", "result": "Pass", "attempt_number": 1}],
+        ]
+        _, res_cand_g = self.manager.execute_dual_write(
+            domain="candidates", mutation_type="create", authoritative_payload={"source_candidate_id": "c1", "display_name": "N"}, authoritative_write_fn=auth_mock, environ=multi_domain_env,
+        )
+        _, res_sess_g = self.manager.execute_dual_write(
+            domain="candidate_sessions", mutation_type="create", authoritative_payload={"session_id": "s1"}, authoritative_write_fn=auth_mock, environ=multi_domain_env,
+        )
+        _, res_att_g = self.manager.execute_dual_write(
+            domain="session_attempts", mutation_type="create", authoritative_payload={"source_action_id": "a1", "result": "Pass", "attempt_number": 1}, authoritative_write_fn=auth_mock, environ=multi_domain_env,
+        )
+        self.assertTrue(res_cand_g.mirror_attempted)
+        self.assertTrue(res_sess_g.mirror_attempted)
+        self.assertTrue(res_att_g.mirror_attempted)
+
+        # Case 4: Unrelated domains -> ALL NO
+        unrelated = [
+            "notifications", "headset_reviews", "newbie_shift_requests",
+            "supervisor_transfers", "candidate_corrections", "extra_attempt_grants",
+            "candidate_status_actions", "pending_requests"
+        ]
+        for dom in unrelated:
+            _, res_u = self.manager.execute_dual_write(
+                domain=dom, mutation_type="action", authoritative_payload={"id": "x"}, authoritative_write_fn=auth_mock, environ=multi_domain_env,
+            )
+            self.assertFalse(res_u.mirror_attempted, f"Domain {dom} should be blocked under candidate lifecycle group")
+
+    # 24. Controlled Candidate Lifecycle Workflow Integration Tests (Section 71)
+    def test_candidate_lifecycle_workflow_orchestration(self):
+        multi_domain_env = {
+            "MTS_DUAL_WRITE_ENABLED": "true",
+            "MTS_DUAL_WRITE_DOMAINS": "candidates,candidate_sessions,session_attempts",
+        }
+
+        # Scenario A: New candidate + session + attempt 1 (happy path)
+        self.mock_supabase.list_resource.side_effect = [
+            [{"source_candidate_id": "c-fixture-1", "display_name": "Alex Smith"}],
+            [{"session_id": "s-fixture-1", "status": "in_progress", "raw_status": "in_progress"}],
+            [{"source_action_id": "att-s1-1", "result": "Pass", "attempt_number": 1}],
+        ]
+        wf_res = self.manager.execute_candidate_lifecycle_workflow(
+            candidate_payload={"source_candidate_id": "c-fixture-1", "display_name": "Alex Smith", "is_new": True},
+            candidate_authoritative_write_fn=lambda: {"ok": True, "id": "c-fixture-1"},
+            session_payload={"session_id": "s-fixture-1", "candidate_name": "Alex Smith", "is_new": True},
+            session_authoritative_write_fn=lambda: {"ok": True, "id": "s-fixture-1"},
+            attempt_payload={"source_action_id": "att-s1-1", "session_id": "s-fixture-1", "attempt_number": 1, "result": "Pass"},
+            attempt_authoritative_write_fn=lambda: {"ok": True, "id": "att-s1-1"},
+            environ=multi_domain_env,
+        )
+        self.assertTrue(wf_res["all_mirrors_succeeded"])
+        self.assertTrue(wf_res["candidate_mirror_result"].mirror_success)
+        self.assertTrue(wf_res["session_mirror_result"].mirror_success)
+        self.assertTrue(wf_res["attempt_mirror_result"].mirror_success)
+        self.assertEqual(len(self.tracker.list_divergences(unresolved_only=True)), 0)
+
+        # Scenario B: Existing candidate + new session + attempt 1
+        self.mock_supabase.list_resource.side_effect = [
+            [{"source_candidate_id": "c-fixture-1", "display_name": "Alex Smith"}],
+            [{"session_id": "s-fixture-2", "status": "in_progress", "raw_status": "in_progress"}],
+            [{"source_action_id": "att-s2-1", "result": "Fail", "attempt_number": 1}],
+        ]
+        wf_res_b = self.manager.execute_candidate_lifecycle_workflow(
+            candidate_payload={"source_candidate_id": "c-fixture-1", "display_name": "Alex Smith", "is_new": False},
+            candidate_authoritative_write_fn=lambda: {"ok": True, "id": "c-fixture-1"},
+            session_payload={"session_id": "s-fixture-2", "candidate_name": "Alex Smith", "is_new": True},
+            session_authoritative_write_fn=lambda: {"ok": True, "id": "s-fixture-2"},
+            attempt_payload={"source_action_id": "att-s2-1", "session_id": "s-fixture-2", "attempt_number": 1, "result": "Fail"},
+            attempt_authoritative_write_fn=lambda: {"ok": True, "id": "att-s2-1"},
+            environ=multi_domain_env,
+        )
+        self.assertTrue(wf_res_b["all_mirrors_succeeded"])
+
+        # Scenario C: Second legitimate attempt on same session
+        self.mock_supabase.list_resource.side_effect = [
+            [{"source_action_id": "att-s2-2", "result": "Pass", "attempt_number": 2}],
+        ]
+        _, att_res_2 = self.manager.execute_dual_write(
+            domain="session_attempts",
+            mutation_type="create",
+            authoritative_payload={"source_action_id": "att-s2-2", "session_id": "s-fixture-2", "attempt_number": 2, "result": "Pass"},
+            authoritative_write_fn=lambda: {"ok": True, "id": "att-s2-2"},
+            environ=multi_domain_env,
+        )
+        self.assertTrue(att_res_2.mirror_success)
+
+        # Scenario D: Attempt mirror failure does NOT roll back candidate/session or Sheets
+        self.mock_supabase.list_resource.side_effect = [
+            [{"source_candidate_id": "c-fixture-3", "display_name": "Chris Lee"}],
+            [{"session_id": "s-fixture-3", "status": "in_progress", "raw_status": "in_progress"}],
+            SupabaseProviderError("Supabase timeout on attempts (status 504)"),
+        ]
+        wf_res_d = self.manager.execute_candidate_lifecycle_workflow(
+            candidate_payload={"source_candidate_id": "c-fixture-3", "display_name": "Chris Lee", "is_new": True},
+            candidate_authoritative_write_fn=lambda: {"ok": True, "id": "c-fixture-3"},
+            session_payload={"session_id": "s-fixture-3", "candidate_name": "Chris Lee", "is_new": True},
+            session_authoritative_write_fn=lambda: {"ok": True, "id": "s-fixture-3"},
+            attempt_payload={"source_action_id": "att-s3-1", "session_id": "s-fixture-3", "attempt_number": 1, "result": "Pass"},
+            attempt_authoritative_write_fn=lambda: {"ok": True, "id": "att-s3-1"},
+            environ=multi_domain_env,
+        )
+        self.assertFalse(wf_res_d["all_mirrors_succeeded"])
+        self.assertTrue(wf_res_d["candidate_authoritative_result"]["ok"])
+        self.assertTrue(wf_res_d["session_authoritative_result"]["ok"])
+        self.assertTrue(wf_res_d["attempt_authoritative_result"]["ok"])
+        self.assertTrue(wf_res_d["candidate_mirror_result"].mirror_success)
+        self.assertTrue(wf_res_d["session_mirror_result"].mirror_success)
+        self.assertFalse(wf_res_d["attempt_mirror_result"].mirror_success)
+        # Exactly 1 divergence recorded for session_attempts
+        divs = self.tracker.list_divergences(unresolved_only=True)
+        self.assertEqual(len(divs), 1)
+        self.assertEqual(divs[0]["domain"], "session_attempts")
+
+        # Scenario E: Dependency-aware repair for the failed attempt only
+        self.mock_supabase.list_resource.side_effect = [
+            [{"source_action_id": "att-s3-1", "result": "Pass", "attempt_number": 1}],
+        ]
+        repair_res = self.manager.retry_divergence(divs[0]["operation_id"])
+        self.assertTrue(repair_res.mirror_success)
+        self.assertEqual(len(self.tracker.list_divergences(unresolved_only=True)), 0)
+
+    # 25. Readiness Report (Section 45)
     def test_readiness_report_structure(self):
         report = self.tracker.get_readiness_report({
             "MTS_DATA_PROVIDER": "sheets",
             "MTS_DUAL_WRITE_ENABLED": "true",
-            "MTS_DUAL_WRITE_DOMAINS": "candidate_status_actions",
+            "MTS_DUAL_WRITE_DOMAINS": "candidates,candidate_sessions,session_attempts",
         })
         self.assertTrue(report["dual_write_implementation_ready"])
         self.assertTrue(report["dual_write_enabled"])
-        self.assertEqual(report["active_domains"], ["candidate_status_actions"])
+        self.assertEqual(sorted(report["active_domains"]), sorted(["candidates", "candidate_sessions", "session_attempts"]))
         self.assertEqual(report["pending_divergences"], 0)
         self.assertTrue(report["idempotency_ready"])
         self.assertTrue(report["repair_tracking_ready"])

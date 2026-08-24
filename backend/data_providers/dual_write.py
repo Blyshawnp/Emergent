@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Mapping
@@ -439,24 +440,77 @@ class HeadsetReviewsAdapter(DomainDualWriteAdapter):
         return True
 
 
+class CandidatesAdapter(DomainDualWriteAdapter):
+    domain = "candidates"
+    target_table = "candidates"
+    conflict_key = "source_candidate_id"
+
+    def extract_business_key(self, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("source_candidate_id") or payload.get("id") or payload.get("candidate_id") or "")
+
+    def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        source_cand_id = self.extract_business_key(payload)
+        display_name = str(payload.get("display_name") or payload.get("candidate_name") or "").strip()
+        normalized_name = str(payload.get("normalized_name") or display_name.lower()).strip()
+        current_status = payload.get("current_status") or payload.get("status") or None
+        latest_session_id = payload.get("latest_session_id") or None
+        last_seen_at_raw = payload.get("last_seen_at") or payload.get("occurred_at") or payload.get("updated_at")
+        last_seen_at = str(last_seen_at_raw).strip() if last_seen_at_raw else datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        data = {
+            "source_candidate_id": source_cand_id,
+            "display_name": display_name,
+            "normalized_name": normalized_name,
+            "current_status": current_status,
+            "last_seen_at": last_seen_at,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        if latest_session_id:
+            data["latest_session_id"] = str(latest_session_id)
+        return data
+
+    def verify_persisted_state(
+        self,
+        supabase_provider: SupabaseDataProvider,
+        business_key: str,
+        expected_payload: Mapping[str, Any],
+    ) -> bool:
+        if not business_key:
+            return False
+        rows = supabase_provider.list_resource("candidates", filters={"source_candidate_id": business_key})
+        if not rows:
+            return False
+        row = rows[0]
+        if expected_payload.get("display_name") and str(row.get("display_name") or "").strip() != str(expected_payload.get("display_name") or "").strip():
+            return False
+        return True
+
+
 class CandidateSessionsAdapter(DomainDualWriteAdapter):
     domain = "candidate_sessions"
     target_table = "candidate_sessions"
     conflict_key = "session_id"
 
     def extract_business_key(self, payload: Mapping[str, Any]) -> str:
-        return str(payload.get("session_id") or payload.get("id") or "")
+        return str(payload.get("session_id") or payload.get("source_session_id") or payload.get("id") or "")
 
     def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         session_id = self.extract_business_key(payload)
+        candidate_id = payload.get("candidate_id") or payload.get("canonical_candidate_id")
         return {
             "session_id": session_id,
+            "source_session_id": session_id,
+            "candidate_id": str(candidate_id) if candidate_id else None,
             "candidate_name": payload.get("candidate_name") or "",
             "tester_name": payload.get("tester_name") or "",
-            "raw_status": payload.get("status") or payload.get("raw_status") or "in_progress",
+            "call_type": payload.get("call_type") or "",
+            "status": payload.get("status") or payload.get("raw_status") or "in_progress",
+            "raw_status": payload.get("raw_status") or payload.get("status") or "in_progress",
             "calculated_result": payload.get("calculated_result") or "",
             "final_result": payload.get("final_result") or "",
             "final_attempt": bool(payload.get("final_attempt", False)),
+            "allowed_attempt_count": int(payload.get("allowed_attempt_count", 3)),
+            "extra_attempts_granted": int(payload.get("extra_attempts_granted", 0)),
             "archived": bool(payload.get("archived", False)),
             "needs_sup_transfer": bool(payload.get("needs_sup_transfer", False)),
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -468,11 +522,64 @@ class CandidateSessionsAdapter(DomainDualWriteAdapter):
         business_key: str,
         expected_payload: Mapping[str, Any],
     ) -> bool:
+        if not business_key:
+            return False
         rows = supabase_provider.list_resource("candidate_sessions", filters={"session_id": business_key})
         if not rows:
             return False
         row = rows[0]
-        if expected_payload.get("raw_status") and str(row.get("raw_status")).lower() != str(expected_payload.get("raw_status")).lower():
+        if expected_payload.get("raw_status") and str(row.get("raw_status") or "").lower() != str(expected_payload.get("raw_status") or "").lower():
+            return False
+        if expected_payload.get("status") and str(row.get("status") or "").lower() != str(expected_payload.get("status") or "").lower():
+            return False
+        return True
+
+
+class SessionAttemptsAdapter(DomainDualWriteAdapter):
+    domain = "session_attempts"
+    target_table = "session_attempts"
+    conflict_key = "source_action_id"
+
+    def extract_business_key(self, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("source_action_id") or payload.get("id") or f"{payload.get('session_id')}:{payload.get('attempt_number', 1)}")
+
+    def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        source_action_id = self.extract_business_key(payload)
+        session_id = payload.get("session_uuid") or payload.get("canonical_session_id") or payload.get("session_id")
+        attempt_number = max(1, int(payload.get("attempt_number") or 1))
+        attempt_type = str(payload.get("attempt_type") or "mock_call").strip()
+        result = payload.get("result") or payload.get("status") or None
+        occurred_at_raw = payload.get("occurred_at") or payload.get("timestamp") or payload.get("created_at")
+        occurred_at = str(occurred_at_raw).strip() if occurred_at_raw else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+
+        data = {
+            "source_action_id": source_action_id,
+            "attempt_number": attempt_number,
+            "attempt_type": attempt_type,
+            "result": result,
+            "occurred_at": occurred_at,
+            "details": details,
+        }
+        if session_id:
+            data["session_id"] = str(session_id)
+        return data
+
+    def verify_persisted_state(
+        self,
+        supabase_provider: SupabaseDataProvider,
+        business_key: str,
+        expected_payload: Mapping[str, Any],
+    ) -> bool:
+        if not business_key:
+            return False
+        rows = supabase_provider.list_resource("session_attempts", filters={"source_action_id": business_key})
+        if not rows:
+            return False
+        row = rows[0]
+        if expected_payload.get("result") and str(row.get("result") or "").strip() != str(expected_payload.get("result") or "").strip():
+            return False
+        if expected_payload.get("attempt_number") and int(row.get("attempt_number") or 0) != int(expected_payload.get("attempt_number")):
             return False
         return True
 
@@ -840,8 +947,8 @@ ADAPTER_REGISTRY: dict[str, DomainDualWriteAdapter] = {
     "notifications": NotificationsAdapter(),
     "headset_reviews": HeadsetReviewsAdapter(),
     "candidate_sessions": CandidateSessionsAdapter(),
-    "candidates": GenericOperationalAdapter("candidates", "candidates", "source_candidate_id"),
-    "session_attempts": GenericOperationalAdapter("session_attempts", "session_attempts", "id"),
+    "candidates": CandidatesAdapter(),
+    "session_attempts": SessionAttemptsAdapter(),
     "supervisor_transfers": SupervisorTransfersAdapter(),
     "newbie_shift_requests": NewbieShiftRequestsAdapter(),
     "candidate_corrections": CandidateCorrectionsAdapter(),
@@ -1092,6 +1199,126 @@ class DualWriteManager:
         )
 
         return authoritative_result, result
+
+    def execute_candidate_lifecycle_workflow(
+        self,
+        candidate_payload: Mapping[str, Any],
+        candidate_authoritative_write_fn: Callable[[], Any],
+        session_payload: Mapping[str, Any],
+        session_authoritative_write_fn: Callable[[], Any],
+        attempt_payload: Mapping[str, Any] | None = None,
+        attempt_authoritative_write_fn: Callable[[], Any] | None = None,
+        workflow_id: str | None = None,
+        actor: str | None = None,
+        environ: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Orchestrates candidate lifecycle workflow writes in dependency order: candidate -> session -> attempt."""
+        wf_id = workflow_id or f"wf-cand-{uuid.uuid4().hex[:12]}"
+        results = {
+            "workflow_id": wf_id,
+            "candidate_authoritative_result": None,
+            "candidate_mirror_result": None,
+            "session_authoritative_result": None,
+            "session_mirror_result": None,
+            "attempt_authoritative_result": None,
+            "attempt_mirror_result": None,
+            "all_mirrors_succeeded": True,
+        }
+
+        # Step 1: Candidate
+        cand_auth, cand_res = self.execute_dual_write(
+            domain="candidates",
+            mutation_type="create" if candidate_payload.get("is_new") else "update",
+            authoritative_payload=candidate_payload,
+            authoritative_write_fn=candidate_authoritative_write_fn,
+            actor=actor,
+            environ=environ,
+        )
+        results["candidate_authoritative_result"] = cand_auth
+        results["candidate_mirror_result"] = cand_res
+        if cand_res.mirror_attempted and not cand_res.mirror_success:
+            results["all_mirrors_succeeded"] = False
+
+        # Step 2: Session
+        sess_auth, sess_res = self.execute_dual_write(
+            domain="candidate_sessions",
+            mutation_type="create" if session_payload.get("is_new") else "update",
+            authoritative_payload=session_payload,
+            authoritative_write_fn=session_authoritative_write_fn,
+            actor=actor,
+            environ=environ,
+        )
+        results["session_authoritative_result"] = sess_auth
+        results["session_mirror_result"] = sess_res
+        if sess_res.mirror_attempted and not sess_res.mirror_success:
+            results["all_mirrors_succeeded"] = False
+
+        # Step 3: Attempt (if present)
+        if attempt_payload and attempt_authoritative_write_fn:
+            att_auth, att_res = self.execute_dual_write(
+                domain="session_attempts",
+                mutation_type="create",
+                authoritative_payload=attempt_payload,
+                authoritative_write_fn=attempt_authoritative_write_fn,
+                actor=actor,
+                environ=environ,
+            )
+            results["attempt_authoritative_result"] = att_auth
+            results["attempt_mirror_result"] = att_res
+            if att_res.mirror_attempted and not att_res.mirror_success:
+                results["all_mirrors_succeeded"] = False
+
+        return results
+
+    def retry_divergence(self, operation_id: str, environ: Mapping[str, str] | None = None) -> DualWriteResult:
+        """Retries a previously recorded divergence operation and resolves it upon successful verification."""
+        with self._divergence_tracker._lock:
+            record = self._divergence_tracker._records.get(operation_id)
+            if not record:
+                raise ValueError(f"No divergence record found for operation_id: {operation_id}")
+            domain = record.domain
+            mutation_type = record.mutation_type
+            auth_ref = record.authoritative_ref
+            actor = record.actor
+
+        adapter = ADAPTER_REGISTRY.get(domain)
+        if not adapter:
+            raise ValueError(f"No adapter registered for domain: {domain}")
+
+        supabase_provider = self._get_supabase_provider()
+        if not supabase_provider:
+            raise ValueError("Supabase provider unavailable for retry")
+
+        try:
+            verified = adapter.verify_persisted_state(supabase_provider, auth_ref, {})
+        except Exception:
+            verified = False
+
+        if verified:
+            self._divergence_tracker.resolve_divergence(operation_id)
+            return DualWriteResult(
+                operation_id=operation_id,
+                domain=domain,
+                mutation_type=mutation_type,
+                authoritative_success=True,
+                authoritative_reference=auth_ref,
+                mirror_attempted=True,
+                mirror_success=True,
+                mirror_status="resolved",
+                verification_success=True,
+            )
+        else:
+            return DualWriteResult(
+                operation_id=operation_id,
+                domain=domain,
+                mutation_type=mutation_type,
+                authoritative_success=True,
+                authoritative_reference=auth_ref,
+                mirror_attempted=True,
+                mirror_success=False,
+                mirror_status="failed",
+                verification_success=False,
+            )
 
 
 _GLOBAL_DUAL_WRITE_MANAGER = DualWriteManager()

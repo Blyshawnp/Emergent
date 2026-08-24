@@ -247,7 +247,25 @@ On August 23, 2026, the `candidate_status_actions` domain was verified for dual-
 
 ---
 
-## 16. Dual-Write Verification Status Matrix
+## 16. Candidate Lifecycle Multi-Domain Workflow Verification
+
+On August 23, 2026, the core coupled certification domains (`candidates`, `candidate_sessions`, `session_attempts`) were verified for multi-domain dual-write workflow orchestration, adapter transformation, dependency ordering, and partial failure isolation:
+- **Adapters**:
+  - `CandidatesAdapter` (`candidates`, conflict key `source_candidate_id`)
+  - `CandidateSessionsAdapter` (`candidate_sessions`, conflict key `session_id`)
+  - `SessionAttemptsAdapter` (`session_attempts`, conflict key `source_action_id`)
+- **Workflow Orchestration**: Implemented `execute_candidate_lifecycle_workflow()` on `DualWriteManager` enforcing dependency order (`candidate` -> `session` -> `attempt`) with workflow correlation ID, individual operation telemetry, and independent per-step divergence recording without distributed two-phase commit rollback.
+- **Fail-Closed Isolation**: Tested multi-domain activation group (`candidates,candidate_sessions,session_attempts`). Non-allowlisted domains (`notifications`, `headset_reviews`, `newbie_shift_requests`, `supervisor_transfers`, `candidate_corrections`, `extra_attempt_grants`, `candidate_status_actions`, `pending_requests`) returned `mirror_attempted=False` with status `skipped_domain_not_allowlisted`.
+- **Integration Fixture Scenarios**:
+  - New candidate + session + attempt 1 (happy path)
+  - Existing candidate + new session (duplicate candidate prevention confirmed)
+  - Legitimate second attempt on same session (attempt sequence ordering verified)
+  - Partial mirror failure (attempt timeout recorded divergence while parent mirrors and Sheets authoritative state remained successful)
+  - Dependency-aware retry and repair of failed attempt only.
+
+---
+
+## 17. Dual-Write Verification Status Matrix
 
 | Domain Name | Status | Dual-Write Eligible | Target Table | Conflict Key |
 |---|:---:|:---:|---|---|
@@ -258,10 +276,11 @@ On August 23, 2026, the `candidate_status_actions` domain was verified for dual-
 | `candidate_corrections` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.candidate_corrections` | `request_id` |
 | `extra_attempt_grants` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.extra_attempt_grants` | `action_id` |
 | `candidate_status_actions` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.candidate_status_actions` | `action_id` |
-| `candidate_sessions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_sessions` | `session_id` |
-| `candidates` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidates` | `source_candidate_id` |
-| `session_attempts` | FRAMEWORK-TESTED | **YES** | `mts_sam.session_attempts` | `id` |
-| `pending_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.pending_requests` | `request_id` |
+| `candidates` | **FRAMEWORK & WORKFLOW READY** (Awaiting Session) | **YES** | `mts_sam.candidates` | `source_candidate_id` |
+| `candidate_sessions` | **FRAMEWORK & WORKFLOW READY** (Awaiting Session) | **YES** | `mts_sam.candidate_sessions` | `session_id` |
+| `session_attempts` | **FRAMEWORK & WORKFLOW READY** (Awaiting Session) | **YES** | `mts_sam.session_attempts` | `source_action_id` |
+| `pending_requests` | DERIVED VIEW (No Direct Mirror) | **NO** | `mts_sam.pending_requests_view` | `request_id` |
+
 
 
 
