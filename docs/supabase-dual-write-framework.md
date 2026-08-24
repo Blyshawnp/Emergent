@@ -207,21 +207,37 @@ On August 23, 2026, the `newbie_shift_requests` domain successfully completed li
 
 ---
 
-## 13. Dual-Write Verification Status Matrix
+## 13. Supervisor Transfers Dual-Write Live Canary Verification
+
+On August 23, 2026, the `supervisor_transfers` domain successfully completed live single-domain dual-write canary verification:
+- **Adapter**: `SupervisorTransfersAdapter` in `backend/data_providers/dual_write.py`.
+- **Target Table**: `mts_sam.supervisor_transfers`.
+- **Conflict Key**: `transfer_id` (deterministic unique business identifier, e.g. `pending-{session_id}`).
+- **Semantics**: Captures `source_session_id`, `candidate_name`, `original_tester_name`, `status`, `final_attempt`, `completed_by`, `completed_status`, `needed_reason`, `notes`, `created_at`, `completed_at`, `source_checksum`, and `source_payload`.
+- **Canary 1 (Note Update)**: Real pending transfer `pending-a5b08463-cc0e-49a7-a5d7-a840ede24db4` updated with test note in Google Sheets `Pending Sup Transfers` row 7 -> mirrored into Supabase `mts_sam.supervisor_transfers` -> verified with exact field read-back.
+- **Restoration**: Restored original notes in Google Sheets -> mirrored into Supabase -> verified (`notes match original=True`).
+- **Idempotency**: Exact replay of mirror operation produced 0 duplicate records.
+- **Fail-Closed Isolation**: All 11 Section 14 cases verified; non-allowlisted domains (`notifications`, `candidate_sessions`) returned `mirror_attempted=False` with status `skipped_domain_not_allowlisted`.
+- **Deltas Across Tables**: 0 unexpected count deltas across all 9 operational tables.
+
+---
+
+## 14. Dual-Write Verification Status Matrix
 
 | Domain Name | Status | Dual-Write Eligible | Target Table | Conflict Key |
 |---|:---:|:---:|---|---|
 | `notifications` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.notifications` | `notification_id` |
 | `headset_reviews` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.headset_reviews` | `review_id` |
 | `newbie_shift_requests` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.newbie_shift_requests` | `request_id` |
+| `supervisor_transfers` | **PROVEN LIVE CANARY** | **YES** | `mts_sam.supervisor_transfers` | `transfer_id` |
 | `candidate_corrections` | **FRAMEWORK & ADAPTER READY** (Awaiting Event) | **YES** | `mts_sam.candidate_corrections` | `request_id` |
 | `candidate_sessions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_sessions` | `session_id` |
 | `candidates` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidates` | `source_candidate_id` |
 | `session_attempts` | FRAMEWORK-TESTED | **YES** | `mts_sam.session_attempts` | `id` |
-| `supervisor_transfers` | FRAMEWORK-TESTED | **YES** | `mts_sam.supervisor_transfers` | `transfer_id` |
 | `pending_requests` | FRAMEWORK-TESTED | **YES** | `mts_sam.pending_requests` | `request_id` |
 | `candidate_status_actions` | FRAMEWORK-TESTED | **YES** | `mts_sam.candidate_status_actions` | `id` |
 | `extra_attempt_grants` | FRAMEWORK-TESTED | **YES** | `mts_sam.extra_attempt_grants` | `id` |
+
 
 
 

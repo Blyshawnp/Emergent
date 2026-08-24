@@ -17,6 +17,7 @@ from data_providers.dual_write import (
     CandidateSessionsAdapter,
     CandidateCorrectionsAdapter,
     NewbieShiftRequestsAdapter,
+    SupervisorTransfersAdapter,
     active_dual_write_domains,
     build_operation_id,
     compute_payload_digest,
@@ -615,16 +616,156 @@ class DualWriteFrameworkTests(unittest.TestCase):
         )
         self.assertFalse(res_i.mirror_attempted)
 
-    # 16. Readiness Report (Section 45)
+    # 16. Supervisor Transfers Adapter
+    def test_supervisor_transfers_adapter_transformation(self):
+        adapter = SupervisorTransfersAdapter()
+        payload = {
+            "transfer_id": "pending-123",
+            "source_session_id": "sess-789",
+            "candidate_name": "John Doe",
+            "original_tester_name": "Shawn Bly",
+            "status": "completed",
+            "completed_status": "PASS",
+            "completed_by": "Shawn Bly",
+            "needed_reason": "Mock calls passed; supervisor transfer required",
+            "notes": "Coaching applied",
+        }
+        transformed = adapter.transform_payload(payload)
+        self.assertEqual(transformed["transfer_id"], "pending-123")
+        self.assertEqual(transformed["source_session_id"], "sess-789")
+        self.assertEqual(transformed["candidate_name"], "John Doe")
+        self.assertEqual(transformed["status"], "completed")
+        self.assertEqual(transformed["completed_status"], "PASS")
+        self.assertEqual(transformed["completed_by"], "Shawn Bly")
+        self.assertEqual(transformed["needed_reason"], "Mock calls passed; supervisor transfer required")
+        self.assertIsNotNone(transformed["source_checksum"])
+
+    # 17. Supervisor Transfers Section 14 Gate Test Cases (A through K)
+    def test_supervisor_transfers_section_14_gate_cases(self):
+        auth_mock = Mock(return_value={"ok": True, "transfer_id": "pending-1"})
+
+        # Case A: MTS_DUAL_WRITE_ENABLED=false -> supervisor_transfers mirror NO
+        _, res_a = self.manager.execute_dual_write(
+            domain="supervisor_transfers",
+            mutation_type="action",
+            authoritative_payload={"transfer_id": "pending-1", "status": "completed"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "false", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_a.mirror_attempted)
+
+        # Case B: MTS_DUAL_WRITE_ENABLED=true, MTS_DUAL_WRITE_DOMAINS=notifications -> supervisor_transfers mirror NO
+        _, res_b = self.manager.execute_dual_write(
+            domain="supervisor_transfers",
+            mutation_type="action",
+            authoritative_payload={"transfer_id": "pending-1", "status": "completed"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "notifications"},
+        )
+        self.assertFalse(res_b.mirror_attempted)
+
+        # Case C: MTS_DUAL_WRITE_ENABLED=true, MTS_DUAL_WRITE_DOMAINS=supervisor_transfers -> supervisor_transfers mirror YES
+        self.mock_supabase.list_resource.return_value = [{"transfer_id": "pending-1", "status": "completed", "source_session_id": "s-1"}]
+        _, res_c = self.manager.execute_dual_write(
+            domain="supervisor_transfers",
+            mutation_type="action",
+            authoritative_payload={"transfer_id": "pending-1", "status": "completed", "source_session_id": "s-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertTrue(res_c.mirror_attempted)
+        self.assertTrue(res_c.mirror_success)
+
+        # Case D: same configuration -> notifications mirror NO
+        _, res_d = self.manager.execute_dual_write(
+            domain="notifications",
+            mutation_type="update",
+            authoritative_payload={"ID": "notif-1", "Title": "T"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_d.mirror_attempted)
+
+        # Case E: same configuration -> headset_reviews mirror NO
+        _, res_e = self.manager.execute_dual_write(
+            domain="headset_reviews",
+            mutation_type="action",
+            authoritative_payload={"review_id": "hr-1", "brand": "B", "model": "M"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_e.mirror_attempted)
+
+        # Case F: same configuration -> newbie_shift_requests mirror NO
+        _, res_f = self.manager.execute_dual_write(
+            domain="newbie_shift_requests",
+            mutation_type="action",
+            authoritative_payload={"request_id": "newbie-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_f.mirror_attempted)
+
+        # Case G: same configuration -> candidate_corrections mirror NO
+        _, res_g = self.manager.execute_dual_write(
+            domain="candidate_corrections",
+            mutation_type="action",
+            authoritative_payload={"request_id": "corr-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_g.mirror_attempted)
+
+        # Case H: same configuration -> candidates mirror NO
+        _, res_h = self.manager.execute_dual_write(
+            domain="candidates",
+            mutation_type="update",
+            authoritative_payload={"source_candidate_id": "c-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_h.mirror_attempted)
+
+        # Case I: same configuration -> candidate_sessions mirror NO
+        _, res_i = self.manager.execute_dual_write(
+            domain="candidate_sessions",
+            mutation_type="update",
+            authoritative_payload={"session_id": "s-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_i.mirror_attempted)
+
+        # Case J: same configuration -> pending_requests mirror NO
+        _, res_j = self.manager.execute_dual_write(
+            domain="pending_requests",
+            mutation_type="action",
+            authoritative_payload={"request_id": "req-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_j.mirror_attempted)
+
+        # Case K: same configuration -> candidate_status_actions mirror NO
+        _, res_k = self.manager.execute_dual_write(
+            domain="candidate_status_actions",
+            mutation_type="action",
+            authoritative_payload={"id": "act-1"},
+            authoritative_write_fn=auth_mock,
+            environ={"MTS_DUAL_WRITE_ENABLED": "true", "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers"},
+        )
+        self.assertFalse(res_k.mirror_attempted)
+
+    # 18. Readiness Report (Section 45)
     def test_readiness_report_structure(self):
         report = self.tracker.get_readiness_report({
             "MTS_DATA_PROVIDER": "sheets",
             "MTS_DUAL_WRITE_ENABLED": "true",
-            "MTS_DUAL_WRITE_DOMAINS": "newbie_shift_requests",
+            "MTS_DUAL_WRITE_DOMAINS": "supervisor_transfers",
         })
         self.assertTrue(report["dual_write_implementation_ready"])
         self.assertTrue(report["dual_write_enabled"])
-        self.assertEqual(report["active_domains"], ["newbie_shift_requests"])
+        self.assertEqual(report["active_domains"], ["supervisor_transfers"])
         self.assertEqual(report["pending_divergences"], 0)
         self.assertTrue(report["idempotency_ready"])
         self.assertTrue(report["repair_tracking_ready"])

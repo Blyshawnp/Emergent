@@ -632,6 +632,75 @@ class NewbieShiftRequestsAdapter(DomainDualWriteAdapter):
         return True
 
 
+class SupervisorTransfersAdapter(DomainDualWriteAdapter):
+    domain = "supervisor_transfers"
+    target_table = "supervisor_transfers"
+    conflict_key = "transfer_id"
+
+    def extract_business_key(self, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("transfer_id") or payload.get("pending_id") or payload.get("id") or "")
+
+    def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        req_id = self.extract_business_key(payload)
+        source_session_id = str(payload.get("source_session_id") or payload.get("original_session_id") or payload.get("session_id") or "").strip()
+        status_val = str(payload.get("status") or "pending").strip().lower()
+        candidate_name = payload.get("candidate_name") or payload.get("candidate") or None
+        original_tester_name = payload.get("original_tester_name") or payload.get("tester_name") or payload.get("tester") or None
+        final_attempt = bool(payload.get("final_attempt")) if payload.get("final_attempt") is not None else None
+        completed_by = payload.get("completed_by") or payload.get("actor") or None
+        completed_status = payload.get("completed_status") or None
+        needed_reason = payload.get("needed_reason") or payload.get("reason") or None
+        notes = payload.get("notes") or None
+
+        created_at_raw = payload.get("created_at") or payload.get("submitted_at")
+        created_at = str(created_at_raw).strip() if created_at_raw else datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        completed_at_raw = payload.get("completed_at")
+        completed_at = str(completed_at_raw).strip() if completed_at_raw else (datetime.datetime.now(datetime.timezone.utc).isoformat() if status_val in ("completed", "cancelled") else None)
+
+        checksum = hashlib.sha256(
+            json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+
+        return {
+            "transfer_id": req_id,
+            "source_session_id": source_session_id,
+            "candidate_name": candidate_name,
+            "original_tester_name": original_tester_name,
+            "status": status_val,
+            "final_attempt": final_attempt,
+            "completed_by": completed_by,
+            "completed_status": completed_status,
+            "needed_reason": needed_reason,
+            "notes": notes,
+            "created_at": created_at,
+            "completed_at": completed_at,
+            "source_checksum": checksum,
+            "source_payload": dict(payload),
+        }
+
+    def verify_persisted_state(
+        self,
+        supabase_provider: SupabaseDataProvider,
+        business_key: str,
+        expected_payload: Mapping[str, Any],
+    ) -> bool:
+        if not business_key:
+            return False
+        rows = supabase_provider.list_resource("supervisor_transfers", filters={"transfer_id": business_key})
+        if not rows:
+            return False
+        row = rows[0]
+        expected_status = str(expected_payload.get("status") or "").lower()
+        if expected_status and str(row.get("status") or "").lower() != expected_status:
+            return False
+        if expected_payload.get("completed_status") and str(row.get("completed_status") or "").strip() != str(expected_payload.get("completed_status") or "").strip():
+            return False
+        if expected_payload.get("source_session_id") and str(row.get("source_session_id") or "").strip() != str(expected_payload.get("source_session_id") or "").strip():
+            return False
+        return True
+
+
 class GenericOperationalAdapter(DomainDualWriteAdapter):
     def __init__(self, domain: str, target_table: str, conflict_key: str):
         self.domain = domain
@@ -664,7 +733,7 @@ ADAPTER_REGISTRY: dict[str, DomainDualWriteAdapter] = {
     "candidate_sessions": CandidateSessionsAdapter(),
     "candidates": GenericOperationalAdapter("candidates", "candidates", "source_candidate_id"),
     "session_attempts": GenericOperationalAdapter("session_attempts", "session_attempts", "id"),
-    "supervisor_transfers": GenericOperationalAdapter("supervisor_transfers", "supervisor_transfers", "transfer_id"),
+    "supervisor_transfers": SupervisorTransfersAdapter(),
     "newbie_shift_requests": NewbieShiftRequestsAdapter(),
     "candidate_corrections": CandidateCorrectionsAdapter(),
     "pending_requests": GenericOperationalAdapter("pending_requests", "pending_requests", "request_id"),
