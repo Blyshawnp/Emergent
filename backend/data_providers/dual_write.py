@@ -551,6 +551,87 @@ class CandidateCorrectionsAdapter(DomainDualWriteAdapter):
         return True
 
 
+class NewbieShiftRequestsAdapter(DomainDualWriteAdapter):
+    domain = "newbie_shift_requests"
+    target_table = "newbie_shift_requests"
+    conflict_key = "request_id"
+
+    def extract_business_key(self, payload: Mapping[str, Any]) -> str:
+        return str(payload.get("request_id") or payload.get("id") or "")
+
+    def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        req_id = self.extract_business_key(payload)
+        source_session_id = str(payload.get("source_session_id") or payload.get("session_id") or "").strip()
+        status_val = str(payload.get("request_status") or payload.get("status") or payload.get("decision") or "pending").strip().lower()
+        if status_val in ("approve", "approved"):
+            status_val = "approved"
+        elif status_val in ("deny", "denied"):
+            status_val = "denied"
+
+        newbie_shift_number = str(payload.get("newbie_shift_number") or "").strip()
+
+        created_at_raw = payload.get("created_at") or payload.get("request_created_at")
+        created_at = str(created_at_raw).strip() if created_at_raw else datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        decision_at_raw = payload.get("decision_at") or payload.get("admin_decision_at")
+        decision_at = str(decision_at_raw).strip() if decision_at_raw else (datetime.datetime.now(datetime.timezone.utc).isoformat() if status_val in ("approved", "denied") else None)
+
+        checksum = hashlib.sha256(
+            json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+
+        return {
+            "request_id": req_id,
+            "source_session_id": source_session_id,
+            "request_type": str(payload.get("request_type") or "initial_newbie_shift"),
+            "request_status": status_val,
+            "newbie_shift_number": newbie_shift_number,
+            "scheduled_at": payload.get("scheduled_at") or None,
+            "original_scheduled_at": payload.get("original_scheduled_at") or None,
+            "rescheduled_at": payload.get("rescheduled_at") or None,
+            "timezone": payload.get("timezone") or None,
+            "within_24_hours": bool(payload.get("within_24_hours")) if payload.get("within_24_hours") is not None else None,
+            "counts_as_attempt": bool(payload.get("counts_as_attempt")) if payload.get("counts_as_attempt") is not None else None,
+            "final_attempt": bool(payload.get("final_attempt")) if payload.get("final_attempt") is not None else None,
+            "current_attempt": int(payload["current_attempt"]) if payload.get("current_attempt") else None,
+            "resulting_attempt": int(payload["resulting_attempt"]) if payload.get("resulting_attempt") else None,
+            "becomes_final_attempt": bool(payload.get("becomes_final_attempt")) if payload.get("becomes_final_attempt") is not None else None,
+            "attempt_rule": payload.get("attempt_rule") or None,
+            "terminal_outcome": payload.get("terminal_outcome") or None,
+            "requested_by": payload.get("requested_by") or payload.get("tester_name") or None,
+            "request_reason": payload.get("request_reason") or payload.get("reason") or None,
+            "request_details": payload.get("request_details") or None,
+            "decision_by": payload.get("decision_by") or payload.get("admin_decision_by") or payload.get("actor") or None,
+            "denial_reason": payload.get("denial_reason") or payload.get("reason") if status_val == "denied" else None,
+            "created_at": created_at,
+            "decision_at": decision_at,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source_checksum": checksum,
+            "source_payload": dict(payload),
+        }
+
+    def verify_persisted_state(
+        self,
+        supabase_provider: SupabaseDataProvider,
+        business_key: str,
+        expected_payload: Mapping[str, Any],
+    ) -> bool:
+        if not business_key:
+            return False
+        rows = supabase_provider.list_resource("newbie_shift_requests", filters={"request_id": business_key})
+        if not rows:
+            return False
+        row = rows[0]
+        expected_status = str(expected_payload.get("request_status") or expected_payload.get("status") or "").lower()
+        if expected_status and str(row.get("request_status") or "").lower() != expected_status:
+            return False
+        if expected_payload.get("source_session_id") and str(row.get("source_session_id") or "").strip() != str(expected_payload.get("source_session_id") or "").strip():
+            return False
+        if expected_payload.get("newbie_shift_number") and str(row.get("newbie_shift_number") or "").strip() != str(expected_payload.get("newbie_shift_number") or "").strip():
+            return False
+        return True
+
+
 class GenericOperationalAdapter(DomainDualWriteAdapter):
     def __init__(self, domain: str, target_table: str, conflict_key: str):
         self.domain = domain
@@ -584,7 +665,7 @@ ADAPTER_REGISTRY: dict[str, DomainDualWriteAdapter] = {
     "candidates": GenericOperationalAdapter("candidates", "candidates", "source_candidate_id"),
     "session_attempts": GenericOperationalAdapter("session_attempts", "session_attempts", "id"),
     "supervisor_transfers": GenericOperationalAdapter("supervisor_transfers", "supervisor_transfers", "transfer_id"),
-    "newbie_shift_requests": GenericOperationalAdapter("newbie_shift_requests", "newbie_shift_requests", "request_id"),
+    "newbie_shift_requests": NewbieShiftRequestsAdapter(),
     "candidate_corrections": CandidateCorrectionsAdapter(),
     "pending_requests": GenericOperationalAdapter("pending_requests", "pending_requests", "request_id"),
     "candidate_status_actions": GenericOperationalAdapter("candidate_status_actions", "candidate_status_actions", "id"),
