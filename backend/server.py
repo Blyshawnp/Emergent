@@ -13906,6 +13906,49 @@ async def request_history_session_deletion(history_id: str, request: Request):
     }
 
 
+@api_router.post("/history/session/{history_id:path}/form-status")
+async def update_history_session_form_status(history_id: str, request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    requested_status = (payload or {}).get("form_fill_status")
+    if requested_status not in FORM_FILL_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "invalid_form_status", "message": f"Form status must be one of: {sorted(FORM_FILL_STATUSES)}"},
+        )
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC")
+    target_row = None
+    target = None
+    for row in rows:
+        existing = SQLiteCollection.decode(row["data"])
+        if _history_record_matches_identifier(existing, history_id):
+            target_row, target = row, existing
+            break
+    if not target:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "history_not_found", "message": "History session not found."},
+        )
+    now = datetime.now(timezone.utc).isoformat()
+    update = {
+        "form_fill_status": requested_status,
+        "form_filled_at": now if requested_status == FORM_FILL_FILLED else "",
+        "form_fill_error_summary": "",
+    }
+    target.update(update)
+    db.history.store.execute(
+        "UPDATE history_documents SET data = ?, timestamp = ? WHERE id = ?",
+        (
+            SQLiteCollection.encode(target),
+            str(target.get("timestamp_iso") or target.get("timestamp") or ""),
+            target_row["id"],
+        ),
+    )
+    return {"ok": True, "form_fill_status": requested_status, "form_filled_at": update["form_filled_at"]}
+
+
 @api_router.post("/history/session/{history_id:path}/correction-request")
 async def request_history_session_correction(history_id: str, request: Request):
     try:

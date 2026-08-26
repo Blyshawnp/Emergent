@@ -323,6 +323,40 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
     }
   };
 
+  const handleToggleFormFillStatus = async (record) => {
+    if (!record) return;
+    const currentStatus = record.form_fill_status || 'not_attempted';
+    const isFilled = currentStatus === 'filled';
+    const nextStatus = isFilled ? 'skipped' : 'filled';
+    const actionLabel = isFilled ? 'Mark as Not Sent / Skipped' : 'Mark as Form Filled';
+    const confirmed = await modal.confirm(
+      'Update Form Status',
+      `Would you like to manually ${actionLabel.toLowerCase()} for this session without running the Microsoft Forms automation?`,
+      'edit-3',
+      'info'
+    );
+    if (!confirmed) return;
+    try {
+      const historyId = getHistoryIdentity(record);
+      const res = await api.updateHistorySessionFormStatus(historyId, nextStatus);
+      if (res?.ok) {
+        const nextRecord = {
+          ...record,
+          form_fill_status: res.form_fill_status,
+          form_filled_at: res.form_filled_at,
+        };
+        setFormRecoveryMarker(record, false);
+        setDetail((current) => (current && getHistoryIdentity(current) === historyId ? { ...current, ...nextRecord } : current));
+        setHistory((current) => current.map((item) => (
+          getHistoryIdentity(item) === historyId ? { ...item, ...nextRecord } : item
+        )));
+        await modal.alert('Form Status Updated', `The form status was changed to "${formFillStatusLabel(nextStatus)}".`, 'check-circle', 'success');
+      }
+    } catch (err) {
+      await modal.error('Update Failed', err.message || 'Unable to update form status.');
+    }
+  };
+
   const handleDeleteSession = async (record) => {
     if (!record) return;
     const identity = getHistoryIdentity(record);
@@ -749,6 +783,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   {detail.candidate_correction_pending ? 'Correction Pending' : 'Correct Candidate Info'}
                 </button>
                 <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
+                <button type="button" className="btn btn-secondary" onClick={() => handleToggleFormFillStatus(detail)} data-testid="history-toggle-form-status">{detail.form_fill_status === 'filled' ? 'Mark Not Sent' : 'Mark Form Filled'}</button>
                 <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">{detail.form_fill_status === 'filled' ? 'Refill Cert Form' : 'Fill Cert Form'}</button>
                 {canRescheduleNewbieShift(detail) && <button ref={rescheduleTriggerRef} className="btn btn-warning" onClick={() => handleRescheduleSession(detail)} data-testid="history-detail-reschedule">Reschedule</button>}
                 <button

@@ -27,6 +27,7 @@ jest.mock('../api', () => ({
     deleteHistorySession: jest.fn(),
     requestHistorySessionDeletion: jest.fn(),
     requestHistorySessionCorrection: jest.fn(),
+    updateHistorySessionFormStatus: jest.fn(),
     logHeadsetReview: jest.fn(),
     clearHistory: jest.fn(),
   },
@@ -571,7 +572,7 @@ test('candidate correction action is in the responsive footer and absent from th
   expect(detail.querySelector('.modal-body [data-testid="history-correction-action"]')).toBeNull();
   expect(footer.querySelector('[data-testid="history-correction-action"]').getAttribute('aria-label')).toBe('Correct Candidate Information');
   expect(Array.from(footer.querySelectorAll('button')).map((button) => button.textContent.trim())).toEqual([
-    'Close', 'Correct Candidate Info', 'Delete Session', 'Refill Cert Form', 'Open in Review',
+    'Close', 'Correct Candidate Info', 'Delete Session', 'Mark Not Sent', 'Refill Cert Form', 'Open in Review',
   ]);
   await view.unmount();
 });
@@ -616,6 +617,40 @@ test('optional reconciliation warning keeps candidate History usable and offers 
   expect(view.container.querySelector('[data-testid="history-row-0"]').textContent).toContain('Taylor Example');
   expect(view.container.querySelector('[role="alert"]').textContent).toContain('Some candidate updates could not be refreshed');
   expect(Array.from(view.container.querySelectorAll('button')).some((button) => button.textContent === 'Retry')).toBe(true);
+  await view.unmount();
+});
+
+test('manual form status toggle switches between filled and skipped without automation', async () => {
+  mockModal.confirm.mockResolvedValue(true);
+  api.updateHistorySessionFormStatus.mockResolvedValue({
+    ok: true,
+    form_fill_status: 'skipped',
+    form_filled_at: '',
+  });
+  const row = {
+    ...historyRows[0],
+    history_id: 'stable-form-1',
+    form_fill_status: 'filled',
+  };
+  const view = await renderPage([row]);
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-view-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  const toggleBtn = view.container.querySelector('[data-testid="history-toggle-form-status"]');
+  expect(toggleBtn).not.toBeNull();
+  expect(toggleBtn.textContent).toBe('Mark Not Sent');
+  await act(async () => {
+    toggleBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(mockModal.confirm).toHaveBeenCalledWith(
+    'Update Form Status',
+    expect.stringContaining('mark as not sent / skipped'),
+    'edit-3',
+    'info'
+  );
+  expect(api.updateHistorySessionFormStatus).toHaveBeenCalledWith('stable-form-1', 'skipped');
   await view.unmount();
 });
 
