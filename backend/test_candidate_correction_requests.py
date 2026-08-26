@@ -285,6 +285,66 @@ class CandidateCorrectionRequestTests(unittest.TestCase):
             candidates.assert_not_called()
             store.conn.close()
 
+    def test_update_history_session_form_status_persists_to_sheets_and_sqlite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = server.SQLiteDocumentStore(Path(temp_dir) / "correction.sqlite3")
+            asyncio.run(store.history.insert_one({
+                "history_id": "session-form-1",
+                "candidate_name": "Taylor Example",
+                "form_fill_status": "not_attempted",
+            }))
+            req = mock.MagicMock()
+            req.json = mock.AsyncMock(return_value={"form_fill_status": "skipped"})
+            with (
+                mock.patch.object(server, "db", store),
+                mock.patch.object(server, "_sync_shared_candidate_tracking", return_value={"ok": True}) as mock_sync,
+            ):
+                res = asyncio.run(server.update_history_session_form_status("session-form-1", req))
+                self.assertTrue(res["ok"])
+                self.assertEqual(res["form_fill_status"], "skipped")
+                self.assertEqual(res["form_filled_at"], "")
+                mock_sync.assert_called_once()
+                synced_record = mock_sync.call_args[0][0]
+                self.assertEqual(synced_record["form_fill_status"], "skipped")
+
+            record = store.history._read_history_docs()[0]
+            self.assertEqual(record["form_fill_status"], "skipped")
+            self.assertEqual(record["form_filled_at"], "")
+            store.conn.close()
+
+    def test_update_history_session_form_status_timestamp_semantics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = server.SQLiteDocumentStore(Path(temp_dir) / "correction.sqlite3")
+            asyncio.run(store.history.insert_one({
+                "history_id": "session-form-2",
+                "candidate_name": "Taylor Example",
+                "form_fill_status": "skipped",
+                "form_filled_at": "",
+            }))
+            # Transition skipped -> filled: should set form_filled_at timestamp
+            req_fill = mock.MagicMock()
+            req_fill.json = mock.AsyncMock(return_value={"form_fill_status": "filled"})
+            with (
+                mock.patch.object(server, "db", store),
+                mock.patch.object(server, "_sync_shared_candidate_tracking", return_value={"ok": True}),
+            ):
+                res_fill = asyncio.run(server.update_history_session_form_status("session-form-2", req_fill))
+                self.assertEqual(res_fill["form_fill_status"], "filled")
+                self.assertTrue(bool(res_fill["form_filled_at"]))
+
+            # Transition filled -> skipped: should clear form_filled_at timestamp
+            req_skip = mock.MagicMock()
+            req_skip.json = mock.AsyncMock(return_value={"form_fill_status": "skipped"})
+            with (
+                mock.patch.object(server, "db", store),
+                mock.patch.object(server, "_sync_shared_candidate_tracking", return_value={"ok": True}),
+            ):
+                res_skip = asyncio.run(server.update_history_session_form_status("session-form-2", req_skip))
+                self.assertEqual(res_skip["form_fill_status"], "skipped")
+                self.assertEqual(res_skip["form_filled_at"], "")
+
+            store.conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

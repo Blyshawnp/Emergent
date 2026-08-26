@@ -13946,7 +13946,13 @@ async def update_history_session_form_status(history_id: str, request: Request):
             target_row["id"],
         ),
     )
-    return {"ok": True, "form_fill_status": requested_status, "form_filled_at": update["form_filled_at"]}
+    sheets_result = _sync_shared_candidate_tracking(target)
+    return {
+        "ok": True,
+        "form_fill_status": requested_status,
+        "form_filled_at": update["form_filled_at"],
+        "sheets_result": sheets_result,
+    }
 
 
 @api_router.post("/history/session/{history_id:path}/correction-request")
