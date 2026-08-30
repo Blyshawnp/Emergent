@@ -43,7 +43,7 @@ from data_providers.runtime_shadow import (
     ShadowComparisonRuntime,
     build_runtime_shadow_providers,
 )
-from data_providers.dual_write import get_dual_write_manager
+from data_providers.dual_write import get_dual_write_manager, is_dual_write_enabled
 from services.apps_script_api import apps_script_api_role
 
 ROOT_DIR = Path(__file__).parent
@@ -3267,13 +3267,18 @@ DEFAULT_SETTINGS = {
     "call_coaching": CALL_COACHING,
     "call_fails": CALL_FAILS,
     "sup_coaching": SUP_COACHING,
-    "sup_fails": SUP_FAILS,
+    "require_newbie_shift_approval": True,
+    "headset_notification_mode": "all",
 }
 
 GEMINI_API_KEY_SETTING = "gemini_api_key"
 LEGACY_GEMINI_API_KEY_SETTINGS = ("gemini_key",)
 SENSITIVE_SETTINGS_KEYS = {GEMINI_API_KEY_SETTING}
 ADMIN_ONLY_SETTINGS_KEYS = set()
+ADMIN_CONTROLLED_SETTINGS_KEYS = {
+    "require_newbie_shift_approval",
+    "headset_notification_mode",
+}
 ALLOWED_SETTINGS_KEYS = set(DEFAULT_SETTINGS.keys()) - ADMIN_ONLY_SETTINGS_KEYS
 PRESERVED_SETTINGS_KEYS_ON_RESTORE = {
     "setup_complete",
@@ -3286,6 +3291,8 @@ PRESERVED_SETTINGS_KEYS_ON_RESTORE = {
     "form_url",
     "cert_sheet_url",
     "support_form_url",
+    "require_newbie_shift_approval",
+    "headset_notification_mode",
     GEMINI_API_KEY_SETTING,
     "enable_gemini",
 }
@@ -3303,6 +3310,26 @@ def _get_stored_gemini_api_key(settings: Optional[dict]) -> str:
 def _is_masked_sensitive_placeholder(value) -> bool:
     text = str(value or "").strip()
     return bool(text) and set(text) <= {"*"}
+
+
+def _is_newbie_shift_approval_required() -> bool:
+    try:
+        doc = db.settings._read_document("app_settings")
+        if doc and "require_newbie_shift_approval" in doc:
+            return bool(doc.get("require_newbie_shift_approval"))
+    except Exception:
+        pass
+    return True
+
+
+def _get_headset_notification_mode() -> str:
+    try:
+        doc = db.settings._read_document("app_settings")
+        if doc and "headset_notification_mode" in doc:
+            return _normalize_headset_notification_mode(doc.get("headset_notification_mode"))
+    except Exception:
+        pass
+    return "all"
 
 
 def _sanitize_fail_reason_setting(key, value, source_label):
@@ -3474,6 +3501,11 @@ def _normalize_vpn_proxy_check_mode(value):
     return mode if mode in {"checker", "links", "disabled"} else "checker"
 
 
+def _normalize_headset_notification_mode(value):
+    mode = str(value or "").strip().lower()
+    return mode if mode in {"all", "action_required_only", "muted"} else "all"
+
+
 def sanitize_settings(doc: Optional[dict]) -> dict:
     base = {key: value for key, value in DEFAULT_SETTINGS.items() if key not in ADMIN_ONLY_SETTINGS_KEYS}
     if doc:
@@ -3492,6 +3524,8 @@ def sanitize_settings(doc: Optional[dict]) -> dict:
     base["enable_sounds"] = base["sound_volume"] != "off"
     base["welcome_voice"] = _normalize_welcome_voice(base.get("welcome_voice"))
     base["vpnProxyCheckMode"] = _normalize_vpn_proxy_check_mode(base.get("vpnProxyCheckMode"))
+    base["require_newbie_shift_approval"] = bool(doc.get("require_newbie_shift_approval", True)) if doc and "require_newbie_shift_approval" in doc else True
+    base["headset_notification_mode"] = _normalize_headset_notification_mode(doc.get("headset_notification_mode") if doc else "all")
     base["call_fails"] = _merge_required_fail_reasons(base.get("call_fails"), "call_fails")
     for key in DEFAULT_MANAGED_SETTINGS_KEYS:
         base[_managed_custom_flag(key)] = bool(doc and doc.get(_managed_custom_flag(key)))
@@ -3536,6 +3570,10 @@ def normalize_settings_payload(payload: dict) -> dict:
                 sanitized["vpnProxyCheckMode_admin_confirmed"] = True
             else:
                 sanitized["vpnProxyCheckMode_admin_confirmed"] = False
+        elif key == "require_newbie_shift_approval":
+            sanitized["require_newbie_shift_approval"] = bool(value)
+        elif key == "headset_notification_mode":
+            sanitized["headset_notification_mode"] = _normalize_headset_notification_mode(value)
         sanitized[key] = value
         if key in DEFAULT_MANAGED_SETTINGS_KEYS:
             sanitized[_managed_custom_flag(key)] = True
@@ -3634,6 +3672,7 @@ NEWBIE_REQUEST_INITIAL = "initial"
 NEWBIE_REQUEST_RESCHEDULE = "reschedule"
 NEWBIE_REQUEST_STATUSES = {"pending", "approved", "denied"}
 NEWBIE_REQUEST_PENDING = "pending"
+NEWBIE_REQUEST_POLICY_APPROVED_ACTOR = "Policy (Auto-Approved)"
 NEWBIE_REQUESTED_BY_TESTER = "tester"
 NEWBIE_REQUESTED_BY_CANDIDATE = "candidate"
 NEWBIE_REQUESTED_BY_OTHER = "other"
@@ -8895,6 +8934,17 @@ def _candidate_session_row(session, existing_rows=None):
             override_note = f"{override_note} {session.get('candidate_override_reason')}"
         review_notes = "\n\n".join(part for part in [review_notes, override_note] if str(part or "").strip())
 
+    newbie_request_status = session.get("newbie_shift_request_status") or NEWBIE_REQUEST_PENDING
+    newbie_decision_by = session.get("newbie_shift_admin_decision_by") or ""
+    newbie_decision_at = session.get("newbie_shift_admin_decision_at") or ""
+    if session.get("newbie_shift_request_id") and not _is_newbie_shift_approval_required():
+        if newbie_request_status == NEWBIE_REQUEST_PENDING:
+            newbie_request_status = "approved"
+            if not newbie_decision_by:
+                newbie_decision_by = NEWBIE_REQUEST_POLICY_APPROVED_ACTOR
+            if not newbie_decision_at:
+                newbie_decision_at = session.get("newbie_shift_request_created_at") or datetime.now(timezone.utc).isoformat()
+
     return [
         session_id,
         candidate_name,
@@ -8947,7 +8997,7 @@ def _candidate_session_row(session, existing_rows=None):
         session.get("newbie_shift_timezone") or "",
         session.get("newbie_shift_request_id") or "",
         session.get("newbie_shift_request_type") or NEWBIE_REQUEST_INITIAL,
-        session.get("newbie_shift_request_status") or NEWBIE_REQUEST_PENDING,
+        newbie_request_status,
         session.get("newbie_shift_requested_by") or "",
         session.get("newbie_shift_request_reason") or "",
         session.get("newbie_shift_request_details") or "",
@@ -8956,8 +9006,8 @@ def _candidate_session_row(session, existing_rows=None):
         session.get("newbie_shift_rescheduled_at") or "",
         _shared_bool(session.get("newbie_shift_within_24_hours")),
         _shared_bool(session.get("newbie_shift_counts_as_attempt")),
-        session.get("newbie_shift_admin_decision_at") or "",
-        session.get("newbie_shift_admin_decision_by") or "",
+        newbie_decision_at,
+        newbie_decision_by,
         session.get("newbie_shift_denial_reason") or "",
         session.get("deletion_request_id") or "",
         session.get("deletion_request_status") or "",
@@ -9062,6 +9112,20 @@ def _newbie_shift_request_row(session):
     candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
     first, last_initial = _split_candidate_name(candidate_name)
     request_id = str(session.get("newbie_shift_request_id") or f"newbie-{session_id}").strip()
+
+    raw_status = session.get("newbie_shift_request_status")
+    decision_by = session.get("newbie_shift_admin_decision_by") or ""
+    decision_at = session.get("newbie_shift_admin_decision_at") or ""
+    if not _is_newbie_shift_approval_required():
+        if not raw_status or raw_status == NEWBIE_REQUEST_PENDING:
+            raw_status = "approved"
+            if not decision_by:
+                decision_by = NEWBIE_REQUEST_POLICY_APPROVED_ACTOR
+            if not decision_at:
+                decision_at = session.get("newbie_shift_request_created_at") or datetime.now(timezone.utc).isoformat()
+    else:
+        raw_status = raw_status or NEWBIE_REQUEST_PENDING
+
     return [
         request_id,
         session_id,
@@ -9070,7 +9134,7 @@ def _newbie_shift_request_row(session):
         last_initial,
         session.get("tester_name") or "",
         session.get("newbie_shift_request_type") or NEWBIE_REQUEST_INITIAL,
-        session.get("newbie_shift_request_status") or NEWBIE_REQUEST_PENDING,
+        raw_status,
         session.get("newbie_shift_requested_by") or "",
         session.get("newbie_shift_request_reason") or "",
         session.get("newbie_shift_request_details") or "",
@@ -9082,8 +9146,8 @@ def _newbie_shift_request_row(session):
         _shared_bool(session.get("newbie_shift_within_24_hours")),
         _shared_bool(session.get("newbie_shift_counts_as_attempt")),
         _shared_bool(session.get("final_attempt")),
-        session.get("newbie_shift_admin_decision_at") or "",
-        session.get("newbie_shift_admin_decision_by") or "",
+        decision_at,
+        decision_by,
         session.get("newbie_shift_denial_reason") or "",
         session.get("newbie_shift_request_updated_at") or "",
         session.get("newbie_shift_lead_time_seconds") if session.get("newbie_shift_lead_time_seconds") is not None else "",
@@ -9317,6 +9381,101 @@ def _sync_newbie_shift_request_only(session):
         return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
 
 
+def _trigger_candidate_lifecycle_dual_write(session, candidate_action):
+    try:
+        if not is_dual_write_enabled():
+            return
+        dm = get_dual_write_manager()
+        candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
+        if not candidate_name:
+            return
+        first, last_initial = _split_candidate_name(candidate_name)
+        session_id = _candidate_session_identity(session) or str(session.get("session_id") or "").strip()
+        if not session_id:
+            return
+
+        is_new = candidate_action == "appended"
+        source_cand_id = str(session.get("candidate_id") or f"cand-{candidate_name.lower().replace(' ', '-')}").strip()
+
+        candidate_payload = {
+            "source_candidate_id": source_cand_id,
+            "display_name": candidate_name,
+            "first_name": first,
+            "last_initial": last_initial,
+            "is_new": is_new,
+        }
+
+        status = compute_final_status(session)
+        shared_status = _shared_status(status)
+
+        session_payload = {
+            "session_id": session_id,
+            "candidate_name": candidate_name,
+            "candidate_first_name": first,
+            "candidate_last_initial": last_initial,
+            "tester_name": session.get("tester_name") or "",
+            "session_type": "sup_transfer_only" if session.get("supervisor_only") else "mock_session",
+            "status": shared_status,
+            "final_result": session.get("final_result") or shared_status,
+            "attempt_number": session.get("attempt_number") or 1,
+            "created_at": str(session.get("timestamp_iso") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
+            "completed_at": str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()),
+            "is_new": is_new,
+            **session,
+        }
+
+        # Collect all completed call attempts
+        call_results = [
+            (1, (session.get("call_1") or {}).get("result") or session.get("call_1_result")),
+            (2, (session.get("call_2") or {}).get("result") or session.get("call_2_result")),
+            (3, (session.get("call_3") or {}).get("result") or session.get("call_3_result")),
+        ]
+        valid_calls = [(num, res) for num, res in call_results if res not in (None, "")]
+        if not valid_calls:
+            attempt_number = session.get("attempt_number") or session.get("current_attempt_number") or 1
+            valid_calls = [(attempt_number, session.get("final_result") or shared_status or "Pass")]
+
+        first_num, first_res = valid_calls[0]
+        attempt_payload = {
+            "source_action_id": f"google_sheets:attempt:{session_id}:{first_num}",
+            "session_id": session_id,
+            "attempt_number": first_num,
+            "result": first_res,
+            "occurred_at": str(session.get("completed_at") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
+            "details": session,
+        }
+
+        wf_res = dm.execute_candidate_lifecycle_workflow(
+            candidate_payload=candidate_payload,
+            candidate_authoritative_write_fn=lambda: {"ok": True},
+            session_payload=session_payload,
+            session_authoritative_write_fn=lambda: {"ok": True},
+            attempt_payload=attempt_payload,
+            attempt_authoritative_write_fn=lambda: {"ok": True},
+            actor=session.get("tester_name") or "MTS",
+        )
+
+        sess_row_id = getattr(wf_res.get("session_mirror_result"), "persisted_row_id", None)
+        for num, res in valid_calls[1:]:
+            dm.execute_dual_write(
+                domain="session_attempts",
+                mutation_type="create",
+                authoritative_payload={
+                    "source_action_id": f"google_sheets:attempt:{session_id}:{num}",
+                    "session_id": sess_row_id or session_id,
+                    "session_uuid": sess_row_id,
+                    "attempt_number": num,
+                    "result": res,
+                    "occurred_at": str(session.get("completed_at") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
+                    "details": session,
+                },
+                authoritative_write_fn=lambda: {"ok": True},
+                actor=session.get("tester_name") or "MTS",
+            )
+    except Exception as exc:
+        logger.warning("[DUAL-WRITE] Candidate lifecycle dual-write hook error: %s", exc)
+
+
 def _sync_shared_candidate_tracking(session):
     context = _shared_sheet_context()
     if not context.get("ok"):
@@ -9358,9 +9517,11 @@ def _sync_shared_candidate_tracking(session):
                 request["request_type"] = "newbie_shift_reschedule" if request.get("request_type") == NEWBIE_REQUEST_RESCHEDULE else "initial_newbie_shift"
                 newbie_action = apps_script_client.post("upsertPendingRequest", {"request": request})
             response = result if isinstance(result, dict) else {}
+            candidate_action = response.get("candidateAction") or "updated"
+            _trigger_candidate_lifecycle_dual_write(session, candidate_action)
             return {
                 "ok": True,
-                "candidateAction": response.get("candidateAction") or "updated",
+                "candidateAction": candidate_action,
                 "pendingAction": response.get("pendingAction") or "",
                 "newbieRequestAction": newbie_action,
                 **response,
@@ -9451,6 +9612,7 @@ def _sync_shared_candidate_tracking(session):
             existing_rows=newbie_request_rows,
         )
 
+        _trigger_candidate_lifecycle_dual_write(session, candidate_action)
         return {"ok": True, "candidateAction": candidate_action, "pendingAction": pending_action, "newbieRequestAction": newbie_request_action}
     except Exception as exc:
         reason = _shared_permission_hint(exc)
@@ -11852,6 +12014,8 @@ async def get_settings():
 
 @api_router.put("/settings")
 async def save_settings(payload: dict, request: Request):
+    if any(k in payload for k in ADMIN_CONTROLLED_SETTINGS_KEYS):
+        _require_admin_token(request)
     update_ops = normalize_settings_payload(payload)
     updates = update_ops.get("$set", {})
     unsets = update_ops.get("$unset", {})
@@ -11863,6 +12027,19 @@ async def save_settings(payload: dict, request: Request):
         upsert=True
     )
     return {"ok": True}
+
+
+@api_router.get("/admin/settings")
+async def get_admin_settings(request: Request):
+    _require_admin_token(request)
+    doc = await db.settings.find_one({"_id": "app_settings"}, {"_id": 0})
+    return sanitize_settings(doc)
+
+
+@api_router.put("/admin/settings")
+async def save_admin_settings(payload: dict, request: Request):
+    _require_admin_token(request)
+    return await save_settings(payload, request)
 
 
 @api_router.post("/settings/restore-defaults")

@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
+def _deterministic_uuid(namespace: str, name: str) -> str:
+    ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    return str(uuid.uuid5(ns, f"mts-sam:{namespace}:{name}"))
+
 # Explicit allowlist of operational domains eligible for dual-write
 DUAL_WRITE_ELIGIBLE_DOMAINS = frozenset({
     "notifications",
@@ -531,11 +535,12 @@ class CandidateSessionsAdapter(DomainDualWriteAdapter):
             last_initial = parts[-1][0] if len(parts) > 1 else None
 
         current_attempt = int(payload.get("current_attempt_number") or payload.get("attempt_number") or 1)
-        allowed_attempts = int(payload.get("allowed_attempt_count") or 3)
-        if current_attempt > allowed_attempts:
+        allowed_attempts = int(payload["allowed_attempt_count"]) if payload.get("allowed_attempt_count") else None
+        if allowed_attempts is not None and current_attempt > allowed_attempts:
             allowed_attempts = current_attempt
 
         return {
+            "id": payload.get("id") or _deterministic_uuid("session", session_id),
             "session_id": session_id,
             "candidate_id": str(candidate_id) if candidate_id else None,
             "candidate_name": display_name,
@@ -546,13 +551,19 @@ class CandidateSessionsAdapter(DomainDualWriteAdapter):
             "attempt_number": int(payload.get("attempt_number") or current_attempt),
             "current_attempt_number": current_attempt,
             "allowed_attempt_count": allowed_attempts,
-            "extra_attempts_granted": int(payload.get("extra_attempts_granted", 0)),
+            "extra_attempts_granted": int(payload.get("extra_attempts_granted") or 0),
             "final_attempt": bool(payload.get("final_attempt", False)),
             "raw_status": payload.get("raw_status") or payload.get("status") or "in_progress",
             "calculated_result": payload.get("calculated_result") or "",
             "final_result": payload.get("final_result") or "",
             "archived": bool(payload.get("archived", False)),
             "needs_sup_transfer": bool(payload.get("needs_sup_transfer", False)),
+            "pending_sup_transfer_id": payload.get("pending_sup_transfer_id") or None,
+            "headset_brand": payload.get("headset_brand") or None,
+            "headset_model": payload.get("headset_model") or None,
+            "newbie_shift_number": payload.get("newbie_shift_number") or None,
+            "created_at": str(payload.get("created_at") or datetime.datetime.now(datetime.timezone.utc).isoformat()),
+            "completed_at": str(payload.get("completed_at") or datetime.datetime.now(datetime.timezone.utc).isoformat()),
             "form_fill_status": payload.get("form_fill_status") or "not_attempted",
             "form_filled_at": payload.get("form_filled_at") or None,
             "source_checksum": checksum,
@@ -572,9 +583,9 @@ class CandidateSessionsAdapter(DomainDualWriteAdapter):
         if not rows:
             return False
         row = rows[0]
-        if expected_payload.get("raw_status") and str(row.get("raw_status") or "").lower() != str(expected_payload.get("raw_status") or "").lower():
+        if expected_payload.get("raw_status") and str(row.get("raw_status") or row.get("status") or "").lower() != str(expected_payload.get("raw_status") or "").lower():
             return False
-        if expected_payload.get("status") and str(row.get("raw_status") or "").lower() != str(expected_payload.get("status") or "").lower():
+        if expected_payload.get("status") and str(row.get("raw_status") or row.get("status") or "").lower() != str(expected_payload.get("status") or "").lower():
             return False
         return True
 
@@ -589,7 +600,9 @@ class SessionAttemptsAdapter(DomainDualWriteAdapter):
 
     def transform_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         source_action_id = self.extract_business_key(payload)
-        session_id = payload.get("session_uuid") or payload.get("canonical_session_id") or payload.get("session_id")
+        session_id_val = payload.get("session_uuid") or payload.get("canonical_session_id") or payload.get("session_id")
+        if not session_id_val and payload.get("source_session_id"):
+            session_id_val = _deterministic_uuid("session", payload.get("source_session_id"))
         attempt_number = max(1, int(payload.get("attempt_number") or 1))
         attempt_type = str(payload.get("attempt_type") or "mock_call").strip()
         result = payload.get("result") or payload.get("status") or None
@@ -598,6 +611,7 @@ class SessionAttemptsAdapter(DomainDualWriteAdapter):
         details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
 
         data = {
+            "id": payload.get("id") or _deterministic_uuid("attempt", source_action_id),
             "source_action_id": source_action_id,
             "attempt_number": attempt_number,
             "attempt_type": attempt_type,
@@ -605,8 +619,8 @@ class SessionAttemptsAdapter(DomainDualWriteAdapter):
             "occurred_at": occurred_at,
             "details": details,
         }
-        if session_id:
-            data["session_id"] = str(session_id)
+        if session_id_val:
+            data["session_id"] = str(session_id_val)
         return data
 
     def verify_persisted_state(

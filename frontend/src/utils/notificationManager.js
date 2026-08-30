@@ -6,6 +6,33 @@ export const MAX_PENDING_REQUEST_SUPPRESSIONS = 250;
 export const HEADSET_REVIEW_REMINDER_STORAGE_KEY = 'sam:headset-review-reminder:v1';
 export const HEADSET_REVIEW_REMINDER_MS = 2 * 60 * 60 * 1000;
 
+export const HEADSET_NOTIFICATION_MODES = Object.freeze({
+  ALL: 'all',
+  ACTION_REQUIRED_ONLY: 'action_required_only',
+  MUTED: 'muted',
+});
+
+export function normalizeHeadsetNotificationMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === HEADSET_NOTIFICATION_MODES.MUTED) return HEADSET_NOTIFICATION_MODES.MUTED;
+  if (mode === HEADSET_NOTIFICATION_MODES.ACTION_REQUIRED_ONLY) return HEADSET_NOTIFICATION_MODES.ACTION_REQUIRED_ONLY;
+  return HEADSET_NOTIFICATION_MODES.ALL;
+}
+
+export function shouldDisplayHeadsetAlert(mode, pendingCount = 0, headsetReviews = []) {
+  const normalizedMode = normalizeHeadsetNotificationMode(mode);
+  if (normalizedMode === HEADSET_NOTIFICATION_MODES.MUTED) {
+    return false;
+  }
+  if (normalizedMode === HEADSET_NOTIFICATION_MODES.ACTION_REQUIRED_ONLY) {
+    const hasPending = (Array.isArray(headsetReviews) ? headsetReviews : []).some(
+      (review) => String(review?.status || 'pending').toLowerCase() === 'pending'
+    );
+    return hasPending && pendingCount > 0;
+  }
+  return pendingCount > 0;
+}
+
 const PENDING_REQUEST_SUPPRESSION_TYPES = new Set(['remind', 'dismiss']);
 
 export function getHeadsetReviewReminderSignature(reviews) {

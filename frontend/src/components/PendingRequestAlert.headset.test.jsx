@@ -99,4 +99,50 @@ describe('grouped headset review reminder cadence', () => {
     expect(sessionStorage.getItem(HEADSET_REVIEW_REMINDER_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem('workflow-test-key')).toBe('still-present');
   });
+
+  test('TEST A - ALL mode: displays headset review alerts normally', () => {
+    renderAlert({ headsetNotificationMode: 'all' });
+    expect(container.querySelectorAll('[data-testid="sam-headset-review-alert"]')).toHaveLength(1);
+    expect(container.textContent).toContain('2 headset reviews are waiting.');
+  });
+
+  test('TEST B - ACTION REQUIRED ONLY mode: displays alerts when pending action needed and suppresses when resolved', () => {
+    // With pending reviews -> alert shown
+    renderAlert({ headsetNotificationMode: 'action_required_only' });
+    expect(container.querySelectorAll('[data-testid="sam-headset-review-alert"]')).toHaveLength(1);
+
+    // With only resolved/approved reviews -> no alert shown
+    unmount();
+    const approvedReviews = [
+      { review_id: 'review-one', brand: 'Example Brand', model: 'Model One', status: 'approved' },
+    ];
+    renderAlert({ headsetNotificationMode: 'action_required_only', headsetReviews: approvedReviews });
+    expect(container.querySelector('[data-testid="sam-headset-review-alert"]')).toBeNull();
+  });
+
+  test('TEST C - MUTED mode: suppresses headset review alerts and persistent reminders', () => {
+    const onAlertSound = jest.fn();
+    renderAlert({ headsetNotificationMode: 'muted', onAlertSound });
+    expect(container.querySelector('[data-testid="sam-headset-review-alert"]')).toBeNull();
+    expect(onAlertSound).not.toHaveBeenCalled();
+
+    // Even advancing timer by 2 hours -> still 0 alerts
+    act(() => jest.advanceTimersByTime(HEADSET_REVIEW_REMINDER_MS));
+    expect(container.querySelector('[data-testid="sam-headset-review-alert"]')).toBeNull();
+  });
+
+  test('TEST D - MUTED mode: does not mute unrelated workflow alerts', () => {
+    const onAlertSound = jest.fn();
+    const workflowRequests = [
+      { request_id: 'req-newbie-1', category: 'newbie_reschedule', status: 'pending' },
+    ];
+    renderAlert({
+      headsetNotificationMode: 'muted',
+      requests: workflowRequests,
+      onAlertSound,
+    });
+    // Workflow request alert is active
+    expect(container.querySelectorAll('[data-testid="sam-pending-request-alert"]')).toHaveLength(1);
+    expect(onAlertSound).toHaveBeenCalledTimes(1);
+  });
 });

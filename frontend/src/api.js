@@ -145,6 +145,8 @@ async function savedRequest(method, path, body = null) {
 const api = {
   getSettings: (timeout) => request('GET', '/settings', null, timeout),
   saveSettings: (data) => savedRequest('PUT', '/settings', data),
+  getAdminSettings: (timeout) => request('GET', '/admin/settings', null, timeout),
+  saveAdminSettings: (data) => savedRequest('PUT', '/admin/settings', data),
   getHealth: () => getHealth(),
   getDefaults: async (timeout, refresh = false) => {
     await ensureBackendHealth();

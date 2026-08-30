@@ -462,6 +462,18 @@ def _candidate_session_canonical_changes(source: Mapping[str, Any], target: Mapp
     return sorted(changes)
 
 
+OWNER_CONFIRMED_SESSION_CANDIDATE_MAPPINGS = {
+    # MarcKenzie Nicolas (Attempt 1 fail & Smart Resume attempt 2 continuation bound to single canonical candidate)
+    "767a38b7-1827-45ad-be0e-ea0c7dcd92bf": "e7ff5b51-13f3-5854-a1b9-b779bbeffb55",
+    "bb32febe-2ba9-4a45-8e15-464bc3552f33": "e7ff5b51-13f3-5854-a1b9-b779bbeffb55",
+    # Tammy Tester (Attempt 1 incomplete & resumed supervisor-transfer attempt 2 continuation bound to single canonical candidate)
+    "d13acabf-986f-4247-8cdf-0abcdba04ee4": "711ec303-80f8-52de-bfc9-9db536f3c77d",
+    "b07c9542-ebca-46db-b433-a42018dea287": "711ec303-80f8-52de-bfc9-9db536f3c77d",
+    # Test Candidate (Aug 3 Attempt 3 / Incomplete session bound to existing canonical candidate)
+    "3cf270cb-13f3-4186-a23a-ad30b1c22602": "9fa74910-32bc-5bf5-a29c-79c9840f185b",
+}
+
+
 def _candidate_items(source_rows, target_rows, target_sessions, by_source, by_entity, source_attempts):
     """Resolve candidates by durable relationships; names are exclusion-only evidence."""
     target_by_id = {str(row.get("id") or ""): row for row in target_rows if row.get("id")}
@@ -506,7 +518,10 @@ def _candidate_items(source_rows, target_rows, target_sessions, by_source, by_en
                 if str(lineage.get("entity_type") or "") != "candidates" or canonical_id not in target_by_id:
                     blocking_reason = "candidate_lineage_target_missing_or_mismatched"
             else:
-                persisted = row.get("persisted_candidate_id") if "persisted_candidate_id" in row else row.get("candidate_id")
+                persisted = (
+                    OWNER_CONFIRMED_SESSION_CANDIDATE_MAPPINGS.get(session_id)
+                    or (row.get("persisted_candidate_id") if "persisted_candidate_id" in row else row.get("candidate_id"))
+                )
                 persisted = _normalized_uuid(persisted)
                 if persisted:
                     canonical_id = persisted

@@ -67,6 +67,7 @@ import {
   toTwelveHour,
   validateNotification,
   isExpiredNotification,
+  normalizeHeadsetNotificationMode,
 } from './utils/notificationManager';
 
 const MANAGER_NOTIFICATION_TYPES = ['info', 'warning', 'urgent'];
@@ -92,6 +93,8 @@ const DEFAULT_SAM_SETTINGS = {
   statusBannerDurationSeconds: 60,
   defaultCandidateView: 'pending',
   includeArchivedInSearchDefault: false,
+  requireNewbieShiftApproval: true,
+  headsetNotificationMode: 'all',
 };
 const SAM_SOUND_VOLUME_OPTIONS = [
   { value: 'off', label: 'Off' },
@@ -321,12 +324,22 @@ function normalizeSamSettings(settings = {}) {
   const defaultCandidateView = Object.prototype.hasOwnProperty.call(CANDIDATE_VIEW_LABELS, settings.defaultCandidateView)
     ? settings.defaultCandidateView
     : DEFAULT_SAM_SETTINGS.defaultCandidateView;
+  const includeArchivedInSearchDefault = Boolean(settings.includeArchivedInSearchDefault);
+  const requireNewbieShiftApproval = settings.requireNewbieShiftApproval !== undefined
+    ? Boolean(settings.requireNewbieShiftApproval)
+    : (settings.require_newbie_shift_approval !== undefined
+      ? Boolean(settings.require_newbie_shift_approval)
+      : DEFAULT_SAM_SETTINGS.requireNewbieShiftApproval);
+  const headsetNotificationMode = normalizeHeadsetNotificationMode(
+    settings.headsetNotificationMode || settings.headset_notification_mode
+  );
   return {
-    ...DEFAULT_SAM_SETTINGS,
     soundVolume,
     statusBannerDurationSeconds,
     defaultCandidateView,
-    includeArchivedInSearchDefault: Boolean(settings.includeArchivedInSearchDefault),
+    includeArchivedInSearchDefault,
+    requireNewbieShiftApproval,
+    headsetNotificationMode,
   };
 }
 
@@ -671,6 +684,16 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
           <button
             type="button"
             role="tab"
+            aria-selected={modalTab === 'admin'}
+            className={`nm-view-tab ${modalTab === 'admin' ? 'is-active' : ''}`}
+            onClick={() => setModalTab('admin')}
+            data-testid="sam-admin-settings-tab"
+          >
+            Admin Settings
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={modalTab === 'account'}
             className={`nm-view-tab ${modalTab === 'account' ? 'is-active' : ''}`}
             onClick={() => setModalTab('account')}
@@ -1006,6 +1029,55 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
                     )}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {modalTab === 'admin' && (
+            <div className="nm-help-settings" id="sam-admin-settings" style={{ gridTemplateColumns: '1fr', gap: 20 }}>
+              <div className="nm-help-settings-copy">
+                <div className="nm-overline">ADMIN CONTROLS</div>
+                <h3>Workflow &amp; Notification Settings</h3>
+                <p>Configure operational approval policies and notification alerts across SAM and MTS.</p>
+              </div>
+
+              <div className="nm-admin-setting-group" style={{ padding: '16px', background: 'var(--nm-card-bg, rgba(255,255,255,0.03))', borderRadius: 8, border: '1px solid var(--nm-border, rgba(255,255,255,0.08))' }}>
+                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 600 }}>Workflow</h4>
+                <label className="nm-field" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontWeight: 600 }}>Require Admin Approval for Newbie Shift Requests</span>
+                  <select
+                    value={settings.requireNewbieShiftApproval ? 'on' : 'off'}
+                    onChange={(event) => updateSetting({ requireNewbieShiftApproval: event.target.value === 'on' })}
+                    data-testid="require-newbie-shift-approval-select"
+                    style={{ maxWidth: 320 }}
+                  >
+                    <option value="on">ON (Approval Required)</option>
+                    <option value="off">OFF (Auto-Approved by Policy)</option>
+                  </select>
+                  <span className="nm-meta" style={{ marginTop: 4, color: 'var(--nm-muted, #888)' }}>
+                    When disabled, newbie shift requests are still recorded and visible, but do not require Admin approval before the workflow can continue.
+                  </span>
+                </label>
+              </div>
+
+              <div className="nm-admin-setting-group" style={{ padding: '16px', background: 'var(--nm-card-bg, rgba(255,255,255,0.03))', borderRadius: 8, border: '1px solid var(--nm-border, rgba(255,255,255,0.08))' }}>
+                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 600 }}>Notifications</h4>
+                <label className="nm-field" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontWeight: 600 }}>Headset Review Notifications</span>
+                  <select
+                    value={settings.headsetNotificationMode || 'all'}
+                    onChange={(event) => updateSetting({ headsetNotificationMode: event.target.value })}
+                    data-testid="headset-notification-mode-select"
+                    style={{ maxWidth: 320 }}
+                  >
+                    <option value="all">All (Standard Notifications)</option>
+                    <option value="action_required_only">Action Required Only</option>
+                    <option value="muted">Muted (Data Updates Only)</option>
+                  </select>
+                  <span className="nm-meta" style={{ marginTop: 4, color: 'var(--nm-muted, #888)' }}>
+                    Controls headset review alerts only. Muting notifications does not stop headset review data from updating.
+                  </span>
+                </label>
               </div>
             </div>
           )}
@@ -4034,7 +4106,34 @@ export default function NotificationManagerApp() {
       setCandidateView(normalized.defaultCandidateView);
     }
     localStorage.setItem(SAM_SETTINGS_KEY, JSON.stringify(normalized));
+    api.saveSettings({
+      require_newbie_shift_approval: normalized.requireNewbieShiftApproval,
+      headset_notification_mode: normalized.headsetNotificationMode,
+    }).catch((err) => {
+      console.warn('Failed to persist admin settings to backend:', err);
+    });
   }, [samSettings.defaultCandidateView]);
+
+  useEffect(() => {
+    let active = true;
+    api.getSettings()
+      .then((backendSettings) => {
+        if (!active || !backendSettings) return;
+        setSamSettings((current) => {
+          const merged = normalizeSamSettings({
+            ...current,
+            requireNewbieShiftApproval: backendSettings.require_newbie_shift_approval,
+            headsetNotificationMode: backendSettings.headset_notification_mode,
+          });
+          try {
+            localStorage.setItem(SAM_SETTINGS_KEY, JSON.stringify(merged));
+          } catch (_error) {}
+          return merged;
+        });
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
   const dismissStatusBanner = useCallback(() => {
     setSheetState((current) => ({ ...current, statusKind: '', statusMessage: '' }));
   }, []);
@@ -5638,6 +5737,7 @@ export default function NotificationManagerApp() {
           refreshCycle={pendingRequestsRefreshCycle}
           headsetReviews={headsetReviews.pending || []}
           headsetReviewsAvailable={headsetReviews.ok !== false}
+          headsetNotificationMode={samSettings.headsetNotificationMode}
           onViewHeadsets={() => setActiveSection('headsets')}
           onAlertSound={() => playSamActionSound('error')}
           onView={(request) => {

@@ -10,6 +10,7 @@ import {
   savePendingRequestSuppressions,
   saveHeadsetReviewReminder,
   selectPendingRequestAlert,
+  shouldDisplayHeadsetAlert,
   suppressPendingRequest,
 } from '../utils/notificationManager';
 
@@ -28,6 +29,7 @@ export default function PendingRequestAlert({
   headsetReviews = [],
   headsetReviewsAvailable = true,
   onViewHeadsets,
+  headsetNotificationMode = 'all',
 }) {
   const [suppressions, setSuppressions] = useState(() => (
     loadPendingRequestSuppressions(typeof window === 'undefined' ? null : window.localStorage)
@@ -125,10 +127,11 @@ export default function PendingRequestAlert({
     )
   ), [requests, suppressions, workflowAlert]);
   const activeRequestId = String(activeRequest?.request_id || '');
+  const shouldAlertHeadset = shouldDisplayHeadsetAlert(headsetNotificationMode, headsetCount, headsetReviews);
   const activeHeadsetReminder = !activeRequest
     && !workflowAlert
     && headsetReviewsAvailable
-    && headsetCount > 0
+    && shouldAlertHeadset
     && (!headsetReminder || headsetReminder.signature !== headsetSignature || Number(headsetReminder.next_eligible_at || 0) <= reminderClock);
 
   const closeImmediateAlert = useCallback(() => {
