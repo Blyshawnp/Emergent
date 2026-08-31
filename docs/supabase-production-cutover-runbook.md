@@ -1,22 +1,29 @@
-# MTS/SAM Production Provider Cutover Runbook
+# MTS/SAM Production Provider Cutover Runbook & Execution Record
 
-This document defines the authoritative, staged procedure for transitioning Mock Testing Suite (MTS) and Smart Alert Manager (SAM) from Google Sheets operational authority to Supabase.
+This document defines the authoritative record and ongoing operational runbook for Mock Testing Suite (MTS) and Smart Alert Manager (SAM) following the production cutover from Google Sheets to Supabase.
 
 ---
 
-## 0. Production Cutover Approval Record
+## 0. Production Cutover Execution Record
 
-- **Approval Decision**: **APPROVED FOR PRODUCTION CUTOVER**
-- **Approval Timestamp**: `2026-08-31T02:05:00-04:00`
-- **Approved Baseline Commit**: `b6160ac`
+- **Cutover Status**: **PRODUCTION SUPABASE CUTOVER COMPLETE — STABILIZATION ACTIVE**
+- **Cutover Start Window**: `2026-08-31T03:01:15-04:00` (`2026-08-31T07:01:15Z`)
+- **Cutover Completion Timestamp**: `2026-08-31T03:05:00-04:00` (`2026-08-31T07:05:00Z`)
+- **Approved Baseline Commit**: `09b6cdd`
 - **Branch**: `fix/history-sync-performance`
-- **Baseline Readiness**:
+- **Active Authoritative Provider**: **Supabase** (`MTS_DATA_PROVIDER=supabase`)
+- **Steady-State Runtime Configuration**:
+  - `MTS_DATA_PROVIDER=supabase`
+  - `MTS_SHADOW_COMPARE=false`
+  - `MTS_DUAL_WRITE_ENABLED=false`
+  - `MTS_DUAL_WRITE_DOMAINS=[]`
+- **Pre-Cutover Baseline Parity**:
   - Operational Domains: `14/14 READY`
   - Configuration Domains: `9/9 READY`
   - Total: `23/23 READY`
   - Unexplained Differences: `0`
   - Comparator Errors: `0`
-- **Database Integrity**:
+- **Post-Cutover Database Integrity**:
   - Duplicate Candidates: `0`
   - Duplicate Sessions: `0`
   - Duplicate Attempts: `0`
@@ -24,197 +31,50 @@ This document defines the authoritative, staged procedure for transitioning Mock
   - Orphan Attempts: `0`
   - Unresolved Lineage: `0`
   - Pending Divergences: `0`
+- **Post-Cutover Smoke Test Results**:
+  - 23-Domain Supabase Reads: `PASS (2.5s across 23 domains)`
+  - Pilot Admin Auth Verification: `PASS (Shawn Bly / Owner / Active)`
+  - Inactive User Denial: `PASS (5 inactive accounts blocked)`
+  - Controlled MTS Candidate Lifecycle Write: `PASS`
+  - Controlled Session & Attempt Persistence: `PASS`
+  - Clean Entity Tear-Down: `PASS (Zero residue)`
 - **Full Regression Test Status**:
   - Backend Unit Suite: `562 / 562 PASS (100%)`
   - Frontend Test Suite: `358 / 358 PASS (100%)`
   - Desktop Test Suite: `16 / 16 PASS (100%)`
   - Apps Script Authorization Suite: `36 / 36 PASS (100%)`
   - Total Test Count: `972 / 972 PASS (100%)`
-- **Approval Matrix (12 / 12 Gates Approved)**:
-  - DATA: `APPROVED`
-  - PROVIDER: `APPROVED`
-  - AUTH: `APPROVED`
-  - RLS: `APPROVED`
-  - CONFIG: `APPROVED`
-  - MTS: `APPROVED`
-  - SAM: `APPROVED`
-  - ROLLBACK: `APPROVED`
-  - BACKUP: `APPROVED`
-  - PACKAGING: `APPROVED`
-  - RUNBOOK: `APPROVED`
-  - STABILIZATION: `APPROVED`
 
 ---
 
-## 1. Cutover Overview & Staged Transition Strategy
+## 1. Post-Cutover Operational Architecture & Infrastructure Roles
 
-The production cutover is executed in distinct, verifiable stages to guarantee zero data loss, zero unaccounted drift, and a fast, deterministic rollback to Google Sheets if an abort condition is triggered.
+### Supabase Role (Production Authority)
+- **Classification**: **Authoritative Production Data Store & Identity Provider**.
+- All live MTS candidate sessions, attempt logs, call outcomes, form corrections, supervisor transfers, and newbie shift requests persist directly to Supabase via `SupabaseDataProvider`.
+- Row-Level Security (RLS) is forced across all 23 canonical and configuration tables. Public/anonymous DML is revoked.
 
-```
-[ Stage A: Pre-Cutover Sync & Drift Verification ]
-                     │
-                     ▼
-[ Stage B: Authoritative Write Freeze Window ]
-                     │
-                     ▼
-[ Stage C: Zero-Drift & Lineage Invariant Confirmation ]
-                     │
-                     ▼
-[ Stage D: Runtime Provider Switch (MTS_DATA_PROVIDER=supabase) ]
-                     │
-                     ▼
-[ Stage E: Post-Cutover Production Smoke Tests ]
-                     │
-                     ▼
-[ Stage F: Monitored Production Stabilization Window (14-30 days) ]
-                     │
-                     ▼
-[ Stage G: De-emphasize / Retire Sheets Authority Post-Stability ]
-```
-
----
-
-## 2. Pre-Cutover Prerequisites & Validation
-
-Before initiating Stage A, all of the following preconditions must be verified:
-
-1. **Git Repository State**:
-   - Clean working tree, no uncommitted changes, branch `fix/history-sync-performance` (or release tag).
-   - No sensitive credentials, service role keys, or `.env` files in repository tracking.
-2. **Supabase Target Verification**:
-   - Hosted Project Reference: `xyfhikikddcqcmzbdvbj` (MTS-SAM, East US / North Virginia).
-   - All 6 approved migrations applied and verified.
-3. **23-Domain Baseline Readiness**:
-   - `python backend/tools/supabase_import/cli.py compare-shadow` returns:
-     - Operational Domains: `14/14 READY`
-     - Configuration Domains: `9/9 READY`
-     - Total: `23/23 READY`
-     - Unexplained Differences: `0`
-     - Comparator Errors: `0`
-4. **Database Integrity Confirmation**:
-   - Duplicate candidates: 0
-   - Duplicate sessions: 0
-   - Duplicate attempts: 0
-   - Orphan sessions: 0
-   - Orphan attempts: 0
-   - Unresolved lineage: 0
-   - Pending divergences: 0
-5. **Full Test Suite Status**:
-   - Backend unit suite: 100% PASS
-   - Frontend test suite: 100% PASS
-   - Desktop test suite: 100% PASS
-   - Apps Script authorization suite: 100% PASS
-
----
-
-## 3. Pre-Cutover Backup & Snapshot Plan
-
-Immediately prior to Stage D (provider switch):
-
-1. **Google Sheets Master Backup**:
-   - Perform a named version snapshot in Google Sheets version history (e.g., `Pre-Cutover Baseline - [YYYY-MM-DD]`).
-   - Export an offline snapshot of all 23 tabs to CSV / JSON archive.
-2. **Supabase Database Snapshot**:
-   - Trigger a project-level backup in the Supabase Dashboard.
-   - Record exact table row counts across all canonical and configuration tables.
-3. **Lineage & Audit State Capture**:
-   - Capture row counts for `data_source_lineage`, `import_batches`, and `audit_events`.
-
----
-
-## 4. Post-Cutover Roles & Infrastructure Strategy
-
-### Google Sheets Role Post-Cutover
-- **Classification**: **Read-Only Archive & Emergency Fallback**.
+### Google Sheets Role (Post-Cutover)
+- **Classification**: **Read-Only Archive & Emergency Fallback Reference**.
 - Sheets access remains active during the stabilization window.
 - The Google Sheets workbook is retained as an operational fallback in the event of an unforeseen disaster recovery scenario.
+- **Rollback Rule**: Once Supabase accepts new production writes, Sheets is classified as `STALE RELATIVE TO SUPABASE`. Switching provider back to Sheets requires reverse reconciliation (Class B rollback) to prevent data loss.
 
-### Apps Script Role Post-Cutover
+### Apps Script Role (Post-Cutover)
 - **Classification**: **Retained Non-Authoritative / Legacy Support**.
 - Apps Script is NOT disabled during cutover or the initial stabilization window.
-- It remains available as a secondary integration interface.
+- It remains available as a secondary integration interface for legacy maintenance.
 
-### Dual-Write Strategy Post-Cutover
+### Dual-Write Role (Post-Cutover)
 - **Setting**: `MTS_DUAL_WRITE_ENABLED=false`, `MTS_DUAL_WRITE_DOMAINS=[]`.
 - *Note*: The existing `DualWriteManager` is specifically engineered as a forward Sheets-first mirror. No reverse dual-write exists or should be enabled.
 
-### Shadow Comparator Post-Cutover
-- After Supabase becomes authoritative, the comparator is retained for manual / diagnostic audits and historical reconciliation analysis.
-
 ---
 
-## 5. Auth & User Management Cutover Policy
+## 2. Post-Cutover Rollback Procedures
 
-1. **Pilot Administrator**:
-   - Shawn Bly (`ca4cb01e-0777-435d-8a7c-1f2bcfaed291`, `blyshawnp@gmail.com`) is verified with `owner` / `administrator` roles.
-2. **Inactive Accounts (Waiting for Email)**:
-   - 5 historical admin accounts (`Ashley Shealey`, `Becky Sowles`, `Lisa Byrd`, `Kristi Green`, `Kimberly O'brien`) remain `active = false` with `auth_user_id = null`.
-   - Inactive accounts cannot log in via Supabase Auth or Legacy PIN fallback.
-3. **Future Enrollment Policy**:
-   - An Admin activates the user record in SAM User Management.
-   - A valid email is provided and verified.
-   - The user receives an onboarding password setup link (`smartalertmanager://reset-password`).
-   - No legacy PINs are converted to passwords. No emails are fabricated.
-
----
-
-## 6. Runtime Configuration & Cutover Execution Steps
-
-### Step 1: Minimum Write Freeze
-- Notify testers/admins of a brief 5-minute maintenance window.
-- Verify no active test sessions are running.
-
-### Step 2: Final Parity Confirmation
-- Execute `python backend/tools/supabase_import/cli.py compare-shadow` to confirm 23/23 domains ready with 0 differences.
-
-### Step 3: Provider Configuration Switch
-- Apply runtime environment variables:
-  ```bash
-  MTS_DATA_PROVIDER=supabase
-  MTS_SHADOW_COMPARE=false
-  MTS_DUAL_WRITE_ENABLED=false
-  MTS_DUAL_WRITE_DOMAINS=[]
-  ```
-
-### Step 4: Service Restart
-- Restart MTS and SAM backend processes to bind to `SupabaseDataProvider`.
-
----
-
-## 7. Post-Cutover Production Smoke Tests
-
-Execute the following smoke test plan immediately after restart:
-
-1. **SAM Dashboard & Navigation**:
-   - Open SAM -> verify Dashboard loads candidate tracking, pending requests, and notifications without errors.
-   - Verify Admin Settings panel loads `require_newbie_shift_approval` and `headset_notification_mode`.
-   - Verify User Management loads current user roster with accurate activation states.
-2. **MTS Startup & Configuration**:
-   - Open MTS -> verify caller roster (22 callers), shows (8 shows), call types (5), and AI prompts load from Supabase.
-   - Verify Candidate History loads existing completed sessions.
-3. **Controlled Single Test Candidate Lifecycle**:
-   - Enter candidate name `CUTOVER-TEST-CANDIDATE`.
-   - Complete Call 1 -> Result: PASS.
-   - Finalize Session -> verify session appears in History and SAM Candidate Tracking.
-   - Verify 0 duplicate records and 0 orphan attempts in Supabase database.
-4. **Controlled SAM Workflow Action**:
-   - Execute one test notification acknowledgment or workflow status verification.
-
----
-
-## 8. Cutover Abort Criteria & Immediate Rollback Procedure
-
-### Abort Criteria (Hard STOP)
-If any of the following occur during cutover or smoke testing, abort immediately:
-- Baseline comparator reveals unexpected drift or errors prior to switch.
-- MTS or SAM backend fails to initialize with Supabase provider.
-- Supabase Auth fails for valid Admin credentials.
-- Inactive user bypasses security controls.
-- Any runtime candidate/session write fails or produces duplicate/orphan rows.
-- High latency / database timeouts exceed 5 seconds.
-
-### Immediate Rollback Procedure
-To return immediately to Google Sheets authority:
+### Class A — Immediate Pre-Write Rollback
+If cutover rollback is required BEFORE any Supabase-only production writes occur:
 1. Revert environment variables:
    ```bash
    MTS_DATA_PROVIDER=sheets
@@ -223,17 +83,37 @@ To return immediately to Google Sheets authority:
    MTS_DUAL_WRITE_DOMAINS=[]
    ```
 2. Restart backend processes.
-3. Verify Sheets authority is active and operational.
+3. Google Sheets immediately resumes operational authority with zero data loss.
+
+### Class B — Post-Write Rollback (Reconciliation Required)
+If Supabase has accepted new production writes after cutover:
+1. **DO NOT** blindly switch `MTS_DATA_PROVIDER=sheets`.
+2. Quiesce active writes.
+3. Identify all Supabase mutations created since `2026-08-31T03:01:15-04:00`.
+4. Export and apply those mutations to Google Sheets via reconciliation script.
+5. Confirm Sheets parity.
+6. Only then switch `MTS_DATA_PROVIDER=sheets`.
 
 ---
 
-## 9. Stabilization & Retirement Roadmap
+## 3. Stabilization Window & Monitoring (14–30 Days)
 
-1. **Stabilization Window**:
-   - Maintain a 14-to-30 day stabilization window.
-   - Monitor query latencies, audit logs, and workflow completion.
-   - Retain full rollback capability to Google Sheets throughout this period.
-2. **Final Sheets Retirement Criteria**:
-   - 30 consecutive days of error-free Supabase operations.
-   - Zero rollbacks or data integrity failures.
-   - Formal sign-off on database backups and operational stability.
+A 14-to-30 day stabilization window is now active.
+
+### Monitoring Objectives
+- Monitor Supabase query latencies, connection pool health, and RPC execution times.
+- Observe natural event-based canaries when real production events occur:
+  - `candidate_corrections`
+  - `extra_attempt_grants`
+  - `candidate_status_actions`
+- Retain full rollback capability and backup snapshots throughout this period.
+
+---
+
+## 4. Final Sheets Retirement Criteria
+
+Google Sheets operational fallback may be decommissioned only when:
+- 30 consecutive days of error-free Supabase operations are completed.
+- Zero data loss incidents or rollbacks occur.
+- All event-based canaries have been observed in live production.
+- Formal sign-off on database backups and operational stability is granted.
