@@ -11,6 +11,10 @@ const { spawn, spawnSync, execFileSync } = require('child_process');
 const http = require('http');
 const { pathToFileURL } = require('url');
 const Store = require('electron-store');
+const {
+  resolveDataProviderConfig,
+  resolveDataRuntimeEnv,
+} = require('./src/dataConfig');
 let desktopPackage = {};
 
 try {
@@ -538,11 +542,14 @@ function startBackend() {
     console.log(`[BACKEND] defaultsDir: ${backendDefaultsDir}`);
     console.log(`[BACKEND] appsScriptApiConfig: ${fs.existsSync(appsScriptApiConfigPath) ? appsScriptApiConfigPath : 'not bundled; local defaults will be used'}`);
 
+    const dataRuntimeEnv = resolveDataRuntimeEnv(backendRuntimeConfigPath);
+
     try {
       backendProcess = spawn(backendPath, [], {
         cwd: backendCwd,
         env: {
           ...process.env,
+          ...dataRuntimeEnv,
           BACKEND_PORT: String(BACKEND_PORT),
           SQLITE_DB_PATH: getSqliteDbPath(),
           APP_DATA_DIR: app.getPath('userData'),
@@ -625,6 +632,9 @@ function startBackend() {
   backendLogTail = [];
   backendCommandLabel = `${launcher.label} -m uvicorn server:app --host 127.0.0.1 --port ${BACKEND_PORT}`;
 
+  const devRuntimeConfigPath = path.join(backendDir, 'config', 'runtime_config.json');
+  const dataRuntimeEnv = resolveDataRuntimeEnv(devRuntimeConfigPath);
+
   backendProcess = spawn(pythonCmd, [
     ...pythonArgs,
     '-m', 'uvicorn', 'server:app',
@@ -635,6 +645,7 @@ function startBackend() {
     cwd: backendDir,
     env: {
       ...process.env,
+      ...dataRuntimeEnv,
       SQLITE_DB_PATH: getSqliteDbPath(),
       APP_VERSION,
       MTS_ADMIN_TOKEN: getSharedAdminToken(),

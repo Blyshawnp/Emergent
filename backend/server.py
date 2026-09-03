@@ -44,16 +44,36 @@ from data_providers.runtime_shadow import (
     build_runtime_shadow_providers,
 )
 from data_providers.dual_write import get_dual_write_manager, is_dual_write_enabled
+from data_providers.factory import configured_provider_mode, build_data_provider
+from data_providers.supabase import SupabaseDataProvider
 from services.apps_script_api import apps_script_api_role
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+if (ROOT_DIR / '.env').is_file():
+    load_dotenv(ROOT_DIR / '.env', override=False)
+if (ROOT_DIR.parent / '.env').is_file():
+    load_dotenv(ROOT_DIR.parent / '.env', override=False)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logger.info("[STARTUP] backend process start")
 
 _shadow_runtime = None
+_cached_active_provider = None
+
+
+def _get_active_data_provider():
+    global _cached_active_provider
+    mode = configured_provider_mode()
+    if mode == "supabase":
+        if _cached_active_provider is None or not isinstance(_cached_active_provider, SupabaseDataProvider):
+            _cached_active_provider = build_data_provider()
+        return _cached_active_provider
+    elif mode == "sheets":
+        ctx = _shared_sheet_context()
+        client = ctx.get("appsScriptClient") or ctx.get("service")
+        return build_data_provider(sheets_client=client)
+    return build_data_provider()
 
 
 def _runtime_shadow_provider_factory(config):
@@ -5750,6 +5770,74 @@ def _sync_headset_content_cache(rows):
 
 
 def _headset_review_snapshot(context=None):
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            raw_reviews = provider.list_resource("headset_reviews", limit=5000)
+            review_rows = []
+            for row in raw_reviews or []:
+                payload = dict(row.get("source_payload") or {})
+                for k, v in row.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                brand, model = _split_headset_brand_model(
+                    payload.get("headset_model") or payload.get("model"),
+                    payload.get("Brand") or payload.get("brand"),
+                    payload.get("Model") or payload.get("model"),
+                )
+                review_rows.append({
+                    "review_id": str(payload.get("review_id") or payload.get("ReviewId") or "").strip(),
+                    "source_session_id": str(payload.get("source_session_id") or payload.get("SourceSessionId") or "").strip(),
+                    "brand": brand,
+                    "model": model,
+                    "status": str(payload.get("Status") or payload.get("review_status") or payload.get("status") or "pending").strip().lower() or "pending",
+                    "note": str(payload.get("Note") or payload.get("ReviewNotes") or payload.get("Notes") or payload.get("notes") or "").strip(),
+                    "submitted_date": str(payload.get("created_at") or payload.get("Timestamp") or payload.get("entered_at") or "").strip(),
+                    "updated_at": str(payload.get("updated_at") or "").strip(),
+                    "candidate": str(payload.get("candidate_name") or payload.get("CandidateName") or "").strip(),
+                    "tester": str(payload.get("tester_name") or payload.get("SubmittedBy") or "").strip(),
+                })
+            headset_rows = provider.list_resource("headset_catalog", limit=5000)
+            catalog_rows = []
+            for row in headset_rows or []:
+                payload = dict(row.get("source_payload") or {})
+                for k, v in row.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                catalog_rows.append({
+                    "brand": str(payload.get("brand") or payload.get("Brand") or "").strip(),
+                    "model": str(payload.get("model") or payload.get("Model") or "").strip(),
+                    "status": str(payload.get("status") or payload.get("Status") or "").strip().lower(),
+                    "note": str(payload.get("note") or payload.get("Note") or "").strip(),
+                    "catalog_identity": str(payload.get("catalog_identity") or "").strip(),
+                    "catalog_row_number": payload.get("catalog_row_number") or 0,
+                })
+            _sync_headset_content_cache(catalog_rows)
+            public_row = lambda r: {
+                "review_id": r.get("review_id") or "",
+                "source_session_id": r.get("source_session_id") or "",
+                "brand": r.get("brand") or "",
+                "model": r.get("model") or "",
+                "status": r.get("status") or "",
+                "note": r.get("note") or "",
+                "submitted_date": r.get("submitted_date") or "",
+                "updated_at": r.get("updated_at") or "",
+                "candidate": r.get("candidate") or "",
+                "tester": r.get("tester") or "",
+                "catalog_identity": r.get("catalog_identity") or "",
+                "catalog_row_number": r.get("catalog_row_number") or 0,
+            }
+            return {
+                "ok": True,
+                "pending": [public_row(r) for r in review_rows if r.get("brand") and r.get("model") and r.get("status") in {"", "pending"}],
+                "approved": [public_row(r) for r in catalog_rows if r.get("status") == "approved"],
+                "denied": [public_row(r) for r in catalog_rows if r.get("status") == "denied"],
+                "error": "",
+            }
+        except Exception as exc:
+            logger.exception("[HEADSET-REVIEW] Failed to load headset review data from Supabase: %s", exc)
+            return {"ok": False, "pending": [], "approved": [], "denied": [], "error": _headset_review_temporary_unavailable_message()}
+
     context = context or _shared_sheet_context()
     if not context.get("ok"):
         return {"ok": False, "pending": [], "approved": [], "denied": [], "error": _headset_review_temporary_unavailable_message()}
@@ -6431,7 +6519,102 @@ def _apply_authoritative_candidate_status(row):
     return next_row
 
 
+def _assemble_candidate_snapshot(candidate_rows, pending_rows, auto_archived_count=0):
+    def summarize_candidate_groups(rows_to_group):
+        grouped = {}
+        for row in rows_to_group:
+            grouped.setdefault(_candidate_name_key(row.get("candidate_name")), []).append(row)
+
+        summaries = []
+        for key, rows in grouped.items():
+            if not key:
+                continue
+            rows.sort(key=lambda row: str(row.get("completed_at") or row.get("created_at") or ""), reverse=True)
+            latest = rows[0]
+            summary = _candidate_attempt_summary(rows)
+            summaries.append({
+                **latest,
+                **summary,
+                "attempts": rows,
+                "latest_session_id": latest.get("session_id") or "",
+                "latest_status": latest.get("status") or "",
+                "last_session_date": latest.get("completed_at") or latest.get("created_at") or "",
+            })
+        return summaries
+
+    active_candidates = [row for row in candidate_rows if _candidate_row_active(row)]
+    archived_candidates = [row for row in candidate_rows if _shared_truthy(row.get("archived"))]
+    candidate_summaries = summarize_candidate_groups(active_candidates)
+    archived_summaries = summarize_candidate_groups(archived_candidates)
+
+    pending_active = _filter_current_pending_sup_transfers(pending_rows, candidate_summaries)
+    failed_not_final = [
+        row for row in candidate_summaries
+        if str(row.get("latest_status") or "").upper() == "FAIL"
+        and not _candidate_row_withdrawn(row)
+    ]
+    failed_final_attempts = [
+        row for row in candidate_summaries
+        if str(row.get("latest_status") or "").upper() == "FAIL-FINAL ATTEMPT"
+        and not _candidate_row_withdrawn(row)
+    ]
+    incomplete = [
+        row for row in candidate_summaries
+        if str(row.get("latest_status") or "").upper() == "INCOMPLETE" and not _candidate_row_withdrawn(row)
+    ]
+    withdrawn = [row for row in candidate_summaries if _candidate_row_withdrawn(row)]
+    extra_attempt = [row for row in candidate_summaries if _candidate_row_extra_attempt(row)]
+    passed_certifications = [
+        row for row in candidate_summaries
+        if str(row.get("latest_status") or "").upper() in {"PASS", "RESUMED-PASS"}
+        and not _candidate_row_withdrawn(row)
+    ]
+
+    return {
+        "ok": True,
+        "setup": _shared_tracking_required_setup(),
+        "autoArchivedCount": auto_archived_count,
+        "candidates": candidate_summaries + archived_summaries,
+        "pending": pending_active,
+        "views": {
+            "pending": pending_active,
+            "failedNotFinal": failed_not_final,
+            "failedFinalAttempts": failed_final_attempts,
+            "incomplete": incomplete,
+            "withdrawn": withdrawn,
+            "extraAttemptGranted": extra_attempt,
+            "passedCertifications": passed_certifications,
+            "archived": archived_summaries,
+            "allActive": [row for row in candidate_summaries if not _candidate_row_withdrawn(row)],
+        },
+    }
+
+
 def _shared_admin_candidate_snapshot(context=None):
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            sessions_raw = provider.list_resource("candidate_sessions", limit=5000)
+            pending_raw = provider.list_resource("supervisor_transfers", limit=5000)
+            candidate_rows = []
+            for s in sessions_raw or []:
+                payload = dict(s.get("source_payload") or {})
+                for k, v in s.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                candidate_rows.append(_apply_authoritative_candidate_status(_normalize_shared_row(payload)))
+            pending_rows = []
+            for p in pending_raw or []:
+                payload = dict(p.get("source_payload") or {})
+                for k, v in p.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                pending_rows.append(_normalize_shared_row(payload))
+            return _assemble_candidate_snapshot(candidate_rows, pending_rows, auto_archived_count=0)
+        except Exception as exc:
+            logger.exception("[SHARED] Failed to read admin candidate tracking rows from Supabase: %s", exc)
+            return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
+
     context = context or _shared_sheet_context()
     if not context.get("ok"):
         return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
@@ -6511,6 +6694,7 @@ def _shared_admin_candidate_snapshot(context=None):
                     "allActive": active,
                 },
             }
+
         sheets_api = context["service"].spreadsheets()
         sheet_id = context["sheet_id"]
         candidate_rows = [
@@ -6532,81 +6716,13 @@ def _shared_admin_candidate_snapshot(context=None):
             )
         ]
         auto_archived_count = _auto_archive_candidate_rows(sheets_api, sheet_id, candidate_rows)
+        return _assemble_candidate_snapshot(candidate_rows, pending_rows, auto_archived_count)
     except Exception as exc:
         if _google_sheet_quota_or_temporary_error(exc):
             logger.warning("[SHARED] Candidate Tracking temporarily unavailable due to Google Sheets quota/rate limit: %s", exc)
         else:
             logger.exception("[SHARED] Failed to read admin candidate tracking rows: %s", exc)
         return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message(), "setup": _shared_tracking_required_setup(), "candidates": [], "pending": []}
-
-    def summarize_candidate_groups(rows_to_group):
-        grouped = {}
-        for row in rows_to_group:
-            grouped.setdefault(_candidate_name_key(row.get("candidate_name")), []).append(row)
-
-        summaries = []
-        for key, rows in grouped.items():
-            if not key:
-                continue
-            rows.sort(key=lambda row: str(row.get("completed_at") or row.get("created_at") or ""), reverse=True)
-            latest = rows[0]
-            summary = _candidate_attempt_summary(rows)
-            summaries.append({
-                **latest,
-                **summary,
-                "attempts": rows,
-                "latest_session_id": latest.get("session_id") or "",
-                "latest_status": latest.get("status") or "",
-                "last_session_date": latest.get("completed_at") or latest.get("created_at") or "",
-            })
-        return summaries
-
-    active_candidates = [row for row in candidate_rows if _candidate_row_active(row)]
-    archived_candidates = [row for row in candidate_rows if _shared_truthy(row.get("archived"))]
-    candidate_summaries = summarize_candidate_groups(active_candidates)
-    archived_summaries = summarize_candidate_groups(archived_candidates)
-
-    pending_active = _filter_current_pending_sup_transfers(pending_rows, candidate_summaries)
-    failed_not_final = [
-        row for row in candidate_summaries
-        if str(row.get("latest_status") or "").upper() == "FAIL"
-        and not _candidate_row_withdrawn(row)
-    ]
-    failed_final_attempts = [
-        row for row in candidate_summaries
-        if str(row.get("latest_status") or "").upper() == "FAIL-FINAL ATTEMPT"
-        and not _candidate_row_withdrawn(row)
-    ]
-    incomplete = [
-        row for row in candidate_summaries
-        if str(row.get("latest_status") or "").upper() == "INCOMPLETE" and not _candidate_row_withdrawn(row)
-    ]
-    withdrawn = [row for row in candidate_summaries if _candidate_row_withdrawn(row)]
-    extra_attempt = [row for row in candidate_summaries if _candidate_row_extra_attempt(row)]
-    passed_certifications = [
-        row for row in candidate_summaries
-        if str(row.get("latest_status") or "").upper() in {"PASS", "RESUMED-PASS"}
-        and not _candidate_row_withdrawn(row)
-    ]
-
-    return {
-        "ok": True,
-        "setup": _shared_tracking_required_setup(),
-        "autoArchivedCount": auto_archived_count,
-        "candidates": candidate_summaries + archived_summaries,
-        "pending": pending_active,
-        "views": {
-            "pending": pending_active,
-            "failedNotFinal": failed_not_final,
-            "failedFinalAttempts": failed_final_attempts,
-            "incomplete": incomplete,
-            "withdrawn": withdrawn,
-            "extraAttemptGranted": extra_attempt,
-            "passedCertifications": passed_certifications,
-            "archived": archived_summaries,
-            "allActive": [row for row in candidate_summaries if not _candidate_row_withdrawn(row)],
-        },
-    }
 
 
 def _request_status_value(value):
@@ -6969,19 +7085,23 @@ def _candidate_row_remote_newbie_request(row):
 
 
 def _fetch_remote_newbie_requests():
-    context = _shared_sheet_context()
-    if not context.get("ok"):
-        raise RuntimeError("shared_request_context_unavailable")
-    if context.get("appsScriptClient"):
-        result = context["appsScriptClient"].get("getPendingRequests", {"include_resolved": "true"})
-        raw_rows = result.get("requests") if isinstance(result, dict) else []
+    if configured_provider_mode() == "supabase":
+        provider = _get_active_data_provider()
+        raw_rows = provider.list_resource("pending_requests", limit=5000)
     else:
-        raw_rows = _shared_read_rows(
-            context["service"].spreadsheets(),
-            context["sheet_id"],
-            SHARED_NEWBIE_SHIFT_REQUESTS_TAB,
-            SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
-        )
+        context = _shared_sheet_context()
+        if not context.get("ok"):
+            raise RuntimeError("shared_request_context_unavailable")
+        if context.get("appsScriptClient"):
+            result = context["appsScriptClient"].get("getPendingRequests", {"include_resolved": "true"})
+            raw_rows = result.get("requests") if isinstance(result, dict) else []
+        else:
+            raw_rows = _shared_read_rows(
+                context["service"].spreadsheets(),
+                context["sheet_id"],
+                SHARED_NEWBIE_SHIFT_REQUESTS_TAB,
+                SHARED_NEWBIE_SHIFT_REQUEST_HEADERS,
+            )
     requests = []
     for row in raw_rows or []:
         if not isinstance(row, dict):
@@ -7306,6 +7426,24 @@ def _safe_history_reconciliation(reconcile, error_code, *args, **kwargs):
 
 
 def _fetch_remote_correction_requests():
+    if configured_provider_mode() == "supabase":
+        provider = _get_active_data_provider()
+        raw_rows = provider.list_resource("pending_requests", limit=5000)
+        requests = []
+        for row in raw_rows or []:
+            if not isinstance(row, dict):
+                continue
+            payload = dict(row.get("source_payload") or {})
+            for k, v in row.items():
+                if k != "source_payload" and k not in payload:
+                    payload[k] = v
+            cat = str(payload.get("category") or "").strip().lower()
+            rtype = str(payload.get("request_type") or "").strip().lower()
+            source_tab = str(payload.get("source_tab") or "")
+            if source_tab == SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB or "correction" in cat or rtype == CORRECTION_REQUEST_TYPE:
+                requests.append(_public_correction_request(payload))
+        return requests
+
     context = _shared_sheet_context()
     if not context.get("ok"):
         raise RuntimeError("correction_transport_unavailable")
@@ -7386,6 +7524,20 @@ def _reconcile_remote_corrections_into_local_history():
 
 
 def _fetch_remote_candidate_information():
+    if configured_provider_mode() == "supabase":
+        provider = _get_active_data_provider()
+        sessions_raw = provider.list_resource("candidate_sessions", limit=5000)
+        rows = []
+        for s in sessions_raw or []:
+            if not isinstance(s, dict):
+                continue
+            payload = dict(s.get("source_payload") or {})
+            for k, v in s.items():
+                if k != "source_payload" and k not in payload:
+                    payload[k] = v
+            rows.append(payload)
+        return rows
+
     context = _shared_sheet_context()
     if not context.get("ok"):
         raise RuntimeError("candidate_information_transport_unavailable")
@@ -7522,6 +7674,56 @@ def _reconcile_remote_candidate_information_into_local_history():
 
 
 def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candidate_tracking=None):
+    if configured_provider_mode() == "supabase":
+        headset_snapshot = headset_snapshot or _headset_review_snapshot()
+        candidate_tracking = candidate_tracking or _shared_admin_candidate_snapshot()
+        headset_pending_count = len(headset_snapshot.get("pending") or []) if headset_snapshot.get("ok") else 0
+        try:
+            provider = _get_active_data_provider()
+            raw_requests = provider.list_resource("pending_requests", limit=5000)
+            requests = []
+            for row in raw_requests or []:
+                if not isinstance(row, dict):
+                    continue
+                payload = dict(row.get("source_payload") or {})
+                for k, v in row.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                cat = str(payload.get("category") or "").strip().lower()
+                rtype = str(payload.get("request_type") or "").strip().lower()
+                source_tab = str(payload.get("source_tab") or "")
+                if source_tab == SHARED_CANDIDATE_CORRECTION_REQUESTS_TAB or "correction" in cat or rtype == CORRECTION_REQUEST_TYPE:
+                    requests.append(_public_correction_request(payload))
+                elif source_tab == SHARED_CANDIDATE_DELETION_REQUESTS_TAB or "deletion" in cat or "deletion" in rtype:
+                    requests.append(_public_deletion_request(payload))
+                else:
+                    requests.append(_public_newbie_request(payload))
+            requests = _filter_obsolete_pending_newbie_requests(requests, candidate_tracking)
+            requests.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+            return {
+                "ok": True,
+                "requests": requests,
+                "headsetReviews": (headset_snapshot or {}).get("pending") or [],
+                "counts": _request_category_counts(requests, headset_pending_count),
+                "targeting": {
+                    "mode": "all_authorized_admins",
+                    "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests.",
+                },
+            }
+        except Exception as exc:
+            logger.exception("[REQUESTS] Pending request snapshot unavailable from Supabase: %s", exc)
+            return {
+                "ok": False,
+                "error": _pending_requests_temporary_unavailable_message(),
+                "requests": [],
+                "headsetReviews": (headset_snapshot or {}).get("pending") or [],
+                "counts": _request_category_counts([], headset_pending_count),
+                "targeting": {
+                    "mode": "all_authorized_admins",
+                    "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests.",
+                },
+            }
+
     context = context or _shared_sheet_context()
     headset_snapshot = headset_snapshot or _headset_review_snapshot(context)
     candidate_tracking = candidate_tracking or _shared_admin_candidate_snapshot(context)
@@ -7638,6 +7840,19 @@ def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candid
 
 
 def _shared_admin_snapshot():
+    if configured_provider_mode() == "supabase":
+        headset_reviews = _headset_review_snapshot()
+        candidate_tracking = _shared_admin_candidate_snapshot()
+        pending_requests = _shared_pending_request_snapshot(headset_reviews, None, candidate_tracking)
+        candidate_tracking = _reconcile_candidate_tracking_with_requests(candidate_tracking, pending_requests)
+        return {
+            "ok": all(section.get("ok") for section in (headset_reviews, pending_requests, candidate_tracking)),
+            "candidateTracking": candidate_tracking,
+            "pendingRequests": pending_requests,
+            "headsetReviews": headset_reviews,
+            "refreshedAt": datetime.now(timezone.utc).isoformat(),
+        }
+
     context = _shared_sheet_context()
     headset_reviews = _headset_review_snapshot(context)
     candidate_tracking = _shared_admin_candidate_snapshot(context)
@@ -9791,20 +10006,17 @@ def _lookup_shared_candidate_sessions(candidate_name):
         }
     lookup_started = time.monotonic()
     logger.info("[SHARED] Candidate lookup started query_len=%d", len(query))
-    try:
-        context = _shared_sheet_context()
-        if not context.get("ok"):
-            logger.warning(
-                "[SHARED] Candidate lookup context unavailable query_len=%d error=%s",
-                len(query),
-                context.get("error"),
-            )
-            return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
-        apps_script_client = context.get("appsScriptClient")
-        if apps_script_client:
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            sessions_raw = provider.list_resource("candidate_sessions", limit=5000)
             rows = []
-            for raw_row in _apps_script_rows(apps_script_client, "getCandidateTracking"):
-                row = _normalize_shared_row(raw_row)
+            for raw_row in sessions_raw or []:
+                payload = dict(raw_row.get("source_payload") or {})
+                for k, v in raw_row.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                row = _normalize_shared_row(payload)
                 row.update({
                     "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip(),
                     "status": str(row.get("status") or row.get("Status") or "").strip(),
@@ -9820,17 +10032,55 @@ def _lookup_shared_candidate_sessions(candidate_name):
                     "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
                 })
                 rows.append(row)
-        else:
-            sheets_api = context["service"].spreadsheets()
-            rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
-    except Exception as exc:
-        logger.warning(
-            "[SHARED] Candidate lookup failed query_len=%d duration_ms=%d error=%s",
-            len(query),
-            int((time.monotonic() - lookup_started) * 1000),
-            exc,
-        )
-        return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
+        except Exception as exc:
+            logger.warning(
+                "[SHARED] Candidate lookup failed query_len=%d duration_ms=%d error=%s",
+                len(query),
+                int((time.monotonic() - lookup_started) * 1000),
+                exc,
+            )
+            return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
+    else:
+        try:
+            context = _shared_sheet_context()
+            if not context.get("ok"):
+                logger.warning(
+                    "[SHARED] Candidate lookup context unavailable query_len=%d error=%s",
+                    len(query),
+                    context.get("error"),
+                )
+                return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
+            apps_script_client = context.get("appsScriptClient")
+            if apps_script_client:
+                rows = []
+                for raw_row in _apps_script_rows(apps_script_client, "getCandidateTracking"):
+                    row = _normalize_shared_row(raw_row)
+                    row.update({
+                        "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip(),
+                        "status": str(row.get("status") or row.get("Status") or "").strip(),
+                        "created_at": str(row.get("created_at") or row.get("Timestamp") or "").strip(),
+                        "review_notes": str(row.get("review_notes") or row.get("Notes") or "").strip(),
+                        "tester_name": str(row.get("tester_name") or row.get("UpdatedBy") or "").strip(),
+                        "session_type": str(row.get("session_type") or row.get("SessionType") or row.get("Session Type") or "").strip(),
+                        "attempt_number": str(row.get("attempt_number") or row.get("AttemptNumber") or row.get("Attempt Number") or "").strip(),
+                        "final_attempt": str(row.get("final_attempt") or row.get("FinalAttempt") or row.get("Final Attempt") or "").strip(),
+                        "completed_at": str(row.get("completed_at") or row.get("CompletedAt") or row.get("Completed At") or "").strip(),
+                        "withdrawn": str(row.get("withdrawn") or row.get("Withdrawn") or "").strip(),
+                        "extra_attempt_granted": str(row.get("extra_attempt_granted") or row.get("ExtraAttemptGranted") or row.get("Extra Attempt Granted") or "").strip(),
+                        "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
+                    })
+                    rows.append(row)
+            else:
+                sheets_api = context["service"].spreadsheets()
+                rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+        except Exception as exc:
+            logger.warning(
+                "[SHARED] Candidate lookup failed query_len=%d duration_ms=%d error=%s",
+                len(query),
+                int((time.monotonic() - lookup_started) * 1000),
+                exc,
+            )
+            return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
     request_snapshot = _remote_newbie_request_snapshot()
     if request_snapshot.get("ok"):
         rows = [
@@ -9883,6 +10133,31 @@ def _lookup_shared_candidate_sessions(candidate_name):
 
 
 def _get_shared_pending_sup_transfers():
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            rows_raw = provider.list_resource("supervisor_transfers", limit=5000)
+            candidate_raw = provider.list_resource("candidate_sessions", limit=5000)
+            rows = []
+            for r in rows_raw or []:
+                payload = dict(r.get("source_payload") or {})
+                for k, v in r.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                rows.append(_normalize_shared_row(payload))
+            candidate_rows = []
+            for c in candidate_raw or []:
+                payload = dict(c.get("source_payload") or {})
+                for k, v in c.items():
+                    if k != "source_payload" and k not in payload:
+                        payload[k] = v
+                candidate_rows.append(_normalize_shared_row(payload))
+            items = _filter_current_pending_sup_transfers(rows, candidate_rows)
+            return {"ok": True, "items": items}
+        except Exception as exc:
+            logger.warning("[SHARED] Pending supervisor transfer lookup unavailable from Supabase: %s", exc)
+            return {"ok": False, "items": [], "error": f"Shared pending supervisor transfers unavailable: {exc}", "setup": _shared_tracking_required_setup()}
+
     try:
         context = _shared_sheet_context()
         if not context.get("ok"):

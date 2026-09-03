@@ -22,6 +22,10 @@ const {
   buildBackendStorageEnvironment,
 } = require('./profileIsolation');
 const {
+  resolveDataProviderConfig,
+  resolveDataRuntimeEnv,
+} = require('./dataConfig');
+const {
   createApplicationQuitController,
 } = require('./applicationQuit');
 let desktopPackage = {};
@@ -667,11 +671,14 @@ function startBackend() {
       userDataPath: app.getPath('userData'),
     });
 
+    const dataRuntimeEnv = resolveDataRuntimeEnv(backendRuntimeConfigPath);
+
     try {
       backendProcess = spawn(backendPath, [], {
         cwd: backendCwd,
         env: {
           ...backendStorageEnvironment,
+          ...dataRuntimeEnv,
           BACKEND_PORT: String(selectedBackendPort),
           BACKEND_LOG_DIR: packagedBackendLogDir || getBackendLogDir(),
           BACKEND_RUNTIME_CONFIG_FILE: backendRuntimeConfigPath,
@@ -770,6 +777,9 @@ function startBackend() {
     userDataPath: app.getPath('userData'),
   });
 
+  const devRuntimeConfigPath = path.join(backendDir, 'config', 'runtime_config.json');
+  const dataRuntimeEnv = resolveDataRuntimeEnv(devRuntimeConfigPath);
+
   backendProcess = spawn(pythonCmd, [
     ...pythonArgs,
     '-m', 'uvicorn', 'server:app',
@@ -780,6 +790,7 @@ function startBackend() {
     cwd: backendDir,
     env: {
       ...backendStorageEnvironment,
+      ...dataRuntimeEnv,
       APP_VERSION,
       MTS_ADMIN_TOKEN: getSharedAdminToken(),
       MTS_DEV_MODE: '1',
