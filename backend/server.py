@@ -13754,7 +13754,7 @@ async def post_sam_setup_reset(request: Request):
     return {"ok": True}
 
 
-def _supabase_anon_rpc(rpc_name: str, body: dict = None):
+def _supabase_anon_rpc(rpc_name: str, body: dict = None, auth_jwt: str = None):
     runtime_config = _load_backend_runtime_config() or {}
     url = str(runtime_config.get("supabase_url") or "").rstrip("/")
     key = str(runtime_config.get("supabase_anon_key") or "").strip()
@@ -13762,12 +13762,13 @@ def _supabase_anon_rpc(rpc_name: str, body: dict = None):
         return {"ok": False, "error": "Supabase configuration is not available."}
     rpc_url = f"{url}/rest/v1/rpc/{rpc_name}"
     req_body = json.dumps(body or {}, separators=(",", ":")).encode("utf-8")
+    bearer = f"Bearer {auth_jwt.strip()}" if (auth_jwt and auth_jwt.strip()) else f"Bearer {key}"
     req = urllib.request.Request(
         rpc_url,
         data=req_body,
         headers={
             "apikey": key,
-            "Authorization": f"Bearer {key}",
+            "Authorization": bearer,
             "Content-Type": "application/json",
             "Accept": "application/json",
             "Content-Profile": "mts_sam",
@@ -13800,11 +13801,15 @@ async def get_sam_auth_config():
 
 
 @api_router.post("/sam/auth/verify")
-async def post_sam_auth_verify(payload: dict):
+async def post_sam_auth_verify(payload: dict, request: Request):
     auth_uid = str((payload or {}).get("auth_uid") or "").strip()
-    if not auth_uid:
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    if not auth_uid and not auth_jwt:
         return {"ok": False, "errorCode": "missing_auth_identity", "error": "Authentication identity is required."}
-    result = await asyncio.to_thread(_supabase_anon_rpc, "verify_sam_authorization", {"p_auth_uid": auth_uid})
+    result = await asyncio.to_thread(_supabase_anon_rpc, "verify_sam_authorization", {"p_auth_uid": auth_uid} if auth_uid else {}, auth_jwt)
     return result
 
 
@@ -13836,31 +13841,128 @@ async def post_sam_auth_complete(payload: dict):
 
 
 @api_router.post("/sam/admin/users/list")
-async def post_sam_admin_users_list(payload: dict):
+async def post_sam_admin_users_list(payload: dict, request: Request):
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
     caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
-    if not caller_auth_uid:
+    if not auth_jwt and not caller_auth_uid:
         return {"ok": False, "error": "Unauthorized"}
-    result = await asyncio.to_thread(_supabase_anon_rpc, "get_sam_user_management_list", {"p_caller_auth_uid": caller_auth_uid})
+    rpc_body = {"p_caller_auth_uid": caller_auth_uid} if caller_auth_uid else {}
+    result = await asyncio.to_thread(_supabase_anon_rpc, "get_sam_user_management_list", rpc_body, auth_jwt)
     return result
 
 
 @api_router.post("/sam/admin/users/set-active")
-async def post_sam_admin_users_set_active(payload: dict):
+async def post_sam_admin_users_set_active(payload: dict, request: Request):
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
     caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
     target_user_id = str((payload or {}).get("target_user_id") or "").strip()
     active = bool((payload or {}).get("active"))
-    if not caller_auth_uid or not target_user_id:
-        return {"ok": False, "error": "Caller and target user IDs are required."}
-    result = await asyncio.to_thread(
-        _supabase_anon_rpc,
-        "set_sam_user_active",
-        {
-            "p_caller_auth_uid": caller_auth_uid,
-            "p_target_user_id": target_user_id,
-            "p_active": active,
-        }
-    )
+    if not target_user_id:
+        return {"ok": False, "error": "Target user ID is required."}
+    if not auth_jwt and not caller_auth_uid:
+        return {"ok": False, "error": "Caller authentication is required."}
+    rpc_body = {
+        "p_target_user_id": target_user_id,
+        "p_active": active,
+    }
+    if caller_auth_uid:
+        rpc_body["p_caller_auth_uid"] = caller_auth_uid
+    result = await asyncio.to_thread(_supabase_anon_rpc, "set_sam_user_active", rpc_body, auth_jwt)
     return result
+
+
+@api_router.post("/sam/admin/users/update")
+async def post_sam_admin_users_update(payload: dict, request: Request):
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
+    target_user_id = str((payload or {}).get("target_user_id") or "").strip()
+    if not target_user_id:
+        return {"ok": False, "error": "Target user ID is required."}
+    if not auth_jwt and not caller_auth_uid:
+        return {"ok": False, "error": "Caller authentication is required."}
+
+    rpc_body = {
+        "p_target_user_id": target_user_id,
+    }
+    if "email" in (payload or {}):
+        rpc_body["p_email"] = str(payload.get("email") or "").strip()
+    if "role" in (payload or {}):
+        rpc_body["p_role"] = str(payload.get("role") or "").strip()
+    if "active" in (payload or {}):
+        rpc_body["p_active"] = bool(payload.get("active"))
+    if caller_auth_uid:
+        rpc_body["p_caller_auth_uid"] = caller_auth_uid
+
+    result = await asyncio.to_thread(_supabase_anon_rpc, "update_sam_user", rpc_body, auth_jwt)
+    return result
+
+
+@api_router.post("/sam/admin/users/enroll")
+async def post_sam_admin_users_enroll(payload: dict, request: Request):
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
+    target_user_id = str((payload or {}).get("target_user_id") or "").strip()
+    if not target_user_id:
+        return {"ok": False, "error": "Target user ID is required."}
+    if not auth_jwt and not caller_auth_uid:
+        return {"ok": False, "error": "Caller authentication is required."}
+
+    rpc_body = {
+        "p_target_user_id": target_user_id,
+    }
+    if caller_auth_uid:
+        rpc_body["p_caller_auth_uid"] = caller_auth_uid
+
+    result = await asyncio.to_thread(_supabase_anon_rpc, "enroll_sam_user", rpc_body, auth_jwt)
+    return result
+
+
+@api_router.post("/sam/admin/users/send-reset")
+async def post_sam_admin_users_send_reset(payload: dict, request: Request):
+    email = str((payload or {}).get("email") or "").strip().lower()
+    if not email:
+        return {"ok": False, "error": "User email address is required."}
+    runtime_config = _load_backend_runtime_config() or {}
+    url = str(runtime_config.get("supabase_url") or "").rstrip("/")
+    key = str(runtime_config.get("supabase_anon_key") or "").strip()
+    if not url or not key:
+        return {"ok": False, "error": "Supabase configuration is not available."}
+
+    recover_url = f"{url}/auth/v1/recover?redirect_to=smartalertmanager://reset-password"
+    req_body = json.dumps({"email": email}).encode("utf-8")
+    req = urllib.request.Request(
+        recover_url,
+        data=req_body,
+        headers={
+            "apikey": key,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            return {"ok": True, "message": "Password reset instructions sent."}
+    except urllib.error.HTTPError as exc:
+        try:
+            err_text = exc.read().decode("utf-8-sig")
+            err_json = json.loads(err_text)
+            return {"ok": False, "error": err_json.get("msg") or err_json.get("message") or err_text}
+        except Exception:
+            return {"ok": False, "error": f"HTTP {exc.code}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @api_router.get("/admin/verify-shared-session-sheets")

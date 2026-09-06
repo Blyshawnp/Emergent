@@ -446,15 +446,17 @@ function getAppVersion() {
   }
 }
 
-function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChange, onClose, onReplayTutorial, onReplayQuickStart, onCheckForUpdates }) {
-  const [modalTab, setModalTab] = useState('preferences'); // 'preferences' | 'account' | 'users'
-  const sectionRefs = useRef({});
-  const [supportFormUrl, setSupportFormUrl] = useState('https://forms.gle/h3L8BZcFqpZ8RZf39');
-  const [supportError, setSupportError] = useState('');
-  const [query, setQuery] = useState('');
-  const [helpContent, setHelpContent] = useState({});
-  const [helpLoadError, setHelpLoadError] = useState('');
-  const [selectedTutorial, setSelectedTutorial] = useState(null);
+function SettingsModal({
+  initialTab = 'general',
+  version,
+  settings,
+  samSetupStatus,
+  onLogout,
+  onSettingsChange,
+  onCheckForUpdates,
+  onClose,
+}) {
+  const [modalTab, setModalTab] = useState(initialTab); // 'general' | 'workflow' | 'notifications' | 'account' | 'users'
 
   // Account State
   const [accountPassword, setAccountPassword] = useState('');
@@ -473,12 +475,21 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
   const [usersSuccess, setUsersSuccess] = useState('');
   const [callerIsOwner, setCallerIsOwner] = useState(Boolean(samSetupStatus?.isOwner));
 
+  // Edit User State
+  const [editingUser, setEditingUser] = useState(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editRole, setEditRole] = useState('administrator');
+  const [editSaving, setEditSaving] = useState(false);
+  const [actionInProgressId, setActionInProgressId] = useState(null);
+
+  const accessToken = samSetupStatus?.session?.access_token || null;
+
   const loadUserManagementList = useCallback(async () => {
     if (!samSetupStatus?.authUid) return;
     setUsersLoading(true);
     setUsersError('');
     try {
-      const res = await api.getSamUserManagementList(samSetupStatus.authUid);
+      const res = await api.getSamUserManagementList(samSetupStatus.authUid, accessToken);
       if (res?.ok) {
         setUserList(res.users || []);
         setCallerIsOwner(Boolean(res.caller_is_owner));
@@ -490,7 +501,7 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
     } finally {
       setUsersLoading(false);
     }
-  }, [samSetupStatus?.authUid]);
+  }, [samSetupStatus?.authUid, accessToken]);
 
   useEffect(() => {
     if (modalTab === 'users') {
@@ -498,18 +509,32 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
     }
   }, [modalTab, loadUserManagementList]);
 
+  const updateSetting = (patch) => {
+    onSettingsChange?.(normalizeSamSettings({ ...settings, ...patch }));
+  };
+
+  const activeOwnerCount = useMemo(() => {
+    return userList.filter((u) => u.active && (u.role === 'owner' || u.is_owner)).length;
+  }, [userList]);
+
   const handleToggleUserActive = async (targetUser) => {
     if (!samSetupStatus?.authUid || !targetUser?.id) return;
     const nextActive = !targetUser.active;
     const actionWord = nextActive ? 'activate' : 'deactivate';
-    if (!window.confirm(`Are you sure you want to ${actionWord} administrator access for ${targetUser.display_name}?`)) {
+
+    if (!nextActive && (targetUser.role === 'owner' || targetUser.is_owner) && activeOwnerCount <= 1) {
+      alert('Cannot deactivate the sole active Owner. Promote another active user to Owner first.');
       return;
     }
-    setUsersLoading(true);
+
+    if (!window.confirm(`Are you sure you want to ${actionWord} administrator access for ${targetUser.display_name}? This change takes effect immediately without sending any email.`)) {
+      return;
+    }
+    setActionInProgressId(targetUser.id);
     setUsersError('');
     setUsersSuccess('');
     try {
-      const res = await api.setSamUserActive(samSetupStatus.authUid, targetUser.id, nextActive);
+      const res = await api.setSamUserActive(samSetupStatus.authUid, targetUser.id, nextActive, accessToken);
       if (res?.ok) {
         setUsersSuccess(`Successfully updated status for ${targetUser.display_name}.`);
         await loadUserManagementList();
@@ -519,7 +544,115 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
     } catch (err) {
       setUsersError(err?.message || `Failed to ${actionWord} user.`);
     } finally {
-      setUsersLoading(false);
+      setActionInProgressId(null);
+    }
+  };
+
+  const handleStartEdit = (u) => {
+    setEditingUser(u);
+    setEditEmail(u.email || '');
+    setEditRole(u.role || 'administrator');
+    setUsersError('');
+    setUsersSuccess('');
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    const cleanEmail = editEmail.trim().toLowerCase();
+    if (cleanEmail && !cleanEmail.includes('@')) {
+      setUsersError('Please provide a valid email address.');
+      return;
+    }
+    if (
+      editingUser.is_owner &&
+      editingUser.active &&
+      editRole !== 'owner' &&
+      activeOwnerCount <= 1
+    ) {
+      setUsersError('Cannot demote the sole active Owner. Promote another user to Owner first.');
+      return;
+    }
+
+    setEditSaving(true);
+    setUsersError('');
+    setUsersSuccess('');
+    try {
+      const res = await api.updateSamUser(
+        samSetupStatus.authUid,
+        editingUser.id,
+        { email: cleanEmail, role: editRole },
+        accessToken
+      );
+      if (res?.ok) {
+        setUsersSuccess(`Successfully updated ${editingUser.display_name}. Information saved without sending email.`);
+        setEditingUser(null);
+        await loadUserManagementList();
+      } else {
+        setUsersError(res?.error || 'Failed to update user.');
+      }
+    } catch (err) {
+      setUsersError(err?.message || 'Failed to update user.');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const handleSendAccountSetup = async (targetUser) => {
+    const email = (targetUser.email || '').trim();
+    if (!email || !email.includes('@')) {
+      alert('Cannot send account setup: User has no email address configured. Click "Edit" to configure their email first.');
+      return;
+    }
+    if (!window.confirm(`Send account setup invitation to ${targetUser.display_name} (${email})? This will create or link their Supabase Auth identity and send a setup link.`)) {
+      return;
+    }
+    setActionInProgressId(targetUser.id);
+    setUsersError('');
+    setUsersSuccess('');
+    try {
+      const enrollRes = await api.enrollSamUser(samSetupStatus.authUid, targetUser.id, accessToken);
+      if (!enrollRes?.ok) {
+        setUsersError(enrollRes?.error || 'Failed to prepare user enrollment.');
+        return;
+      }
+      const resetRes = await api.sendSamUserPasswordReset(email);
+      if (resetRes?.ok) {
+        setUsersSuccess(`Account setup invitation sent to ${email}.`);
+        await loadUserManagementList();
+      } else {
+        setUsersError(resetRes?.error || 'Enrollment prepared, but failed to send setup email.');
+      }
+    } catch (err) {
+      setUsersError(err?.message || 'Failed to send account setup.');
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
+  const handleSendPasswordReset = async (targetUser) => {
+    const email = (targetUser.email || '').trim();
+    if (!email || !email.includes('@')) {
+      alert('Cannot send password reset: User has no email address configured.');
+      return;
+    }
+    if (!window.confirm(`Send password reset email to ${targetUser.display_name} (${email})?`)) {
+      return;
+    }
+    setActionInProgressId(targetUser.id);
+    setUsersError('');
+    setUsersSuccess('');
+    try {
+      const res = await api.sendSamUserPasswordReset(email);
+      if (res?.ok) {
+        setUsersSuccess(`Password reset instructions sent to ${email}.`);
+      } else {
+        setUsersError(res?.error || 'Failed to send password reset email.');
+      }
+    } catch (err) {
+      setUsersError(err?.message || 'Failed to send password reset email.');
+    } finally {
+      setActionInProgressId(null);
     }
   };
 
@@ -586,88 +719,72 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
     }
   };
 
-  useEffect(() => {
-    let active = true;
-    api.getSettings()
-      .then((appSettings) => {
-        if (active) {
-          const url = appSettings?.support_form_url;
-          if (url !== undefined) {
-            setSupportFormUrl(url || '');
-          }
-        }
-      })
-      .catch((err) => {
-        console.error('Failed to load support form URL:', err);
-      });
-    return () => {
-      active = false;
+  const renderEnrollmentBadge = (u) => {
+    const rawStatus = u.enrollment_status || (u.is_linked ? 'Active / Enrolled' : (u.active ? 'Active / Enrollment Required' : 'Inactive / No Email'));
+    let badgeStyle = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '2px 8px',
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
     };
-  }, []);
 
-  useEffect(() => {
-    let active = true;
-    api.getHelpContent().then((content) => {
-      if (active) {
-        setHelpContent(content || {});
-        setHelpLoadError('');
-      }
-    }).catch(() => {
-      if (active) {
-        setHelpContent({});
-        setHelpLoadError('Unable to load tutorial videos right now.');
-      }
-    });
-    return () => { active = false; };
-  }, []);
-
-  const retryHelpContent = async () => {
-    try {
-      const content = await api.getHelpContent();
-      setHelpContent(content || {});
-      setHelpLoadError('');
-    } catch (_error) {
-      setHelpLoadError('Unable to load tutorial videos right now.');
-    }
-  };
-
-  const handleRequestSupport = async () => {
-    setSupportError('');
-    if (!supportFormUrl || !supportFormUrl.trim()) {
-      setSupportError('Support form is not configured yet.');
-      alert('Support form is not configured yet.');
-      return;
-    }
-    if (window.electronAPI?.openExternal) {
-      await window.electronAPI.openExternal(supportFormUrl);
+    if (rawStatus.includes('Enrolled') && u.active) {
+      badgeStyle = {
+        ...badgeStyle,
+        background: 'rgba(34, 197, 94, 0.15)',
+        color: '#4ade80',
+        border: '1px solid rgba(34, 197, 94, 0.3)',
+      };
+    } else if (rawStatus.includes('Setup Sent')) {
+      badgeStyle = {
+        ...badgeStyle,
+        background: 'rgba(56, 189, 248, 0.15)',
+        color: '#38bdf8',
+        border: '1px solid rgba(56, 189, 248, 0.3)',
+      };
+    } else if (rawStatus.includes('Ready') || rawStatus.includes('Setup Not Sent')) {
+      badgeStyle = {
+        ...badgeStyle,
+        background: 'rgba(234, 179, 8, 0.15)',
+        color: '#facc15',
+        border: '1px solid rgba(234, 179, 8, 0.3)',
+      };
+    } else if (rawStatus.includes('Required')) {
+      badgeStyle = {
+        ...badgeStyle,
+        background: 'rgba(249, 115, 22, 0.15)',
+        color: '#fb923c',
+        border: '1px solid rgba(249, 115, 22, 0.3)',
+      };
     } else {
-      window.open(supportFormUrl, '_blank', 'noopener,noreferrer');
+      badgeStyle = {
+        ...badgeStyle,
+        background: 'rgba(148, 163, 184, 0.15)',
+        color: '#94a3b8',
+        border: '1px solid rgba(148, 163, 184, 0.3)',
+      };
     }
-  };
 
-  const updateSetting = (patch) => {
-    onSettingsChange?.(normalizeSamSettings({ ...settings, ...patch }));
+    return (
+      <span style={badgeStyle} title={`Enrollment State: ${rawStatus}`}>
+        {rawStatus}
+      </span>
+    );
   };
-  const jumpToSection = (id) => {
-    sectionRefs.current[id]?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-  };
-  const normalizedQuery = query.trim().toLowerCase();
-  const visibleSections = useMemo(
-    () => SAM_HELP_SECTIONS.filter((section) => !normalizedQuery || `${section.title} ${section.body}`.toLowerCase().includes(normalizedQuery)),
-    [normalizedQuery],
-  );
-  const samTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.sam, 'sam'), [helpContent]);
 
   return (
     <div className="nm-modal-backdrop" onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}>
-      <section className="nm-help-modal" role="dialog" aria-modal="true" aria-labelledby="sam-help-title">
+      <section className="nm-help-modal" role="dialog" aria-modal="true" aria-labelledby="sam-settings-title" style={{ maxWidth: 880 }}>
         <div className="nm-help-header">
           <div>
-            <div className="nm-overline">SAM SETTINGS &amp; HELP</div>
-            <h2 id="sam-help-title">{SAM_TITLE}</h2>
-            <p>Smart Alert Manager keeps live alert messages and candidate administration organized for Mock Testing Suite operators.</p>
+            <div className="nm-overline">SAM SETTINGS</div>
+            <h2 id="sam-settings-title">Application &amp; Administration Settings</h2>
+            <p>Configure device preferences, workflow policies, and authorized operators.</p>
           </div>
-          <button type="button" className="nm-modal-close" onClick={onClose} aria-label="Close help">×</button>
+          <button type="button" className="nm-modal-close" onClick={onClose} aria-label="Close settings">×</button>
         </div>
 
         {/* Modal Navigation Tabs */}
@@ -675,21 +792,29 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
           <button
             type="button"
             role="tab"
-            aria-selected={modalTab === 'preferences'}
-            className={`nm-view-tab ${modalTab === 'preferences' ? 'is-active' : ''}`}
-            onClick={() => setModalTab('preferences')}
+            aria-selected={modalTab === 'general'}
+            className={`nm-view-tab ${modalTab === 'general' ? 'is-active' : ''}`}
+            onClick={() => setModalTab('general')}
           >
-            Preferences &amp; Help
+            General
           </button>
           <button
             type="button"
             role="tab"
-            aria-selected={modalTab === 'admin'}
-            className={`nm-view-tab ${modalTab === 'admin' ? 'is-active' : ''}`}
-            onClick={() => setModalTab('admin')}
-            data-testid="sam-admin-settings-tab"
+            aria-selected={modalTab === 'workflow'}
+            className={`nm-view-tab ${modalTab === 'workflow' ? 'is-active' : ''}`}
+            onClick={() => setModalTab('workflow')}
           >
-            Admin Settings
+            Workflow
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={modalTab === 'notifications'}
+            className={`nm-view-tab ${modalTab === 'notifications' ? 'is-active' : ''}`}
+            onClick={() => setModalTab('notifications')}
+          >
+            Notifications
           </button>
           <button
             type="button"
@@ -706,100 +831,108 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
             aria-selected={modalTab === 'users'}
             className={`nm-view-tab ${modalTab === 'users' ? 'is-active' : ''}`}
             onClick={() => setModalTab('users')}
+            data-testid="sam-admin-settings-tab"
           >
             User Management
           </button>
         </div>
 
         <div className="nm-help-modal-body">
-          {modalTab === 'preferences' && (
-            <>
-              <div className="nm-help-settings" id="sam-help-settings">
-                <div className="nm-help-settings-copy">
-                  <div className="nm-overline">SAM SETTINGS</div>
-                  <h3>Local preferences</h3>
-                  <p>These settings apply on this device and take effect immediately.</p>
-                  <p className="nm-meta">Version {version} - Powered by MTS</p>
-                </div>
-                <label className="nm-field">
-                  <span>SAM sounds</span>
-                  <select value={settings.soundVolume} onChange={(event) => updateSetting({ soundVolume: event.target.value })}>
-                    {SAM_SOUND_VOLUME_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                </label>
-                <label className="nm-field">
-                  <span>Success banner duration</span>
-                  <select value={settings.statusBannerDurationSeconds} onChange={(event) => updateSetting({ statusBannerDurationSeconds: Number(event.target.value) })}>
-                    {SAM_BANNER_DURATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
-                </label>
-                <label className="nm-field">
-                  <span>Default candidate filter</span>
-                  <select value={settings.defaultCandidateView} onChange={(event) => updateSetting({ defaultCandidateView: event.target.value })}>
-                    {Object.entries(CANDIDATE_VIEW_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                  </select>
-                </label>
-                <label className="nm-checkbox nm-help-toggle">
-                  <input
-                    type="checkbox"
-                    checked={settings.includeArchivedInSearchDefault}
-                    onChange={(event) => updateSetting({ includeArchivedInSearchDefault: event.target.checked })}
-                  />
-                  Include archived candidates in search by default
-                </label>
-                <button type="button" className="nm-btn nm-btn-secondary" onClick={() => onCheckForUpdates?.()}>Check for Updates</button>
+          {modalTab === 'general' && (
+            <div className="nm-help-settings" id="sam-help-settings">
+              <div className="nm-help-settings-copy">
+                <div className="nm-overline">LOCAL PREFERENCES</div>
+                <h3>Device preferences</h3>
+                <p>These settings apply on this device and take effect immediately.</p>
+                <p className="nm-meta">Version {version} · Powered by MTS</p>
+              </div>
+              <label className="nm-field">
+                <span>SAM sounds</span>
+                <select value={settings.soundVolume} onChange={(event) => updateSetting({ soundVolume: event.target.value })}>
+                  {SAM_SOUND_VOLUME_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </label>
+              <label className="nm-field">
+                <span>Success banner duration</span>
+                <select value={settings.statusBannerDurationSeconds} onChange={(event) => updateSetting({ statusBannerDurationSeconds: Number(event.target.value) })}>
+                  {SAM_BANNER_DURATION_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </label>
+              <label className="nm-field">
+                <span>Default candidate filter</span>
+                <select value={settings.defaultCandidateView} onChange={(event) => updateSetting({ defaultCandidateView: event.target.value })}>
+                  {Object.entries(CANDIDATE_VIEW_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                </select>
+              </label>
+              <label className="nm-checkbox nm-help-toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.includeArchivedInSearchDefault}
+                  onChange={(event) => updateSetting({ includeArchivedInSearchDefault: event.target.checked })}
+                />
+                Include archived candidates in search by default
+              </label>
+              <button type="button" className="nm-btn nm-btn-secondary" onClick={() => onCheckForUpdates?.()}>Check for Updates</button>
+            </div>
+          )}
+
+          {modalTab === 'workflow' && (
+            <div className="nm-help-settings" id="sam-admin-settings" style={{ gridTemplateColumns: '1fr', gap: 20 }}>
+              <div className="nm-help-settings-copy">
+                <div className="nm-overline">WORKFLOW POLICY</div>
+                <h3>Approval Controls</h3>
+                <p>Configure operational approval policies across SAM and MTS.</p>
               </div>
 
-              <div className="nm-help-toc" aria-label="SAM help sections">
-                <label className="nm-field">
-                  <span>Search Help</span>
-                  <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dashboard, requests, reports..." data-testid="sam-help-search" />
-                </label>
-                {visibleSections.map((section) => (
-                  <button key={section.id} type="button" className="nm-help-toc-button" onClick={() => jumpToSection(section.id)}>
-                    {section.title}
-                  </button>
-                ))}
-                <button type="button" className="nm-help-toc-button" onClick={() => document.getElementById('sam-tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })}>
-                  Tutorial Videos
-                </button>
-              </div>
-
-              <div className="nm-help-grid">
-                {visibleSections.map((section) => (
-                  <article
-                    key={section.id}
-                    id={`sam-help-${section.id}`}
-                    className="nm-help-card"
-                    ref={(node) => { sectionRefs.current[section.id] = node; }}
+              <div className="nm-admin-setting-group" style={{ padding: '16px', background: 'var(--nm-card-bg, rgba(255,255,255,0.03))', borderRadius: 8, border: '1px solid var(--nm-border, rgba(255,255,255,0.08))' }}>
+                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 600 }}>Workflow Approvals</h4>
+                <label className="nm-field" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontWeight: 600 }}>Require Admin Approval for Newbie Shift Requests</span>
+                  <select
+                    value={settings.requireNewbieShiftApproval ? 'on' : 'off'}
+                    onChange={(event) => updateSetting({ requireNewbieShiftApproval: event.target.value === 'on' })}
+                    data-testid="require-newbie-shift-approval-select"
+                    style={{ maxWidth: 320 }}
                   >
-                    <h3>{section.title}</h3>
-                    <h4>What this is</h4><p>{section.body}</p>
-                    <h4>When to use it</h4><p>Use this topic when you are working in {section.title} or deciding which administrator action is appropriate.</p>
-                    <h4>Steps</h4><ol><li>Open {section.title} from SAM.</li><li>Review the visible status and selected record.</li><li>Choose the applicable action and confirm the result.</li></ol>
-                    <h4>What happens next</h4><p>SAM refreshes the applicable view and keeps unresolved work visible until it is completed.</p>
-                    <h4>Common mistakes</h4><p>Do not treat Dismiss as a decision, approve without reviewing details, or deny a Pending Request without a clear reason.</p>
-                    <h4>Related topics</h4><p>Dashboard · Troubleshooting · Tutorial Videos</p>
-                    {section.id === 'support' && (
-                      <div style={{ marginTop: 12 }}>
-                        <button
-                          type="button"
-                          className="nm-btn nm-btn-secondary"
-                          onClick={handleRequestSupport}
-                          data-testid="support-request-btn"
-                        >
-                          Request App Support
-                        </button>
-                        {supportError && <p className="nm-meta" style={{ color: '#ff4d4d', marginTop: 8 }}>{supportError}</p>}
-                      </div>
-                    )}
-                  </article>
-                ))}
+                    <option value="on">ON (Approval Required)</option>
+                    <option value="off">OFF (Auto-Approved by Policy)</option>
+                  </select>
+                  <span className="nm-meta" style={{ marginTop: 4, color: 'var(--nm-muted, #888)' }}>
+                    When disabled, newbie shift requests are still recorded and visible, but do not require Admin approval before the workflow can continue.
+                  </span>
+                </label>
               </div>
-              <div className="nm-help-grid">
-                <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" loadError={helpLoadError} onRetry={retryHelpContent} />
+            </div>
+          )}
+
+          {modalTab === 'notifications' && (
+            <div className="nm-help-settings" style={{ gridTemplateColumns: '1fr', gap: 20 }}>
+              <div className="nm-help-settings-copy">
+                <div className="nm-overline">NOTIFICATION CONTROLS</div>
+                <h3>Alert Preferences</h3>
+                <p>Configure alert thresholds and sound triggers for operations.</p>
               </div>
-            </>
+
+              <div className="nm-admin-setting-group" style={{ padding: '16px', background: 'var(--nm-card-bg, rgba(255,255,255,0.03))', borderRadius: 8, border: '1px solid var(--nm-border, rgba(255,255,255,0.08))' }}>
+                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 600 }}>Headset Review Alerts</h4>
+                <label className="nm-field" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <span style={{ fontWeight: 600 }}>Headset Review Notifications</span>
+                  <select
+                    value={settings.headsetNotificationMode || 'all'}
+                    onChange={(event) => updateSetting({ headsetNotificationMode: event.target.value })}
+                    data-testid="headset-notification-mode-select"
+                    style={{ maxWidth: 320 }}
+                  >
+                    <option value="all">All (Standard Notifications)</option>
+                    <option value="action_required_only">Action Required Only</option>
+                    <option value="muted">Muted (Data Updates Only)</option>
+                  </select>
+                  <span className="nm-meta" style={{ marginTop: 4, color: 'var(--nm-muted, #888)' }}>
+                    Controls headset review alerts only. Muting notifications does not stop headset review data from updating.
+                  </span>
+                </label>
+              </div>
+            </div>
           )}
 
           {modalTab === 'account' && (
@@ -942,11 +1075,16 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
                 <div className="nm-help-settings-copy">
                   <div className="nm-overline">USER MANAGEMENT</div>
                   <h3>Authorized SAM Operators</h3>
-                  <p>Manage access and view enrollment status for all authorized administrators.</p>
+                  <p>Manage access, configure contact emails, and view enrollment status for administrators.</p>
                 </div>
                 <button type="button" className="nm-btn nm-btn-secondary" onClick={() => loadUserManagementList()} disabled={usersLoading}>
                   <RefreshCw size={14} className={usersLoading ? 'is-spinning' : ''} style={{ marginRight: 6 }} /> Refresh
                 </button>
+              </div>
+
+              {/* Status Banner */}
+              <div style={{ padding: '12px 16px', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: 8, fontSize: 13, color: '#cbd5e1', lineHeight: 1.5 }}>
+                <strong style={{ color: '#38bdf8' }}>Status: AWAITING TWO OWNER-PROVIDED EMAIL MAPPINGS.</strong> Contact emails have not yet been provided by the Owner for inactive legacy administrators. Saving an email prepares the account without sending email. Email invitation is only sent when &ldquo;Send Account Setup&rdquo; is explicitly clicked.
               </div>
 
               {usersSuccess && (
@@ -963,66 +1101,155 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
                 </div>
               )}
 
+              {/* Edit User Modal Dialog */}
+              {editingUser && (
+                <div style={{ padding: 16, background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(56, 189, 248, 0.3)', borderRadius: 8, marginBottom: 12 }}>
+                  <div className="nm-overline" style={{ color: '#38bdf8' }}>EDIT ADMINISTRATOR</div>
+                  <h4 style={{ margin: '4px 0 12px 0', fontSize: '1.1rem' }}>{editingUser.display_name}</h4>
+                  <p className="nm-meta" style={{ color: '#94a3b8', marginBottom: 12 }}>
+                    Saving updates the email address and role assignment immediately <strong>without sending any email</strong>.
+                  </p>
+                  <form onSubmit={handleSaveEdit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <label className="nm-field">
+                      <span>Contact Email Address</span>
+                      <input
+                        type="email"
+                        value={editEmail}
+                        onChange={(e) => setEditEmail(e.target.value)}
+                        placeholder="admin@example.com"
+                        autoFocus
+                      />
+                    </label>
+                    <label className="nm-field">
+                      <span>Application Role</span>
+                      <select
+                        value={editRole}
+                        onChange={(e) => setEditRole(e.target.value)}
+                        disabled={editingUser.is_owner && activeOwnerCount <= 1}
+                      >
+                        <option value="administrator">Administrator</option>
+                        <option value="owner">Owner</option>
+                      </select>
+                    </label>
+                    {editingUser.is_owner && activeOwnerCount <= 1 && (
+                      <span className="nm-meta" style={{ color: '#facc15' }}>
+                        This user is the sole active Owner and cannot be demoted.
+                      </span>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                      <button type="submit" className="nm-btn nm-btn-primary" disabled={editSaving}>
+                        {editSaving ? 'Saving...' : 'Save Changes'}
+                      </button>
+                      <button type="button" className="nm-btn nm-btn-secondary" onClick={() => setEditingUser(null)} disabled={editSaving}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
               <div className="nm-table-wrap">
                 <table className="nm-table">
                   <thead>
                     <tr>
                       <th>Administrator</th>
+                      <th>Email</th>
                       <th>Role</th>
-                      <th>Auth Link</th>
-                      <th>Status</th>
-                      {callerIsOwner && <th>Action</th>}
+                      <th>Active Status</th>
+                      <th>Enrollment Status</th>
+                      {callerIsOwner && <th>Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {userList.map((u) => (
-                      <tr key={u.id}>
-                        <td>
-                          <strong>{u.display_name}</strong>
-                          {u.is_owner && <span style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(234, 179, 8, 0.15)', color: '#facc15', border: '1px solid rgba(234, 179, 8, 0.3)' }}>Owner</span>}
-                        </td>
-                        <td style={{ textTransform: 'capitalize' }}>{u.role || 'administrator'}</td>
-                        <td>
-                          {u.is_linked ? (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#4ade80', fontSize: 13 }}>
-                              <CheckCircle size={14} /> Linked
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--nm-muted)', fontSize: 13 }}>Not enrolled</span>
-                          )}
-                        </td>
-                        <td>
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            padding: '2px 8px',
-                            borderRadius: 999,
-                            fontSize: 12,
-                            fontWeight: 700,
-                            background: u.active ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                            color: u.active ? '#4ade80' : '#f87171',
-                            border: `1px solid ${u.active ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                          }}>
-                            {u.active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        {callerIsOwner && (
+                    {userList.map((u) => {
+                      const isSoleOwner = (u.role === 'owner' || u.is_owner) && u.active && activeOwnerCount <= 1;
+                      const hasEmail = Boolean(u.email && u.email.trim());
+                      const isActionBusy = actionInProgressId === u.id;
+
+                      return (
+                        <tr key={u.id}>
                           <td>
-                            <button
-                              type="button"
-                              className={`nm-btn nm-btn-table ${u.active ? 'nm-btn-danger' : 'nm-btn-primary'}`}
-                              onClick={() => handleToggleUserActive(u)}
-                              disabled={usersLoading}
-                            >
-                              {u.active ? 'Deactivate' : 'Activate'}
-                            </button>
+                            <strong>{u.display_name}</strong>
+                            {u.is_owner && <span style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(234, 179, 8, 0.15)', color: '#facc15', border: '1px solid rgba(234, 179, 8, 0.3)' }}>Owner</span>}
                           </td>
-                        )}
-                      </tr>
-                    ))}
+                          <td>
+                            {hasEmail ? (
+                              <span style={{ fontSize: 13, color: '#e2e8f0' }}>{u.email}</span>
+                            ) : (
+                              <span style={{ fontStyle: 'italic', color: 'var(--nm-muted)', fontSize: 12 }}>Awaiting Owner email</span>
+                            )}
+                          </td>
+                          <td style={{ textTransform: 'capitalize' }}>{u.role || 'administrator'}</td>
+                          <td>
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 12,
+                              fontWeight: 700,
+                              background: u.active ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                              color: u.active ? '#4ade80' : '#f87171',
+                              border: `1px solid ${u.active ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                            }}>
+                              {u.active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td>
+                            {renderEnrollmentBadge(u)}
+                          </td>
+                          {callerIsOwner && (
+                            <td>
+                              <div style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="nm-btn nm-btn-table nm-btn-secondary"
+                                  onClick={() => handleStartEdit(u)}
+                                  disabled={usersLoading || isActionBusy}
+                                  title="Edit email and role"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`nm-btn nm-btn-table ${u.active ? 'nm-btn-danger' : 'nm-btn-primary'}`}
+                                  onClick={() => handleToggleUserActive(u)}
+                                  disabled={usersLoading || isActionBusy || isSoleOwner}
+                                  title={isSoleOwner ? 'Cannot deactivate the sole active Owner' : (u.active ? 'Deactivate user' : 'Activate user')}
+                                >
+                                  {u.active ? 'Deactivate' : 'Activate'}
+                                </button>
+                                {hasEmail && !u.is_linked && (
+                                  <button
+                                    type="button"
+                                    className="nm-btn nm-btn-table nm-btn-secondary"
+                                    onClick={() => handleSendAccountSetup(u)}
+                                    disabled={usersLoading || isActionBusy}
+                                    title="Send account setup invitation email"
+                                  >
+                                    Send Setup
+                                  </button>
+                                )}
+                                {hasEmail && (
+                                  <button
+                                    type="button"
+                                    className="nm-btn nm-btn-table nm-btn-secondary"
+                                    onClick={() => handleSendPasswordReset(u)}
+                                    disabled={usersLoading || isActionBusy}
+                                    title="Send password reset email"
+                                  >
+                                    Reset PW
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
                     {!userList.length && !usersLoading && (
                       <tr>
-                        <td colSpan={callerIsOwner ? 5 : 4} style={{ textAlign: 'center', color: 'var(--nm-muted)' }}>
+                        <td colSpan={callerIsOwner ? 6 : 5} style={{ textAlign: 'center', color: 'var(--nm-muted)' }}>
                           No authorized users loaded.
                         </td>
                       </tr>
@@ -1032,64 +1259,177 @@ function HelpModal({ version, settings, samSetupStatus, onLogout, onSettingsChan
               </div>
             </div>
           )}
-
-          {modalTab === 'admin' && (
-            <div className="nm-help-settings" id="sam-admin-settings" style={{ gridTemplateColumns: '1fr', gap: 20 }}>
-              <div className="nm-help-settings-copy">
-                <div className="nm-overline">ADMIN CONTROLS</div>
-                <h3>Workflow &amp; Notification Settings</h3>
-                <p>Configure operational approval policies and notification alerts across SAM and MTS.</p>
-              </div>
-
-              <div className="nm-admin-setting-group" style={{ padding: '16px', background: 'var(--nm-card-bg, rgba(255,255,255,0.03))', borderRadius: 8, border: '1px solid var(--nm-border, rgba(255,255,255,0.08))' }}>
-                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 600 }}>Workflow</h4>
-                <label className="nm-field" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontWeight: 600 }}>Require Admin Approval for Newbie Shift Requests</span>
-                  <select
-                    value={settings.requireNewbieShiftApproval ? 'on' : 'off'}
-                    onChange={(event) => updateSetting({ requireNewbieShiftApproval: event.target.value === 'on' })}
-                    data-testid="require-newbie-shift-approval-select"
-                    style={{ maxWidth: 320 }}
-                  >
-                    <option value="on">ON (Approval Required)</option>
-                    <option value="off">OFF (Auto-Approved by Policy)</option>
-                  </select>
-                  <span className="nm-meta" style={{ marginTop: 4, color: 'var(--nm-muted, #888)' }}>
-                    When disabled, newbie shift requests are still recorded and visible, but do not require Admin approval before the workflow can continue.
-                  </span>
-                </label>
-              </div>
-
-              <div className="nm-admin-setting-group" style={{ padding: '16px', background: 'var(--nm-card-bg, rgba(255,255,255,0.03))', borderRadius: 8, border: '1px solid var(--nm-border, rgba(255,255,255,0.08))' }}>
-                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 600 }}>Notifications</h4>
-                <label className="nm-field" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontWeight: 600 }}>Headset Review Notifications</span>
-                  <select
-                    value={settings.headsetNotificationMode || 'all'}
-                    onChange={(event) => updateSetting({ headsetNotificationMode: event.target.value })}
-                    data-testid="headset-notification-mode-select"
-                    style={{ maxWidth: 320 }}
-                  >
-                    <option value="all">All (Standard Notifications)</option>
-                    <option value="action_required_only">Action Required Only</option>
-                    <option value="muted">Muted (Data Updates Only)</option>
-                  </select>
-                  <span className="nm-meta" style={{ marginTop: 4, color: 'var(--nm-muted, #888)' }}>
-                    Controls headset review alerts only. Muting notifications does not stop headset review data from updating.
-                  </span>
-                </label>
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="nm-help-modal-footer">
-          {modalTab === 'preferences' && (
-            <>
-              <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayQuickStart}>Quick Start Choices</button>
-              <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayTutorial}>Replay Guided Walkthrough</button>
-            </>
-          )}
+          <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function HelpModal({ version, onClose, onOpenSettings, onReplayTutorial, onReplayQuickStart }) {
+  const sectionRefs = useRef({});
+  const [supportFormUrl, setSupportFormUrl] = useState('https://forms.gle/h3L8BZcFqpZ8RZf39');
+  const [supportError, setSupportError] = useState('');
+  const [query, setQuery] = useState('');
+  const [helpContent, setHelpContent] = useState({});
+  const [helpLoadError, setHelpLoadError] = useState('');
+  const [selectedTutorial, setSelectedTutorial] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    api.getSettings()
+      .then((appSettings) => {
+        if (active) {
+          const url = appSettings?.support_form_url;
+          if (url !== undefined) {
+            setSupportFormUrl(url || '');
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load support form URL:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api.getHelpContent().then((content) => {
+      if (active) {
+        setHelpContent(content || {});
+        setHelpLoadError('');
+      }
+    }).catch(() => {
+      if (active) {
+        setHelpContent({});
+        setHelpLoadError('Unable to load tutorial videos right now.');
+      }
+    });
+    return () => { active = false; };
+  }, []);
+
+  const retryHelpContent = async () => {
+    try {
+      const content = await api.getHelpContent();
+      setHelpContent(content || {});
+      setHelpLoadError('');
+    } catch (_error) {
+      setHelpLoadError('Unable to load tutorial videos right now.');
+    }
+  };
+
+  const handleRequestSupport = async () => {
+    setSupportError('');
+    if (!supportFormUrl || !supportFormUrl.trim()) {
+      setSupportError('Support form is not configured yet.');
+      alert('Support form is not configured yet.');
+      return;
+    }
+    if (window.electronAPI?.openExternal) {
+      await window.electronAPI.openExternal(supportFormUrl);
+    } else {
+      window.open(supportFormUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const jumpToSection = (id) => {
+    sectionRefs.current[id]?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+  };
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleSections = useMemo(
+    () => SAM_HELP_SECTIONS.filter((section) => !normalizedQuery || `${section.title} ${section.body}`.toLowerCase().includes(normalizedQuery)),
+    [normalizedQuery],
+  );
+  const samTutorials = useMemo(() => normalizeTutorialVideos(helpContent?.tutorial_videos?.sam, 'sam'), [helpContent]);
+
+  return (
+    <div className="nm-modal-backdrop" onKeyDown={(e) => { if (e.key === 'Escape') onClose?.(); }}>
+      <section className="nm-help-modal" role="dialog" aria-modal="true" aria-labelledby="sam-help-title">
+        <div className="nm-help-header">
+          <div>
+            <div className="nm-overline">SAM HELP &amp; DOCUMENTATION</div>
+            <h2 id="sam-help-title">{SAM_TITLE}</h2>
+            <p>Smart Alert Manager keeps live alert messages and candidate administration organized for Mock Testing Suite operators.</p>
+          </div>
+          <button type="button" className="nm-modal-close" onClick={onClose} aria-label="Close help">×</button>
+        </div>
+
+        {/* Informative Settings Notice */}
+        <div style={{ padding: '12px 16px', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: 8, margin: '0 24px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <span style={{ fontSize: 13, color: '#cbd5e1' }}>Workflow, notification, and administrative settings are available in Settings.</span>
+          <button
+            type="button"
+            className="nm-btn nm-btn-secondary"
+            style={{ whiteSpace: 'nowrap', padding: '4px 12px', fontSize: 12 }}
+            onClick={() => {
+              onClose?.();
+              onOpenSettings?.('workflow');
+            }}
+          >
+            Open Settings
+          </button>
+        </div>
+
+        <div className="nm-help-modal-body">
+          <div className="nm-help-toc" aria-label="SAM help sections">
+            <label className="nm-field">
+              <span>Search Help</span>
+              <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search dashboard, requests, reports..." data-testid="sam-help-search" />
+            </label>
+            {visibleSections.map((section) => (
+              <button key={section.id} type="button" className="nm-help-toc-button" onClick={() => jumpToSection(section.id)}>
+                {section.title}
+              </button>
+            ))}
+            <button type="button" className="nm-help-toc-button" onClick={() => document.getElementById('sam-tutorial-videos')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })}>
+              Tutorial Videos
+            </button>
+          </div>
+
+          <div className="nm-help-grid">
+            {visibleSections.map((section) => (
+              <article
+                key={section.id}
+                id={`sam-help-${section.id}`}
+                className="nm-help-card"
+                ref={(node) => { sectionRefs.current[section.id] = node; }}
+              >
+                <h3>{section.title}</h3>
+                <h4>What this is</h4><p>{section.body}</p>
+                <h4>When to use it</h4><p>Use this topic when you are working in {section.title} or deciding which administrator action is appropriate.</p>
+                <h4>Steps</h4><ol><li>Open {section.title} from SAM.</li><li>Review the visible status and selected record.</li><li>Choose the applicable action and confirm the result.</li></ol>
+                <h4>What happens next</h4><p>SAM refreshes the applicable view and keeps unresolved work visible until it is completed.</p>
+                <h4>Common mistakes</h4><p>Do not treat Dismiss as a decision, approve without reviewing details, or deny a Pending Request without a clear reason.</p>
+                <h4>Related topics</h4><p>Dashboard · Troubleshooting · Tutorial Videos</p>
+                {section.id === 'support' && (
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="nm-btn nm-btn-secondary"
+                      onClick={handleRequestSupport}
+                      data-testid="support-request-btn"
+                    >
+                      Request App Support
+                    </button>
+                    {supportError && <p className="nm-meta" style={{ color: '#ff4d4d', marginTop: 8 }}>{supportError}</p>}
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+          <div className="nm-help-grid">
+            <TutorialVideoLibrary videos={samTutorials} title="SAM Tutorial Videos" selectedVideo={selectedTutorial} onSelectVideo={setSelectedTutorial} sectionId="sam-tutorial-videos" loadError={helpLoadError} onRetry={retryHelpContent} />
+          </div>
+        </div>
+
+        <div className="nm-help-modal-footer">
+          <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayQuickStart}>Quick Start Choices</button>
+          <button type="button" className="nm-btn nm-btn-secondary" onClick={onReplayTutorial}>Replay Guided Walkthrough</button>
           <button type="button" className="nm-btn nm-btn-primary" onClick={onClose}>Done</button>
         </div>
       </section>
@@ -1988,7 +2328,7 @@ const SECTION_NAV_ITEMS = [
   { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive', tone: 'candidates' },
   { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending', tone: 'pending' },
   { key: 'requests', label: 'Pending Requests', target: 'sam-pending-requests', tone: 'pending' },
-  { key: 'help', label: 'Settings/Help', target: 'sam-help-settings', tone: 'help' },
+  { key: 'help', label: 'Help', target: 'sam-help', tone: 'help' },
 ];
 
 const REQUEST_FILTERS = [
@@ -4028,6 +4368,8 @@ export default function NotificationManagerApp() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [samBannerSrc, setSamBannerSrc] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState('general');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorDraft, setEditorDraft] = useState(null);
   const [editorIndex, setEditorIndex] = useState(null);
@@ -4839,6 +5181,7 @@ export default function NotificationManagerApp() {
         error: '',
       });
       setHelpOpen(false);
+      setSettingsOpen(false);
     }
   }, [samSetupStatus?.session?.access_token]);
 
@@ -5359,6 +5702,11 @@ export default function NotificationManagerApp() {
       setHelpOpen(true);
       return;
     }
+    if (item.key === 'settings') {
+      setSettingsInitialTab('general');
+      setSettingsOpen(true);
+      return;
+    }
     setActiveSection(item.key || 'notifications');
     if (item.candidateView) setCandidateView(item.candidateView);
   };
@@ -5596,9 +5944,22 @@ export default function NotificationManagerApp() {
             </button>
             <button
               type="button"
+              className="nm-ops-icon-btn nm-ops-settings-btn"
+              onClick={() => {
+                setSettingsInitialTab('general');
+                setSettingsOpen(true);
+              }}
+              title="Settings"
+              aria-label="Settings"
+            >
+              <SettingsIcon size={18} aria-hidden="true" />
+              <span>Settings</span>
+            </button>
+            <button
+              type="button"
               className="nm-ops-icon-btn"
               onClick={() => setHelpOpen(true)}
-              title="Help &amp; settings"
+              title="Help"
               aria-label="Help and settings"
             >
               <HelpCircle size={18} aria-hidden="true" />
@@ -5974,14 +6335,26 @@ export default function NotificationManagerApp() {
         onDelete={handleDelete}
         onClose={closeEditor}
       />
-      {helpOpen ? (
-        <HelpModal
+      {settingsOpen ? (
+        <SettingsModal
+          initialTab={settingsInitialTab}
           version={appVersion}
           settings={samSettings}
           samSetupStatus={samSetupStatus}
           onLogout={handleSamLogout}
           onSettingsChange={updateSamSettings}
           onCheckForUpdates={handleCheckForUpdates}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
+      {helpOpen ? (
+        <HelpModal
+          version={appVersion}
+          onOpenSettings={(tab = 'general') => {
+            setHelpOpen(false);
+            setSettingsInitialTab(tab);
+            setSettingsOpen(true);
+          }}
           onClose={() => {
             localStorage.setItem(SAM_HELP_DISMISSED_KEY, '1');
             setHelpOpen(false);

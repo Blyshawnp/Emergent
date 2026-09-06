@@ -1,73 +1,112 @@
-# Smart Alert Manager (SAM) Supabase Auth Enrollment
+# Smart Alert Manager (SAM) Supabase Auth Enrollment & User Management
 
-Status: Controlled Supabase Auth enrollment verified. Operational provider remains Google Sheets (`MTS_DATA_PROVIDER=sheets`). No provider cutover.
-
----
-
-## 1. Overview & Architecture
-
-SAM supports Supabase Auth email/password authentication alongside persistent session encryption via Electron `safeStorage`, password recovery through deep links (`smartalertmanager://reset-password`), and fallback legacy PIN authorization.
-
-Operational data authority remains 100% Google Sheets. Supabase Auth is isolated to application identity, authorization, and administrative user management.
+Status: Post-cutover stabilization active. Authoritative data and identity provider is **Supabase** (`MTS_DATA_PROVIDER=supabase`).
 
 ---
 
-## 2. Current User Inventory & Classification
+## 1. Overview & Security Architecture
 
-All 6 known application users are cataloged in `mts_sam.app_users` with role assignments in `mts_sam.user_role_assignments`:
+SAM uses Supabase Auth email and password authentication with persistent session encryption via Electron `safeStorage`, password recovery through deep links (`smartalertmanager://reset-password`), and fallback legacy PIN authorization for emergency recovery.
 
-| Safe User ID | Display Name | Role | Active | Email Available | Auth Linked | Classification |
-|---|---|---|:---:|:---:|:---:|---|
-| `c6cdf86b-9624-dc61-cfc9-acd33d4aee9a` | Shawn Bly | owner / administrator | YES | YES | YES | **AUTH ACTIVE / ENROLLED** |
-| `3b6adb57-c87d-bd76-f5de-da6a177b8226` | Ashley Shealey | admin / administrator | NO | NO | NO | **LEGACY INACTIVE / NOT ENROLLED (WAITING FOR EMAIL)** |
-| `6f650f78-3912-2ebc-d056-8ab70f6e72ae` | Becky Sowles | admin / administrator | NO | NO | NO | **LEGACY INACTIVE / NOT ENROLLED (WAITING FOR EMAIL)** |
-| `31b16aca-e998-faa9-6f62-7dc34856ec3f` | Lisa Byrd | admin / administrator | NO | NO | NO | **LEGACY INACTIVE / NOT ENROLLED (WAITING FOR EMAIL)** |
-| `dacfcf7b-add6-93a6-c9ae-cacfd8f262b8` | Kristi Green | admin / administrator | NO | NO | NO | **LEGACY INACTIVE / NOT ENROLLED (WAITING FOR EMAIL)** |
-| `3a5b1c6f-8d17-50ef-9b4f-a39b70fc13cb` | Kimberly O'brien | admin / administrator | NO | NO | NO | **LEGACY INACTIVE / NOT ENROLLED (WAITING FOR EMAIL)** |
+### Zero Packaged Service-Role Key Guarantee
+The packaged SAM application (including its local FastAPI backend `backend/server.py` and React UI) runs on client Windows machines and is treated as an **untrusted client runtime boundary**.
 
-### Classification Totals:
-- **Total Application Users**: 6
-- **Active Users**: 1
-- **Inactive Users**: 5
-- **Supabase Auth Enrolled**: 1
-- **Not Enrolled**: 5
-- **Waiting for Email**: 5
+- `SUPABASE_SERVICE_ROLE_KEY` is **NEVER** bundled with SAM, written to `runtime_config.json`, placed in packaged environment defaults, written to disk, or exposed to Electron/React.
+- Automated packaging tests (`backend/test_packaged_security.py`) assert that `SUPABASE_SERVICE_ROLE_KEY` is completely absent from packaged configuration and codebases.
+
+### Remote Security Boundary & JWT-Derived Authorization
+All privileged administrative operations are executed within the hosted Supabase database boundary via PostgreSQL `security definer` RPCs:
+- `mts_sam.get_sam_user_management_list(p_caller_auth_uid)`
+- `mts_sam.update_sam_user(p_target_user_id, p_email, p_role, p_active, p_caller_auth_uid)`
+- `mts_sam.set_sam_user_active(p_caller_auth_uid, p_target_user_id, p_active)`
+- `mts_sam.enroll_sam_user(p_target_user_id, p_caller_auth_uid)`
+
+**Caller identity is derived exclusively from the verified Supabase Auth JWT (`auth.uid()`)**. Client-supplied caller IDs cannot be used to spoof an administrator or bypass authorization checks.
 
 ---
 
-## 3. Inactive-User Security Policy
+## 2. Canonical Authority
 
-- **No Usable Credentials**: Inactive users have no usable credentials in Supabase Auth.
-- **Login Blocked**: `verify_sam_authorization` RPC inspects `v_user.active` and immediately rejects inactive accounts (`inactive_account`).
-- **PIN Fallback Blocked**: `_complete_sam_setup` and Apps Script `completeSamSetup` verify the `enabled` flag; inactive records return `setup_authorization_failed` and are strictly denied.
-- **JWT Protection**: Tokens for inactive users cannot access SAM endpoints.
-- **Recovery Protection**: Password recovery does not activate inactive accounts.
-- **Last Owner Guard**: `set_sam_user_active` RPC prevents deactivating the last active owner account.
-
----
-
-## 4. Pilot User Verification
-
-- **Pilot User**: Shawn Bly
-- **Auth UID**: `ca4cb01e-0777-435d-8a7c-1f2bcfaed291`
-- **App User ID**: `c6cdf86b-9624-dc61-cfc9-acd33d4aee9a`
-- **Email**: `blyshawnp@gmail.com`
-- **Linkage Status**: Verified (app_users <-> auth.users <-> user_role_assignments)
-- **Role**: `owner` / `administrator`
-- **Session Lifecycle**: Normal sign-in, encrypted session persistence, app restart, role validation, and logout tested and passing.
+To avoid authorization drift and race conditions, authority is strictly segregated:
+1. **Active / Inactive Status**: `mts_sam.app_users.active` is the single authoritative source of truth.
+2. **Application Role**: `mts_sam.user_role_assignments.role_key` (`owner`, `administrator`) is the single authoritative source of truth.
+3. **Contact Email & Timestamps**: `mts_sam.app_users.metadata->>'email'` stores normalized contact email; `metadata->>'invited_at'` tracks setup invitation dispatch timestamp.
+4. **Auth Linkage**: `mts_sam.app_users.auth_user_id` links the local application user to `auth.users.id`.
 
 ---
 
-## 5. Least-Privilege & Row-Level Security (RLS)
+## 3. Current User Inventory & Classification
 
-- **Anon Role**: Anon has zero direct table access and zero DML privileges on `mts_sam` tables. Operational DML is strictly denied.
-- **Authenticated Role**: Authenticated users can read their own user record (`app_users`) and assigned roles (`app_roles`, `user_role_assignments`) via RLS policies (`app_users_read_self_or_admin`, etc.).
-- **Service Role**: Granted full privileges for trusted server-side API execution only. The service-role key is never packaged in frontend or desktop assets.
+All 6 application users are cataloged in `mts_sam.app_users` with role assignments in `mts_sam.user_role_assignments`:
+
+| Safe User ID | Display Name | Role | Active | Email Stored | Auth Linked | Enrollment Status | Classification / Operational State |
+|---|---|---|:---:|:---:|:---:|---|---|
+| `c6cdf86b-9624-dc61-cfc9-acd33d4aee9a` | Shawn Bly | owner | YES | YES | YES | `Active / Enrolled` | **AUTH ACTIVE / ENROLLED (OWNER)** |
+| `3b6adb57-c87d-bd76-f5de-da6a177b8226` | Ashley Shealey | administrator | NO | NO | NO | `Inactive / No Email` | **AWAITING TWO OWNER-PROVIDED EMAIL MAPPINGS** |
+| `6f650f78-3912-2ebc-d056-8ab70f6e72ae` | Becky Sowles | administrator | NO | NO | NO | `Inactive / No Email` | **AWAITING TWO OWNER-PROVIDED EMAIL MAPPINGS** |
+| `31b16aca-e998-faa9-6f62-7dc34856ec3f` | Lisa Byrd | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / NOT ENROLLED** |
+| `dacfcf7b-add6-93a6-c9ae-cacfd8f262b8` | Kristi Green | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / NOT ENROLLED** |
+| `3a5b1c6f-8d17-50ef-9b4f-a39b70fc13cb` | Kimberly O'brien | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / NOT ENROLLED** |
+
+### Current State Summary:
+- **Total Users**: 6
+- **Active Enrolled Owner**: 1 (Shawn Bly)
+- **Inactive Legacy Users**: 5
+- **Awaiting Owner-Provided Emails**: Ashley Shealey and Becky Sowles (ready for direct entry in `Settings -> User Management`).
+- **No Fabricated Emails**: Inactive users have no fabricated or placeholder emails assigned.
 
 ---
 
-## 6. Email Enrollment & Password Rules
+## 4. Two-Step User Preparation Lifecycle (Hard Invariant)
 
-- **No Fabricated Emails**: Inactive legacy users without verified emails remain classified as `WAITING FOR EMAIL`.
-- **No PIN Conversion**: Legacy PINs are never converted into passwords or used as temporary credentials.
-- **Activation Flow**: When an Admin activates a user and associates a verified email, the user sets their password through the secure password reset/onboarding flow (`smartalertmanager://reset-password`).
+User preparation and email invitation are strictly decoupled into two discrete steps:
+
+### Step 1: Prepare Account (No Email Sent)
+- The Owner or Administrator opens `Settings -> User Management`.
+- Clicking **Edit** opens a dialog to configure the user's real contact email and application role.
+- Clicking **Activate** or **Deactivate** updates the account status.
+- **Invariant**: Saving updates in Step 1 strictly persists the data via `update_sam_user` or `set_sam_user_active` **WITHOUT sending any email** (no welcome, invite, setup, or recovery email is dispatched).
+
+### Step 2: Send Account Setup (Explicit Email Dispatch)
+- Once an email address is configured, the **Send Setup** button becomes enabled.
+- Account setup email is dispatched **ONLY** when the Owner/Admin explicitly clicks **Send Setup** (or **Reset PW**).
+- Clicking **Send Setup** executes `enroll_sam_user` (verifying no collision in `auth.users` and setting `invited_at`) followed by GoTrue password recovery dispatch (`/auth/v1/recover?redirect_to=smartalertmanager://reset-password`).
+- The user receives an email inviting them to set their password on first login.
+
+---
+
+## 5. Sole Active Owner Protection
+
+To prevent accidental lockout:
+- `mts_sam.update_sam_user` and `mts_sam.set_sam_user_active` enforce a database-level constraint preventing the sole active Owner from being deactivated or demoted to administrator.
+- The UI proactively disables deactivation and demotion when only one active Owner exists.
+
+---
+
+## 6. Dedicated Settings Interface
+
+SAM provides a dedicated first-class `SettingsModal` accessible via a dedicated header toolbar button with gear icon and visible `Settings` text:
+- **General**: Device preferences (volume, status banner duration, default candidate filter, search archive toggle, update check).
+- **Workflow**: `require_newbie_shift_approval` policy control.
+- **Notifications**: `headset_notification_mode` alert policy control.
+- **Account & Security**: Signed-in operator profile, password update subform, email update subform, and logout.
+- **User Management**: Authorized SAM operator roster, status badges, edit email/role dialog, activate/deactivate toggle, and setup invitation triggers.
+
+`HelpModal` is dedicated pure documentation with an informative notice and button redirecting users to Settings.
+
+---
+
+## 26. Class B Rollback Warning (Post-Cutover)
+
+> [!WARNING]
+> **CLASS B ROLLBACK WARNING: POST-CUTOVER GOOGLE SHEETS FALLBACK**
+>
+> Because production cutover is complete and Supabase is actively authoritative (`MTS_DATA_PROVIDER=supabase`), Google Sheets is classified as **STALE RELATIVE TO SUPABASE**.
+>
+> In the event that a rollback to Google Sheets is ever required:
+> 1. **DO NOT** blindly set `MTS_DATA_PROVIDER=sheets`.
+> 2. Quiesce active writes across MTS and SAM.
+> 3. Perform a full Supabase mutation inventory of all candidate sessions, attempt logs, call outcomes, form corrections, supervisor transfers, and newbie shift requests created since cutover (`2026-08-31T03:01:15-04:00`).
+> 4. Run reverse reconciliation to backfill all post-cutover mutations into Google Sheets.
+> 5. Verify 100% data parity between Supabase and Google Sheets.
+> 6. Only after parity is verified may `MTS_DATA_PROVIDER=sheets` be activated.
