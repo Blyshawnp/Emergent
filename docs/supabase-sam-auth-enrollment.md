@@ -44,18 +44,19 @@ All 6 application users are cataloged in `mts_sam.app_users` with role assignmen
 | Safe User ID | Display Name | Role | Active | Email Stored | Auth Linked | Enrollment Status | Classification / Operational State |
 |---|---|---|:---:|:---:|:---:|---|---|
 | `c6cdf86b-9624-dc61-cfc9-acd33d4aee9a` | Shawn Bly | owner | YES | YES | YES | `Active / Enrolled` | **AUTH ACTIVE / ENROLLED (OWNER)** |
-| `3b6adb57-c87d-bd76-f5de-da6a177b8226` | Ashley Shealey | administrator | NO | NO | NO | `Inactive / No Email` | **AWAITING TWO OWNER-PROVIDED EMAIL MAPPINGS** |
-| `6f650f78-3912-2ebc-d056-8ab70f6e72ae` | Becky Sowles | administrator | NO | NO | NO | `Inactive / No Email` | **AWAITING TWO OWNER-PROVIDED EMAIL MAPPINGS** |
-| `31b16aca-e998-faa9-6f62-7dc34856ec3f` | Lisa Byrd | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / NOT ENROLLED** |
-| `dacfcf7b-add6-93a6-c9ae-cacfd8f262b8` | Kristi Green | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / NOT ENROLLED** |
-| `3a5b1c6f-8d17-50ef-9b4f-a39b70fc13cb` | Kimberly O'brien | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / NOT ENROLLED** |
+| `3b6adb57-c87d-bd76-f5de-da6a177b8226` | Ashley Shealey | administrator | YES | NO | NO | `Active / Enrollment Required` | **AWAITING TWO OWNER-PROVIDED EMAIL MAPPINGS** |
+| `6f650f78-3912-2ebc-d056-8ab70f6e72ae` | Becky Sowles | administrator | YES | NO | NO | `Active / Enrollment Required` | **AWAITING TWO OWNER-PROVIDED EMAIL MAPPINGS** |
+| `3a5b1c6f-8d17-50ef-9b4f-a39b70fc13cb` | Kimberly O'brien | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / AVAILABLE IN SETTINGS** |
+| `dacfcf7b-add6-93a6-c9ae-cacfd8f262b8` | Kristi Green | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / AVAILABLE IN SETTINGS** |
+| `31b16aca-e998-faa9-6f62-7dc34856ec3f` | Lisa Byrd | administrator | NO | NO | NO | `Inactive / No Email` | **LEGACY INACTIVE / AVAILABLE IN SETTINGS** |
 
 ### Current State Summary:
 - **Total Users**: 6
-- **Active Enrolled Owner**: 1 (Shawn Bly)
-- **Inactive Legacy Users**: 5
-- **Awaiting Owner-Provided Emails**: Ashley Shealey and Becky Sowles (ready for direct entry in `Settings -> User Management`).
-- **No Fabricated Emails**: Inactive users have no fabricated or placeholder emails assigned.
+- **Active Enrolled Owner**: 1 (Shawn Bly — email resolved deterministically: `blyshawnp@gmail.com`)
+- **Active Administrator Accounts Awaiting Email**: 2 (Ashley Shealey, Becky Sowles — ready for Owner email entry in Settings)
+- **Inactive Legacy Administrators**: 3 (Kimberly O'brien, Kristi Green, Lisa Byrd — inactive until explicitly activated by Owner)
+- **Zero Fabricated Emails**: Inactive/un-enrolled users have no fabricated or placeholder emails assigned.
+- **Zero Real Emails Dispatched**: No setup, recovery, or invite emails sent.
 
 ---
 
