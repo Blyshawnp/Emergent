@@ -13882,7 +13882,7 @@ async def post_sam_admin_users_list(payload: dict, request: Request):
     if not auth_jwt and (payload or {}).get("access_token"):
         auth_jwt = str(payload.get("access_token")).strip()
     caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
-    if not auth_jwt and not caller_auth_uid:
+    if not auth_jwt:
         return {"ok": False, "error": "Unauthorized"}
     rpc_body = {"p_caller_auth_uid": caller_auth_uid} if caller_auth_uid else {}
     result = await asyncio.to_thread(_supabase_anon_rpc, "get_sam_user_management_list", rpc_body, auth_jwt)
@@ -13900,7 +13900,7 @@ async def post_sam_admin_users_set_active(payload: dict, request: Request):
     active = bool((payload or {}).get("active"))
     if not target_user_id:
         return {"ok": False, "error": "Target user ID is required."}
-    if not auth_jwt and not caller_auth_uid:
+    if not auth_jwt:
         return {"ok": False, "error": "Caller authentication is required."}
     rpc_body = {
         "p_target_user_id": target_user_id,
@@ -13922,7 +13922,7 @@ async def post_sam_admin_users_update(payload: dict, request: Request):
     target_user_id = str((payload or {}).get("target_user_id") or "").strip()
     if not target_user_id:
         return {"ok": False, "error": "Target user ID is required."}
-    if not auth_jwt and not caller_auth_uid:
+    if not auth_jwt:
         return {"ok": False, "error": "Caller authentication is required."}
 
     rpc_body = {

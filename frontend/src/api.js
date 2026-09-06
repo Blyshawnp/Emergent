@@ -131,7 +131,12 @@ async function request(method, path, body = null, timeout = 15000) {
   if (adminToken) {
     opts.headers['X-MTS-Admin-Token'] = adminToken;
   }
-  if (body !== null) opts.data = body;
+  if (body !== null) {
+    opts.data = body;
+    if (body && typeof body === 'object' && body.access_token) {
+      opts.headers['Authorization'] = `Bearer ${String(body.access_token).trim()}`;
+    }
+  }
   const res = await axios(opts);
   return res.data;
 }

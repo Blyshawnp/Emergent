@@ -454,6 +454,7 @@ function SettingsModal({
   onLogout,
   onSettingsChange,
   onCheckForUpdates,
+  onSessionUpdate,
   onClose,
 }) {
   const [modalTab, setModalTab] = useState(initialTab); // 'general' | 'workflow' | 'notifications' | 'account' | 'users'
@@ -482,26 +483,108 @@ function SettingsModal({
   const [editSaving, setEditSaving] = useState(false);
   const [actionInProgressId, setActionInProgressId] = useState(null);
 
-  const accessToken = samSetupStatus?.session?.access_token || null;
+  const getFreshAccessToken = useCallback(async () => {
+    const currentSession = samSetupStatus?.session;
+    if (!currentSession) return null;
 
-  const loadUserManagementList = useCallback(async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const expiresAt = currentSession.expires_at || 0;
+    const isExpiredOrStale = !expiresAt || nowSec >= (expiresAt - 60);
+
+    if (isExpiredOrStale && currentSession.refresh_token) {
+      try {
+        const configRes = await api.getSamAuthConfig().catch(() => null);
+        if (configRes?.supabase_url && configRes?.supabase_anon_key) {
+          const refreshed = await refreshAuthSession(
+            configRes.supabase_url,
+            configRes.supabase_anon_key,
+            currentSession.refresh_token
+          );
+          if (refreshed?.access_token) {
+            if (window.electronAPI?.authSession?.save) {
+              await window.electronAPI.authSession.save(refreshed).catch(() => {});
+            }
+            onSessionUpdate?.(refreshed);
+            return refreshed.access_token;
+          }
+        }
+      } catch (_refreshErr) {
+        // Fall back to current token
+      }
+    }
+    return currentSession.access_token || null;
+  }, [samSetupStatus?.session, onSessionUpdate]);
+
+  const refreshSessionExplicit = useCallback(async () => {
+    const refreshToken = samSetupStatus?.session?.refresh_token;
+    if (!refreshToken) return null;
+    try {
+      const configRes = await api.getSamAuthConfig().catch(() => null);
+      if (configRes?.supabase_url && configRes?.supabase_anon_key) {
+        const refreshed = await refreshAuthSession(
+          configRes.supabase_url,
+          configRes.supabase_anon_key,
+          refreshToken
+        );
+        if (refreshed?.access_token) {
+          if (window.electronAPI?.authSession?.save) {
+            await window.electronAPI.authSession.save(refreshed).catch(() => {});
+          }
+          onSessionUpdate?.(refreshed);
+          return refreshed.access_token;
+        }
+      }
+    } catch (_err) {}
+    return null;
+  }, [samSetupStatus?.session, onSessionUpdate]);
+
+  const loadUserManagementList = useCallback(async (retry = true) => {
     if (!samSetupStatus?.authUid) return;
     setUsersLoading(true);
     setUsersError('');
     try {
-      const res = await api.getSamUserManagementList(samSetupStatus.authUid, accessToken);
+      const token = await getFreshAccessToken();
+      const res = await api.getSamUserManagementList(samSetupStatus.authUid, token);
       if (res?.ok) {
         setUserList(res.users || []);
         setCallerIsOwner(Boolean(res.caller_is_owner));
       } else {
+        const errMsg = String(res?.error || '');
+        const isAuthErr = errMsg.includes('permission denied') || errMsg.includes('expired') || errMsg.includes('Unauthorized') || res?.error_code === 'AUTH_TOKEN_REQUIRED';
+        if (retry && isAuthErr) {
+          const refreshedToken = await refreshSessionExplicit();
+          if (refreshedToken) {
+            const retryRes = await api.getSamUserManagementList(samSetupStatus.authUid, refreshedToken);
+            if (retryRes?.ok) {
+              setUserList(retryRes.users || []);
+              setCallerIsOwner(Boolean(retryRes.caller_is_owner));
+              return;
+            }
+          }
+        }
         setUsersError(res?.error || 'Unable to load user authorization list.');
       }
     } catch (err) {
+      const errMsg = String(err?.message || '');
+      const isAuthErr = errMsg.includes('permission denied') || errMsg.includes('401') || errMsg.includes('expired');
+      if (retry && isAuthErr) {
+        const refreshedToken = await refreshSessionExplicit();
+        if (refreshedToken) {
+          try {
+            const retryRes = await api.getSamUserManagementList(samSetupStatus.authUid, refreshedToken);
+            if (retryRes?.ok) {
+              setUserList(retryRes.users || []);
+              setCallerIsOwner(Boolean(retryRes.caller_is_owner));
+              return;
+            }
+          } catch (_retryErr) {}
+        }
+      }
       setUsersError(err?.message || 'Failed to connect to user management.');
     } finally {
       setUsersLoading(false);
     }
-  }, [samSetupStatus?.authUid, accessToken]);
+  }, [samSetupStatus?.authUid, getFreshAccessToken, refreshSessionExplicit]);
 
   useEffect(() => {
     if (modalTab === 'users') {
@@ -534,7 +617,15 @@ function SettingsModal({
     setUsersError('');
     setUsersSuccess('');
     try {
-      const res = await api.setSamUserActive(samSetupStatus.authUid, targetUser.id, nextActive, accessToken);
+      let token = await getFreshAccessToken();
+      let res = await api.setSamUserActive(samSetupStatus.authUid, targetUser.id, nextActive, token);
+      if (!res?.ok && (String(res?.error || '').includes('permission denied') || res?.error_code === 'AUTH_TOKEN_REQUIRED' || res?.error === 'Unauthorized')) {
+        const refreshedToken = await refreshSessionExplicit();
+        if (refreshedToken) {
+          token = refreshedToken;
+          res = await api.setSamUserActive(samSetupStatus.authUid, targetUser.id, nextActive, token);
+        }
+      }
       if (res?.ok) {
         setUsersSuccess(`Successfully updated status for ${targetUser.display_name}.`);
         await loadUserManagementList();
@@ -578,12 +669,25 @@ function SettingsModal({
     setUsersError('');
     setUsersSuccess('');
     try {
-      const res = await api.updateSamUser(
+      let token = await getFreshAccessToken();
+      let res = await api.updateSamUser(
         samSetupStatus.authUid,
         editingUser.id,
         { email: cleanEmail, role: editRole },
-        accessToken
+        token
       );
+      if (!res?.ok && (String(res?.error || '').includes('permission denied') || res?.error_code === 'AUTH_TOKEN_REQUIRED' || res?.error === 'Unauthorized')) {
+        const refreshedToken = await refreshSessionExplicit();
+        if (refreshedToken) {
+          token = refreshedToken;
+          res = await api.updateSamUser(
+            samSetupStatus.authUid,
+            editingUser.id,
+            { email: cleanEmail, role: editRole },
+            token
+          );
+        }
+      }
       if (res?.ok) {
         setUsersSuccess(`Successfully updated ${editingUser.display_name}. Information saved without sending email.`);
         setEditingUser(null);
@@ -611,7 +715,15 @@ function SettingsModal({
     setUsersError('');
     setUsersSuccess('');
     try {
-      const enrollRes = await api.enrollSamUser(samSetupStatus.authUid, targetUser.id, accessToken);
+      let token = await getFreshAccessToken();
+      let enrollRes = await api.enrollSamUser(samSetupStatus.authUid, targetUser.id, token);
+      if (!enrollRes?.ok && (String(enrollRes?.error || '').includes('permission denied') || enrollRes?.error_code === 'AUTH_TOKEN_REQUIRED' || enrollRes?.error === 'Unauthorized')) {
+        const refreshedToken = await refreshSessionExplicit();
+        if (refreshedToken) {
+          token = refreshedToken;
+          enrollRes = await api.enrollSamUser(samSetupStatus.authUid, targetUser.id, token);
+        }
+      }
       if (!enrollRes?.ok) {
         setUsersError(enrollRes?.error || 'Failed to send account setup.');
         return;
@@ -668,7 +780,7 @@ function SettingsModal({
       const configRes = await api.getSamAuthConfig();
       const supabaseUrl = configRes?.supabase_url;
       const anonKey = configRes?.supabase_anon_key;
-      const token = samSetupStatus?.session?.access_token;
+      const token = (await getFreshAccessToken()) || samSetupStatus?.session?.access_token;
       if (!supabaseUrl || !anonKey || !token) {
         setAccountError('Authentication session expired. Please sign in again.');
         return;
@@ -698,7 +810,7 @@ function SettingsModal({
       const configRes = await api.getSamAuthConfig();
       const supabaseUrl = configRes?.supabase_url;
       const anonKey = configRes?.supabase_anon_key;
-      const token = samSetupStatus?.session?.access_token;
+      const token = (await getFreshAccessToken()) || samSetupStatus?.session?.access_token;
       if (!supabaseUrl || !anonKey || !token) {
         setAccountError('Authentication session expired. Please sign in again.');
         return;
@@ -5184,8 +5296,28 @@ export default function NotificationManagerApp() {
     try {
       // 1. Check Electron safeStorage for persistent Supabase Auth session
       if (window.electronAPI?.authSession?.get) {
-        const storedSession = await window.electronAPI.authSession.get().catch(() => null);
+        let storedSession = await window.electronAPI.authSession.get().catch(() => null);
         if (storedSession?.user?.id) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          const isExpiredOrNear = !storedSession.expires_at || nowSec >= (storedSession.expires_at - 120);
+          if (isExpiredOrNear && storedSession.refresh_token) {
+            try {
+              const configRes = await api.getSamAuthConfig().catch(() => null);
+              if (configRes?.supabase_url && configRes?.supabase_anon_key) {
+                const refreshed = await refreshAuthSession(
+                  configRes.supabase_url,
+                  configRes.supabase_anon_key,
+                  storedSession.refresh_token
+                );
+                if (refreshed?.access_token) {
+                  storedSession = refreshed;
+                  await window.electronAPI.authSession.save(refreshed).catch(() => {});
+                }
+              }
+            } catch (_refreshErr) {
+              // Stale token refresh failed, continue to verify check
+            }
+          }
           const verify = await api.verifySamAuth(storedSession.user.id).catch(() => null);
           if (verify?.ok) {
             const nextStatus = {
@@ -5193,7 +5325,7 @@ export default function NotificationManagerApp() {
               setupComplete: true,
               userName: verify.display_name,
               userRole: verify.role,
-              userEmail: storedSession.user.email || '',
+              userEmail: storedSession.user?.email || '',
               authUid: storedSession.user.id,
               isOwner: Boolean(verify.is_owner),
               session: storedSession,
@@ -5955,7 +6087,7 @@ export default function NotificationManagerApp() {
               className="nm-ops-icon-btn"
               onClick={() => setHelpOpen(true)}
               title="Help"
-              aria-label="Help and settings"
+              aria-label="Help"
             >
               <HelpCircle size={18} aria-hidden="true" />
             </button>
@@ -6339,6 +6471,14 @@ export default function NotificationManagerApp() {
           onLogout={handleSamLogout}
           onSettingsChange={updateSamSettings}
           onCheckForUpdates={handleCheckForUpdates}
+          onSessionUpdate={(newSession) => {
+            setSamSetupStatus((prev) => ({
+              ...prev,
+              session: newSession,
+              userEmail: newSession?.user?.email || prev.userEmail,
+              authUid: newSession?.user?.id || prev.authUid,
+            }));
+          }}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}

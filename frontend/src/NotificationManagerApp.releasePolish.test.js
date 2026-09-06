@@ -598,7 +598,7 @@ test('SAM notification header has one help control and one destructive exit cont
   expect(appSource).toContain('className="nm-btn nm-ops-exit"');
   expect(samPolishCss).toContain('.nm-ops-exit');
   expect(samPolishCss).toContain('background: #7f1d1d');
-  expect((appSource.match(/aria-label="Help and settings"/g) || [])).toHaveLength(1);
+  expect((appSource.match(/aria-label="Help"/g) || [])).toHaveLength(1);
   expect((appSource.match(/aria-label="Exit Smart Alert Manager"/g) || [])).toHaveLength(1);
   expect(appSource).not.toContain('<span className="nm-ops-quick-label">Selection</span>');
 });
