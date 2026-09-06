@@ -613,16 +613,11 @@ function SettingsModal({
     try {
       const enrollRes = await api.enrollSamUser(samSetupStatus.authUid, targetUser.id, accessToken);
       if (!enrollRes?.ok) {
-        setUsersError(enrollRes?.error || 'Failed to prepare user enrollment.');
+        setUsersError(enrollRes?.error || 'Failed to send account setup.');
         return;
       }
-      const resetRes = await api.sendSamUserPasswordReset(email);
-      if (resetRes?.ok) {
-        setUsersSuccess(`Account setup invitation sent to ${email}.`);
-        await loadUserManagementList();
-      } else {
-        setUsersError(resetRes?.error || 'Enrollment prepared, but failed to send setup email.');
-      }
+      setUsersSuccess(enrollRes?.message || `Account setup invitation sent to ${email}.`);
+      await loadUserManagementList();
     } catch (err) {
       setUsersError(err?.message || 'Failed to send account setup.');
     } finally {

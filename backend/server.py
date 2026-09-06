@@ -13790,6 +13790,41 @@ def _supabase_anon_rpc(rpc_name: str, body: dict = None, auth_jwt: str = None):
         return {"ok": False, "error": str(exc)}
 
 
+def _call_supabase_edge_function(function_name: str, body: dict = None, auth_jwt: str = None) -> dict:
+    runtime_config = _load_backend_runtime_config() or {}
+    url = str(runtime_config.get("supabase_url") or "").rstrip("/")
+    key = str(runtime_config.get("supabase_anon_key") or "").strip()
+    if not url or not key:
+        return {"ok": False, "error": "Supabase configuration is not available."}
+    if not auth_jwt or not auth_jwt.strip():
+        return {"ok": False, "error": "Caller authentication token is required."}
+    fn_url = f"{url}/functions/v1/{function_name}"
+    req_body = json.dumps(body or {}, separators=(",", ":")).encode("utf-8")
+    req = urllib.request.Request(
+        fn_url,
+        data=req_body,
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {auth_jwt.strip()}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15.0) as resp:
+            return json.loads(resp.read().decode("utf-8-sig"))
+    except urllib.error.HTTPError as exc:
+        try:
+            err_text = exc.read().decode("utf-8-sig")
+            err_json = json.loads(err_text)
+            return {"ok": False, "status_code": exc.code, "error": err_json.get("error") or err_json.get("message") or err_text, **err_json}
+        except Exception:
+            return {"ok": False, "status_code": exc.code, "error": f"HTTP {exc.code}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 @api_router.get("/sam/auth/config")
 async def get_sam_auth_config():
     config = _load_backend_runtime_config() or {}
@@ -13916,16 +13951,16 @@ async def post_sam_admin_users_enroll(payload: dict, request: Request):
     target_user_id = str((payload or {}).get("target_user_id") or "").strip()
     if not target_user_id:
         return {"ok": False, "error": "Target user ID is required."}
-    if not auth_jwt and not caller_auth_uid:
-        return {"ok": False, "error": "Caller authentication is required."}
+    if not auth_jwt:
+        return {"ok": False, "error": "Caller authentication token is required."}
 
-    rpc_body = {
-        "p_target_user_id": target_user_id,
+    req_body = {
+        "target_user_id": target_user_id,
     }
     if caller_auth_uid:
-        rpc_body["p_caller_auth_uid"] = caller_auth_uid
+        req_body["caller_auth_uid"] = caller_auth_uid
 
-    result = await asyncio.to_thread(_supabase_anon_rpc, "enroll_sam_user", rpc_body, auth_jwt)
+    result = await asyncio.to_thread(_call_supabase_edge_function, "sam-admin-enroll-user", req_body, auth_jwt)
     return result
 
 

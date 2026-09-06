@@ -97,25 +97,65 @@ class SamUserEnrollmentEndpointTests(unittest.TestCase):
             "test-jwt",
         )
 
-    @patch("server._supabase_anon_rpc")
-    def test_post_sam_admin_users_enroll_invokes_enroll_rpc(self, mock_rpc):
-        mock_rpc.return_value = {"ok": True, "enrollment_status": "Active / Setup Sent"}
+    @patch("server._call_supabase_edge_function")
+    def test_post_sam_admin_users_enroll_invokes_edge_function(self, mock_edge_fn):
+        mock_edge_fn.return_value = {
+            "ok": True,
+            "status": "created_and_invited",
+            "message": "New authentication account created and setup invitation email sent.",
+        }
         req = MagicMock()
         req.headers = {"Authorization": "Bearer test-jwt"}
         import asyncio
 
         payload = {
             "target_user_id": "3b6adb57-c87d-bd76-f5de-da6a177b8226",
+            "caller_auth_uid": "ca4cb01e-0777-435d-8a7c-1f2bcfaed291",
         }
         res = asyncio.run(server.post_sam_admin_users_enroll(payload, req))
         self.assertTrue(res.get("ok"))
-        mock_rpc.assert_called_once_with(
-            "enroll_sam_user",
+        mock_edge_fn.assert_called_once_with(
+            "sam-admin-enroll-user",
             {
-                "p_target_user_id": "3b6adb57-c87d-bd76-f5de-da6a177b8226",
+                "target_user_id": "3b6adb57-c87d-bd76-f5de-da6a177b8226",
+                "caller_auth_uid": "ca4cb01e-0777-435d-8a7c-1f2bcfaed291",
             },
             "test-jwt",
         )
+
+    def test_post_sam_admin_users_enroll_requires_auth_jwt(self):
+        req = MagicMock()
+        req.headers = {}
+        import asyncio
+
+        payload = {
+            "target_user_id": "3b6adb57-c87d-bd76-f5de-da6a177b8226",
+            "caller_auth_uid": "ca4cb01e-0777-435d-8a7c-1f2bcfaed291",
+        }
+        res = asyncio.run(server.post_sam_admin_users_enroll(payload, req))
+        self.assertFalse(res.get("ok"))
+        self.assertIn("Caller authentication token is required", res.get("error", ""))
+
+    @patch("server._load_backend_runtime_config")
+    @patch("urllib.request.urlopen")
+    def test_call_supabase_edge_function_passes_bearer_and_apikey(self, mock_urlopen, mock_cfg):
+        mock_cfg.return_value = self.mock_config
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"ok": True, "status": "created_and_invited"}).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        res = server._call_supabase_edge_function(
+            "sam-admin-enroll-user",
+            {"target_user_id": "test-target-id"},
+            auth_jwt="admin-jwt-token-xyz",
+        )
+        self.assertTrue(res.get("ok"))
+        called_req = mock_urlopen.call_args[0][0]
+        self.assertIn("/functions/v1/sam-admin-enroll-user", called_req.full_url)
+        self.assertEqual(called_req.get_header("Apikey"), "test-anon-key-12345")
+        self.assertEqual(called_req.get_header("Authorization"), "Bearer admin-jwt-token-xyz")
+        self.assertEqual(called_req.get_header("Content-type"), "application/json")
 
     @patch("server._load_backend_runtime_config")
     @patch("urllib.request.urlopen")
@@ -148,6 +188,55 @@ class SamUserEnrollmentEndpointTests(unittest.TestCase):
         res = asyncio.run(server.post_sam_admin_users_send_reset({}, req))
         self.assertFalse(res.get("ok"))
         self.assertIn("email address is required", res.get("error", ""))
+
+    @patch("server._call_supabase_edge_function")
+    def test_post_sam_admin_users_enroll_propagates_caller_mismatch(self, mock_edge_fn):
+        mock_edge_fn.return_value = {
+            "ok": False,
+            "error_code": "CALLER_IDENTITY_MISMATCH",
+            "error": "Client-supplied caller UID does not match verified JWT identity.",
+        }
+        req = MagicMock()
+        req.headers = {"Authorization": "Bearer non-admin-jwt"}
+        import asyncio
+
+        payload = {
+            "target_user_id": "3b6adb57-c87d-bd76-f5de-da6a177b8226",
+            "caller_auth_uid": "spoofed-owner-uid",
+        }
+        res = asyncio.run(server.post_sam_admin_users_enroll(payload, req))
+        self.assertFalse(res.get("ok"))
+        self.assertEqual(res.get("error_code"), "CALLER_IDENTITY_MISMATCH")
+
+    @patch("server._supabase_anon_rpc")
+    def test_post_sam_admin_users_list_relays_jwt(self, mock_rpc):
+        mock_rpc.return_value = {"ok": True, "users": []}
+        req = MagicMock()
+        req.headers = {"Authorization": "Bearer admin-jwt-123"}
+        import asyncio
+
+        res = asyncio.run(server.post_sam_admin_users_list({}, req))
+        self.assertTrue(res.get("ok"))
+        mock_rpc.assert_called_once_with("get_sam_user_management_list", {}, "admin-jwt-123")
+
+    @patch("server._supabase_anon_rpc")
+    def test_post_sam_admin_users_set_active_relays_jwt(self, mock_rpc):
+        mock_rpc.return_value = {"ok": True, "active": True}
+        req = MagicMock()
+        req.headers = {"Authorization": "Bearer admin-jwt-123"}
+        import asyncio
+
+        payload = {
+            "target_user_id": "3b6adb57-c87d-bd76-f5de-da6a177b8226",
+            "active": True,
+        }
+        res = asyncio.run(server.post_sam_admin_users_set_active(payload, req))
+        self.assertTrue(res.get("ok"))
+        mock_rpc.assert_called_once_with(
+            "set_sam_user_active",
+            {"p_target_user_id": "3b6adb57-c87d-bd76-f5de-da6a177b8226", "p_active": True},
+            "admin-jwt-123",
+        )
 
 
 if __name__ == "__main__":

@@ -15,13 +15,15 @@ The packaged SAM application (including its local FastAPI backend `backend/serve
 - Automated packaging tests (`backend/test_packaged_security.py`) assert that `SUPABASE_SERVICE_ROLE_KEY` is completely absent from packaged configuration and codebases.
 
 ### Remote Security Boundary & JWT-Derived Authorization
-All privileged administrative operations are executed within the hosted Supabase database boundary via PostgreSQL `security definer` RPCs:
-- `mts_sam.get_sam_user_management_list(p_caller_auth_uid)`
-- `mts_sam.update_sam_user(p_target_user_id, p_email, p_role, p_active, p_caller_auth_uid)`
-- `mts_sam.set_sam_user_active(p_caller_auth_uid, p_target_user_id, p_active)`
-- `mts_sam.enroll_sam_user(p_target_user_id, p_caller_auth_uid)`
+All privileged administrative operations are executed within the hosted Supabase database and Edge Function boundary:
+- Hosted Supabase Edge Function `sam-admin-enroll-user`: Securely executes first-time GoTrue Auth user creation via GoTrue Admin API (`adminClient.auth.admin.inviteUserByEmail`), collision verification, safe linking to `mts_sam.app_users.auth_user_id`, and setup invitation dispatch.
+- PostgreSQL `security definer` RPCs (restricted to `authenticated` and `service_role`; revoked from `anon`):
+  - `mts_sam.get_sam_user_management_list(p_caller_auth_uid)`
+  - `mts_sam.update_sam_user(p_target_user_id, p_email, p_role, p_active, p_caller_auth_uid)`
+  - `mts_sam.set_sam_user_active(p_caller_auth_uid, p_target_user_id, p_active)`
+  - `mts_sam.enroll_sam_user(p_target_user_id, p_caller_auth_uid)`
 
-**Caller identity is derived exclusively from the verified Supabase Auth JWT (`auth.uid()`)**. Client-supplied caller IDs cannot be used to spoof an administrator or bypass authorization checks.
+**Caller identity is derived exclusively from the verified Supabase Auth JWT (`auth.uid()`)**. Client-supplied caller IDs cannot be used to spoof an administrator or bypass authorization checks; mismatched client IDs are rejected with `CALLER_IDENTITY_MISMATCH`.
 
 ---
 
@@ -70,7 +72,10 @@ User preparation and email invitation are strictly decoupled into two discrete s
 ### Step 2: Send Account Setup (Explicit Email Dispatch)
 - Once an email address is configured, the **Send Setup** button becomes enabled.
 - Account setup email is dispatched **ONLY** when the Owner/Admin explicitly clicks **Send Setup** (or **Reset PW**).
-- Clicking **Send Setup** executes `enroll_sam_user` (verifying no collision in `auth.users` and setting `invited_at`) followed by GoTrue password recovery dispatch (`/auth/v1/recover?redirect_to=smartalertmanager://reset-password`).
+- Clicking **Send Setup** executes the hosted Edge Function `sam-admin-enroll-user` with caller JWT verification.
+  - If the user does not exist in `auth.users`, it calls `adminClient.auth.admin.inviteUserByEmail`, creating the new authentication identity and dispatching an invitation email to set their password.
+  - If the user already exists in `auth.users`, it verifies no conflicting application user is linked, links `auth_user_id`, and dispatches password recovery.
+  - Sets `invited_at` timestamp in `mts_sam.app_users.metadata`.
 - The user receives an email inviting them to set their password on first login.
 
 ---
