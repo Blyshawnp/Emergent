@@ -447,21 +447,26 @@ class SupabaseDataProvider(DataProvider):
                 **row,
                 "request_type": request_type,
                 "category": category,
-                "request_status": row.get("status"),
+                "status": row.get("status") or row.get("request_status"),
+                "request_status": row.get("status") or row.get("request_status"),
             })
         for row in newbie:
+            req_status = row.get("request_status") or row.get("status")
             projected.append({
                 **row,
                 "request_type": row.get("request_type") or "initial_newbie_shift",
                 "category": "newbie-shift-requests",
-                "status": row.get("request_status"),
+                "status": req_status,
+                "request_status": req_status,
             })
         for row in corrections:
+            corr_status = row.get("status") or row.get("request_status")
             projected.append({
                 **row,
                 "request_type": row.get("request_type") or "candidate_information_correction",
                 "category": "candidate-information-correction-requests",
-                "request_status": row.get("status"),
+                "status": corr_status,
+                "request_status": corr_status,
             })
         by_request = {}
         for row in projected:

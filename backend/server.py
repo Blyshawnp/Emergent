@@ -5769,6 +5769,51 @@ def _sync_headset_content_cache(rows):
     _headset_cache["last_fetch"] = time.time()
 
 
+CANONICAL_AUTHORITATIVE_FIELDS = {
+    "status",
+    "request_status",
+    "final_result",
+    "raw_status",
+    "candidate_name",
+    "candidate_id",
+    "session_id",
+    "source_session_id",
+    "scheduled_at",
+    "completed_at",
+    "brand",
+    "model",
+}
+
+
+def merge_source_with_canonical(source_payload, canonical_row, authoritative_fields=None):
+    """Merge legacy/staged source_payload with canonical database row.
+    Canonical columns override source_payload values when present and non-empty.
+    Does NOT blindly overwrite meaningful source values with None or empty strings.
+    """
+    merged = dict(source_payload or {})
+    if not canonical_row or not isinstance(canonical_row, dict):
+        return merged
+
+    auth_set = set(authoritative_fields or CANONICAL_AUTHORITATIVE_FIELDS)
+    for k, v in canonical_row.items():
+        if k == "source_payload":
+            continue
+        # If key is authoritative, canonical wins whenever v is not None and not empty string
+        if k in auth_set:
+            if v is not None and str(v).strip() != "":
+                merged[k] = v
+            elif k not in merged:
+                merged[k] = v
+        else:
+            # Non-authoritative: prefer existing source_payload if present and non-empty, else canonical
+            if k not in merged or merged[k] is None or (isinstance(merged[k], str) and not merged[k].strip()):
+                merged[k] = v
+            elif v is not None and str(v).strip() != "" and (merged[k] is None or str(merged[k]).strip() == ""):
+                merged[k] = v
+
+    return merged
+
+
 def _headset_review_snapshot(context=None):
     if configured_provider_mode() == "supabase":
         try:
@@ -5776,22 +5821,20 @@ def _headset_review_snapshot(context=None):
             raw_reviews = provider.list_resource("headset_reviews", limit=5000)
             review_rows = []
             for row in raw_reviews or []:
-                payload = dict(row.get("source_payload") or {})
-                for k, v in row.items():
-                    if k != "source_payload" and k not in payload:
-                        payload[k] = v
+                payload = merge_source_with_canonical(row.get("source_payload"), row)
                 brand, model = _split_headset_brand_model(
                     payload.get("headset_model") or payload.get("model"),
                     payload.get("Brand") or payload.get("brand"),
                     payload.get("Model") or payload.get("model"),
                 )
+                status = str(payload.get("status") or payload.get("Status") or payload.get("review_status") or "pending").strip().lower() or "pending"
                 review_rows.append({
                     "review_id": str(payload.get("review_id") or payload.get("ReviewId") or "").strip(),
                     "source_session_id": str(payload.get("source_session_id") or payload.get("SourceSessionId") or "").strip(),
                     "brand": brand,
                     "model": model,
-                    "status": str(payload.get("Status") or payload.get("review_status") or payload.get("status") or "pending").strip().lower() or "pending",
-                    "note": str(payload.get("Note") or payload.get("ReviewNotes") or payload.get("Notes") or payload.get("notes") or "").strip(),
+                    "status": status,
+                    "note": str(payload.get("note") or payload.get("Note") or payload.get("ReviewNotes") or payload.get("Notes") or payload.get("notes") or "").strip(),
                     "submitted_date": str(payload.get("created_at") or payload.get("Timestamp") or payload.get("entered_at") or "").strip(),
                     "updated_at": str(payload.get("updated_at") or "").strip(),
                     "candidate": str(payload.get("candidate_name") or payload.get("CandidateName") or "").strip(),
@@ -5800,10 +5843,7 @@ def _headset_review_snapshot(context=None):
             headset_rows = provider.list_resource("headset_catalog", limit=5000)
             catalog_rows = []
             for row in headset_rows or []:
-                payload = dict(row.get("source_payload") or {})
-                for k, v in row.items():
-                    if k != "source_payload" and k not in payload:
-                        payload[k] = v
+                payload = merge_source_with_canonical(row.get("source_payload"), row)
                 catalog_rows.append({
                     "brand": str(payload.get("brand") or payload.get("Brand") or "").strip(),
                     "model": str(payload.get("model") or payload.get("Model") or "").strip(),
@@ -6598,17 +6638,11 @@ def _shared_admin_candidate_snapshot(context=None):
             pending_raw = provider.list_resource("supervisor_transfers", limit=5000)
             candidate_rows = []
             for s in sessions_raw or []:
-                payload = dict(s.get("source_payload") or {})
-                for k, v in s.items():
-                    if k != "source_payload" and k not in payload:
-                        payload[k] = v
+                payload = merge_source_with_canonical(s.get("source_payload"), s)
                 candidate_rows.append(_apply_authoritative_candidate_status(_normalize_shared_row(payload)))
             pending_rows = []
             for p in pending_raw or []:
-                payload = dict(p.get("source_payload") or {})
-                for k, v in p.items():
-                    if k != "source_payload" and k not in payload:
-                        payload[k] = v
+                payload = merge_source_with_canonical(p.get("source_payload"), p)
                 pending_rows.append(_normalize_shared_row(payload))
             return _assemble_candidate_snapshot(candidate_rows, pending_rows, auto_archived_count=0)
         except Exception as exc:
@@ -6750,6 +6784,8 @@ def _public_newbie_request(row):
         "id": row.get("request_id") or "",
         "request_id": row.get("request_id") or "",
         "session_id": row.get("session_id") or "",
+        "source_session_id": row.get("source_session_id") or "",
+        "candidate_id": row.get("candidate_id") or "",
         "category": "newbie_reschedule" if request_type == NEWBIE_REQUEST_RESCHEDULE else "newbie_initial",
         "categoryLabel": "Newbie Shift — Reschedule" if request_type == NEWBIE_REQUEST_RESCHEDULE else "Newbie Shift — Initial",
         "candidate": row.get("candidate_name") or "",
@@ -6790,6 +6826,8 @@ def _public_deletion_request(row):
         "id": row.get("request_id") or "",
         "request_id": row.get("request_id") or "",
         "session_id": row.get("session_id") or "",
+        "source_session_id": row.get("source_session_id") or "",
+        "candidate_id": row.get("candidate_id") or "",
         "category": "candidate_deletion",
         "categoryLabel": "Candidate Deletion Request",
         "candidate": row.get("candidate_name") or "",
@@ -6910,7 +6948,8 @@ def _public_correction_request(row):
     return {
         "id": row.get("request_id") or "",
         "request_id": row.get("request_id") or "",
-        "session_id": row.get("source_session_id") or row.get("session_id") or "",
+        "session_id": row.get("session_id") or row.get("source_session_id") or "",
+        "source_session_id": row.get("source_session_id") or "",
         "candidate_id": row.get("candidate_id") or "",
         "category": "candidate_correction",
         "categoryLabel": "Candidate Information Correction",
@@ -6965,14 +7004,27 @@ def _candidate_terminal_for_newbie_shift(row):
 
 def _filter_obsolete_pending_newbie_requests(requests, candidate_tracking):
     candidates = (candidate_tracking or {}).get("candidates") or []
-    by_session = {
-        str(row.get("session_id") or "").strip(): row
-        for row in candidates
-        if str(row.get("session_id") or "").strip()
-    }
+    by_session = {}
+    for row in candidates:
+        sid = str(row.get("session_id") or "").strip()
+        if sid:
+            by_session[sid] = row
+        ssid = str(row.get("source_session_id") or "").strip()
+        if ssid:
+            by_session[ssid] = row
+        for att in row.get("attempts") or []:
+            asid = str(att.get("session_id") or "").strip()
+            if asid:
+                by_session[asid] = row
+            assid = str(att.get("source_session_id") or "").strip()
+            if assid:
+                by_session[assid] = row
+
     filtered = []
     for request in requests or []:
-        candidate = by_session.get(str(request.get("session_id") or "").strip())
+        session_id = str(request.get("session_id") or "").strip()
+        source_session_id = str(request.get("source_session_id") or "").strip()
+        candidate = by_session.get(session_id) or (by_session.get(source_session_id) if source_session_id else None)
         is_pending_newbie = (
             request.get("category") in {"newbie_initial", "newbie_reschedule"}
             and request.get("raw_status") == "pending"
@@ -7681,14 +7733,39 @@ def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candid
         try:
             provider = _get_active_data_provider()
             raw_requests = provider.list_resource("pending_requests", limit=5000)
+            candidates = (candidate_tracking or {}).get("candidates") or []
+            by_session_name = {}
+            for c in candidates:
+                cname = str(c.get("candidate_name") or c.get("display_name") or "").strip()
+                if cname:
+                    sid = str(c.get("session_id") or "").strip()
+                    if sid:
+                        by_session_name[sid] = cname
+                    ssid = str(c.get("source_session_id") or "").strip()
+                    if ssid:
+                        by_session_name[ssid] = cname
+                    for att in c.get("attempts") or []:
+                        asid = str(att.get("session_id") or "").strip()
+                        if asid:
+                            by_session_name[asid] = cname
+                        assid = str(att.get("source_session_id") or "").strip()
+                        if assid:
+                            by_session_name[assid] = cname
+
             requests = []
             for row in raw_requests or []:
                 if not isinstance(row, dict):
                     continue
-                payload = dict(row.get("source_payload") or {})
-                for k, v in row.items():
-                    if k != "source_payload" and k not in payload:
-                        payload[k] = v
+                payload = merge_source_with_canonical(row.get("source_payload"), row)
+                # If candidate_name is empty, attempt resolution from candidate tracking
+                if not payload.get("candidate_name") and not payload.get("candidate"):
+                    resolved_cname = (
+                        by_session_name.get(str(payload.get("session_id") or "").strip())
+                        or by_session_name.get(str(payload.get("source_session_id") or "").strip())
+                    )
+                    if resolved_cname:
+                        payload["candidate_name"] = resolved_cname
+
                 cat = str(payload.get("category") or "").strip().lower()
                 rtype = str(payload.get("request_type") or "").strip().lower()
                 source_tab = str(payload.get("source_tab") or "")

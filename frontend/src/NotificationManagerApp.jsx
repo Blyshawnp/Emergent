@@ -1255,16 +1255,16 @@ function SettingsModal({
                 </div>
               )}
 
-              <div className="nm-table-wrap">
-                <table className="nm-table">
+              <div className="nm-table-wrap nm-users-table-wrap">
+                <table className="nm-table nm-users-table">
                   <thead>
                     <tr>
-                      <th>Administrator</th>
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Active Status</th>
-                      <th>Enrollment Status</th>
-                      {callerIsOwner && <th>Actions</th>}
+                      <th style={{ width: '22%' }}>User</th>
+                      <th style={{ width: '26%' }}>Email</th>
+                      <th style={{ width: '12%' }}>Role</th>
+                      <th style={{ width: '10%' }}>Access</th>
+                      <th style={{ width: '14%' }}>Enrollment</th>
+                      {callerIsOwner && <th style={{ width: '16%' }}>Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1276,15 +1276,19 @@ function SettingsModal({
                       return (
                         <tr key={u.id}>
                           <td>
-                            <strong>{u.display_name}</strong>
-                            {u.is_owner && <span style={{ marginLeft: 8, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: 'rgba(234, 179, 8, 0.15)', color: '#facc15', border: '1px solid rgba(234, 179, 8, 0.3)' }}>Owner</span>}
+                            <div className="nm-user-name-cell" title={u.display_name}>
+                              <strong>{u.display_name}</strong>
+                              {u.is_owner && <span className="nm-owner-tag">Owner</span>}
+                            </div>
                           </td>
                           <td>
-                            {hasEmail ? (
-                              <span style={{ fontSize: 13, color: '#e2e8f0' }}>{u.email}</span>
-                            ) : (
-                              <span style={{ fontStyle: 'italic', color: 'var(--nm-muted)', fontSize: 12 }}>Awaiting Owner email</span>
-                            )}
+                            <div className="nm-user-email-cell" title={hasEmail ? u.email : 'Awaiting Owner email'}>
+                              {hasEmail ? (
+                                <span>{u.email}</span>
+                              ) : (
+                                <span style={{ fontStyle: 'italic', color: 'var(--nm-muted)', fontSize: 12 }}>Awaiting Owner email</span>
+                              )}
+                            </div>
                           </td>
                           <td style={{ textTransform: 'capitalize' }}>{u.role || 'administrator'}</td>
                           <td>
@@ -1307,7 +1311,7 @@ function SettingsModal({
                           </td>
                           {callerIsOwner && (
                             <td>
-                              <div style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+                              <div className="nm-user-actions-cell">
                                 <button
                                   type="button"
                                   className="nm-btn nm-btn-table nm-btn-secondary"
@@ -2864,12 +2868,20 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
           <section className="nm-modal-card" role="dialog" aria-modal="true" aria-label="Deny request">
             <h3>Deny Request</h3>
             <p className="nm-muted">Enter a readable reason. Denials cannot be submitted without a reason.</p>
+            <label htmlFor="pending-request-denial-reason-input" className="nm-field-label" style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#94a3b8', marginBottom: 6 }}>
+              Reason for denial
+            </label>
             <textarea
+              id="pending-request-denial-reason-input"
               value={denialReason}
-              onChange={(event) => setDenialReason(event.target.value)}
+              onChange={(event) => {
+                setDenialReason(event.target.value);
+                if (denialError && event.target.value.trim()) setDenialError('');
+              }}
               rows={4}
-              placeholder="Reason for denial"
+              placeholder="Enter the reason for denying this request..."
               data-testid="pending-request-denial-reason"
+              className="nm-denial-textarea"
             />
             {denialError ? <div className="nm-form-error">{denialError}</div> : null}
             <div className="nm-modal-actions">
@@ -5949,7 +5961,7 @@ export default function NotificationManagerApp() {
   const syncTone = isOnline ? 'ok' : (isConnecting ? 'pending' : 'warn');
   const syncLabel = isOnline ? 'Live' : (isConnecting ? 'Connecting' : 'Offline');
   const syncSub = isOnline
-    ? 'Connected to sheet'
+    ? 'Connected to shared data'
     : (isConnecting ? 'Reaching data source' : 'Working from local draft');
   const lastSyncLabel = formatRelativeSyncTime(lastSyncAt);
   const operatorName = samSetupStatus.userName || samSetupStatus.userRole || '';
@@ -6064,14 +6076,14 @@ export default function NotificationManagerApp() {
               className="nm-ops-icon-btn"
               onClick={loadSheetItems}
               disabled={sheetState.isLoading || sheetState.isSaving}
-              title="Refresh from sheet"
-              aria-label="Refresh from sheet"
+              title="Refresh data"
+              aria-label="Refresh data"
             >
               <RefreshCw size={18} aria-hidden="true" />
             </button>
             <button
               type="button"
-              className="nm-ops-icon-btn nm-ops-settings-btn"
+              className="nm-ops-icon-btn"
               onClick={() => {
                 setSettingsInitialTab('general');
                 setSettingsOpen(true);
@@ -6080,7 +6092,6 @@ export default function NotificationManagerApp() {
               aria-label="Settings"
             >
               <SettingsIcon size={18} aria-hidden="true" />
-              <span>Settings</span>
             </button>
             <button
               type="button"
