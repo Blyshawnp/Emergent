@@ -43,7 +43,16 @@ from data_providers.runtime_shadow import (
     ShadowComparisonRuntime,
     build_runtime_shadow_providers,
 )
-from data_providers.dual_write import get_dual_write_manager, is_dual_write_enabled
+from data_providers.dual_write import (
+    get_dual_write_manager,
+    is_dual_write_enabled,
+    ADAPTER_REGISTRY,
+    TABLE_ALLOWED_COLUMNS,
+    CandidatesAdapter,
+    CandidateSessionsAdapter,
+    SessionAttemptsAdapter,
+    HeadsetReviewsAdapter,
+)
 from data_providers.factory import configured_provider_mode, build_data_provider
 from data_providers.supabase import SupabaseDataProvider
 from services.apps_script_api import apps_script_api_role
@@ -9673,99 +9682,277 @@ def _sync_newbie_shift_request_only(session):
         return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
 
 
+def _build_candidate_lifecycle_payloads(session, candidate_action="updated"):
+    """Extract and build canonical candidate lifecycle payloads.
+    Shared by both primary Supabase write path and dual-write mirror path.
+    Preserves:
+      - candidate canonical ID construction (source_candidate_id)
+      - session canonical ID construction (session_id)
+      - session_attempt IDs (source_action_id)
+      - attempt numbering, timestamps, final-attempt semantics, call-result mapping
+    """
+    candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
+    if not candidate_name:
+        return {"ok": False, "reason": "missing_candidate_name"}
+    first, last_initial = _split_candidate_name(candidate_name)
+    session_id = _candidate_session_identity(session) or str(session.get("session_id") or "").strip()
+    if not session_id:
+        return {"ok": False, "reason": "missing_session_id"}
+
+    is_new = candidate_action == "appended"
+    source_cand_id = str(session.get("candidate_id") or f"cand-{candidate_name.lower().replace(' ', '-')}").strip()
+
+    candidate_payload = {
+        "source_system": "google_sheets",
+        "source_candidate_id": source_cand_id,
+        "display_name": candidate_name,
+        "first_name": first,
+        "last_initial": last_initial,
+        "is_new": is_new,
+    }
+
+    status = compute_final_status(session)
+    shared_status = _shared_status(status)
+
+    session_payload = {
+        "session_id": session_id,
+        "candidate_name": candidate_name,
+        "candidate_first_name": first,
+        "candidate_last_initial": last_initial,
+        "tester_name": session.get("tester_name") or "",
+        "session_type": "sup_transfer_only" if session.get("supervisor_only") else "mock_session",
+        "status": shared_status,
+        "final_result": session.get("final_result") or shared_status,
+        "attempt_number": session.get("attempt_number") or 1,
+        "created_at": str(session.get("timestamp_iso") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
+        "completed_at": str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()),
+        "is_new": is_new,
+        **session,
+    }
+
+    # Collect all completed call attempts
+    call_results = [
+        (1, (session.get("call_1") or {}).get("result") or session.get("call_1_result")),
+        (2, (session.get("call_2") or {}).get("result") or session.get("call_2_result")),
+        (3, (session.get("call_3") or {}).get("result") or session.get("call_3_result")),
+    ]
+    valid_calls = [(num, res) for num, res in call_results if res not in (None, "")]
+    if not valid_calls:
+        attempt_number = session.get("attempt_number") or session.get("current_attempt_number") or 1
+        valid_calls = [(attempt_number, session.get("final_result") or shared_status or "Pass")]
+
+    attempt_payloads = []
+    for num, res in valid_calls:
+        attempt_payloads.append({
+            "source_action_id": f"google_sheets:attempt:{session_id}:{num}",
+            "session_id": session_id,
+            "attempt_number": num,
+            "attempt_type": "mock_call",
+            "result": res,
+            "occurred_at": str(session.get("completed_at") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
+            "details": session,
+        })
+
+    return {
+        "ok": True,
+        "candidate_payload": candidate_payload,
+        "session_payload": session_payload,
+        "attempt_payloads": attempt_payloads,
+        "identifiers": {
+            "candidate_name": candidate_name,
+            "first_name": first,
+            "last_initial": last_initial,
+            "session_id": session_id,
+            "source_candidate_id": source_cand_id,
+            "valid_calls": valid_calls,
+        },
+    }
+
+
 def _trigger_candidate_lifecycle_dual_write(session, candidate_action):
     try:
         if not is_dual_write_enabled():
             return
         dm = get_dual_write_manager()
-        candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
-        if not candidate_name:
-            return
-        first, last_initial = _split_candidate_name(candidate_name)
-        session_id = _candidate_session_identity(session) or str(session.get("session_id") or "").strip()
-        if not session_id:
+        built = _build_candidate_lifecycle_payloads(session, candidate_action)
+        if not built.get("ok"):
             return
 
-        is_new = candidate_action == "appended"
-        source_cand_id = str(session.get("candidate_id") or f"cand-{candidate_name.lower().replace(' ', '-')}").strip()
-
-        candidate_payload = {
-            "source_candidate_id": source_cand_id,
-            "display_name": candidate_name,
-            "first_name": first,
-            "last_initial": last_initial,
-            "is_new": is_new,
-        }
-
-        status = compute_final_status(session)
-        shared_status = _shared_status(status)
-
-        session_payload = {
-            "session_id": session_id,
-            "candidate_name": candidate_name,
-            "candidate_first_name": first,
-            "candidate_last_initial": last_initial,
-            "tester_name": session.get("tester_name") or "",
-            "session_type": "sup_transfer_only" if session.get("supervisor_only") else "mock_session",
-            "status": shared_status,
-            "final_result": session.get("final_result") or shared_status,
-            "attempt_number": session.get("attempt_number") or 1,
-            "created_at": str(session.get("timestamp_iso") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
-            "completed_at": str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()),
-            "is_new": is_new,
-            **session,
-        }
-
-        # Collect all completed call attempts
-        call_results = [
-            (1, (session.get("call_1") or {}).get("result") or session.get("call_1_result")),
-            (2, (session.get("call_2") or {}).get("result") or session.get("call_2_result")),
-            (3, (session.get("call_3") or {}).get("result") or session.get("call_3_result")),
-        ]
-        valid_calls = [(num, res) for num, res in call_results if res not in (None, "")]
-        if not valid_calls:
-            attempt_number = session.get("attempt_number") or session.get("current_attempt_number") or 1
-            valid_calls = [(attempt_number, session.get("final_result") or shared_status or "Pass")]
-
-        first_num, first_res = valid_calls[0]
-        attempt_payload = {
-            "source_action_id": f"google_sheets:attempt:{session_id}:{first_num}",
-            "session_id": session_id,
-            "attempt_number": first_num,
-            "result": first_res,
-            "occurred_at": str(session.get("completed_at") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
-            "details": session,
-        }
+        candidate_payload = built["candidate_payload"]
+        session_payload = built["session_payload"]
+        attempt_payloads = built["attempt_payloads"]
+        first_attempt = attempt_payloads[0] if attempt_payloads else None
 
         wf_res = dm.execute_candidate_lifecycle_workflow(
             candidate_payload=candidate_payload,
             candidate_authoritative_write_fn=lambda: {"ok": True},
             session_payload=session_payload,
             session_authoritative_write_fn=lambda: {"ok": True},
-            attempt_payload=attempt_payload,
-            attempt_authoritative_write_fn=lambda: {"ok": True},
+            attempt_payload=first_attempt,
+            attempt_authoritative_write_fn=lambda: {"ok": True} if first_attempt else None,
             actor=session.get("tester_name") or "MTS",
         )
 
         sess_row_id = getattr(wf_res.get("session_mirror_result"), "persisted_row_id", None)
-        for num, res in valid_calls[1:]:
+        for att in attempt_payloads[1:]:
+            att_payload = dict(att)
+            if sess_row_id:
+                att_payload["session_uuid"] = sess_row_id
+                att_payload["session_id"] = sess_row_id
             dm.execute_dual_write(
                 domain="session_attempts",
                 mutation_type="create",
-                authoritative_payload={
-                    "source_action_id": f"google_sheets:attempt:{session_id}:{num}",
-                    "session_id": sess_row_id or session_id,
-                    "session_uuid": sess_row_id,
-                    "attempt_number": num,
-                    "result": res,
-                    "occurred_at": str(session.get("completed_at") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
-                    "details": session,
-                },
+                authoritative_payload=att_payload,
                 authoritative_write_fn=lambda: {"ok": True},
                 actor=session.get("tester_name") or "MTS",
             )
     except Exception as exc:
         logger.warning("[DUAL-WRITE] Candidate lifecycle dual-write hook error: %s", exc)
+
+
+def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"):
+    """Persist completed candidate session lifecycle directly to Supabase as primary authority.
+    Order: candidates -> candidate_sessions -> session_attempts.
+    Idempotent across retries and partial failures.
+    Returns structured diagnostics on failure without leaking secrets.
+    """
+    built = _build_candidate_lifecycle_payloads(session, candidate_action)
+    if not built.get("ok"):
+        return {
+            "ok": False,
+            "stage": "payload_building",
+            "resource": "session",
+            "safe_identifier": str(session.get("session_id") or ""),
+            "error": f"Invalid session payload: {built.get('reason')}",
+        }
+
+    identifiers = built["identifiers"]
+    candidate_payload = built["candidate_payload"]
+    session_payload = built["session_payload"]
+    attempt_payloads = built["attempt_payloads"]
+
+    try:
+        provider = _get_active_data_provider()
+        if not provider or not hasattr(provider, "upsert_rows"):
+            return {
+                "ok": False,
+                "stage": "provider_initialization",
+                "resource": "provider",
+                "safe_identifier": identifiers["session_id"],
+                "error": "Supabase active provider is unavailable",
+            }
+    except Exception as exc:
+        logger.error("[MTS-PERSIST] Failed to obtain active data provider: %s", exc)
+        return {
+            "ok": False,
+            "stage": "provider_initialization",
+            "resource": "provider",
+            "safe_identifier": identifiers["session_id"],
+            "error": f"Provider initialization error: {type(exc).__name__}",
+        }
+
+    cand_adapter = ADAPTER_REGISTRY.get("candidates") or CandidatesAdapter()
+    sess_adapter = ADAPTER_REGISTRY.get("candidate_sessions") or CandidateSessionsAdapter()
+    att_adapter = ADAPTER_REGISTRY.get("session_attempts") or SessionAttemptsAdapter()
+
+    # Stage 1: candidates
+    cand_row_id = None
+    try:
+        cand_transformed = cand_adapter.transform_payload(candidate_payload)
+        cand_allowed = TABLE_ALLOWED_COLUMNS.get("candidates")
+        if cand_allowed:
+            cand_transformed = {k: v for k, v in cand_transformed.items() if k in cand_allowed}
+        cand_written = provider.upsert_rows(
+            "candidates",
+            [cand_transformed],
+            on_conflict=cand_adapter.conflict_key,
+            resolution="merge-duplicates",
+        )
+        if cand_written and isinstance(cand_written, list) and cand_written[0]:
+            cand_row_id = cand_written[0].get("id")
+    except Exception as exc:
+        logger.error("[MTS-PERSIST] Candidate write failed for candidate_id=%s: %s", identifiers["source_candidate_id"], exc)
+        return {
+            "ok": False,
+            "stage": "candidates",
+            "resource": "candidates",
+            "safe_identifier": identifiers["source_candidate_id"],
+            "error": f"Candidate write failed: {type(exc).__name__}",
+        }
+
+    # Stage 2: candidate_sessions
+    sess_row_id = None
+    try:
+        sess_payload_dict = dict(session_payload)
+        if cand_row_id and not sess_payload_dict.get("candidate_id"):
+            sess_payload_dict["candidate_id"] = cand_row_id
+        sess_transformed = sess_adapter.transform_payload(sess_payload_dict)
+        sess_allowed = TABLE_ALLOWED_COLUMNS.get("candidate_sessions")
+        if sess_allowed:
+            sess_transformed = {k: v for k, v in sess_transformed.items() if k in sess_allowed}
+        sess_written = provider.upsert_rows(
+            "candidate_sessions",
+            [sess_transformed],
+            on_conflict=sess_adapter.conflict_key,
+            resolution="merge-duplicates",
+        )
+        if sess_written and isinstance(sess_written, list) and sess_written[0]:
+            sess_row_id = sess_written[0].get("id")
+    except Exception as exc:
+        logger.error("[MTS-PERSIST] Session write failed for session_id=%s: %s", identifiers["session_id"], exc)
+        return {
+            "ok": False,
+            "stage": "candidate_sessions",
+            "resource": "candidate_sessions",
+            "safe_identifier": identifiers["session_id"],
+            "error": f"Session write failed: {type(exc).__name__}",
+        }
+
+    # Stage 3: session_attempts
+    written_attempts_count = 0
+    try:
+        transformed_attempts = []
+        for att in attempt_payloads:
+            att_dict = dict(att)
+            if sess_row_id:
+                att_dict["session_uuid"] = sess_row_id
+            t_att = att_adapter.transform_payload(att_dict)
+            att_allowed = TABLE_ALLOWED_COLUMNS.get("session_attempts")
+            if att_allowed:
+                t_att = {k: v for k, v in t_att.items() if k in att_allowed}
+            transformed_attempts.append(t_att)
+
+        if transformed_attempts:
+            att_written = provider.upsert_rows(
+                "session_attempts",
+                transformed_attempts,
+                on_conflict=att_adapter.conflict_key,
+                resolution="merge-duplicates",
+            )
+            written_attempts_count = len(att_written) if isinstance(att_written, list) else len(transformed_attempts)
+    except Exception as exc:
+        logger.error("[MTS-PERSIST] Session attempts write failed for session_id=%s: %s", identifiers["session_id"], exc)
+        return {
+            "ok": False,
+            "stage": "session_attempts",
+            "resource": "session_attempts",
+            "safe_identifier": identifiers["session_id"],
+            "error": f"Session attempts write failed: {type(exc).__name__}",
+        }
+
+    logger.info(
+        "[MTS-PERSIST] Primary Supabase lifecycle write succeeded: session_id=%s candidate_id=%s attempts=%d",
+        identifiers["session_id"],
+        identifiers["source_candidate_id"],
+        written_attempts_count,
+    )
+    return {
+        "ok": True,
+        "candidate_id": cand_row_id,
+        "session_uuid": sess_row_id,
+        "session_id": identifiers["session_id"],
+        "attempts_count": written_attempts_count,
+    }
 
 
 def _sync_shared_candidate_tracking(session):
@@ -9967,24 +10154,29 @@ def _shared_row_date(row):
 
 
 def _shared_candidate_suggestion_visible(row, now=None):
-    now = now or datetime.now(timezone.utc)
-    row_dt = _shared_row_date(row)
-    if not row_dt:
-        return True
-    if row_dt.tzinfo is None:
-        row_dt = row_dt.replace(tzinfo=timezone.utc)
-    age_days = max(0, (now - row_dt).days)
+    """Determine whether a candidate row is visible for autocomplete suggestions.
+    Non-terminal candidates (active failures seeking retest) are discoverable
+    regardless of age.
+    Terminal candidates (Pass, Fail-Final Attempt, Withdrawn) preserve the
+    established 10-day deduplication window.
+    """
+    if _shared_truthy((row or {}).get("archived")):
+        return False
     status = _shared_status_upper(row)
     extra_attempt = _candidate_row_extra_attempt(row)
-    if _candidate_row_withdrawn(row):
+    # Terminal outcomes maintain established 10-day deduplication window
+    if _candidate_row_withdrawn(row) or (status in {"PASS", "RESUMED-PASS"}) or (status == "FAIL-FINAL ATTEMPT" and not extra_attempt):
+        now = now or datetime.now(timezone.utc)
+        row_dt = _shared_row_date(row)
+        if not row_dt:
+            return True
+        if row_dt.tzinfo is None:
+            row_dt = row_dt.replace(tzinfo=timezone.utc)
+        age_days = max(0, (now - row_dt).days)
         return age_days <= 10
-    if status in {"PASS", "RESUMED-PASS"}:
-        return age_days <= 10
-    if status == "FAIL-FINAL ATTEMPT" and not extra_attempt:
-        return age_days <= 10
-    if extra_attempt:
-        return age_days <= 30
-    return age_days <= 30
+    # Non-terminal candidates (active failures seeking retry, extra attempt granted, etc.): discoverable regardless of age
+    return True
+
 
 
 def _latest_shared_candidate_rows(rows):
@@ -10089,10 +10281,8 @@ def _lookup_shared_candidate_sessions(candidate_name):
             sessions_raw = provider.list_resource("candidate_sessions", limit=5000)
             rows = []
             for raw_row in sessions_raw or []:
-                payload = dict(raw_row.get("source_payload") or {})
-                for k, v in raw_row.items():
-                    if k != "source_payload" and k not in payload:
-                        payload[k] = v
+                payload = merge_source_with_canonical(raw_row.get("source_payload"), raw_row)
+                payload = _apply_authoritative_candidate_status(payload)
                 row = _normalize_shared_row(payload)
                 row.update({
                     "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip(),
@@ -14195,8 +14385,57 @@ async def _sync_finished_session_headset_review(session):
         "candidate_name": session.get("candidate_name"),
         "tester_name": session.get("tester_name"),
         "headset_model": session.get("headset_brand"),
-        "note": session.get("headset_review_note") or "",
     })
+
+
+async def _sync_finished_session_headset_review_supabase(session):
+    source_session_id = _candidate_session_identity(session)
+    if not source_session_id:
+        return {
+            "ok": False,
+            "reason": "parent_session_unavailable",
+            "error": "Headset review parent session could not be verified.",
+        }
+    brand, model = _split_headset_brand_model(
+        str(session.get("headset_brand") or "").strip(),
+        session.get("brand"),
+        session.get("model"),
+    )
+    normalized_identity = _headset_identity_key(brand, model)
+    if normalized_identity in _approved_headset_identity_keys():
+        return {"ok": True, "skipped": True, "reason": "approved_headset", "status": "approved"}
+    if normalized_identity in _denied_headset_identity_keys():
+        return {"ok": True, "skipped": True, "reason": "resolved_headset", "status": "denied"}
+
+    review_id = str(session.get("headset_review_id") or "").strip() or str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"mts-headset-review:{source_session_id}",
+    ))
+    payload = {
+        "review_id": review_id,
+        "source_session_id": source_session_id,
+        "candidate_name": session.get("candidate_name"),
+        "tester_name": session.get("tester_name"),
+        "brand": brand,
+        "model": model,
+        "headset_brand": brand,
+        "headset_model": model,
+        "note": session.get("headset_review_note") or "",
+        "status": "pending",
+    }
+    try:
+        provider = _get_active_data_provider()
+        adapter = ADAPTER_REGISTRY.get("headset_reviews") or HeadsetReviewsAdapter()
+        transformed = adapter.transform_payload(payload)
+        allowed = TABLE_ALLOWED_COLUMNS.get("headset_reviews")
+        if allowed:
+            transformed = {k: v for k, v in transformed.items() if k in allowed}
+        written = provider.upsert_rows("headset_reviews", [transformed], on_conflict=adapter.conflict_key, resolution="merge-duplicates")
+        return {"ok": True, "logged": True, "review_id": review_id, "source_session_id": source_session_id, "status": "pending"}
+    except Exception as exc:
+        logger.error("[MTS-PERSIST] Headset review Supabase write failed: %s", exc)
+        return {"ok": False, "reason": "write_failed", "error": str(exc)}
+
 
 
 def _headset_review_sync_updates(session, headset_review):
@@ -14364,11 +14603,17 @@ async def finish_session_simple(request: Request):
         "history_id": doc.get("history_id") or doc.get("resume_source_history_id") or str(uuid.uuid4()),
     }
     saved_record, action = await _upsert_history_record(record, doc)
-    shared_result = _sync_shared_candidate_tracking(saved_record)
+    if configured_provider_mode() == "supabase":
+        shared_result = _persist_candidate_lifecycle_to_supabase(saved_record, action)
+    else:
+        shared_result = _sync_shared_candidate_tracking(saved_record)
     headset_review = None
     if _shared_truthy(saved_record.get("headset_review_requested")):
         if shared_result.get("ok"):
-            headset_review = await _sync_finished_session_headset_review(saved_record)
+            if configured_provider_mode() == "supabase":
+                headset_review = await _sync_finished_session_headset_review_supabase(saved_record)
+            else:
+                headset_review = await _sync_finished_session_headset_review(saved_record)
         else:
             headset_review = {
                 "ok": False,
@@ -14382,7 +14627,10 @@ async def finish_session_simple(request: Request):
     await db.sessions.delete_one({"_id": "active_session"})
     warnings = []
     if not shared_result.get("ok"):
-        warnings.append("Session saved locally, but shared Google Sheet update failed.")
+        if configured_provider_mode() == "supabase":
+            warnings.append("Session saved locally, but shared candidate history could not be updated. Retry or sync from History.")
+        else:
+            warnings.append("Session saved locally, but shared Google Sheet update failed.")
     elif headset_review and not headset_review.get("ok"):
         warnings.append("Session saved, but the headset review could not be submitted. Retry it from History.")
     return {
@@ -14612,7 +14860,10 @@ async def update_history_session_form_status(history_id: str, request: Request):
             target_row["id"],
         ),
     )
-    sheets_result = _sync_shared_candidate_tracking(target)
+    if configured_provider_mode() == "supabase":
+        sheets_result = _persist_candidate_lifecycle_to_supabase(target, "updated")
+    else:
+        sheets_result = _sync_shared_candidate_tracking(target)
     return {
         "ok": True,
         "form_fill_status": requested_status,
@@ -17201,12 +17452,18 @@ async def finish_all(payload: dict, request: Request):
         record.pop("evaluatorNotesSummaryEdited", None)
 
     _saved_record, action = await _upsert_history_record(record, doc)
-    shared_result = _sync_shared_candidate_tracking(_saved_record)
+    if configured_provider_mode() == "supabase":
+        shared_result = _persist_candidate_lifecycle_to_supabase(_saved_record, action)
+    else:
+        shared_result = _sync_shared_candidate_tracking(_saved_record)
     await db.sessions.delete_one({"_id": "active_session"})
     db.backup("after-finish-session")
     message = "Resumed session updated successfully!" if action == "updated" else "Session saved successfully!"
     if not shared_result.get("ok"):
-        message = f"{message} Session saved locally, but shared Google Sheet update failed."
+        if configured_provider_mode() == "supabase":
+            message = f"{message} Session saved locally, but shared candidate history could not be updated. Retry or sync from History."
+        else:
+            message = f"{message} Session saved locally, but shared Google Sheet update failed."
     return {"ok": True, "message": message, "action": action, "sharedTracking": shared_result}
 
 

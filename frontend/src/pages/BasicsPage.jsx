@@ -540,7 +540,7 @@ export default function BasicsPage({ onNavigate }) {
         });
         scheduleRetry(error?.message || 'request failed');
       }
-    }, 650);
+    }, 250);
 
     return () => window.clearTimeout(timer);
   }, [candidateLookupRetryTick, confirmedCandidateMatch, form.candidate_name, suppressedCandidateLookupName]);
