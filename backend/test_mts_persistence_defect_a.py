@@ -339,6 +339,82 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             self.assertFalse(attempt_state.get("terminal"), "Should not be terminal after 1st attempt")
             self.assertTrue(attempt_state.get("retry_allowed"), "Should allow retry")
 
+    def test_native_and_legacy_supabase_rows_have_equivalent_lookup_behavior(self):
+        completed_at = datetime.now(timezone.utc).isoformat()
+        session_record = {
+            "session_id": "sess-native-lookup-001",
+            "candidate_name": "Jane Smith",
+            "tester_name": "Evaluator A",
+            "final_result": "Fail",
+            "final_attempt": False,
+            "attempt_number": 1,
+            "call_1": {"result": "Fail"},
+            "completed_at": completed_at,
+        }
+
+        native_provider, _native_tables = self._create_mock_store()
+        with patch("server._get_active_data_provider", return_value=native_provider):
+            persisted = server._persist_candidate_lifecycle_to_supabase(session_record, "appended")
+            native_lookup = server._lookup_shared_candidate_sessions("Jane Sm")
+
+        legacy_provider, legacy_tables = self._create_mock_store()
+        legacy_tables["candidate_sessions"]["sess-legacy-lookup-001"] = {
+            "id": "uuid-legacy-session-1",
+            "session_id": "sess-legacy-lookup-001",
+            "candidate_id": "uuid-legacy-candidate-1",
+            "candidate_name": "Jane Smith",
+            "candidate_first_name": "Jane",
+            "candidate_last_initial": "S",
+            "raw_status": "INCOMPLETE",
+            "final_result": "Fail",
+            "final_attempt": False,
+            "attempt_number": 1,
+            "session_type": "mock_session",
+            "created_at": completed_at,
+            "completed_at": completed_at,
+            "source_payload": {
+                "candidate_name": "Jane Smith",
+                "status": "INCOMPLETE",
+                "final_result": "Fail",
+                "final_attempt": "FALSE",
+                "session_id": "sess-legacy-lookup-001",
+            },
+        }
+        with patch("server._get_active_data_provider", return_value=legacy_provider):
+            legacy_lookup = server._lookup_shared_candidate_sessions("Jane Sm")
+
+        self.assertTrue(persisted.get("ok"))
+        for result in (native_lookup, legacy_lookup):
+            self.assertTrue(result.get("ok"))
+            self.assertEqual(len(result.get("matches", [])), 1)
+            self.assertEqual(result["matches"][0]["candidate_name"], "Jane Smith")
+            self.assertEqual(result["matches"][0]["matchConfidence"], 90)
+            self.assertTrue(result["matches"][0]["matchConfirmed"])
+            self.assertTrue(server._shared_candidate_suggestion_visible(result["matches"][0]))
+            self.assertFalse(result["attemptState"]["terminal"])
+
+        self.assertEqual(
+            native_lookup["matches"][0]["matchConfidence"],
+            legacy_lookup["matches"][0]["matchConfidence"],
+        )
+        self.assertEqual(native_lookup["attemptState"]["terminal"], legacy_lookup["attemptState"]["terminal"])
+
+    def test_fail_non_final_boolean_shapes_remain_non_terminal(self):
+        for final_attempt in (False, "false", "False", 0, None):
+            with self.subTest(final_attempt=final_attempt):
+                row = {
+                    "session_id": f"session-{final_attempt!r}",
+                    "candidate_name": "Jane Smith",
+                    "status": "Fail",
+                    "final_result": "Fail",
+                    "final_attempt": final_attempt,
+                    "attempt_number": 1,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                self.assertFalse(server._shared_truthy(final_attempt))
+                self.assertTrue(server._shared_candidate_suggestion_visible(row))
+                self.assertFalse(server.calculate_candidate_attempt_state([row])["terminal"])
+
     def test_canonical_column_precedence_in_lookup(self):
         """Step F: Canonical non-empty columns in candidate_sessions override stale source_payload values."""
         provider, tables = self._create_mock_store()

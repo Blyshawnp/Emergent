@@ -618,6 +618,73 @@ test('shared candidate lookup retries after a temporary failure and recovers wit
   }
 });
 
+test('shared candidate lookup ignores an older response that finishes after the latest query', async () => {
+  api.getCurrentSession.mockResolvedValue({ session: null });
+  api.getSettings.mockResolvedValue({});
+  api.getDefaults.mockResolvedValue({});
+  api.getApprovedHeadsets.mockResolvedValue({ groups: [], denied: [] });
+
+  let resolveOlderLookup;
+  let resolveLatestLookup;
+  api.lookupSharedCandidate
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveOlderLookup = resolve; }))
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveLatestLookup = resolve; }));
+
+  const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+  const view = await renderComponent(<BasicsPage onNavigate={jest.fn()} />);
+  jest.useFakeTimers();
+  try {
+    await act(async () => {
+      setInputValue(view.container.querySelector('[data-testid="basics-candidate"]'), 'Canary L');
+      jest.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      setInputValue(view.container.querySelector('[data-testid="basics-candidate"]'), 'Canary Li');
+      jest.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+
+    expect(api.lookupSharedCandidate).toHaveBeenNthCalledWith(1, 'Canary L');
+    expect(api.lookupSharedCandidate).toHaveBeenNthCalledWith(2, 'Canary Li');
+
+    await act(async () => {
+      resolveLatestLookup({
+        ok: true,
+        matches: [{
+          candidate_name: 'Canary LiveTest',
+          session_id: 'session-native-1',
+          matchConfirmed: true,
+          matchConfidence: 90,
+          status: 'Pass',
+          completed_at: '2026-09-07T12:00:00Z',
+        }],
+        finalAttempt: false,
+        finalAttemptUsed: false,
+        withdrawn: false,
+        extraAttemptGranted: false,
+        passedCertification: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(view.container.querySelector('[data-testid="candidate-suggestions-dropdown"]')).not.toBeNull();
+    expect(view.container.textContent).toContain('Canary LiveTest');
+
+    await act(async () => {
+      resolveOlderLookup({ ok: true, matches: [] });
+      await Promise.resolve();
+    });
+
+    expect(view.container.querySelector('[data-testid="candidate-suggestions-dropdown"]')).not.toBeNull();
+    expect(view.container.textContent).toContain('Canary LiveTest');
+  } finally {
+    jest.useRealTimers();
+    infoSpy.mockRestore();
+    await view.unmount();
+  }
+});
+
 test('shared candidate typed-name choice suppresses repeated dropdown until the name changes', async () => {
   api.getCurrentSession.mockResolvedValue({ session: null });
   api.getSettings.mockResolvedValue({});

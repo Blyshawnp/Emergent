@@ -296,6 +296,7 @@ export default function BasicsPage({ onNavigate }) {
   const itemRefs = useRef([]);
   const candidateLookupRetryTimerRef = useRef(null);
   const candidateLookupAttemptRef = useRef(0);
+  const candidateLookupRequestSequenceRef = useRef(0);
   const candidateLookupFailureCountRef = useRef(0);
   const candidateLookupLastQueryRef = useRef('');
   const [form, setForm] = useState({
@@ -438,6 +439,9 @@ export default function BasicsPage({ onNavigate }) {
       return undefined;
     }
 
+    const requestSequence = candidateLookupRequestSequenceRef.current + 1;
+    candidateLookupRequestSequenceRef.current = requestSequence;
+
     if (confirmedCandidateMatch && normalizeName(confirmedCandidateMatch.candidate_name).toLowerCase() !== normalizeName(candidateName).toLowerCase()) {
       setConfirmedCandidateMatch(null);
     }
@@ -489,6 +493,7 @@ export default function BasicsPage({ onNavigate }) {
       });
       try {
         const response = await api.lookupSharedCandidate(candidateName);
+        if (candidateLookupRequestSequenceRef.current !== requestSequence) return;
         if (response?.ok === false) {
           candidateLookupFailureCountRef.current += 1;
           setCandidateLookup({
@@ -526,6 +531,7 @@ export default function BasicsPage({ onNavigate }) {
           passedCertification: Boolean(response?.passedCertification),
         });
       } catch (error) {
+        if (candidateLookupRequestSequenceRef.current !== requestSequence) return;
         candidateLookupFailureCountRef.current += 1;
         setCandidateLookup({
           loading: false,
