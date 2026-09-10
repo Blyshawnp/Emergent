@@ -120,6 +120,16 @@ async function ensureBackendHealth() {
   await getHealth();
 }
 
+let _mtsAuthToken = '';
+
+export function setMtsAuthToken(token) {
+  _mtsAuthToken = String(token || '').trim();
+}
+
+export function getMtsAuthToken() {
+  return _mtsAuthToken;
+}
+
 async function request(method, path, body = null, timeout = 15000) {
   const opts = {
     method,
@@ -130,6 +140,9 @@ async function request(method, path, body = null, timeout = 15000) {
   const adminToken = getAdminToken();
   if (adminToken) {
     opts.headers['X-MTS-Admin-Token'] = adminToken;
+  }
+  if (_mtsAuthToken) {
+    opts.headers['Authorization'] = `Bearer ${_mtsAuthToken}`;
   }
   if (body !== null) {
     opts.data = body;
@@ -188,6 +201,8 @@ const api = {
   getSamSetupStatus: () => request('GET', '/sam/setup/status', null, 60000),
   completeSamSetup: (data) => savedRequest('POST', '/sam/setup/complete', data),
   resetSamSetup: () => savedRequest('POST', '/sam/setup/reset'),
+  getMtsAuthConfig: () => request('GET', '/mts/auth/config', null, 10000),
+  verifyMtsAuth: () => request('POST', '/mts/auth/verify', {}, 15000),
   getSamAuthConfig: () => request('GET', '/sam/auth/config', null, 10000),
   verifySamAuth: (authUid) => request('POST', '/sam/auth/verify', { auth_uid: authUid }, 15000),
   completeSamAuthSetup: (data) => savedRequest('POST', '/sam/auth/complete', data),

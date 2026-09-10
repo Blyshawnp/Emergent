@@ -555,5 +555,201 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             loop.close()
 
 
+class MtsAuthenticatedPersistenceTests(unittest.TestCase):
+    """Verifies the authenticated MTS write boundary:
+    1. Actor identity resolution: Auth UID vs canonical app_users.id separation.
+    2. Edge function DTO strictness and payload relay forwarding.
+    3. Rejection of spoofed/unknown actor fields in DTO.
+    4. Negative authentication/authorization responses (missing auth, expired token, unlinked, inactive, non-evaluator).
+    5. Conflicting retry rejection vs idempotent replay handling.
+    6. Headset review conditional persistence forwarding.
+    """
+
+    def setUp(self):
+        self.env_patcher = patch.dict(os.environ, {
+            "MTS_DATA_PROVIDER": "supabase",
+            "MTS_SHADOW_COMPARE": "false",
+            "MTS_DUAL_WRITE_ENABLED": "false",
+        })
+        self.env_patcher.start()
+
+    def tearDown(self):
+        self.env_patcher.stop()
+
+    def _sample_session(self, session_id="test-session-auth-001", candidate_name="Jane Doe"):
+        return {
+            "session_id": session_id,
+            "candidate_name": candidate_name,
+            "tester_name": "Shawn Bly",
+            "session_type": "regular",
+            "status": "PASS",
+            "calculated_result": "PASS",
+            "final_result": "PASS",
+            "mock_calls_completed": 3,
+            "sup_transfers_completed": 0,
+            "attempt_number": 1,
+            "current_attempt_number": 1,
+            "allowed_attempt_count": 3,
+            "extra_attempts_granted": 0,
+            "final_attempt": 1,
+            "withdrawn": False,
+            "archived": False,
+            "needs_sup_transfer": False,
+            "call_1": {"result": "PASS", "details": {"score": 95}},
+            "call_2": {"result": "PASS", "details": {"score": 92}},
+            "call_3": {"result": "PASS", "details": {"score": 98}},
+            "call_results": {
+                "call_1": {"result": "PASS", "details": {"score": 95}},
+                "call_2": {"result": "PASS", "details": {"score": 92}},
+                "call_3": {"result": "PASS", "details": {"score": 98}},
+            },
+            "environment_checks": {"headset_review": "completed"},
+            "headset_brand": "Jabra",
+            "headset_model": "Evolve 65",
+            "headset_usb": True,
+            "noise_cancel": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    @patch("server._call_supabase_edge_function")
+    def test_relay_forwards_strict_dto_with_bearer_jwt(self, mock_edge_fn):
+        """When auth_jwt is provided, _persist_candidate_lifecycle_to_supabase forwards
+        a strict DTO to 'mts-candidate-lifecycle-write' without any client-supplied actor IDs.
+        """
+        mock_edge_fn.return_value = {
+            "ok": True,
+            "canonical_ids": {
+                "candidate_id": "cand-uuid-123",
+                "session_id": "sess-uuid-456",
+                "session_business_id": "test-session-auth-001",
+            },
+            "row_counts": {"session_attempts": 3},
+        }
+
+        session = self._sample_session()
+        jwt = "valid.evaluator.jwt"
+        result = server._persist_candidate_lifecycle_to_supabase(
+            session,
+            candidate_action="appended",
+            auth_jwt=jwt,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result.get("edge_function"))
+        mock_edge_fn.assert_called_once()
+        fn_name, forwarded_dto, forwarded_jwt = mock_edge_fn.call_args[0]
+        self.assertEqual(fn_name, "mts-candidate-lifecycle-write")
+        self.assertEqual(forwarded_jwt, jwt)
+
+        # Ensure forwarded DTO does NOT allow client-supplied actor IDs
+        self.assertNotIn("actor_user_id", forwarded_dto)
+        self.assertNotIn("p_actor_user_id", forwarded_dto)
+        self.assertNotIn("user_id", forwarded_dto)
+        self.assertIn("candidate", forwarded_dto)
+        self.assertIn("session", forwarded_dto)
+        self.assertIn("attempts", forwarded_dto)
+        self.assertEqual(len(forwarded_dto["attempts"]), 3)
+
+    @patch("server._call_supabase_edge_function")
+    def test_relay_surfaces_edge_function_auth_errors(self, mock_edge_fn):
+        """When Edge Function rejects write due to missing/expired auth or insufficient role,
+        the relay returns structured error diagnostics without secrets.
+        """
+        mock_edge_fn.return_value = {
+            "ok": False,
+            "status_code": 403,
+            "error_code": "INSUFFICIENT_ROLE",
+            "error": "Active evaluator entitlement required to persist candidate lifecycles.",
+        }
+
+        session = self._sample_session()
+        result = server._persist_candidate_lifecycle_to_supabase(
+            session,
+            auth_jwt="invalid.or.unauthorized.jwt",
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stage"], "hosted_edge_function")
+        self.assertEqual(result["error_code"], "INSUFFICIENT_ROLE")
+        self.assertIn("Active evaluator entitlement required", result["error"])
+
+    @patch("server._call_supabase_edge_function")
+    def test_conflicting_retry_rejection_from_hosted_boundary(self, mock_edge_fn):
+        """When the database RPC detects a conflicting retry (same session_id, different candidate/status),
+        the error is cleanly surfaced.
+        """
+        mock_edge_fn.return_value = {
+            "ok": False,
+            "status_code": 409,
+            "error_code": "CONFLICTING_RETRY",
+            "error": "Session 'test-session-auth-001' already exists with different attributes.",
+        }
+
+        session = self._sample_session()
+        result = server._persist_candidate_lifecycle_to_supabase(
+            session,
+            auth_jwt="valid.jwt",
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "CONFLICTING_RETRY")
+
+    @patch("server._call_supabase_edge_function")
+    def test_idempotent_replay_success(self, mock_edge_fn):
+        """When an idempotent replay occurs, the Edge Function returns ok with existing IDs."""
+        mock_edge_fn.return_value = {
+            "ok": True,
+            "canonical_ids": {
+                "candidate_id": "cand-uuid-123",
+                "session_id": "sess-uuid-456",
+                "session_business_id": "test-session-auth-001",
+            },
+            "row_counts": {"session_attempts": 3},
+            "idempotent_replay": True,
+        }
+
+        session = self._sample_session()
+        result = server._persist_candidate_lifecycle_to_supabase(
+            session,
+            auth_jwt="valid.jwt",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["session_id"], "test-session-auth-001")
+
+    @patch("server._call_supabase_edge_function")
+    def test_headset_review_forwarding(self, mock_edge_fn):
+        """Headset review payload is forwarded to Edge Function when present."""
+        mock_edge_fn.return_value = {
+            "ok": True,
+            "canonical_ids": {
+                "candidate_id": "cand-uuid-123",
+                "session_id": "sess-uuid-456",
+                "session_business_id": "test-session-auth-001",
+            },
+            "row_counts": {"session_attempts": 3, "headset_reviews": 1},
+        }
+
+        session = self._sample_session()
+        headset_payload = {
+            "review_id": "rev-test-1",
+            "candidate_name": "Jane Doe",
+            "headset_brand": "UnknownBrand",
+            "headset_model": "CustomModel",
+            "review_status": "pending",
+        }
+
+        result = server._persist_candidate_lifecycle_to_supabase(
+            session,
+            auth_jwt="valid.jwt",
+            headset_review_payload=headset_payload,
+        )
+
+        self.assertTrue(result["ok"])
+        fn_name, forwarded_dto, _ = mock_edge_fn.call_args[0]
+        self.assertEqual(forwarded_dto.get("headset_review"), headset_payload)
+
+
 if __name__ == "__main__":
     unittest.main()

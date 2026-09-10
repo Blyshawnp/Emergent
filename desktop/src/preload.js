@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     save: (session) => ipcRenderer.invoke('authSession:save', session),
     clear: () => ipcRenderer.invoke('authSession:clear'),
   },
+  mtsAuthSession: {
+    get: () => ipcRenderer.invoke('mtsAuthSession:get'),
+    save: (session) => ipcRenderer.invoke('mtsAuthSession:save', session),
+    clear: () => ipcRenderer.invoke('mtsAuthSession:clear'),
+  },
   getPendingDeepLink: () => ipcRenderer.invoke('auth:getPendingDeepLink'),
   consumePendingDeepLink: () => ipcRenderer.invoke('auth:consumePendingDeepLink'),
   onAppEvent: (callback) => {

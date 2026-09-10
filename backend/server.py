@@ -9810,9 +9810,12 @@ def _trigger_candidate_lifecycle_dual_write(session, candidate_action):
         logger.warning("[DUAL-WRITE] Candidate lifecycle dual-write hook error: %s", exc)
 
 
-def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"):
+def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated", auth_jwt=None, headset_review_payload=None):
     """Persist completed candidate session lifecycle directly to Supabase as primary authority.
-    Order: candidates -> candidate_sessions -> session_attempts.
+    When auth_jwt is provided, forwards strict lifecycle DTO to the hosted Edge Function
+    `mts-candidate-lifecycle-write` for independent JWT verification, active evaluator check,
+    and service-role transactional persistence.
+    Falls back to direct provider upsert only if auth_jwt is omitted (e.g. internal tests/scripts).
     Idempotent across retries and partial failures.
     Returns structured diagnostics on failure without leaking secrets.
     """
@@ -9830,6 +9833,104 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
     candidate_payload = built["candidate_payload"]
     session_payload = built["session_payload"]
     attempt_payloads = built["attempt_payloads"]
+
+    # If auth_jwt is available, use the hosted trusted Edge Function boundary
+    if auth_jwt and auth_jwt.strip():
+        try:
+            dto = {
+                "candidate": {
+                    "source_system": candidate_payload.get("source_system", "google_sheets"),
+                    "source_candidate_id": candidate_payload.get("source_candidate_id"),
+                    "display_name": candidate_payload.get("display_name"),
+                    "first_name": candidate_payload.get("first_name"),
+                    "last_initial": candidate_payload.get("last_initial"),
+                    "is_new": candidate_payload.get("is_new", False),
+                },
+                "session": {
+                    "session_id": session_payload.get("session_id"),
+                    "candidate_name": session_payload.get("candidate_name"),
+                    "candidate_first_name": session_payload.get("candidate_first_name"),
+                    "candidate_last_initial": session_payload.get("candidate_last_initial"),
+                    "tester_name": session_payload.get("tester_name"),
+                    "session_type": session_payload.get("session_type"),
+                    "attempt_number": session_payload.get("attempt_number"),
+                    "current_attempt_number": session_payload.get("current_attempt_number"),
+                    "allowed_attempt_count": session_payload.get("allowed_attempt_count"),
+                    "extra_attempts_granted": session_payload.get("extra_attempts_granted"),
+                    "final_attempt": session_payload.get("final_attempt"),
+                    "raw_status": session_payload.get("raw_status"),
+                    "calculated_result": session_payload.get("calculated_result"),
+                    "final_result": session_payload.get("final_result"),
+                    "withdrawn": session_payload.get("withdrawn"),
+                    "archived": session_payload.get("archived"),
+                    "needs_sup_transfer": session_payload.get("needs_sup_transfer"),
+                    "pending_sup_transfer_id": session_payload.get("pending_sup_transfer_id"),
+                    "mock_calls_completed": session_payload.get("mock_calls_completed"),
+                    "sup_transfers_completed": session_payload.get("sup_transfers_completed"),
+                    "call_results": session_payload.get("call_results") or {},
+                    "supervisor_transfer_results": session_payload.get("supervisor_transfer_results") or {},
+                    "coaching_summary": session_payload.get("coaching_summary"),
+                    "fail_summary": session_payload.get("fail_summary"),
+                    "review_notes": session_payload.get("review_notes"),
+                    "evaluator_notes_summary": session_payload.get("evaluator_notes_summary"),
+                    "skills": session_payload.get("skills"),
+                    "final_notes": session_payload.get("final_notes") or {},
+                    "headset_brand": session_payload.get("headset_brand"),
+                    "headset_model": session_payload.get("headset_model"),
+                    "headset_usb": session_payload.get("headset_usb"),
+                    "noise_cancel": session_payload.get("noise_cancel"),
+                    "environment_checks": session_payload.get("environment_checks") or {},
+                    "form_fill_status": session_payload.get("form_fill_status"),
+                    "form_filled_at": session_payload.get("form_filled_at"),
+                    "newbie_shift_number": session_payload.get("newbie_shift_number"),
+                    "newbie_shift_data": session_payload.get("newbie_shift_data") or {},
+                    "created_at": session_payload.get("created_at"),
+                    "completed_at": session_payload.get("completed_at"),
+                },
+                "attempts": [
+                    {
+                        "source_action_id": att.get("source_action_id"),
+                        "attempt_number": att.get("attempt_number"),
+                        "attempt_type": att.get("attempt_type", "mock_call"),
+                        "result": att.get("result"),
+                        "occurred_at": att.get("occurred_at"),
+                        "details": att.get("details") or {},
+                    }
+                    for att in attempt_payloads
+                ],
+                "headset_review": headset_review_payload,
+            }
+            res = _call_supabase_edge_function("mts-candidate-lifecycle-write", dto, auth_jwt.strip())
+            if res.get("ok"):
+                c_ids = res.get("canonical_ids") or {}
+                r_counts = res.get("row_counts") or {}
+                return {
+                    "ok": True,
+                    "candidate_id": c_ids.get("candidate_id"),
+                    "session_uuid": c_ids.get("session_id"),
+                    "session_id": c_ids.get("session_business_id") or identifiers["session_id"],
+                    "attempts_count": r_counts.get("session_attempts", len(attempt_payloads)),
+                    "edge_function": True,
+                }
+            else:
+                logger.error("[MTS-PERSIST] Edge Function rejected write: %s", res.get("error"))
+                return {
+                    "ok": False,
+                    "stage": "hosted_edge_function",
+                    "resource": "mts-candidate-lifecycle-write",
+                    "safe_identifier": identifiers["session_id"],
+                    "error_code": res.get("error_code") or "HOSTED_WRITE_FAILED",
+                    "error": res.get("error") or "Hosted write rejected.",
+                }
+        except Exception as exc:
+            logger.error("[MTS-PERSIST] Edge function call failed: %s", exc)
+            return {
+                "ok": False,
+                "stage": "hosted_edge_function",
+                "resource": "mts-candidate-lifecycle-write",
+                "safe_identifier": identifiers["session_id"],
+                "error": f"Hosted Edge Function error: {type(exc).__name__}",
+            }
 
     try:
         provider = _get_active_data_provider()
@@ -14092,6 +14193,32 @@ def _call_supabase_edge_function(function_name: str, body: dict = None, auth_jwt
         return {"ok": False, "error": str(exc)}
 
 
+@api_router.get("/mts/auth/config")
+async def get_mts_auth_config():
+    config = _load_backend_runtime_config() or {}
+    return {
+        "ok": True,
+        "supabase_url": config.get("supabase_url", ""),
+        "supabase_anon_key": config.get("supabase_anon_key", ""),
+    }
+
+
+@api_router.post("/mts/auth/verify")
+async def post_mts_auth_verify(payload: dict, request: Request):
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    if not auth_jwt:
+        return {"ok": False, "errorCode": "missing_auth_identity", "error": "Authentication identity is required."}
+    # RPC takes no parameters — identity derived from auth.uid() via the JWT Bearer token.
+    result = await asyncio.to_thread(_supabase_anon_rpc, "verify_mts_authorization", {}, auth_jwt)
+    # Wrap minimal RPC response with app_user for the frontend sidebar.
+    if isinstance(result, dict) and result.get("ok"):
+        result["app_user"] = {"display_name": result.get("display_name", "")}
+    return result
+
+
 @api_router.get("/sam/auth/config")
 async def get_sam_auth_config():
     config = _load_backend_runtime_config() or {}
@@ -14603,8 +14730,14 @@ async def finish_session_simple(request: Request):
         "history_id": doc.get("history_id") or doc.get("resume_source_history_id") or str(uuid.uuid4()),
     }
     saved_record, action = await _upsert_history_record(record, doc)
+    auth_header = ""
+    if request and hasattr(request, "headers") and hasattr(request.headers, "get"):
+        raw_header = request.headers.get("Authorization", "")
+        if isinstance(raw_header, str):
+            auth_header = raw_header.strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
     if configured_provider_mode() == "supabase":
-        shared_result = _persist_candidate_lifecycle_to_supabase(saved_record, action)
+        shared_result = _persist_candidate_lifecycle_to_supabase(saved_record, action, auth_jwt=auth_jwt)
     else:
         shared_result = _sync_shared_candidate_tracking(saved_record)
     headset_review = None
@@ -14860,8 +14993,14 @@ async def update_history_session_form_status(history_id: str, request: Request):
             target_row["id"],
         ),
     )
+    auth_header = ""
+    if request and hasattr(request, "headers") and hasattr(request.headers, "get"):
+        raw_header = request.headers.get("Authorization", "")
+        if isinstance(raw_header, str):
+            auth_header = raw_header.strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
     if configured_provider_mode() == "supabase":
-        sheets_result = _persist_candidate_lifecycle_to_supabase(target, "updated")
+        sheets_result = _persist_candidate_lifecycle_to_supabase(target, "updated", auth_jwt=auth_jwt)
     else:
         sheets_result = _sync_shared_candidate_tracking(target)
     return {
@@ -17452,8 +17591,14 @@ async def finish_all(payload: dict, request: Request):
         record.pop("evaluatorNotesSummaryEdited", None)
 
     _saved_record, action = await _upsert_history_record(record, doc)
+    auth_header = ""
+    if request and hasattr(request, "headers") and hasattr(request.headers, "get"):
+        raw_header = request.headers.get("Authorization", "")
+        if isinstance(raw_header, str):
+            auth_header = raw_header.strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
     if configured_provider_mode() == "supabase":
-        shared_result = _persist_candidate_lifecycle_to_supabase(_saved_record, action)
+        shared_result = _persist_candidate_lifecycle_to_supabase(_saved_record, action, auth_jwt=auth_jwt)
     else:
         shared_result = _sync_shared_candidate_tracking(_saved_record)
     await db.sessions.delete_one({"_id": "active_session"})

@@ -36,27 +36,41 @@ export async function signInWithPassword(supabaseUrl, anonKey, email, password) 
   return data;
 }
 
+const _inFlightRefreshes = new Map();
+
 export async function refreshAuthSession(supabaseUrl, anonKey, refreshToken) {
   if (!refreshToken) return null;
-  const url = `${supabaseUrl.replace(/\/+$/, '')}/auth/v1/token?grant_type=refresh_token`;
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'apikey': anonKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return null;
-    }
-    return data;
-  } catch (_networkErr) {
-    return null;
+  const cacheKey = `${supabaseUrl}:${refreshToken}`;
+  if (_inFlightRefreshes.has(cacheKey)) {
+    return _inFlightRefreshes.get(cacheKey);
   }
+
+  const refreshPromise = (async () => {
+    const url = `${supabaseUrl.replace(/\/+$/, '')}/auth/v1/token?grant_type=refresh_token`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'apikey': anonKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return null;
+      }
+      return data;
+    } catch (_networkErr) {
+      return null;
+    } finally {
+      _inFlightRefreshes.delete(cacheKey);
+    }
+  })();
+
+  _inFlightRefreshes.set(cacheKey, refreshPromise);
+  return refreshPromise;
 }
 
 export async function resetPasswordForEmail(supabaseUrl, anonKey, email, options = {}) {

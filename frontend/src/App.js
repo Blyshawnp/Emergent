@@ -54,12 +54,16 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Shield,
   Table2,
 } from 'lucide-react';
 import mtsLogo from './assets/images/MTSLogonew.png';
 import updateGraphic from './assets/images/update.png';
 import TutorialPreviewOverlay from "./tutorial/TutorialPreviewOverlay";
 import PostSetupQuickStart from './components/PostSetupQuickStart';
+import MtsAuthModal from './components/MtsAuthModal';
+import { setMtsAuthToken } from './api';
+import { refreshAuthSession } from './utils/supabaseAuth';
 
 const LOGO_SRC = mtsLogo;
 const APP_VERSION_FALLBACK = '1.0.1';
@@ -585,6 +589,9 @@ function AppShell() {
   const [discordInitialPaletteOpen, setDiscordInitialPaletteOpen] = useState(false);
   const [discordInitialFilter, setDiscordInitialFilter] = useState('');
   const [discordInitialShortcutKey, setDiscordInitialShortcutKey] = useState('');
+  const [mtsAuthModalOpen, setMtsAuthModalOpen] = useState(false);
+  const [mtsAuthSession, setMtsAuthSession] = useState(null);
+  const [mtsEvaluatorProfile, setMtsEvaluatorProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('Starting app...');
   const [loadingProgress, setLoadingProgress] = useState(10);
@@ -617,6 +624,66 @@ function AppShell() {
     if (resolvedVersion) {
       setAppVersion(resolvedVersion);
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const restoreMtsAuth = async () => {
+      try {
+        if (!window.electronAPI?.mtsAuthSession?.get) return;
+        const savedSession = await window.electronAPI.mtsAuthSession.get();
+        if (cancelled || !savedSession || !savedSession.access_token) return;
+
+        let activeSession = savedSession;
+        const expiresAt = (savedSession.expires_at || 0) * 1000;
+        const now = Date.now();
+        const REFRESH_THRESHOLD_MS = 60 * 1000; // Refresh if within 60s of expiration
+
+        if (expiresAt && (expiresAt - now < REFRESH_THRESHOLD_MS) && savedSession.refresh_token) {
+          try {
+            const config = await api.getMtsAuthConfig();
+            if (config?.supabase_url && config?.supabase_anon_key) {
+              const refreshed = await refreshAuthSession(
+                config.supabase_url,
+                config.supabase_anon_key,
+                savedSession.refresh_token
+              );
+              if (refreshed?.access_token) {
+                activeSession = refreshed;
+                if (window.electronAPI?.mtsAuthSession?.save) {
+                  await window.electronAPI.mtsAuthSession.save(refreshed);
+                }
+              }
+            }
+          } catch (refreshErr) {
+            console.warn('[MTS AUTH] Automatic session refresh failed on restore:', refreshErr);
+          }
+        }
+
+        if (cancelled) return;
+        setMtsAuthToken(activeSession.access_token);
+        setMtsAuthSession(activeSession);
+
+        const authUser = activeSession.user || activeSession;
+        const authUid = authUser?.id;
+        if (authUid) {
+          const verifyRes = await api.verifyMtsAuth();
+          if (!cancelled && verifyRes?.ok) {
+            setMtsEvaluatorProfile(verifyRes.app_user || null);
+          } else if (!cancelled && !verifyRes?.ok) {
+            console.warn('[MTS AUTH] Stored session failed authorization verification:', verifyRes?.error);
+          }
+        }
+      } catch (err) {
+        console.warn('[MTS AUTH] Failed to restore session from safeStorage:', err);
+      }
+    };
+
+    restoreMtsAuth();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1352,6 +1419,22 @@ function AppShell() {
             </nav>
             <div className="sidebar-divider" />
             <div className="sidebar-actions">
+              <button
+                className={`action-btn action-evaluator ${mtsAuthSession?.access_token ? 'authenticated' : ''}`}
+                onClick={() => setMtsAuthModalOpen(true)}
+                data-testid="link-evaluator-auth"
+                title={sidebarCollapsed ? (mtsAuthSession?.access_token ? (mtsEvaluatorProfile?.display_name || 'Evaluator Signed In') : 'Evaluator Sign In') : (mtsAuthSession?.access_token ? `Evaluator: ${mtsEvaluatorProfile?.display_name || 'Active'}` : 'Evaluator Sign In')}
+                style={{
+                  background: mtsAuthSession?.access_token ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.15)',
+                  border: `1px solid ${mtsAuthSession?.access_token ? 'rgba(34, 197, 94, 0.4)' : 'rgba(59, 130, 246, 0.3)'}`,
+                  color: mtsAuthSession?.access_token ? '#4ade80' : '#93c5fd',
+                }}
+              >
+                <span className="action-icon"><Shield size={17} strokeWidth={2.2} /></span>
+                <span className="action-label">
+                  {mtsAuthSession?.access_token ? (mtsEvaluatorProfile?.display_name || 'Evaluator') : 'Evaluator Sign In'}
+                </span>
+              </button>
               <button className="action-btn action-discord" onClick={() => { setDiscordInitialTab('templates'); setDiscordInitialPaletteOpen(false); setDiscordOpen(true); }} data-testid="link-discord" data-tour="sidebar-discord" title={sidebarCollapsed ? 'Discord Post' : 'Open Discord message templates'}>
                 <span className="action-icon"><MessageSquareText size={17} strokeWidth={2.2} /></span><span className="action-label">Discord Post</span>
               </button>
@@ -1441,6 +1524,21 @@ function AppShell() {
             onClose={() => setMtsUpdateModal(null)}
           />
         )}
+        <MtsAuthModal
+          isOpen={mtsAuthModalOpen}
+          onClose={() => setMtsAuthModalOpen(false)}
+          authSession={mtsAuthSession}
+          onAuthSuccess={(session, verifyRes) => {
+            setMtsAuthSession(session);
+            if (verifyRes?.app_user) {
+              setMtsEvaluatorProfile(verifyRes.app_user);
+            }
+          }}
+          onSignOut={() => {
+            setMtsAuthSession(null);
+            setMtsEvaluatorProfile(null);
+          }}
+        />
       </div>
      </>  
   );

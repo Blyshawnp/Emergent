@@ -1710,6 +1710,10 @@ function getAuthSessionFilePath() {
   return path.join(app.getPath('userData'), 'sam_auth_session.enc');
 }
 
+function getMtsAuthSessionFilePath() {
+  return path.join(app.getPath('userData'), 'mts_auth_session.enc');
+}
+
 ipcMain.handle('authSession:get', async () => {
   try {
     const sessionPath = getAuthSessionFilePath();
@@ -1748,6 +1752,53 @@ ipcMain.handle('authSession:save', async (_event, session) => {
 ipcMain.handle('authSession:clear', async () => {
   try {
     const sessionPath = getAuthSessionFilePath();
+    if (fs.existsSync(sessionPath)) {
+      fs.unlinkSync(sessionPath);
+    }
+    return true;
+  } catch (_err) {
+    return false;
+  }
+});
+
+ipcMain.handle('mtsAuthSession:get', async () => {
+  try {
+    const sessionPath = getMtsAuthSessionFilePath();
+    if (!fs.existsSync(sessionPath)) {
+      return null;
+    }
+    const encrypted = fs.readFileSync(sessionPath);
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+      return null;
+    }
+    const decrypted = safeStorage.decryptString(encrypted);
+    return JSON.parse(decrypted);
+  } catch (_err) {
+    return null;
+  }
+});
+
+ipcMain.handle('mtsAuthSession:save', async (_event, session) => {
+  try {
+    if (!session || typeof session !== 'object') {
+      return false;
+    }
+    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+      return false;
+    }
+    const sessionPath = getMtsAuthSessionFilePath();
+    const plainText = JSON.stringify(session);
+    const encrypted = safeStorage.encryptString(plainText);
+    fs.writeFileSync(sessionPath, encrypted);
+    return true;
+  } catch (_err) {
+    return false;
+  }
+});
+
+ipcMain.handle('mtsAuthSession:clear', async () => {
+  try {
+    const sessionPath = getMtsAuthSessionFilePath();
     if (fs.existsSync(sessionPath)) {
       fs.unlinkSync(sessionPath);
     }
