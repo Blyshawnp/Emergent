@@ -67,6 +67,32 @@ interface RequestPayload {
     note?: string;
     status?: string;
   };
+  newbie_shift_request?: {
+    request_id?: string;
+    source_session_id?: string;
+    request_type?: string;
+    request_status?: string;
+    newbie_shift_number?: string;
+    scheduled_at?: string;
+    original_scheduled_at?: string;
+    rescheduled_at?: string;
+    timezone?: string;
+    within_24_hours?: boolean;
+    counts_as_attempt?: boolean;
+    final_attempt?: boolean;
+    current_attempt?: number;
+    resulting_attempt?: number;
+    becomes_final_attempt?: boolean;
+    attempt_rule?: string;
+    terminal_outcome?: string;
+    requested_by?: string;
+    request_reason?: string;
+    request_details?: string;
+    decision_by?: string;
+    denial_reason?: string;
+    created_at?: string;
+    decision_at?: string;
+  };
   // Explicitly reject any spoofed actor/caller parameters
   caller_auth_uid?: unknown;
   actor_user_id?: unknown;
@@ -291,6 +317,7 @@ Deno.serve(async (req: Request) => {
           session: session,
           attempts: body.attempts || [],
           headset_review: body.headset_review || null,
+          newbie_shift_request: body.newbie_shift_request || null,
         },
         p_actor_user_id: canonicalAppUserId,
       });

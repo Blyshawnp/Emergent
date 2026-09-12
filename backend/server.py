@@ -9899,6 +9899,52 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
                     for att in attempt_payloads
                 ],
                 "headset_review": headset_review_payload,
+                "newbie_shift_request": (
+                    {
+                        "request_id": str(session.get("newbie_shift_request_id") or f"newbie-{identifiers['session_id']}").strip(),
+                        "source_session_id": identifiers["session_id"],
+                        "request_type": (
+                            "newbie_shift_reschedule"
+                            if session.get("newbie_shift_request_type") == NEWBIE_REQUEST_RESCHEDULE
+                            else "initial_newbie_shift"
+                        ),
+                        "request_status": "approved" if not _is_newbie_shift_approval_required() and (not session.get("newbie_shift_request_status") or session.get("newbie_shift_request_status") == NEWBIE_REQUEST_PENDING) else (session.get("newbie_shift_request_status") or NEWBIE_REQUEST_PENDING),
+                        "newbie_shift_number": session.get("newbie_shift_number") or None,
+                        "scheduled_at": session.get("newbie_shift_scheduled_at") or None,
+                        "original_scheduled_at": session.get("newbie_shift_original_scheduled_at") or None,
+                        "rescheduled_at": session.get("newbie_shift_rescheduled_at") or None,
+                        "timezone": session.get("newbie_shift_timezone") or None,
+                        "within_24_hours": bool(session.get("newbie_shift_within_24_hours")) if session.get("newbie_shift_within_24_hours") is not None else None,
+                        "counts_as_attempt": bool(session.get("newbie_shift_counts_as_attempt")) if session.get("newbie_shift_counts_as_attempt") is not None else None,
+                        "final_attempt": bool(session.get("final_attempt")) if session.get("final_attempt") is not None else None,
+                        "current_attempt": int(session["newbie_shift_current_attempt"]) if session.get("newbie_shift_current_attempt") else None,
+                        "resulting_attempt": int(session["newbie_shift_resulting_attempt"]) if session.get("newbie_shift_resulting_attempt") else None,
+                        "becomes_final_attempt": bool(session.get("newbie_shift_becomes_final_attempt")) if session.get("newbie_shift_becomes_final_attempt") is not None else None,
+                        "attempt_rule": session.get("newbie_shift_attempt_rule") or None,
+                        "terminal_outcome": session.get("newbie_shift_terminal_outcome") or None,
+                        "requested_by": session.get("newbie_shift_requested_by") or session.get("tester_name") or None,
+                        "request_reason": session.get("newbie_shift_request_reason") or None,
+                        "request_details": session.get("newbie_shift_request_details") or None,
+                        "decision_by": (
+                            NEWBIE_REQUEST_POLICY_APPROVED_ACTOR
+                            if not _is_newbie_shift_approval_required() and not session.get("newbie_shift_admin_decision_by") and (not session.get("newbie_shift_request_status") or session.get("newbie_shift_request_status") == NEWBIE_REQUEST_PENDING)
+                            else (session.get("newbie_shift_admin_decision_by") or None)
+                        ),
+                        "denial_reason": session.get("newbie_shift_denial_reason") or None,
+                        "created_at": session.get("newbie_shift_request_created_at") or session.get("created_at") or None,
+                        "decision_at": (
+                            (session.get("newbie_shift_request_created_at") or datetime.now(timezone.utc).isoformat())
+                            if not _is_newbie_shift_approval_required() and not session.get("newbie_shift_admin_decision_at") and (not session.get("newbie_shift_request_status") or session.get("newbie_shift_request_status") == NEWBIE_REQUEST_PENDING)
+                            else (session.get("newbie_shift_admin_decision_at") or None)
+                        ),
+                    }
+                    if (
+                        session.get("newbie_shift_request_id")
+                        or session.get("newbie_shift_scheduled_at")
+                        or session.get("newbie_shift_rescheduled_at")
+                    )
+                    else None
+                ),
             }
             res = _call_supabase_edge_function("mts-candidate-lifecycle-write", dto, auth_jwt.strip())
             if res.get("ok"):
@@ -10040,7 +10086,6 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
             "safe_identifier": identifiers["session_id"],
             "error": f"Session attempts write failed: {type(exc).__name__}",
         }
-
     logger.info(
         "[MTS-PERSIST] Primary Supabase lifecycle write succeeded: session_id=%s candidate_id=%s attempts=%d",
         identifiers["session_id"],
@@ -10054,6 +10099,7 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
         "session_id": identifiers["session_id"],
         "attempts_count": written_attempts_count,
     }
+
 
 
 def _sync_shared_candidate_tracking(session):
