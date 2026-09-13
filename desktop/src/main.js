@@ -1762,7 +1762,7 @@ async function syncInstallationCredentialToBackend(port = selectedBackendPort) {
       const req = http.request({
         hostname: '127.0.0.1',
         port,
-        path: '/internal/install-credential',
+        path: '/api/internal/install-credential',
         method: 'DELETE',
         headers: {
           'X-MTS-Bootstrap-Secret': backendBootstrapSecret,
@@ -1790,7 +1790,7 @@ async function syncInstallationCredentialToBackend(port = selectedBackendPort) {
     const req = http.request({
       hostname: '127.0.0.1',
       port,
-      path: '/internal/install-credential',
+      path: '/api/internal/install-credential',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

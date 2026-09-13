@@ -14599,6 +14599,7 @@ def _call_supabase_edge_function(function_name: str, body: dict = None, auth_jwt
 
 
 @api_router.post("/internal/install-credential")
+@app.post("/internal/install-credential")
 async def set_internal_install_credential(payload: dict, request: Request):
     _require_bootstrap_capability(request)
     cred = str((payload or {}).get("credential") or (payload or {}).get("token") or "").strip()
@@ -14609,6 +14610,7 @@ async def set_internal_install_credential(payload: dict, request: Request):
 
 
 @api_router.delete("/internal/install-credential")
+@app.delete("/internal/install-credential")
 async def clear_internal_install_credential(request: Request):
     _require_bootstrap_capability(request)
     _clear_mts_installation_credential()
@@ -14616,6 +14618,7 @@ async def clear_internal_install_credential(request: Request):
 
 
 @api_router.get("/internal/install-credential/status")
+@app.get("/internal/install-credential/status")
 async def get_internal_install_credential_status(request: Request):
     cred = _get_mts_installation_credential()
     has_token = bool(cred.get("credential"))
