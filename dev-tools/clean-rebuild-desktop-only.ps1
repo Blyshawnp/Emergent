@@ -7,7 +7,7 @@ $desktopDir = Join-Path $rootDir 'desktop'
 $mtsDist = Join-Path $desktopDir 'dist'
 $samDist = Join-Path $desktopDir 'dist-notification-manager'
 $mtsInstaller = 'Mock-Testing-Suite-Setup-1.0.1.exe'
-$samInstaller = 'Sam-Setup-1.0.1.exe'
+$samInstaller = 'Smart-Alert-Manager-Setup-1.0.1.exe'
 $repoPython = Join-Path $rootDir '.venv\Scripts\python.exe'
 if (Test-Path -LiteralPath $repoPython) {
   $env:MTS_BUILD_PYTHON = $repoPython
@@ -259,7 +259,7 @@ Run-Command 'Yarn version' 'yarn --version' $rootDir
 Run-Command 'Python version' 'python --version' $rootDir
 
 Section 'STOPPING RUNNING PROCESSES'
-foreach ($image in @('Mock Testing Suite.exe', 'Sam.exe', 'SAM.exe', 'backend.exe', 'electron.exe', 'makensis.exe', '7za.exe')) {
+foreach ($image in @('Mock Testing Suite.exe', 'Smart Alert Manager.exe', 'Sam.exe', 'SAM.exe', 'backend.exe', 'electron.exe', 'makensis.exe', '7za.exe')) {
   Stop-Image $image
 }
 Stop-PythonBackends
@@ -303,7 +303,7 @@ Remove-AccidentalBackendFiles (Join-Path $mtsDist 'win-unpacked\resources\backen
 
 Section 'PACKAGING SAM SMART ALERT MANAGER'
 Run-Command 'npx electron-builder --win --x64 --config notification-manager-builder.json' 'npx electron-builder --win --x64 --config notification-manager-builder.json' $desktopDir
-Verify-Path (Join-Path $samDist 'win-unpacked\Sam.exe') 'SAM win-unpacked executable'
+Verify-Path (Join-Path $samDist 'win-unpacked\Smart Alert Manager.exe') 'SAM win-unpacked executable'
 Verify-OptionalPath (Join-Path $samDist 'win-unpacked\resources\backend\drivers\chromedriver.exe') 'SAM backend chromedriver.exe'
 Verify-OptionalPath (Join-Path $samDist 'win-unpacked\resources\backend\drivers\msedgedriver.exe') 'SAM backend msedgedriver.exe'
 Verify-Path (Join-Path $samDist $samInstaller) 'SAM installer'
