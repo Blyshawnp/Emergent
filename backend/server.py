@@ -6018,7 +6018,7 @@ def _headset_review_snapshot(context=None):
                     "model": str(payload.get("model") or payload.get("Model") or "").strip(),
                     "status": str(payload.get("status") or payload.get("Status") or "").strip().lower(),
                     "note": str(payload.get("note") or payload.get("Note") or "").strip(),
-                    "catalog_identity": str(payload.get("catalog_identity") or "").strip(),
+                    "catalog_identity": str(payload.get("catalog_identity") or payload.get("catalog_id") or row.get("catalog_id") or "").strip(),
                     "catalog_row_number": payload.get("catalog_row_number") or 0,
                 })
             _sync_headset_content_cache(catalog_rows)
@@ -6137,6 +6137,71 @@ def _edit_headset_review(payload):
     actor = str((payload or {}).get("actor") or "SAM").strip() or "SAM"
     if not review_id:
         return {"ok": False, "error": "Refresh Headset Review before editing this item."}
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            rows = provider.list_resource("headset_reviews", filters={"review_id": review_id})
+            if not rows:
+                return {"ok": False, "error": "The selected headset review could not be found. Refresh Headset Review and try again."}
+            target = rows[0]
+            normalized_status = str(target.get("status") or "pending").lower()
+            if normalized_status not in {"", "pending"}:
+                return {"ok": False, "error": "Only pending headset reviews can be edited."}
+            brand_value = (payload or {}).get("brand") if "brand" in (payload or {}) else target.get("brand")
+            model_value = (payload or {}).get("model") if "model" in (payload or {}) else target.get("model")
+            brand = re.sub(r"\s+", " ", str(brand_value or "").strip())
+            model = re.sub(r"\s+", " ", str(model_value or "").strip())
+            if not brand and not model:
+                return {"ok": False, "error": "Enter a headset brand or model."}
+            note = str((payload or {}).get("note") or "").strip()
+            now_iso = datetime.now(timezone.utc).isoformat()
+            before = {"brand": target.get("brand") or "", "model": target.get("model") or "", "note": target.get("note") or ""}
+
+            source_payload = dict(target.get("source_payload") or {})
+            source_payload.update({"Brand": brand, "Model": model, "Note": note, "updated_at": now_iso, "decision_by": actor})
+            checksum = hashlib.sha256(json.dumps(source_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+            update_data = {
+                "id": target["id"],
+                "review_id": review_id,
+                "brand": brand,
+                "model": model,
+                "note": note,
+                "updated_at": now_iso,
+                "decision_by": actor,
+                "source_payload": source_payload,
+                "source_checksum": checksum,
+            }
+            provider.upsert_rows("headset_reviews", [update_data], on_conflict="review_id")
+
+            try:
+                provider.upsert_rows("headset_review_actions", [{
+                    "id": str(uuid.uuid4()),
+                    "action_id": str(uuid.uuid4()),
+                    "review_id": target["id"],
+                    "action_type": "edit",
+                    "actor_name": actor,
+                    "reason": "Edited brand/model/notes",
+                    "before_state": before,
+                    "after_state": {"brand": brand, "model": model, "note": note},
+                    "occurred_at": now_iso,
+                    "source_provider": "supabase",
+                }], on_conflict="action_id")
+            except Exception as act_err:
+                logger.warning("[HEADSET-REVIEW] Failed to record edit action audit: %s", act_err)
+
+            approved_headsets = provider.list_resource("headset_catalog", filters={"status": "approved"}, limit=5000)
+            approved_match = any(_headset_identity_key(r.get("brand"), r.get("model")) == _headset_identity_key(brand, model) for r in approved_headsets or [])
+            source_session_id = str(target.get("source_session_id") or "").strip()
+            return {
+                "ok": True, "action": "edit", "review_id": review_id,
+                "source_session_id": source_session_id, "brand": brand, "model": model,
+                "note": note, "status": "pending", "updated_at": now_iso,
+                "approved_match": approved_match,
+                "audit": {"actor": actor, "before": before, "after": {"brand": brand, "model": model, "note": note}},
+            }
+        except Exception as exc:
+            logger.exception("[HEADSET-REVIEW] Failed to edit pending headset review in Supabase: %s", exc)
+            return {"ok": False, "error": "Unable to update the pending headset review."}
     try:
         context = _shared_sheet_context()
         if not context.get("ok"):
@@ -6237,7 +6302,230 @@ def _headset_review_action(payload):
     if action == "deny" and reason == "Other" and not other_note:
         return {"ok": False, "error": "A note is required when the denial reason is Other."}
     decision_note = other_note if action == "deny" and reason == "Other" else (reason if action == "deny" else other_note)
-    decision_status = "approved" if action == "approve" else "denied" if action == "deny" else "archived"
+    decision_status = "approved" if action == "approve" else "denied" if action == "deny" else "deleted" if action == "delete" else "archived"
+    actor = str((payload or {}).get("actor") or "SAM").strip() or "SAM"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            catalog_identity = str((payload or {}).get("catalog_identity") or "").strip()
+            target_key = _headset_identity_key(brand, model)
+
+            # 1. If review_id is provided, update headset_reviews
+            if review_id:
+                reviews = provider.list_resource("headset_reviews", filters={"review_id": review_id})
+                if not reviews:
+                    return {"ok": False, "error": "The selected headset review could not be found. Refresh Headset Review and try again."}
+                review_target = reviews[0]
+                current_status = str(review_target.get("status") or "pending").lower()
+                if current_status not in {"", "pending", decision_status}:
+                    return {"ok": False, "error": "This headset review was already resolved with a different decision."}
+
+                rev_payload = dict(review_target.get("source_payload") or {})
+                rev_payload.update({
+                    "Status": decision_status,
+                    "Note": decision_note,
+                    "updated_at": now_iso,
+                    "decision_at": now_iso,
+                    "decision_by": actor,
+                    "denial_reason": reason if action == "deny" else "",
+                })
+                rev_checksum = hashlib.sha256(json.dumps(rev_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+                updated_review = {
+                    "id": review_target["id"],
+                    "review_id": review_id,
+                    "status": decision_status,
+                    "note": decision_note,
+                    "denial_reason": reason if action == "deny" else "",
+                    "decision_by": actor,
+                    "decision_at": now_iso,
+                    "updated_at": now_iso,
+                    "source_payload": rev_payload,
+                    "source_checksum": rev_checksum,
+                }
+                provider.upsert_rows("headset_reviews", [updated_review], on_conflict="review_id")
+
+                try:
+                    provider.upsert_rows("headset_review_actions", [{
+                        "id": str(uuid.uuid4()),
+                        "action_id": str(uuid.uuid4()),
+                        "review_id": review_target["id"],
+                        "action_type": action if action in {"approve", "deny", "archive", "delete"} else "edit",
+                        "actor_name": actor,
+                        "reason": decision_note or reason,
+                        "before_state": {"status": current_status},
+                        "after_state": {"status": decision_status},
+                        "occurred_at": now_iso,
+                        "source_provider": "supabase",
+                    }], on_conflict="action_id")
+                except Exception as act_err:
+                    logger.warning("[HEADSET-REVIEW] Failed to record action audit: %s", act_err)
+
+                if action == "delete":
+                    return {"ok": True, "action": action, "brand": brand, "model": model, "changed_rows": 1, "deleted": True}
+
+            # 2. Mutate headset_catalog
+            catalog_rows = provider.list_resource("headset_catalog", limit=5000)
+            existing_catalog = next(
+                (r for r in catalog_rows or [] if _headset_identity_key(r.get("brand"), r.get("model")) == target_key),
+                None
+            )
+            if not existing_catalog and catalog_identity:
+                existing_catalog = next(
+                    (r for r in catalog_rows or [] if str(r.get("catalog_id") or r.get("id") or "") == catalog_identity),
+                    None
+                )
+
+            changed_rows = 0
+            if action == "approve":
+                if existing_catalog:
+                    cat_payload = dict(existing_catalog.get("source_payload") or {})
+                    cat_payload.update({"Brand": existing_catalog["brand"], "Model": existing_catalog["model"], "Status": "approved", "Note": decision_note or existing_catalog.get("note") or ""})
+                    ck = hashlib.sha256(json.dumps(cat_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+                    up_row = {
+                        "id": existing_catalog["id"],
+                        "catalog_id": existing_catalog["catalog_id"],
+                        "source_row_key": existing_catalog["source_row_key"],
+                        "brand": existing_catalog["brand"],
+                        "model": existing_catalog["model"],
+                        "status": "approved",
+                        "note": decision_note or existing_catalog.get("note") or "",
+                        "updated_at": now_iso,
+                        "archived_at": None,
+                        "deleted_at": None,
+                        "source_payload": cat_payload,
+                        "source_checksum": ck,
+                    }
+                    provider.upsert_rows("headset_catalog", [up_row], on_conflict="brand,model")
+                    changed_rows = 1
+                else:
+                    cat_payload = {"Brand": brand, "Model": model, "Status": "approved", "Note": decision_note}
+                    ck = hashlib.sha256(json.dumps(cat_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+                    new_row = {
+                        "catalog_id": str(uuid.uuid4()),
+                        "source_row_key": f"headset:{brand}:{model}",
+                        "brand": brand,
+                        "model": model,
+                        "status": "approved",
+                        "note": decision_note,
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                        "archived_at": None,
+                        "deleted_at": None,
+                        "source_payload": cat_payload,
+                        "source_checksum": ck,
+                    }
+                    provider.upsert_rows("headset_catalog", [new_row], on_conflict="brand,model")
+                    changed_rows = 1
+            elif action == "deny":
+                if existing_catalog:
+                    cat_payload = dict(existing_catalog.get("source_payload") or {})
+                    cat_payload.update({"Brand": existing_catalog["brand"], "Model": existing_catalog["model"], "Status": "denied", "Note": decision_note})
+                    ck = hashlib.sha256(json.dumps(cat_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+                    up_row = {
+                        "id": existing_catalog["id"],
+                        "catalog_id": existing_catalog["catalog_id"],
+                        "source_row_key": existing_catalog["source_row_key"],
+                        "brand": existing_catalog["brand"],
+                        "model": existing_catalog["model"],
+                        "status": "denied",
+                        "note": decision_note,
+                        "updated_at": now_iso,
+                        "source_payload": cat_payload,
+                        "source_checksum": ck,
+                    }
+                    provider.upsert_rows("headset_catalog", [up_row], on_conflict="brand,model")
+                    changed_rows = 1
+                else:
+                    cat_payload = {"Brand": brand, "Model": model, "Status": "denied", "Note": decision_note}
+                    ck = hashlib.sha256(json.dumps(cat_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+                    new_row = {
+                        "catalog_id": str(uuid.uuid4()),
+                        "source_row_key": f"headset:{brand}:{model}",
+                        "brand": brand,
+                        "model": model,
+                        "status": "denied",
+                        "note": decision_note,
+                        "created_at": now_iso,
+                        "updated_at": now_iso,
+                        "archived_at": None,
+                        "deleted_at": None,
+                        "source_payload": cat_payload,
+                        "source_checksum": ck,
+                    }
+                    provider.upsert_rows("headset_catalog", [new_row], on_conflict="brand,model")
+                    changed_rows = 1
+            elif action == "archive":
+                if existing_catalog:
+                    cat_payload = dict(existing_catalog.get("source_payload") or {})
+                    cat_payload.update({"Brand": existing_catalog["brand"], "Model": existing_catalog["model"], "Status": "archived"})
+                    ck = hashlib.sha256(json.dumps(cat_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+                    up_row = {
+                        "id": existing_catalog["id"],
+                        "catalog_id": existing_catalog["catalog_id"],
+                        "source_row_key": existing_catalog["source_row_key"],
+                        "brand": existing_catalog["brand"],
+                        "model": existing_catalog["model"],
+                        "status": "archived",
+                        "note": existing_catalog.get("note") or "",
+                        "updated_at": now_iso,
+                        "archived_at": now_iso,
+                        "source_payload": cat_payload,
+                        "source_checksum": ck,
+                    }
+                    provider.upsert_rows("headset_catalog", [up_row], on_conflict="brand,model")
+                    changed_rows = 1
+                else:
+                    changed_rows = 1
+            elif action == "delete":
+                if existing_catalog:
+                    cat_payload = dict(existing_catalog.get("source_payload") or {})
+                    cat_payload.update({"Brand": existing_catalog["brand"], "Model": existing_catalog["model"], "Status": "deleted"})
+                    ck = hashlib.sha256(json.dumps(cat_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+                    up_row = {
+                        "id": existing_catalog["id"],
+                        "catalog_id": existing_catalog["catalog_id"],
+                        "source_row_key": existing_catalog["source_row_key"],
+                        "brand": existing_catalog["brand"],
+                        "model": existing_catalog["model"],
+                        "status": "deleted",
+                        "note": existing_catalog.get("note") or "",
+                        "updated_at": now_iso,
+                        "deleted_at": now_iso,
+                        "source_payload": cat_payload,
+                        "source_checksum": ck,
+                    }
+                    provider.upsert_rows("headset_catalog", [up_row], on_conflict="brand,model")
+                    changed_rows = 1
+                else:
+                    changed_rows = 1
+
+            refreshed = provider.list_resource("headset_catalog", limit=5000)
+            cat_list = []
+            for r in refreshed or []:
+                p_item = merge_source_with_canonical(r.get("source_payload"), r)
+                cat_list.append({
+                    "brand": str(p_item.get("brand") or p_item.get("Brand") or "").strip(),
+                    "model": str(p_item.get("model") or p_item.get("Model") or "").strip(),
+                    "status": str(p_item.get("status") or p_item.get("Status") or "").strip().lower(),
+                    "note": str(p_item.get("note") or p_item.get("Note") or "").strip(),
+                })
+            _sync_headset_content_cache(cat_list)
+
+            return {
+                "ok": True,
+                "action": action,
+                "status": decision_status,
+                "brand": brand,
+                "model": model,
+                "changed_rows": changed_rows,
+                "deleted": action == "delete",
+                "skipped": False,
+            }
+        except Exception as exc:
+            logger.exception("[HEADSET-REVIEW] Failed to apply headset decision in Supabase: %s", exc)
+            return {"ok": False, "error": "Unable to save the headset review decision."}
 
     try:
         context = _shared_sheet_context()
@@ -17541,6 +17829,34 @@ async def _fetch_approved_headsets(force=False):
     now = time.time()
     if not force and _headset_cache["groups"] and (now - _headset_cache["last_fetch"]) < 300:
         return _headset_cache["groups"], _headset_cache.get("denied") or [], ""
+
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            headset_rows = await asyncio.to_thread(provider.list_resource, "headset_catalog", limit=5000)
+            catalog_rows = []
+            for row in headset_rows or []:
+                payload = merge_source_with_canonical(row.get("source_payload"), row)
+                catalog_rows.append({
+                    "brand": str(payload.get("brand") or payload.get("Brand") or "").strip(),
+                    "model": str(payload.get("model") or payload.get("Model") or "").strip(),
+                    "status": str(payload.get("status") or payload.get("Status") or "").strip().lower(),
+                    "note": str(payload.get("note") or payload.get("Note") or "").strip(),
+                    "catalog_identity": str(payload.get("catalog_identity") or payload.get("catalog_id") or row.get("catalog_id") or "").strip(),
+                    "catalog_row_number": payload.get("catalog_row_number") or 0,
+                })
+            _sync_headset_content_cache(catalog_rows)
+            if _headset_cache.get("groups"):
+                return _headset_cache["groups"], _headset_cache.get("denied") or [], ""
+        except Exception as exc:
+            logger.exception("[HEADSET] Failed to load approved headsets from Supabase: %s", exc)
+            if _headset_cache.get("groups"):
+                return (
+                    _headset_cache["groups"],
+                    _headset_cache.get("denied") or [],
+                    "Approved headset refresh is temporarily delayed. Showing the last available list.",
+                )
+            return [], _headset_cache.get("denied") or [], "Unable to load the approved headset list right now."
 
     if force:
         refreshed = await asyncio.to_thread(_refresh_managed_content_sections, ("approved_headsets",))
