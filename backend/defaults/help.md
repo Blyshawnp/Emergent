@@ -264,7 +264,7 @@ The Discord panel keeps reusable Discord messages and screenshot images close at
 - Double-click a Discord post to copy it immediately. Copy buttons change to Copied when successful.
 - Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.
 - Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.
-- Use Screenshots -> Discord Posts to open the centralized Phonetics.png reference when supported.
+- Use Screenshots -> Discord Posts to open configured screenshot references when supported.
 - Templates, suggested screenshots, screenshot image rows, shortcut behavior, automatic copy, confirmation toast, and favorite shortcut assignments are managed in Settings.
 - Admins can link zero, one, two, or three screenshots to each Discord post in Settings -> Discord -> Posts.
 
@@ -288,7 +288,7 @@ Update checks and app version info live in the app menu and Settings.
 ## 27. Tech Issues
 Use the built-in tech issue paths before ending a session for technical reasons.
 - Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.
-- Use the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.
+- Use the centralized Discord Posts screenshot reference to preview and copy reference images for Discord.
 - Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.
 - If the app itself is misbehaving, restart it. Active session drafts are saved automatically.
 - When reporting an app issue, include the screen name, the action you took, and any visible error text.

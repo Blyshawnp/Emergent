@@ -253,6 +253,12 @@ function getSharedAppDataPath(subpath = '') {
   return path.join(app.getPath('userData'), subpath);
 }
 
+let backendBootstrapSecret = null;
+
+function getBackendBootstrapSecret() {
+  return backendBootstrapSecret;
+}
+
 function getSharedAdminToken() {
   if (sharedAdminToken) {
     return sharedAdminToken;
@@ -672,6 +678,7 @@ function startBackend() {
     });
 
     const dataRuntimeEnv = resolveDataRuntimeEnv(backendRuntimeConfigPath);
+    backendBootstrapSecret = crypto.randomBytes(32).toString('hex');
 
     try {
       backendProcess = spawn(backendPath, [], {
@@ -692,7 +699,7 @@ function startBackend() {
         },
         windowsHide: true,
         shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (err) {
       backendLaunchError = err;
@@ -716,6 +723,14 @@ function startBackend() {
       role: 'fastapi-backend',
       childProcess: backendProcess,
     });
+
+    if (backendProcess.stdin && !backendProcess.stdin.destroyed) {
+      try {
+        backendProcess.stdin.write(`${backendBootstrapSecret}\n`);
+      } catch (err) {
+        console.warn('[BACKEND] Failed to write bootstrap secret to stdin pipe:', err.message);
+      }
+    }
 
     backendProcess.stdout.on('data', (data) => {
       const text = data.toString();
@@ -779,6 +794,7 @@ function startBackend() {
 
   const devRuntimeConfigPath = path.join(backendDir, 'config', 'runtime_config.json');
   const dataRuntimeEnv = resolveDataRuntimeEnv(devRuntimeConfigPath);
+  backendBootstrapSecret = crypto.randomBytes(32).toString('hex');
 
   backendProcess = spawn(pythonCmd, [
     ...pythonArgs,
@@ -806,6 +822,14 @@ function startBackend() {
     role: 'fastapi-backend',
     childProcess: backendProcess,
   });
+
+  if (backendProcess.stdin && !backendProcess.stdin.destroyed) {
+    try {
+      backendProcess.stdin.write(`${backendBootstrapSecret}\n`);
+    } catch (err) {
+      console.warn('[BACKEND] Failed to write bootstrap secret to stdin pipe:', err.message);
+    }
+  }
 
   backendProcess.stdout.on('data', (data) => {
     const message = data.toString().trim();
@@ -1247,6 +1271,9 @@ function ensureBackendAvailable() {
       backendRetryAttemptCount = 0;
       setBackendConnectionStatus('connected');
       console.log(`[APP] Reusing existing backend on port ${selectedBackendPort}`);
+      if (!isNotificationManagerMode) {
+        void syncInstallationCredentialToBackend(selectedBackendPort);
+      }
       return;
     }
 
@@ -1255,6 +1282,9 @@ function ensureBackendAvailable() {
     await waitForBackend();
     backendRetryAttemptCount = 0;
     console.log(`[APP] Backend is ready on port ${selectedBackendPort}`);
+    if (!isNotificationManagerMode) {
+      void syncInstallationCredentialToBackend(selectedBackendPort);
+    }
   })();
 }
 
@@ -1710,98 +1740,145 @@ function getAuthSessionFilePath() {
   return path.join(app.getPath('userData'), 'sam_auth_session.enc');
 }
 
-function getMtsAuthSessionFilePath() {
-  return path.join(app.getPath('userData'), 'mts_auth_session.enc');
+function getMtsInstallCredentialFilePath() {
+  return path.join(app.getPath('userData'), 'mts_install_credential.enc');
 }
 
-ipcMain.handle('authSession:get', async () => {
+async function syncInstallationCredentialToBackend(port = selectedBackendPort) {
   try {
-    const sessionPath = getAuthSessionFilePath();
-    if (!fs.existsSync(sessionPath)) {
-      return null;
+    if (!backendBootstrapSecret) {
+      console.warn('[APP] Cannot sync install credential to backend: bootstrap capability not yet established');
+      return;
     }
-    const encrypted = fs.readFileSync(sessionPath);
+    const credPath = getMtsInstallCredentialFilePath();
+    let credential = null;
+    if (fs.existsSync(credPath) && safeStorage && safeStorage.isEncryptionAvailable()) {
+      const encrypted = fs.readFileSync(credPath);
+      // Encrypted under user's OS security context via Electron safeStorage / Windows DPAPI
+      credential = JSON.parse(safeStorage.decryptString(encrypted));
+    }
+    const token = (credential?.credential || credential?.token || '').trim();
+    if (!token) {
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port,
+        path: '/internal/install-credential',
+        method: 'DELETE',
+        headers: {
+          'X-MTS-Bootstrap-Secret': backendBootstrapSecret,
+        },
+        timeout: 3000,
+      }, (res) => {
+        res.resume();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          console.log('[APP] Installation credential cleared on backend');
+        }
+      });
+      req.on('error', (err) => {
+        console.warn('[APP] Failed to clear install credential on backend:', err.message);
+      });
+      req.end();
+      return;
+    }
+
+    const payload = JSON.stringify({
+      credential: token,
+      label: credential?.label || '',
+      installation_id: credential?.installation_id || '',
+    });
+
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      path: '/internal/install-credential',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        'X-MTS-Bootstrap-Secret': backendBootstrapSecret,
+      },
+      timeout: 3000,
+    }, (res) => {
+      res.resume();
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        console.log('[APP] Installation credential synced to backend successfully');
+      } else {
+        console.warn(`[APP] Backend returned status ${res.statusCode} when syncing install credential`);
+      }
+    });
+
+    req.on('error', (err) => {
+      console.warn('[APP] Failed to sync install credential to backend:', err.message);
+    });
+    req.write(payload);
+    req.end();
+  } catch (err) {
+    console.warn('[APP] Error in syncInstallationCredentialToBackend:', err.message);
+  }
+}
+
+ipcMain.handle('installCredential:getStatus', async () => {
+  try {
+    const credPath = getMtsInstallCredentialFilePath();
+    if (!fs.existsSync(credPath)) {
+      return { enrolled: false };
+    }
     if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
-      return null;
+      return { enrolled: false, error: 'Encryption unavailable' };
     }
+    const encrypted = fs.readFileSync(credPath);
+    // Decrypted under user's OS security context via Electron safeStorage / Windows DPAPI
     const decrypted = safeStorage.decryptString(encrypted);
-    return JSON.parse(decrypted);
-  } catch (_err) {
-    return null;
+    const data = JSON.parse(decrypted);
+    return {
+      enrolled: Boolean(data?.credential || data?.token),
+      label: data?.label || '',
+      installation_id: data?.installation_id || '',
+      enrolled_at: data?.enrolled_at || '',
+    };
+  } catch (err) {
+    return { enrolled: false, error: err.message };
   }
 });
 
-ipcMain.handle('authSession:save', async (_event, session) => {
+ipcMain.handle('installCredential:save', async (_event, credData) => {
   try {
-    if (!session || typeof session !== 'object') {
+    if (!credData) {
       return false;
     }
     if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
       return false;
     }
-    const sessionPath = getAuthSessionFilePath();
-    const plainText = JSON.stringify(session);
+    const credPath = getMtsInstallCredentialFilePath();
+    const normalized = typeof credData === 'string'
+      ? { credential: credData.trim(), label: '', installation_id: '', enrolled_at: new Date().toISOString() }
+      : {
+          credential: String(credData.credential || credData.token || '').trim(),
+          label: String(credData.label || '').trim(),
+          installation_id: String(credData.installation_id || '').trim(),
+          enrolled_at: credData.enrolled_at || new Date().toISOString(),
+        };
+    if (!normalized.credential) {
+      return false;
+    }
+    const plainText = JSON.stringify(normalized);
+    // Encrypted under user's OS security context via Electron safeStorage / Windows DPAPI
     const encrypted = safeStorage.encryptString(plainText);
-    fs.writeFileSync(sessionPath, encrypted);
+    fs.writeFileSync(credPath, encrypted);
+    void syncInstallationCredentialToBackend();
     return true;
   } catch (_err) {
     return false;
   }
 });
 
-ipcMain.handle('authSession:clear', async () => {
+ipcMain.handle('installCredential:clear', async () => {
   try {
-    const sessionPath = getAuthSessionFilePath();
-    if (fs.existsSync(sessionPath)) {
-      fs.unlinkSync(sessionPath);
+    const credPath = getMtsInstallCredentialFilePath();
+    if (fs.existsSync(credPath)) {
+      fs.unlinkSync(credPath);
     }
-    return true;
-  } catch (_err) {
-    return false;
-  }
-});
-
-ipcMain.handle('mtsAuthSession:get', async () => {
-  try {
-    const sessionPath = getMtsAuthSessionFilePath();
-    if (!fs.existsSync(sessionPath)) {
-      return null;
-    }
-    const encrypted = fs.readFileSync(sessionPath);
-    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
-      return null;
-    }
-    const decrypted = safeStorage.decryptString(encrypted);
-    return JSON.parse(decrypted);
-  } catch (_err) {
-    return null;
-  }
-});
-
-ipcMain.handle('mtsAuthSession:save', async (_event, session) => {
-  try {
-    if (!session || typeof session !== 'object') {
-      return false;
-    }
-    if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
-      return false;
-    }
-    const sessionPath = getMtsAuthSessionFilePath();
-    const plainText = JSON.stringify(session);
-    const encrypted = safeStorage.encryptString(plainText);
-    fs.writeFileSync(sessionPath, encrypted);
-    return true;
-  } catch (_err) {
-    return false;
-  }
-});
-
-ipcMain.handle('mtsAuthSession:clear', async () => {
-  try {
-    const sessionPath = getMtsAuthSessionFilePath();
-    if (fs.existsSync(sessionPath)) {
-      fs.unlinkSync(sessionPath);
-    }
+    void syncInstallationCredentialToBackend();
     return true;
   } catch (_err) {
     return false;

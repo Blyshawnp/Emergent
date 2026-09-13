@@ -111,9 +111,8 @@ class MtsPersistenceDefectATests(unittest.TestCase):
         self.assertEqual(len(tables["session_attempts"]), 0)
 
     def test_primary_supabase_persistence_writes_all_entities(self):
-        """Step C: Tests that _persist_candidate_lifecycle_to_supabase writes
-
-        candidates, candidate_sessions, and session_attempts to Supabase with dual-write OFF.
+        """Step C: Tests that _persist_candidate_lifecycle_to_supabase requires installation authorization
+        and never falls back to direct provider upserts.
         """
         provider, tables = self._create_mock_store()
         session_record = {
@@ -128,42 +127,29 @@ class MtsPersistenceDefectATests(unittest.TestCase):
         with patch("server._get_active_data_provider", return_value=provider):
             res = server._persist_candidate_lifecycle_to_supabase(session_record, "appended")
 
-        self.assertTrue(res.get("ok"), f"Persistence failed: {res}")
-        self.assertEqual(len(tables["candidates"]), 1)
-        self.assertEqual(len(tables["candidate_sessions"]), 1)
-        self.assertEqual(len(tables["session_attempts"]), 2)
+        self.assertFalse(res.get("ok"))
+        self.assertEqual(res.get("stage"), "installation_authorization")
+        self.assertEqual(res.get("error_code"), "INSTALLATION_AUTH_REQUIRED")
+        self.assertEqual(len(tables["candidates"]), 0)
+        self.assertEqual(len(tables["candidate_sessions"]), 0)
+        self.assertEqual(len(tables["session_attempts"]), 0)
+        provider.upsert_rows.assert_not_called()
 
-        # Verify candidate entity
-        cand = list(tables["candidates"].values())[0]
-        self.assertEqual(cand["display_name"], "Devon Tester")
-        self.assertEqual(cand["source_candidate_id"], "cand-devon-tester")
-        self.assertEqual(cand["source_system"], "google_sheets")
-
-        # Verify session entity
-        sess = list(tables["candidate_sessions"].values())[0]
-        self.assertEqual(sess["session_id"], "sess-primary-001")
-        self.assertEqual(sess["candidate_name"], "Devon Tester")
-        self.assertEqual(sess["final_result"], "Fail")
-        self.assertEqual(sess["candidate_id"], cand["id"])
-
-        # Verify attempt entities
-        attempts = list(tables["session_attempts"].values())
-        self.assertEqual(len(attempts), 2)
-        self.assertEqual(attempts[0]["attempt_number"], 1)
-        self.assertEqual(attempts[0]["result"], "Fail")
-        self.assertEqual(attempts[0]["source_action_id"], "google_sheets:attempt:sess-primary-001:1")
-        self.assertEqual(attempts[0]["session_id"], sess["id"])
-
-        self.assertEqual(attempts[1]["attempt_number"], 2)
-        self.assertEqual(attempts[1]["result"], "Fail")
-        self.assertEqual(attempts[1]["source_action_id"], "google_sheets:attempt:sess-primary-001:2")
-        self.assertEqual(attempts[1]["session_id"], sess["id"])
-
-    def test_idempotency_full_lifecycle(self):
-        """Step D: Submitting the same completed session twice results in
-
-        exact same counts without duplicate candidate, session, or attempt rows.
+    @patch("server._call_supabase_edge_function")
+    def test_idempotency_full_lifecycle(self, mock_edge):
+        """Step D: Submitting the same completed session twice with installation authorization
+        succeeds via hosted Edge Function idempotency and produces zero direct provider writes.
         """
+        mock_edge.return_value = {
+            "ok": True,
+            "canonical_ids": {
+                "candidate_id": "cand-uuid-idem",
+                "session_id": "sess-uuid-idem",
+                "session_business_id": "sess-idem-001",
+            },
+            "row_counts": {"session_attempts": 2},
+            "idempotent_replay": True,
+        }
         provider, tables = self._create_mock_store()
         session_record = {
             "session_id": "sess-idem-001",
@@ -175,56 +161,28 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             "call_2": {"result": "Pass"},
         }
         with patch("server._get_active_data_provider", return_value=provider):
-            res1 = server._persist_candidate_lifecycle_to_supabase(session_record, "appended")
-            res2 = server._persist_candidate_lifecycle_to_supabase(session_record, "updated")
+            res1 = server._persist_candidate_lifecycle_to_supabase(session_record, "appended", auth_jwt="valid.jwt")
+            res2 = server._persist_candidate_lifecycle_to_supabase(session_record, "updated", auth_jwt="valid.jwt")
 
         self.assertTrue(res1.get("ok"))
         self.assertTrue(res2.get("ok"))
-        self.assertEqual(len(tables["candidates"]), 1, "Duplicate candidate created!")
-        self.assertEqual(len(tables["candidate_sessions"]), 1, "Duplicate session created!")
-        self.assertEqual(len(tables["session_attempts"]), 2, "Duplicate attempts created!")
+        self.assertEqual(res1.get("session_id"), "sess-idem-001")
+        self.assertEqual(res2.get("session_id"), "sess-idem-001")
+        self.assertEqual(mock_edge.call_count, 2)
+        provider.upsert_rows.assert_not_called()
 
-    def test_idempotency_partial_failure_recovery(self):
-        """Step D: Simulates partial authoritative failure (attempt 2 fails on first try),
-
-        then retrying the session repairs the incomplete lifecycle with 0 duplicates.
+    @patch("server._call_supabase_edge_function")
+    def test_idempotency_partial_failure_recovery(self, mock_edge):
+        """Step D: When hosted Edge Function persistence fails, surfaces structured error
+        diagnostics and never falls back to direct provider writes.
         """
-        tables = {
-            "candidates": {},
-            "candidate_sessions": {},
-            "session_attempts": {},
+        mock_edge.return_value = {
+            "ok": False,
+            "status_code": 500,
+            "error_code": "HOSTED_TRANSACTION_FAILED",
+            "error": "Simulated database connection failure",
         }
-        provider = MagicMock()
-        attempt_call_count = [0]
-
-        def mock_upsert(table, rows, *, on_conflict, resolution="merge-duplicates"):
-            if table not in tables:
-                tables[table] = {}
-            if table == "session_attempts":
-                attempt_call_count[0] += 1
-                if attempt_call_count[0] == 1:
-                    # First attempt call fails with a database exception!
-                    raise RuntimeError("Simulated network timeout during session_attempts write")
-            results = []
-            for r in rows:
-                row_copy = dict(r)
-                if not row_copy.get("id"):
-                    row_copy["id"] = f"uuid-{table}-{len(tables[table]) + 1}"
-                if table == "candidates":
-                    key = (row_copy.get("source_system", "google_sheets"), row_copy.get("source_candidate_id"))
-                elif table == "candidate_sessions":
-                    key = row_copy.get("session_id")
-                elif table == "session_attempts":
-                    key = row_copy.get("source_action_id")
-                else:
-                    key = row_copy.get("id")
-
-                tables[table][key] = row_copy
-                results.append(row_copy)
-            return results
-
-        provider.upsert_rows.side_effect = mock_upsert
-
+        provider, tables = self._create_mock_store()
         session_record = {
             "session_id": "sess-partial-fail-001",
             "candidate_name": "Alex Taylor",
@@ -235,34 +193,27 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             "call_2": {"result": "Fail"},
         }
         with patch("server._get_active_data_provider", return_value=provider):
-            # Run 1: Should fail at session_attempts stage
-            res1 = server._persist_candidate_lifecycle_to_supabase(session_record, "appended")
-            self.assertFalse(res1.get("ok"))
-            self.assertEqual(res1.get("stage"), "session_attempts")
-            self.assertEqual(len(tables["candidates"]), 1)
-            self.assertEqual(len(tables["candidate_sessions"]), 1)
-            self.assertEqual(len(tables["session_attempts"]), 0)
+            res1 = server._persist_candidate_lifecycle_to_supabase(session_record, "appended", auth_jwt="valid.jwt")
 
-            # Run 2: Retry should repair the missing session_attempts without duplicating candidate/session
-            res2 = server._persist_candidate_lifecycle_to_supabase(session_record, "updated")
-            self.assertTrue(res2.get("ok"))
-            self.assertEqual(len(tables["candidates"]), 1, "Expected 1 candidate after retry")
-            self.assertEqual(len(tables["candidate_sessions"]), 1, "Expected 1 session after retry")
-            self.assertEqual(len(tables["session_attempts"]), 2, "Expected 2 attempts after retry")
+        self.assertFalse(res1.get("ok"))
+        self.assertEqual(res1.get("stage"), "hosted_edge_function")
+        self.assertEqual(res1.get("error_code"), "HOSTED_TRANSACTION_FAILED")
+        provider.upsert_rows.assert_not_called()
+        self.assertEqual(len(tables["candidates"]), 0)
+        self.assertEqual(len(tables["candidate_sessions"]), 0)
+        self.assertEqual(len(tables["session_attempts"]), 0)
 
     def test_physical_call_row_counts(self):
-        """Step D: Verifies physical row counts for 1-call, 2-call, 3-call, and supervisor-only sessions."""
-        provider, tables = self._create_mock_store()
-
+        """Step D: Verifies physical attempt payload counts built for 1-call, 2-call, 3-call, and supervisor-only sessions."""
         # 1-call session
         s1 = {
             "session_id": "sess-1call",
             "candidate_name": "Candidate One",
             "call_1": {"result": "Pass"},
         }
-        with patch("server._get_active_data_provider", return_value=provider):
-            r1 = server._persist_candidate_lifecycle_to_supabase(s1, "appended")
-        self.assertEqual(r1["attempts_count"], 1)
+        b1 = server._build_candidate_lifecycle_payloads(s1, "appended")
+        self.assertTrue(b1["ok"])
+        self.assertEqual(len(b1["attempt_payloads"]), 1)
 
         # 2-call session
         s2 = {
@@ -271,9 +222,9 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             "call_1": {"result": "Fail"},
             "call_2": {"result": "Pass"},
         }
-        with patch("server._get_active_data_provider", return_value=provider):
-            r2 = server._persist_candidate_lifecycle_to_supabase(s2, "appended")
-        self.assertEqual(r2["attempts_count"], 2)
+        b2 = server._build_candidate_lifecycle_payloads(s2, "appended")
+        self.assertTrue(b2["ok"])
+        self.assertEqual(len(b2["attempt_payloads"]), 2)
 
         # 3-call session
         s3 = {
@@ -283,9 +234,9 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             "call_2": {"result": "Pass"},
             "call_3": {"result": "Pass"},
         }
-        with patch("server._get_active_data_provider", return_value=provider):
-            r3 = server._persist_candidate_lifecycle_to_supabase(s3, "appended")
-        self.assertEqual(r3["attempts_count"], 3)
+        b3 = server._build_candidate_lifecycle_payloads(s3, "appended")
+        self.assertTrue(b3["ok"])
+        self.assertEqual(len(b3["attempt_payloads"]), 3)
 
         # Supervisor-only session
         s_sup = {
@@ -295,36 +246,31 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             "final_result": "Fail",
             "attempt_number": 2,
         }
-        with patch("server._get_active_data_provider", return_value=provider):
-            r_sup = server._persist_candidate_lifecycle_to_supabase(s_sup, "appended")
-        self.assertEqual(r_sup["attempts_count"], 1)
-        sess_row = tables["candidate_sessions"]["sess-sup-only"]
-        self.assertEqual(sess_row["session_type"], "sup_transfer_only")
+        b_sup = server._build_candidate_lifecycle_payloads(s_sup, "appended")
+        self.assertTrue(b_sup["ok"])
+        self.assertEqual(len(b_sup["attempt_payloads"]), 1)
+        self.assertEqual(b_sup["session_payload"]["session_type"], "sup_transfer_only")
 
     def test_cross_client_visibility(self):
-        """Step E: Client A writes authoritative lifecycle to Supabase.
+        """Step E: Client A has written authoritative lifecycle to Supabase.
 
         Client B (empty local history) looks up candidate name.
         Candidate appears from Supabase with correct state and no local history involved.
         """
         provider, tables = self._create_mock_store()
-        session_record = {
+        completed_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        tables["candidate_sessions"]["sess-client-a-101"] = {
+            "id": "uuid-sess-client-a-101",
             "session_id": "sess-client-a-101",
             "candidate_name": "Jordan Case",
-            "tester_name": "Evaluator A",
             "final_result": "Fail",
             "final_attempt": False,
             "attempt_number": 1,
-            "call_1": {"result": "Fail"},
-            "call_2": {"result": "Fail"},
-            "completed_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+            "completed_at": completed_at,
+            "created_at": completed_at,
         }
 
         with patch("server._get_active_data_provider", return_value=provider):
-            # Client A persists session to Supabase
-            save_res = server._persist_candidate_lifecycle_to_supabase(session_record, "appended")
-            self.assertTrue(save_res.get("ok"))
-
             # Client B with zero local history performs lookup
             lookup_res = server._lookup_shared_candidate_sessions("Jordan")
             self.assertTrue(lookup_res.get("ok"))
@@ -341,20 +287,20 @@ class MtsPersistenceDefectATests(unittest.TestCase):
 
     def test_native_and_legacy_supabase_rows_have_equivalent_lookup_behavior(self):
         completed_at = datetime.now(timezone.utc).isoformat()
-        session_record = {
+        native_provider, native_tables = self._create_mock_store()
+        native_tables["candidate_sessions"]["sess-native-lookup-001"] = {
+            "id": "uuid-native-session-1",
             "session_id": "sess-native-lookup-001",
             "candidate_name": "Jane Smith",
-            "tester_name": "Evaluator A",
+            "raw_status": "FAIL",
             "final_result": "Fail",
             "final_attempt": False,
             "attempt_number": 1,
-            "call_1": {"result": "Fail"},
+            "session_type": "mock_session",
+            "created_at": completed_at,
             "completed_at": completed_at,
         }
-
-        native_provider, _native_tables = self._create_mock_store()
         with patch("server._get_active_data_provider", return_value=native_provider):
-            persisted = server._persist_candidate_lifecycle_to_supabase(session_record, "appended")
             native_lookup = server._lookup_shared_candidate_sessions("Jane Sm")
 
         legacy_provider, legacy_tables = self._create_mock_store()
@@ -382,8 +328,6 @@ class MtsPersistenceDefectATests(unittest.TestCase):
         }
         with patch("server._get_active_data_provider", return_value=legacy_provider):
             legacy_lookup = server._lookup_shared_candidate_sessions("Jane Sm")
-
-        self.assertTrue(persisted.get("ok"))
         for result in (native_lookup, legacy_lookup):
             self.assertTrue(result.get("ok"))
             self.assertEqual(len(result.get("matches", [])), 1)
@@ -473,8 +417,19 @@ class MtsPersistenceDefectATests(unittest.TestCase):
         self.assertEqual(len(lookup_res.get("matches", [])), 1, "Non-terminal 60-day-old candidate was pruned!")
         self.assertEqual(lookup_res["matches"][0]["candidate_name"], "Old Candidate")
 
-    def test_finish_session_simple_endpoint_success_and_cleanup(self):
-        """Integration test: finish_session_simple persists to Supabase, preserves local history, and removes active session."""
+    @patch("server._call_supabase_edge_function")
+    def test_finish_session_simple_endpoint_success_and_cleanup(self, mock_edge):
+        """Integration test: finish_session_simple persists to Supabase via installation auth, preserves local history, and removes active session."""
+        mock_edge.return_value = {
+            "ok": True,
+            "canonical_ids": {
+                "candidate_id": "c-finish-01",
+                "session_id": "s-finish-01",
+                "session_business_id": "sess-finish-endpoint-01",
+            },
+            "row_counts": {"session_attempts": 2},
+        }
+        server._set_mts_installation_credential("valid-install-token")
         provider, tables = self._create_mock_store()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -499,9 +454,7 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             self.assertTrue(resp.get("ok"))
             self.assertTrue(resp.get("sharedTracking", {}).get("ok"))
             self.assertEqual(resp.get("warning"), "")
-            self.assertEqual(len(tables["candidates"]), 1)
-            self.assertEqual(len(tables["candidate_sessions"]), 1)
-            self.assertEqual(len(tables["session_attempts"]), 2)
+            provider.upsert_rows.assert_not_called()
 
             # Active session must be deleted
             remaining_active = loop.run_until_complete(server.db.sessions.find_one({"_id": "active_session"}))
@@ -513,6 +466,7 @@ class MtsPersistenceDefectATests(unittest.TestCase):
             )
             self.assertGreaterEqual(len(history_rows), 1)
         finally:
+            server._clear_mts_installation_credential()
             loop.run_until_complete(server.db.sessions.delete_one({"_id": "active_session"}))
             server.db.history.store.execute("DELETE FROM history_documents WHERE data LIKE '%Riley Cooper%'", ())
             loop.close()

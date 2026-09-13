@@ -152,12 +152,15 @@ class NewbieShiftLifecyclePersistenceTests(unittest.TestCase):
         with patch("server._get_active_data_provider", return_value=provider):
             res = server._persist_candidate_lifecycle_to_supabase(session)
 
-        self.assertTrue(res["ok"])
-        self.assertEqual(len(tables["candidates"]), 1)
-        self.assertEqual(len(tables["candidate_sessions"]), 1)
-        self.assertEqual(len(tables["session_attempts"]), 3)
-        # Direct provider fallback MUST NOT write to newbie_shift_requests
+        # Invariant: Without installation authorization, direct provider fallback is NEVER invoked.
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["stage"], "installation_authorization")
+        self.assertEqual(res["error_code"], "INSTALLATION_AUTH_REQUIRED")
+        self.assertEqual(len(tables["candidates"]), 0)
+        self.assertEqual(len(tables["candidate_sessions"]), 0)
+        self.assertEqual(len(tables["session_attempts"]), 0)
         self.assertEqual(len(tables["newbie_shift_requests"]), 0)
+        provider.upsert_rows.assert_not_called()
 
     def test_case_d_reschedule_type_mapping(self):
         """Case D: NEWBIE_REQUEST_RESCHEDULE maps to 'newbie_shift_reschedule'."""

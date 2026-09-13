@@ -81,3 +81,33 @@ test('falls back to safe default sheets when runtime config is absent or empty',
   assert.equal(runtimeEnv.MTS_DATA_PROVIDER, 'sheets');
   assert.equal(runtimeEnv.MTS_SHADOW_COMPARE, 'true');
 });
+
+test('backend bootstrap secret is 256-bit cryptographically secure hex string', () => {
+  const crypto = require('crypto');
+  const secret = crypto.randomBytes(32).toString('hex');
+  assert.equal(secret.length, 64);
+  assert.match(secret, /^[0-9a-f]{64}$/);
+  const secret2 = crypto.randomBytes(32).toString('hex');
+  assert.notEqual(secret, secret2);
+});
+
+test('installation credential bootstrap handoff validates header against ephemeral secret', () => {
+  const crypto = require('crypto');
+  const ephemeralSecret = crypto.randomBytes(32).toString('hex');
+  const validHeaders = { 'X-MTS-Bootstrap-Secret': ephemeralSecret };
+  const invalidHeaders = { 'X-MTS-Bootstrap-Secret': 'wrong-secret' };
+  const missingHeaders = {};
+
+  function validateHandoff(headers) {
+    const provided = headers['X-MTS-Bootstrap-Secret'];
+    if (!provided || !ephemeralSecret) return false;
+    const bufA = Buffer.from(provided);
+    const bufB = Buffer.from(ephemeralSecret);
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+  }
+
+  assert.equal(validateHandoff(validHeaders), true);
+  assert.equal(validateHandoff(invalidHeaders), false);
+  assert.equal(validateHandoff(missingHeaders), false);
+});

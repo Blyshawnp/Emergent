@@ -118,6 +118,33 @@ function computeCalculatedStatus(session) {
   return 'Incomplete';
 }
 
+export const SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE =
+  'The final readiness judgment is Incomplete as the supervisor test call is needed to complete certification.';
+
+export function isIncompleteAwaitingSupervisorCall(session) {
+  if (!session || typeof session !== 'object') return false;
+  const status = computeFinalStatus(session);
+  if (status !== 'Incomplete') return false;
+  const supsPassed = [session.sup_transfer_1, session.sup_transfer_2].filter(
+    (s) => s && (s.result === 'Pass' || s.result === 'PASS')
+  ).length;
+  const supsFailed = [session.sup_transfer_1, session.sup_transfer_2].filter(
+    (s) => s && (s.result === 'Fail' || s.result === 'FAIL')
+  ).length;
+  if (supsPassed >= 1 || supsFailed >= 2) return false;
+  const callsPassed = [session.call_1, session.call_2, session.call_3].filter(
+    (s) => s && (s.result === 'Pass' || s.result === 'PASS')
+  ).length;
+  const isSupOnly = Boolean(session.supervisor_only);
+  const hasScheduledNewbie = Boolean(
+    session.newbie_shift_data ||
+      session.newbie_shift_scheduled_at ||
+      session.newbie_shift_request_id ||
+      session.newbie_shift_number
+  );
+  return callsPassed >= 2 || isSupOnly || hasScheduledNewbie;
+}
+
 function normalizeFinalReadinessJudgment(judgment, calculatedResult) {
   const existing = judgment && typeof judgment === 'object' ? judgment : {};
   const overrideApplied = Boolean(existing.overrideApplied);
@@ -1135,6 +1162,15 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           <div>
             <h3>Final Readiness Judgment</h3>
             <div className="text-sm text-muted">Calculated result: <strong>{calculatedStatus}</strong></div>
+            {isIncompleteAwaitingSupervisorCall(s) && (
+              <div
+                className="text-sm font-semibold"
+                style={{ marginTop: 6, color: 'var(--color-primary, #2563eb)' }}
+                data-testid="final-readiness-judgment-sentence"
+              >
+                {SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE}
+              </div>
+            )}
           </div>
           {finalReadinessJudgment.overrideApplied && (
             <span className="readiness-override-badge">Evaluator Override Applied</span>

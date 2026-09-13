@@ -578,3 +578,24 @@ test('override requires primary reason before fill form', async () => {
 
   await view.unmount();
 });
+
+test('renders exact supervisor test call sentence in Final Readiness Judgment for incomplete state awaiting supervisor call', async () => {
+  const incompleteSession = {
+    ...passingSession,
+    final_status: 'Incomplete',
+    call_1: { result: 'Pass', coaching: {} },
+    call_2: { result: 'Pass', coaching: {} },
+    call_3: {},
+    sup_transfer_1: {},
+    sup_transfer_2: {},
+  };
+  const view = await renderReview(incompleteSession);
+
+  const sentenceEl = view.container.querySelector('[data-testid="final-readiness-judgment-sentence"]');
+  expect(sentenceEl).not.toBeNull();
+  expect(sentenceEl.textContent).toBe(
+    'The final readiness judgment is Incomplete as the supervisor test call is needed to complete certification.'
+  );
+
+  await view.unmount();
+});

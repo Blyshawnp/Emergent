@@ -495,6 +495,9 @@ function GeneralTab({ s, set }) {
       <p className="text-muted text-sm" style={{ marginTop: 12, lineHeight: 1.7 }}>
         Ticker Speed is the only notification ticker setting exposed to normal users. Notification content is managed by administrators in SAM.
       </p>
+
+      <InstallationSection />
+
       <h3 style={{ margin: '24px 0 16px' }}>Theme</h3>
       <button className="btn btn-ghost btn-sm" onClick={() => {
         const c = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -503,6 +506,160 @@ function GeneralTab({ s, set }) {
         localStorage.setItem('mts-theme', n);
         set('theme', n);
       }} data-testid="settings-theme-toggle">Toggle Light/Dark</button>
+    </div>
+  );
+}
+
+function InstallationSection() {
+  const [installStatus, setInstallStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [tokenInput, setTokenInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      if (window.electronAPI?.installCredential?.getStatus) {
+        const res = await window.electronAPI.installCredential.getStatus();
+        setInstallStatus(res);
+      } else {
+        const res = await api.getInstallCredentialStatus();
+        setInstallStatus(res);
+      }
+    } catch (err) {
+      setInstallStatus({ enrolled: false });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  const handleEnroll = async () => {
+    const rawToken = tokenInput.trim();
+    setTokenInput('');
+    if (!rawToken) {
+      setError('Please paste a valid installation authorization token.');
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    setError('');
+    try {
+      if (window.electronAPI?.installCredential?.save) {
+        await window.electronAPI.installCredential.save(rawToken);
+      } else {
+        throw new Error('Installation credential management is only supported in the desktop application.');
+      }
+      setMessage('Installation enrolled successfully.');
+      await fetchStatus();
+    } catch (err) {
+      setError(err?.message || 'Failed to save installation credential.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClear = async () => {
+    setBusy(true);
+    setMessage('');
+    setError('');
+    try {
+      if (window.electronAPI?.installCredential?.clear) {
+        await window.electronAPI.installCredential.clear();
+      } else {
+        throw new Error('Installation credential management is only supported in the desktop application.');
+      }
+      setMessage('Installation credential cleared.');
+      await fetchStatus();
+    } catch (err) {
+      setError(err?.message || 'Failed to clear installation credential.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }} data-testid="settings-installation-section">
+      <h3 style={{ marginBottom: 8 }}>Workstation Cloud Synchronization Authorization</h3>
+      <p className="text-muted text-sm" style={{ marginBottom: 16, lineHeight: 1.6 }}>
+        Authorizes this Mock Testing Suite workstation installation to synchronize candidate test sessions to cloud storage.
+        Evaluators do not have individual user accounts or passwords on this testing suite; cloud authorization is tied to the enrolled workstation installation identity.
+      </p>
+
+      {loading ? (
+        <div className="text-muted text-sm">Checking installation status…</div>
+      ) : installStatus?.enrolled ? (
+        <div style={{ background: 'var(--bg-secondary)', padding: '12px 16px', borderRadius: 6, border: '1px solid var(--border-subtle)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#22c55e' }} />
+            <strong style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-primary)' }}>
+              Workstation Authorized
+            </strong>
+          </div>
+          {installStatus.label && (
+            <div className="text-muted text-xs" style={{ marginBottom: 4 }}>
+              <strong>Workstation Label:</strong> {installStatus.label}
+            </div>
+          )}
+          {installStatus.installation_id && (
+            <div className="text-muted text-xs" style={{ marginBottom: 4 }}>
+              <strong>Installation ID:</strong> {installStatus.installation_id}
+            </div>
+          )}
+          {installStatus.enrolled_at && (
+            <div className="text-muted text-xs" style={{ marginBottom: 12 }}>
+              <strong>Authorized:</strong> {new Date(installStatus.enrolled_at).toLocaleString()}
+            </div>
+          )}
+          <button
+            className="btn btn-danger btn-sm"
+            onClick={handleClear}
+            disabled={busy}
+            data-testid="settings-clear-installation"
+            title="Remove cloud authorization from this workstation"
+          >
+            {busy ? 'Clearing…' : 'Remove Workstation Authorization'}
+          </button>
+        </div>
+      ) : (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#f59e0b' }} />
+            <span className="text-muted text-sm">
+              Not Authorized — Session results are saved locally in History but will not synchronize to the cloud until this workstation is authorized.
+            </span>
+          </div>
+          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+            Manual Token Entry (Development / Provisioning Mode):
+          </div>
+          <div style={{ display: 'flex', gap: 8, maxWidth: 540, alignItems: 'center' }}>
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder="Paste workstation authorization token"
+              style={{ flex: 1 }}
+              data-testid="settings-install-token-input"
+              disabled={busy}
+            />
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={handleEnroll}
+              disabled={busy || !tokenInput.trim()}
+              data-testid="settings-enroll-installation-btn"
+            >
+              {busy ? 'Authorizing…' : 'Authorize Workstation'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {message && <div style={{ color: '#22c55e', fontSize: 'var(--font-size-xs)', marginTop: 8 }}>{message}</div>}
+      {error && <div style={{ color: '#ef4444', fontSize: 'var(--font-size-xs)', marginTop: 8 }}>{error}</div>}
     </div>
   );
 }

@@ -113,6 +113,14 @@ const ALLOWED_FINAL_RESULTS = new Set([
   "Fail-Final Attempt",
 ]);
 
+async function hashToken(token: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(token.trim());
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
@@ -138,7 +146,6 @@ Deno.serve(async (req: Request) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
     if (!supabaseUrl || !supabaseServiceKey) {
@@ -148,33 +155,16 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 1. Extract Bearer token
+    // 1. Extract Bearer token from Authorization header
     const authHeader = req.headers.get("Authorization") ?? "";
-    const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
 
-    if (!jwt) {
+    if (!bearerToken) {
       return new Response(
         JSON.stringify({ ok: false, error: "Unauthorized: Missing Authorization Bearer token." }),
         { status: 401, headers: corsHeaders }
       );
     }
-
-    // 2. Authenticate caller independently with Supabase Auth
-    const callerClient = createClient(supabaseUrl, supabaseAnonKey || supabaseServiceKey, {
-      global: { headers: { Authorization: `Bearer ${jwt}` } },
-      auth: { persistSession: false },
-    });
-
-    const { data: { user: authUser }, error: authError } = await callerClient.auth.getUser();
-
-    if (authError || !authUser?.id) {
-      return new Response(
-        JSON.stringify({ ok: false, error: "Unauthorized: Invalid or expired caller token." }),
-        { status: 401, headers: corsHeaders }
-      );
-    }
-
-    const authUid = authUser.id; // Supabase Auth UID (auth.users.id)
 
     // Parse and validate request body
     let body: RequestPayload = {};
@@ -250,65 +240,48 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 3. Connect to database using service-role client for verification and execution
+    // Connect to database using service-role client
     const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false },
     });
 
-    // Query canonical app user by auth_user_id (authUid)
-    const { data: appUserData, error: appUserError } = await adminClient
+    // 2. Authorize caller: MTS Installation Credential only
+    const tokenHash = await hashToken(bearerToken);
+    const { data: instVerifyResult, error: instRpcError } = await adminClient
       .schema("mts_sam")
-      .from("app_users")
-      .select("id, auth_user_id, display_name, active")
-      .eq("auth_user_id", authUid)
-      .maybeSingle();
+      .rpc("verify_mts_installation_credential", {
+        p_credential_hash: tokenHash,
+      });
 
-    if (appUserError || !appUserData) {
+    if (instRpcError) {
+      console.error("[mts-candidate-lifecycle-write] Installation verify RPC failed:", instRpcError.message);
       return new Response(
         JSON.stringify({
           ok: false,
-          error_code: "UNLINKED_ACCOUNT",
-          error: "Your account is not registered for application access.",
+          error_code: "INTERNAL_ERROR",
+          error: "Failed to verify MTS installation credential.",
         }),
-        { status: 403, headers: corsHeaders }
+        { status: 500, headers: corsHeaders }
       );
     }
 
-    if (!appUserData.active) {
+    if (!instVerifyResult || !instVerifyResult.ok) {
+      const errorCode = instVerifyResult?.error_code || "UNAUTHORIZED";
+      const isRevokedOrInactive = errorCode === "INSTALLATION_REVOKED" || errorCode === "INSTALLATION_INACTIVE";
+      const statusCode = isRevokedOrInactive ? 403 : 401;
       return new Response(
         JSON.stringify({
           ok: false,
-          error_code: "INACTIVE_ACCOUNT",
-          error: "Your application account has been deactivated.",
+          error_code: errorCode,
+          error: instVerifyResult?.error || "Unauthorized: Invalid or unrecognized MTS installation credential.",
         }),
-        { status: 403, headers: corsHeaders }
+        { status: statusCode, headers: corsHeaders }
       );
     }
 
-    const canonicalAppUserId = appUserData.id; // Canonical mts_sam.app_users.id
+    const installationId = instVerifyResult.installation_id;
 
-    // 4. Verify active evaluator entitlement
-    const { data: roleAssignments, error: roleError } = await adminClient
-      .schema("mts_sam")
-      .from("user_role_assignments")
-      .select("id, role_key, revoked_at")
-      .eq("user_id", canonicalAppUserId)
-      .eq("role_key", "evaluator")
-      .is("revoked_at", null);
-
-    if (roleError || !roleAssignments || roleAssignments.length === 0) {
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          error_code: "INSUFFICIENT_ROLE",
-          error: "Your account does not have active evaluator permissions.",
-        }),
-        { status: 403, headers: corsHeaders }
-      );
-    }
-
-    // 5. Invoke service-role-only transactional PostgreSQL RPC
-    // Pass canonicalAppUserId as p_actor_user_id (referencing mts_sam.app_users.id)
+    // 3. Invoke service-role-only transactional PostgreSQL RPC
     const { data: rpcResult, error: rpcError } = await adminClient
       .schema("mts_sam")
       .rpc("persist_candidate_lifecycle", {
@@ -319,7 +292,8 @@ Deno.serve(async (req: Request) => {
           headset_review: body.headset_review || null,
           newbie_shift_request: body.newbie_shift_request || null,
         },
-        p_actor_user_id: canonicalAppUserId,
+        p_actor_user_id: null,
+        p_actor_installation_id: installationId,
       });
 
     if (rpcError) {
@@ -338,25 +312,20 @@ Deno.serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           ok: false,
-          error_code: rpcResult?.error_code || "PERSISTENCE_REJECTED",
-          error: rpcResult?.error || "Candidate lifecycle update was rejected.",
+          error_code: rpcResult?.error_code || "HOSTED_WRITE_REJECTED",
+          error: rpcResult?.error || "Transaction was rejected by authoritative policy.",
         }),
         { status: statusCode, headers: corsHeaders }
       );
     }
 
+    return new Response(JSON.stringify(rpcResult), {
+      status: 200,
+      headers: corsHeaders,
+    });
+  } catch (error) {
     return new Response(
-      JSON.stringify({
-        ok: true,
-        canonical_ids: rpcResult.canonical_ids,
-        row_counts: rpcResult.row_counts,
-      }),
-      { status: 200, headers: corsHeaders }
-    );
-  } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : "Internal server error";
-    return new Response(
-      JSON.stringify({ ok: false, error: "An unexpected error occurred." }),
+      JSON.stringify({ ok: false, error: (error as Error).message || "Internal server error." }),
       { status: 500, headers: corsHeaders }
     );
   }

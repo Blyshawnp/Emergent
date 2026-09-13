@@ -63,7 +63,7 @@ const HELP_CATEGORIES = [
   {
     id: 'cat-screenshots',
     title: 'Screenshots',
-    description: 'Phonetics reference and configured screenshot images.',
+    description: 'Configured reference screenshots and image library.',
     anchor: 'discord',
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
   },
@@ -453,7 +453,7 @@ const HELP_TOPICS = [
       'Favorite shortcuts are customized in Settings -> Discord -> Productivity with the Press Shortcut recorder. Click Press Shortcut and press the desired key combination; do not type the shortcut manually.',
       'Some workflow fail popups and follow-up screens also copy specific Discord templates directly from this same content.',
       'Switch to Screenshots to preview and copy any configured screenshot image. Screenshot copy buttons also show Copied when successful.',
-      'Use Screenshots -> Discord Posts to open the centralized Phonetics.png reference when supported.',
+      'Use Screenshots -> Discord Posts to open configured screenshot references when supported.',
       'Templates, suggested screenshots, screenshot image rows, shortcut behavior, automatic copy, confirmation toast, and favorite shortcut assignments are managed in Settings.',
     ],
   },
@@ -511,7 +511,7 @@ const HELP_TOPICS = [
     summary: 'Use the built-in tech issue paths before ending a session for technical reasons.',
     bullets: [
       'Use Tech Issue for internet, DTE, browser, routing, or Other technical problems.',
-      'Use the centralized Discord Posts screenshot reference to preview and copy the phonetics image for Discord.',
+      'Use the centralized Discord Posts screenshot reference to preview and copy reference images for Discord.',
       'Follow the prompts to continue the session, go to Review, or schedule Newbie Shift.',
       'If shared candidate data is temporarily unavailable, continue with the local or manual workflow, wait a moment, and try Refresh again.',
       'If the app itself is misbehaving, restart it. Active session drafts are saved automatically.',

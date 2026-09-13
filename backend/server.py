@@ -154,6 +154,88 @@ def _require_admin_token(request: Request):
         raise HTTPException(status_code=403, detail="Admin access is required for this endpoint.")
 
 
+_EPHEMERAL_BOOTSTRAP_CAPABILITY: str = ""
+BOOTSTRAP_CAPABILITY_HEADER: str = "X-MTS-Bootstrap-Secret"
+
+
+def _get_ephemeral_bootstrap_capability() -> str:
+    return str(_EPHEMERAL_BOOTSTRAP_CAPABILITY or "").strip()
+
+
+def _set_ephemeral_bootstrap_capability(secret: str):
+    global _EPHEMERAL_BOOTSTRAP_CAPABILITY
+    _EPHEMERAL_BOOTSTRAP_CAPABILITY = str(secret or "").strip()
+
+
+def _require_bootstrap_capability(request: Request):
+    expected = _get_ephemeral_bootstrap_capability()
+    provided = (request.headers.get(BOOTSTRAP_CAPABILITY_HEADER) or "").strip()
+    if not expected or not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Valid ephemeral internal bootstrap capability required."
+        )
+
+
+def _start_stdin_bootstrap_listener():
+    def _listener():
+        try:
+            import sys
+            if sys.stdin and not sys.stdin.isatty():
+                line = sys.stdin.readline()
+                if line:
+                    val = line.strip()
+                    if val:
+                        _set_ephemeral_bootstrap_capability(val)
+        except Exception:
+            pass
+
+    threading.Thread(target=_listener, daemon=True, name="mts-bootstrap-stdin-listener").start()
+
+
+_start_stdin_bootstrap_listener()
+
+
+
+_MTS_INSTALLATION_CREDENTIAL = {
+    "credential": "",
+    "label": "",
+    "installation_id": "",
+    "enrolled_at": "",
+}
+
+
+def _get_mts_installation_credential():
+    return dict(_MTS_INSTALLATION_CREDENTIAL)
+
+
+def _set_mts_installation_credential(credential, label="", installation_id="", enrolled_at=None):
+    global _MTS_INSTALLATION_CREDENTIAL
+    cred_str = str(credential or "").strip()
+    lbl_str = str(label or "").strip()
+    inst_id_str = str(installation_id or "").strip()
+    enrolled_str = str(enrolled_at or datetime.now(timezone.utc).isoformat())
+    _MTS_INSTALLATION_CREDENTIAL = {
+        "credential": cred_str,
+        "label": lbl_str,
+        "installation_id": inst_id_str,
+        "enrolled_at": enrolled_str if cred_str else "",
+    }
+
+
+def _clear_mts_installation_credential():
+    global _MTS_INSTALLATION_CREDENTIAL
+    _MTS_INSTALLATION_CREDENTIAL = {
+        "credential": "",
+        "label": "",
+        "installation_id": "",
+        "enrolled_at": "",
+    }
+
+
+def _get_mts_installation_token():
+    return str(_MTS_INSTALLATION_CREDENTIAL.get("credential") or "").strip()
+
 def _admin_token_configured():
     return bool((os.getenv("MTS_ADMIN_TOKEN") or "").strip())
 
@@ -180,6 +262,57 @@ def _is_development_mode():
 
 def _can_use_local_diagnostic_auth_fallback(request: Request):
     return _is_loopback_request(request) and _is_development_mode()
+
+
+def _is_sam_runtime(request: Request = None) -> bool:
+    """
+    Determines whether the server or incoming request is executing within the
+    Smart Alert Manager (SAM) runtime (port 8601+) as opposed to Mock Testing Suite (port 8600).
+    """
+    if request is not None:
+        try:
+            server_info = request.scope.get("server")
+            if server_info and len(server_info) > 1 and server_info[1] is not None:
+                port = int(server_info[1])
+                if port == 8600:
+                    return False
+                if port in range(8601, 8611):
+                    return True
+        except (ValueError, TypeError):
+            pass
+
+        host_hdr = str(request.headers.get("host") or "").strip().lower()
+        if ":8600" in host_hdr:
+            return False
+        if any(f":{p}" in host_hdr for p in range(8601, 8611)):
+            return True
+
+    if os.getenv("MTS_NOTIFICATION_MANAGER") == "1":
+        return True
+    if os.getenv("APPS_SCRIPT_API_ROLE") == "sam":
+        return True
+
+    backend_port = os.getenv("BACKEND_PORT")
+    if backend_port:
+        try:
+            port_num = int(backend_port)
+            if port_num == 8600:
+                return False
+            if port_num >= 8601:
+                return True
+        except ValueError:
+            pass
+
+    return False
+
+
+def _require_sam_runtime(request: Request):
+    """
+    Enforces route isolation between MTS (port 8600) and SAM (port 8601+).
+    SAM-only routes must return 404 Not Found when accessed via the MTS runtime.
+    """
+    if not _is_sam_runtime(request):
+        raise HTTPException(status_code=404, detail="Not Found")
 
 
 def _safe_file_label(value):
@@ -5029,6 +5162,31 @@ def _append_readiness_override_note(text, session):
     return f"{base}\n\n{note}" if base else note
 
 
+SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE = (
+    "The final readiness judgment is Incomplete as the supervisor test call is needed to complete certification."
+)
+
+
+def _is_incomplete_awaiting_supervisor_call(session):
+    if not isinstance(session, dict):
+        return False
+    status = compute_final_status(session)
+    if status != "Incomplete":
+        return False
+    sups_passed = _count_results(session, "sup_transfer", 2, "Pass")
+    sups_failed = _count_results(session, "sup_transfer", 2, "Fail")
+    if sups_passed >= 1 or sups_failed >= 2:
+        return False
+    calls_passed = _count_results(session, "call", 3, "Pass")
+    is_sup_only = bool(session.get("supervisor_only"))
+    has_scheduled_newbie = bool(
+        session.get("newbie_shift_data")
+        or session.get("newbie_shift_scheduled_at")
+        or session.get("newbie_shift_request_id")
+    )
+    return calls_passed >= 2 or is_sup_only or has_scheduled_newbie
+
+
 def _readiness_context_text(session):
     judgment = _readiness_judgment(session)
     calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
@@ -5043,6 +5201,8 @@ def _readiness_context_text(session):
         parts.append(f"Override reason: {reason}.")
     if explanation:
         parts.append(f"Override explanation: {explanation}")
+    if _is_incomplete_awaiting_supervisor_call(session):
+        parts.append(SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE)
     return " ".join(parts).strip()
 
 
@@ -9834,8 +9994,20 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
     session_payload = built["session_payload"]
     attempt_payloads = built["attempt_payloads"]
 
-    # If auth_jwt is available, use the hosted trusted Edge Function boundary
-    if auth_jwt and auth_jwt.strip():
+    auth_token = (auth_jwt or "").strip() or _get_mts_installation_token()
+    if not auth_token:
+        logger.warning("[MTS-PERSIST] Installation is not enrolled or authenticated; lifecycle persistence blocked.")
+        return {
+            "ok": False,
+            "stage": "installation_authorization",
+            "resource": "mts_installations",
+            "safe_identifier": identifiers["session_id"],
+            "error_code": "INSTALLATION_AUTH_REQUIRED",
+            "error": "Installation authorization required. Please enroll this installation in Settings.",
+        }
+
+    # Use the hosted trusted Edge Function boundary with installation or evaluator token
+    if auth_token:
         try:
             dto = {
                 "candidate": {
@@ -9946,7 +10118,7 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
                     else None
                 ),
             }
-            res = _call_supabase_edge_function("mts-candidate-lifecycle-write", dto, auth_jwt.strip())
+            res = _call_supabase_edge_function("mts-candidate-lifecycle-write", dto, auth_token)
             if res.get("ok"):
                 c_ids = res.get("canonical_ids") or {}
                 r_counts = res.get("row_counts") or {}
@@ -9978,126 +10150,13 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
                 "error": f"Hosted Edge Function error: {type(exc).__name__}",
             }
 
-    try:
-        provider = _get_active_data_provider()
-        if not provider or not hasattr(provider, "upsert_rows"):
-            return {
-                "ok": False,
-                "stage": "provider_initialization",
-                "resource": "provider",
-                "safe_identifier": identifiers["session_id"],
-                "error": "Supabase active provider is unavailable",
-            }
-    except Exception as exc:
-        logger.error("[MTS-PERSIST] Failed to obtain active data provider: %s", exc)
-        return {
-            "ok": False,
-            "stage": "provider_initialization",
-            "resource": "provider",
-            "safe_identifier": identifiers["session_id"],
-            "error": f"Provider initialization error: {type(exc).__name__}",
-        }
-
-    cand_adapter = ADAPTER_REGISTRY.get("candidates") or CandidatesAdapter()
-    sess_adapter = ADAPTER_REGISTRY.get("candidate_sessions") or CandidateSessionsAdapter()
-    att_adapter = ADAPTER_REGISTRY.get("session_attempts") or SessionAttemptsAdapter()
-
-    # Stage 1: candidates
-    cand_row_id = None
-    try:
-        cand_transformed = cand_adapter.transform_payload(candidate_payload)
-        cand_allowed = TABLE_ALLOWED_COLUMNS.get("candidates")
-        if cand_allowed:
-            cand_transformed = {k: v for k, v in cand_transformed.items() if k in cand_allowed}
-        cand_written = provider.upsert_rows(
-            "candidates",
-            [cand_transformed],
-            on_conflict=cand_adapter.conflict_key,
-            resolution="merge-duplicates",
-        )
-        if cand_written and isinstance(cand_written, list) and cand_written[0]:
-            cand_row_id = cand_written[0].get("id")
-    except Exception as exc:
-        logger.error("[MTS-PERSIST] Candidate write failed for candidate_id=%s: %s", identifiers["source_candidate_id"], exc)
-        return {
-            "ok": False,
-            "stage": "candidates",
-            "resource": "candidates",
-            "safe_identifier": identifiers["source_candidate_id"],
-            "error": f"Candidate write failed: {type(exc).__name__}",
-        }
-
-    # Stage 2: candidate_sessions
-    sess_row_id = None
-    try:
-        sess_payload_dict = dict(session_payload)
-        if cand_row_id and not sess_payload_dict.get("candidate_id"):
-            sess_payload_dict["candidate_id"] = cand_row_id
-        sess_transformed = sess_adapter.transform_payload(sess_payload_dict)
-        sess_allowed = TABLE_ALLOWED_COLUMNS.get("candidate_sessions")
-        if sess_allowed:
-            sess_transformed = {k: v for k, v in sess_transformed.items() if k in sess_allowed}
-        sess_written = provider.upsert_rows(
-            "candidate_sessions",
-            [sess_transformed],
-            on_conflict=sess_adapter.conflict_key,
-            resolution="merge-duplicates",
-        )
-        if sess_written and isinstance(sess_written, list) and sess_written[0]:
-            sess_row_id = sess_written[0].get("id")
-    except Exception as exc:
-        logger.error("[MTS-PERSIST] Session write failed for session_id=%s: %s", identifiers["session_id"], exc)
-        return {
-            "ok": False,
-            "stage": "candidate_sessions",
-            "resource": "candidate_sessions",
-            "safe_identifier": identifiers["session_id"],
-            "error": f"Session write failed: {type(exc).__name__}",
-        }
-
-    # Stage 3: session_attempts
-    written_attempts_count = 0
-    try:
-        transformed_attempts = []
-        for att in attempt_payloads:
-            att_dict = dict(att)
-            if sess_row_id:
-                att_dict["session_uuid"] = sess_row_id
-            t_att = att_adapter.transform_payload(att_dict)
-            att_allowed = TABLE_ALLOWED_COLUMNS.get("session_attempts")
-            if att_allowed:
-                t_att = {k: v for k, v in t_att.items() if k in att_allowed}
-            transformed_attempts.append(t_att)
-
-        if transformed_attempts:
-            att_written = provider.upsert_rows(
-                "session_attempts",
-                transformed_attempts,
-                on_conflict=att_adapter.conflict_key,
-                resolution="merge-duplicates",
-            )
-            written_attempts_count = len(att_written) if isinstance(att_written, list) else len(transformed_attempts)
-    except Exception as exc:
-        logger.error("[MTS-PERSIST] Session attempts write failed for session_id=%s: %s", identifiers["session_id"], exc)
-        return {
-            "ok": False,
-            "stage": "session_attempts",
-            "resource": "session_attempts",
-            "safe_identifier": identifiers["session_id"],
-            "error": f"Session attempts write failed: {type(exc).__name__}",
-        }
-    logger.info(
-        "[MTS-PERSIST] Primary Supabase lifecycle write succeeded: session_id=%s candidate_id=%s attempts=%d",
-        identifiers["session_id"],
-        identifiers["source_candidate_id"],
-        written_attempts_count,
-    )
     return {
-        "ok": True,
-        "candidate_id": cand_row_id,
-        "session_uuid": sess_row_id,
-        "session_id": identifiers["session_id"],
-        "attempts_count": written_attempts_count,
+        "ok": False,
+        "stage": "hosted_edge_function",
+        "resource": "mts-candidate-lifecycle-write",
+        "safe_identifier": identifiers["session_id"],
+        "error_code": "HOSTED_WRITE_INCOMPLETE",
+        "error": "Direct table persistence fallback is disabled for security. All writes must route through Edge Function.",
     }
 
 
@@ -10818,10 +10877,7 @@ SPECIAL_COACHING_GUIDANCE = (
             "street-name spelling and phone type."
         ),
     ),
-    (
-        "phonetics table provided",
-        "A phonetics table of the sound-alike letters was provided to the candidate for reference.",
-    ),
+
     (
         "search name for every call",
         "Coaching was given on searching the caller's name on every call to help avoid creating duplicate member records.",
@@ -11534,7 +11590,8 @@ def build_clean_coaching(session):
                 return _append_readiness_override_note(fallback_notes_str, session)
             return _append_readiness_override_note(base_summary + "\n\n" + fallback_notes_str, session)
 
-    return _append_readiness_override_note(base_summary, session)
+    result_summary = _append_readiness_override_note(base_summary, session)
+    return result_summary
 
 
 def build_clean_fail(session):
@@ -11628,7 +11685,7 @@ DEFAULT_GEMINI_COACHING_PROMPT = (
     "generalizing vaguely. Reference the specific coached items in plain language, and only "
     "reference coaching items that appear in the session notes. Keep checkbox-specific "
     "guidance from the session notes intact when it explains what was coached, including "
-    "donor-information verification guidance, phonetics-table coaching, caller-name search "
+    "donor-information verification guidance, caller-name search "
     "coaching, and coaching on not volunteering unprovided member information. If a failed "
     "call or supervisor transfer includes fail-reason detail lines, preserve the connection "
     "between the fail reason and its detail. Do not drop the detail or attach it to a different "
@@ -11686,13 +11743,24 @@ def _clean_gemini_prompt_text(value):
     return text
 
 
+GEMINI_PHONETICS_PROHIBITION_RULE = (
+    "STRICT PROHIBITION: Do NOT include any coaching on a phonetics table, sound-alike letters, "
+    "or phonetic alphabet. Phonetics table coaching has been retired and must never be referenced."
+)
+
+
 def _ensure_required_gemini_coaching_rules(prompt):
     text = str(prompt or "").strip()
     if not text:
         return ""
-    if "Coaching was provided using the standard screenshots and Discord chat." in text:
-        return text
-    return f"{text}\n\n{GEMINI_SCREENSHOT_DISCORD_RULE}"
+    rules_to_add = []
+    if "Coaching was provided using the standard screenshots and Discord chat." not in text:
+        rules_to_add.append(GEMINI_SCREENSHOT_DISCORD_RULE)
+    if "Phonetics table coaching has been retired" not in text:
+        rules_to_add.append(GEMINI_PHONETICS_PROHIBITION_RULE)
+    if rules_to_add:
+        return f"{text}\n\n" + "\n\n".join(rules_to_add)
+    return text
 
 
 def _safe_gemini_error_message(exc, api_key=""):
@@ -11872,6 +11940,7 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
     text = _extract_gemini_text(response)
     if not text:
         raise RuntimeError(f"Gemini returned an empty {summary_type} summary.")
+    text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
     return text
 
 
@@ -12166,6 +12235,8 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
         "used_fallback": not used_gemini,
     }
     if res_coaching is not None:
+        if _is_incomplete_awaiting_supervisor_call(session) and SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE not in res_coaching:
+            res_coaching = f"{res_coaching}\n\n{SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE}" if res_coaching else SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE
         ret["coaching"] = res_coaching
     if res_fail is not None:
         ret["fail"] = _ensure_final_attempt_fail_summary(res_fail, session)
@@ -14239,30 +14310,34 @@ def _call_supabase_edge_function(function_name: str, body: dict = None, auth_jwt
         return {"ok": False, "error": str(exc)}
 
 
-@api_router.get("/mts/auth/config")
-async def get_mts_auth_config():
-    config = _load_backend_runtime_config() or {}
+@api_router.post("/internal/install-credential")
+async def set_internal_install_credential(payload: dict, request: Request):
+    _require_bootstrap_capability(request)
+    cred = str((payload or {}).get("credential") or (payload or {}).get("token") or "").strip()
+    label = str((payload or {}).get("label") or "").strip()
+    inst_id = str((payload or {}).get("installation_id") or "").strip()
+    _set_mts_installation_credential(cred, label, inst_id)
+    return {"ok": True, "enrolled": bool(cred), "label": label, "installation_id": inst_id}
+
+
+@api_router.delete("/internal/install-credential")
+async def clear_internal_install_credential(request: Request):
+    _require_bootstrap_capability(request)
+    _clear_mts_installation_credential()
+    return {"ok": True}
+
+
+@api_router.get("/internal/install-credential/status")
+async def get_internal_install_credential_status(request: Request):
+    cred = _get_mts_installation_credential()
+    has_token = bool(cred.get("credential"))
     return {
         "ok": True,
-        "supabase_url": config.get("supabase_url", ""),
-        "supabase_anon_key": config.get("supabase_anon_key", ""),
+        "enrolled": has_token,
+        "label": cred.get("label") or "",
+        "installation_id": cred.get("installation_id") or "",
+        "enrolled_at": cred.get("enrolled_at") or "",
     }
-
-
-@api_router.post("/mts/auth/verify")
-async def post_mts_auth_verify(payload: dict, request: Request):
-    auth_header = request.headers.get("Authorization", "").strip()
-    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
-    if not auth_jwt and (payload or {}).get("access_token"):
-        auth_jwt = str(payload.get("access_token")).strip()
-    if not auth_jwt:
-        return {"ok": False, "errorCode": "missing_auth_identity", "error": "Authentication identity is required."}
-    # RPC takes no parameters — identity derived from auth.uid() via the JWT Bearer token.
-    result = await asyncio.to_thread(_supabase_anon_rpc, "verify_mts_authorization", {}, auth_jwt)
-    # Wrap minimal RPC response with app_user for the frontend sidebar.
-    if isinstance(result, dict) and result.get("ok"):
-        result["app_user"] = {"display_name": result.get("display_name", "")}
-    return result
 
 
 @api_router.get("/sam/auth/config")
@@ -14438,6 +14513,76 @@ async def post_sam_admin_users_send_reset(payload: dict, request: Request):
             return {"ok": False, "error": f"HTTP {exc.code}"}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+@api_router.post("/sam/admin/installations/list")
+async def post_sam_admin_installations_list(payload: dict, request: Request):
+    _require_sam_runtime(request)
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
+    rpc_body = {"p_caller_auth_uid": caller_auth_uid} if caller_auth_uid else {}
+    result = await asyncio.to_thread(_supabase_anon_rpc, "get_sam_installation_list", rpc_body, auth_jwt)
+    return result
+
+
+@api_router.post("/sam/admin/installations/enroll")
+async def post_sam_admin_installations_enroll(payload: dict, request: Request):
+    _require_sam_runtime(request)
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    label = str((payload or {}).get("label") or "").strip()
+    if not label:
+        return {"ok": False, "error": "Installation label is required."}
+    metadata = (payload or {}).get("metadata") or {}
+    raw_credential = secrets.token_urlsafe(32)
+    cred_hash = hashlib.sha256(raw_credential.encode("utf-8")).hexdigest()
+    installation_id = str(uuid.uuid4())
+    caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
+    rpc_body = {
+        "p_installation_id": installation_id,
+        "p_label": label,
+        "p_credential_hash": cred_hash,
+        "p_metadata": metadata,
+    }
+    if caller_auth_uid:
+        rpc_body["p_caller_auth_uid"] = caller_auth_uid
+    result = await asyncio.to_thread(_supabase_anon_rpc, "enroll_sam_installation", rpc_body, auth_jwt)
+    if isinstance(result, dict) and result.get("ok"):
+        result["credential"] = raw_credential
+        result["installation_id"] = installation_id
+        result["label"] = label
+    return result
+
+
+@api_router.post("/sam/admin/installations/revoke")
+async def post_sam_admin_installations_revoke(payload: dict, request: Request):
+    _require_sam_runtime(request)
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    installation_id = str((payload or {}).get("installation_id") or "").strip()
+    if not installation_id:
+        return {"ok": False, "error": "Installation ID is required."}
+    caller_auth_uid = str((payload or {}).get("caller_auth_uid") or "").strip()
+    rpc_body = {
+        "p_installation_id": installation_id,
+    }
+    if caller_auth_uid:
+        rpc_body["p_caller_auth_uid"] = caller_auth_uid
+    result = await asyncio.to_thread(_supabase_anon_rpc, "revoke_sam_installation", rpc_body, auth_jwt)
+    return result
 
 
 @api_router.get("/admin/verify-shared-session-sheets")
