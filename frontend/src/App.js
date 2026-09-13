@@ -618,6 +618,8 @@ function AppShell() {
     if (resolvedVersion) {
       setAppVersion(resolvedVersion);
     }
+  }, []);
+
   useEffect(() => {
     window.sessionStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
   }, [sidebarCollapsed]);
