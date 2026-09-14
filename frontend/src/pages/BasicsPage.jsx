@@ -896,6 +896,8 @@ export default function BasicsPage({ onNavigate }) {
 
   const buildBasicsRecoveredForm = (source, candidateName, finalAttempt, blockResult) => ({
     ...mergeBasicsIntoSession(form, buildBasicsFromRecord(source)),
+    candidate_id: source?.candidate_id || '',
+    source_candidate_id: source?.source_candidate_id || '',
     candidate_name: candidateName || form.candidate_name,
     tester_name: form.tester_name || settings.tester_name || source?.tester_name || '',
     final_attempt: finalAttempt,
@@ -941,6 +943,8 @@ export default function BasicsPage({ onNavigate }) {
       if (!basicsSource) {
         const linkedForm = {
           ...form,
+          candidate_id: match.candidate_id || '',
+          source_candidate_id: match.source_candidate_id || '',
           candidate_name: candidateName || form.candidate_name,
           tester_name: form.tester_name || settings.tester_name || match.tester_name || '',
           final_attempt: finalAttempt,

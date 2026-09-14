@@ -5187,6 +5187,26 @@ def _is_incomplete_awaiting_supervisor_call(session):
     return calls_passed >= 2 or is_sup_only or has_scheduled_newbie
 
 
+READINESS_NARRATION_PATTERNS = (
+    re.compile(r"(?i)\bthe final readiness judgment is incomplete as the supervisor test call is needed to complete certification\.?", re.IGNORECASE),
+    re.compile(r"(?i)\bthe final readiness judgment is [^\.\n]+(?:\.|$)", re.IGNORECASE),
+    re.compile(r"(?i)\bfinal readiness judgment:[^\.\n]+(?:\.|$)", re.IGNORECASE),
+    re.compile(r"(?i)\bthe supervisor test call is needed to complete certification\.?", re.IGNORECASE),
+)
+
+
+def _strip_readiness_narration(text):
+    value = str(text or "").strip()
+    if not value:
+        return value
+    cleaned = value
+    for pattern in READINESS_NARRATION_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n\s*\n+", "\n\n", cleaned).strip()
+    return cleaned
+
+
 def _readiness_context_text(session):
     judgment = _readiness_judgment(session)
     calculated = str(judgment.get("calculatedResult") or compute_calculated_status(session) or "").strip()
@@ -5201,8 +5221,9 @@ def _readiness_context_text(session):
         parts.append(f"Override reason: {reason}.")
     if explanation:
         parts.append(f"Override explanation: {explanation}")
-    if _is_incomplete_awaiting_supervisor_call(session):
-        parts.append(SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE)
+    parts.append(
+        "Final Readiness is displayed in its own dedicated card. Do not narrate it in any summary."
+    )
     return " ".join(parts).strip()
 
 
@@ -10769,11 +10790,54 @@ def _lookup_shared_candidate_sessions(candidate_name):
         }
     lookup_started = time.monotonic()
     logger.info("[SHARED] Candidate lookup started query_len=%d", len(query))
+    local_rows = []
+    try:
+        if getattr(db, "history", None) and getattr(db.history, "store", None):
+            local_history_records = db.history.store.fetchall(
+                "SELECT id, data FROM history_documents ORDER BY id DESC LIMIT 500",
+                (),
+            )
+            for lrec in local_history_records or []:
+                raw_data = lrec.get("data")
+                if isinstance(raw_data, str):
+                    try:
+                        doc = json.loads(raw_data)
+                    except Exception:
+                        doc = {}
+                elif isinstance(raw_data, dict):
+                    doc = raw_data
+                else:
+                    doc = {}
+                if not doc:
+                    continue
+                cname = str(doc.get("candidate_name") or doc.get("name") or "").strip()
+                if not cname:
+                    continue
+                score = _shared_candidate_match_score(query, cname)
+                if score > 0:
+                    normalized = _normalize_shared_row(doc)
+                    normalized.update({
+                        "candidate_name": cname,
+                        "status": str(doc.get("status") or doc.get("result") or "").strip(),
+                        "created_at": str(doc.get("created_at") or doc.get("timestamp") or "").strip(),
+                        "session_id": str(doc.get("session_id") or doc.get("id") or lrec.get("id") or "").strip(),
+                        "history_id": str(doc.get("history_id") or lrec.get("id") or "").strip(),
+                        "attempt_number": str(doc.get("attempt_number") or doc.get("attempt") or "").strip(),
+                        "final_attempt": str(doc.get("final_attempt") or "").strip(),
+                        "completed_at": str(doc.get("completed_at") or doc.get("timestamp") or "").strip(),
+                        "source_candidate_id": str(doc.get("source_candidate_id") or doc.get("candidate_id") or "").strip(),
+                        "candidate_id": str(doc.get("candidate_id") or doc.get("source_candidate_id") or "").strip(),
+                    })
+                    local_rows.append(normalized)
+    except Exception as exc:
+        logger.warning("[SHARED] Local history lookup encountered error: %s", exc)
+
+    rows = []
+    remote_error = None
     if configured_provider_mode() == "supabase":
         try:
             provider = _get_active_data_provider()
             sessions_raw = provider.list_resource("candidate_sessions", limit=5000)
-            rows = []
             for raw_row in sessions_raw or []:
                 payload = merge_source_with_canonical(raw_row.get("source_payload"), raw_row)
                 payload = _apply_authoritative_candidate_status(payload)
@@ -10800,7 +10864,7 @@ def _lookup_shared_candidate_sessions(candidate_name):
                 int((time.monotonic() - lookup_started) * 1000),
                 exc,
             )
-            return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
+            remote_error = exc
     else:
         try:
             context = _shared_sheet_context()
@@ -10810,30 +10874,31 @@ def _lookup_shared_candidate_sessions(candidate_name):
                     len(query),
                     context.get("error"),
                 )
-                return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
-            apps_script_client = context.get("appsScriptClient")
-            if apps_script_client:
-                rows = []
-                for raw_row in _apps_script_rows(apps_script_client, "getCandidateTracking"):
-                    row = _normalize_shared_row(raw_row)
-                    row.update({
-                        "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip(),
-                        "status": str(row.get("status") or row.get("Status") or "").strip(),
-                        "created_at": str(row.get("created_at") or row.get("Timestamp") or "").strip(),
-                        "review_notes": str(row.get("review_notes") or row.get("Notes") or "").strip(),
-                        "tester_name": str(row.get("tester_name") or row.get("UpdatedBy") or "").strip(),
-                        "session_type": str(row.get("session_type") or row.get("SessionType") or row.get("Session Type") or "").strip(),
-                        "attempt_number": str(row.get("attempt_number") or row.get("AttemptNumber") or row.get("Attempt Number") or "").strip(),
-                        "final_attempt": str(row.get("final_attempt") or row.get("FinalAttempt") or row.get("Final Attempt") or "").strip(),
-                        "completed_at": str(row.get("completed_at") or row.get("CompletedAt") or row.get("Completed At") or "").strip(),
-                        "withdrawn": str(row.get("withdrawn") or row.get("Withdrawn") or "").strip(),
-                        "extra_attempt_granted": str(row.get("extra_attempt_granted") or row.get("ExtraAttemptGranted") or row.get("Extra Attempt Granted") or "").strip(),
-                        "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
-                    })
-                    rows.append(row)
+                if not local_rows:
+                    return {"ok": False, "matches": [], "error": context.get("error"), "setup": context.get("setup")}
             else:
-                sheets_api = context["service"].spreadsheets()
-                rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+                apps_script_client = context.get("appsScriptClient")
+                if apps_script_client:
+                    for raw_row in _apps_script_rows(apps_script_client, "getCandidateTracking"):
+                        row = _normalize_shared_row(raw_row)
+                        row.update({
+                            "candidate_name": str(row.get("candidate_name") or row.get("CandidateName") or row.get("Candidate Name") or "").strip(),
+                            "status": str(row.get("status") or row.get("Status") or "").strip(),
+                            "created_at": str(row.get("created_at") or row.get("Timestamp") or "").strip(),
+                            "review_notes": str(row.get("review_notes") or row.get("Notes") or "").strip(),
+                            "tester_name": str(row.get("tester_name") or row.get("UpdatedBy") or "").strip(),
+                            "session_type": str(row.get("session_type") or row.get("SessionType") or row.get("Session Type") or "").strip(),
+                            "attempt_number": str(row.get("attempt_number") or row.get("AttemptNumber") or row.get("Attempt Number") or "").strip(),
+                            "final_attempt": str(row.get("final_attempt") or row.get("FinalAttempt") or row.get("Final Attempt") or "").strip(),
+                            "completed_at": str(row.get("completed_at") or row.get("CompletedAt") or row.get("Completed At") or "").strip(),
+                            "withdrawn": str(row.get("withdrawn") or row.get("Withdrawn") or "").strip(),
+                            "extra_attempt_granted": str(row.get("extra_attempt_granted") or row.get("ExtraAttemptGranted") or row.get("Extra Attempt Granted") or "").strip(),
+                            "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
+                        })
+                        rows.append(row)
+                else:
+                    sheets_api = context["service"].spreadsheets()
+                    rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
         except Exception as exc:
             logger.warning(
                 "[SHARED] Candidate lookup failed query_len=%d duration_ms=%d error=%s",
@@ -10841,7 +10906,31 @@ def _lookup_shared_candidate_sessions(candidate_name):
                 int((time.monotonic() - lookup_started) * 1000),
                 exc,
             )
-            return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {exc}", "setup": _shared_tracking_required_setup()}
+            remote_error = exc
+
+    if remote_error and not local_rows:
+        return {"ok": False, "matches": [], "error": f"Shared candidate lookup unavailable: {remote_error}", "setup": _shared_tracking_required_setup()}
+
+    session_index = {}
+    combined_rows = []
+    for r in rows:
+        sid = str(r.get("session_id") or r.get("id") or "").strip()
+        idx = len(combined_rows)
+        combined_rows.append(r)
+        if sid:
+            session_index[sid] = idx
+    for lr in local_rows:
+        sid = str(lr.get("session_id") or lr.get("history_id") or "").strip()
+        if sid and sid in session_index:
+            existing = combined_rows[session_index[sid]]
+            for k, v in lr.items():
+                if v and not existing.get(k):
+                    existing[k] = v
+        else:
+            combined_rows.append(lr)
+            if sid:
+                session_index[sid] = len(combined_rows) - 1
+    rows = combined_rows
     request_snapshot = _remote_newbie_request_snapshot()
     if request_snapshot.get("ok"):
         rows = [
@@ -12037,11 +12126,21 @@ GEMINI_PHONETICS_PROHIBITION_RULE = (
 )
 
 
+GEMINI_READINESS_PROHIBITION_RULE = (
+    "Final Readiness Judgment is deterministic product output displayed separately. "
+    "Do NOT write a Final Readiness sentence, certification judgment, or an alternate "
+    "supervisor-call-required certification sentence in coaching or fail summaries. "
+    "Summarize only observed performance and coaching."
+)
+
+
 def _ensure_required_gemini_coaching_rules(prompt):
     text = str(prompt or "").strip()
     if not text:
         return ""
     rules_to_add = []
+    if GEMINI_READINESS_PROHIBITION_RULE not in text:
+        rules_to_add.append(GEMINI_READINESS_PROHIBITION_RULE)
     if "Coaching was provided using the standard screenshots and Discord chat." not in text:
         rules_to_add.append(GEMINI_SCREENSHOT_DISCORD_RULE)
     if "Phonetics table coaching has been retired" not in text:
@@ -12203,6 +12302,8 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
 
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(_select_supported_gemini_model(api_key))
+    prompt_template = f"{prompt_template}\n\n{GEMINI_READINESS_PROHIBITION_RULE}"
+    current_summary = _strip_readiness_narration(current_summary)
     if instructions:
         prompt = (
             f"{prompt_template}\n\n"
@@ -12229,7 +12330,7 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
     if not text:
         raise RuntimeError(f"Gemini returned an empty {summary_type} summary.")
     text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
-    return text
+    return _strip_readiness_narration(text)
 
 
 def _generate_gemini_summary_with_timeout(source_text, prompt_template, api_key, summary_type, final_notes_text="", instructions="", current_summary=""):
@@ -12385,8 +12486,8 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
             **diagnostics,
         }
 
-    coaching = build_clean_coaching(session)
-    fail = "N/A" if _is_fail_na(session) else build_clean_fail(session)
+    coaching = _strip_readiness_narration(build_clean_coaching(session))
+    fail = "N/A" if _is_fail_na(session) else _strip_readiness_narration(build_clean_fail(session))
 
     if not use_gemini:
         duration_ms = int((time.perf_counter() - start_time) * 1000)
@@ -12523,11 +12624,9 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
         "used_fallback": not used_gemini,
     }
     if res_coaching is not None:
-        if _is_incomplete_awaiting_supervisor_call(session) and SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE not in res_coaching:
-            res_coaching = f"{res_coaching}\n\n{SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE}" if res_coaching else SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE
-        ret["coaching"] = res_coaching
+        ret["coaching"] = _strip_readiness_narration(res_coaching)
     if res_fail is not None:
-        ret["fail"] = _ensure_final_attempt_fail_summary(res_fail, session)
+        ret["fail"] = _strip_readiness_narration(_ensure_final_attempt_fail_summary(res_fail, session))
     if gemini_error:
         ret["gemini_error"] = gemini_error
         ret["error"] = gemini_error

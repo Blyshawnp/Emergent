@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
+import { buildNewbieShiftAppointment, buildNewbieShiftCalendarUrl } from '../utils/newbieShiftCalendar';
 import {
   buildNewbieShiftDiscordPost,
   buildRescheduleFailSummary,
@@ -117,15 +118,17 @@ export default function NewbieShiftPage({ onNavigate }) {
     return `Supervisor Test Call - ${first} ${lastInitial}`.trim();
   }, [candidateName]);
 
+  const appointment = useMemo(
+    () => buildNewbieShiftAppointment(date, getFormattedTime(), tz),
+    [date, getFormattedTime, tz]
+  );
+
   const handleGcal = useCallback(() => {
-    const ft = getFormattedTime();
-    if (!ft) { modal.warning('Notice', 'Enter a valid time (e.g. 10:30 or 9:45).'); return; }
-    const dateStr = date.replace(/-/g, '');
-    const title = encodeURIComponent(getCalendarTitle());
-    const details = encodeURIComponent(`Mock Testing Suite - Newbie Shift\nTime: ${ft}\nTimezone: ${tz}`);
-    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dateStr}/${dateStr}&details=${details}`;
+    if (!appointment) { modal.warning('Notice', 'Enter a valid date and time in the selected timezone.'); return; }
+    const details = `Mock Testing Suite - Newbie Shift\nTime: ${getFormattedTime()}\nTimezone: ${appointment.timeZone}`;
+    const url = buildNewbieShiftCalendarUrl(appointment, getCalendarTitle(), details);
     window.open(url, '_blank');
-  }, [date, tz, modal, getFormattedTime, getCalendarTitle]);
+  }, [appointment, modal, getFormattedTime, getCalendarTitle]);
 
   const candidateFirstName = splitCandidateFirstName(candidateName);
   const isReschedule = session?.newbie_shift_request_type === NEWBIE_REQUEST_TYPE.RESCHEDULE;
@@ -215,9 +218,9 @@ export default function NewbieShiftPage({ onNavigate }) {
   const handleContinue = useCallback(async () => {
     if (isReschedule && rescheduleSubmitInFlightRef.current) return;
     const ft = getFormattedTime();
-    if (!ft) { await modal.warning('Notice', 'Enter a valid time (e.g. 10:30 or 9:45).'); return; }
+    if (!appointment) { await modal.warning('Notice', 'Enter a valid date and time in the selected timezone.'); return; }
     const fd = getFormattedDate();
-    const scheduledAt = parseScheduledDateTime(fd, ft, tz) || '';
+    const scheduledAt = appointment.scheduledAt;
     const patch = {
       newbie_shift_data: { newbie_date: fd, newbie_time: ft, newbie_tz: tz },
       newbie_shift_scheduled_at: scheduledAt,
@@ -268,7 +271,7 @@ export default function NewbieShiftPage({ onNavigate }) {
         setSubmittingReschedule(false);
       }
     }
-  }, [getFormattedTime, getFormattedDate, tz, session, isReschedule, modal, onNavigate]);
+  }, [appointment, getFormattedTime, getFormattedDate, tz, session, isReschedule, modal, onNavigate]);
 
   const handleStoppedResponding = useCallback(async () => {
     const confirmed = await modal.confirm(

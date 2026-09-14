@@ -201,14 +201,15 @@ class TestInstallationAuthorizationAndFixes(unittest.TestCase):
         }
         self.assertFalse(_is_incomplete_awaiting_supervisor_call(session_failed))
 
-    def test_readiness_context_text_includes_exact_sentence(self):
+    def test_readiness_context_text_does_not_instruct_ai_to_repeat_sentence(self):
         session = {
             "call_1": {"result": "Pass"},
             "call_2": {"result": "Pass"},
             "sup_transfer_1": {},
         }
         context = _readiness_context_text(session)
-        self.assertIn(SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE, context)
+        self.assertNotIn(SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE, context)
+        self.assertIn("Do not narrate it in any summary", context)
         self.assertEqual(
             SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE,
             "The final readiness judgment is Incomplete as the supervisor test call is needed to complete certification.",

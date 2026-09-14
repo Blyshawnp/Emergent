@@ -119,6 +119,64 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
+test('calendar and persisted Newbie Shift share the same timed Eastern appointment', async () => {
+  const open = jest.spyOn(window, 'open').mockImplementation(() => null);
+  const view = await renderPage({
+    newbie_shift_request_type: 'initial',
+    newbie_shift_requested_by: 'tester',
+    newbie_shift_data: {
+      newbie_date: '09/14/2026',
+      newbie_time: '10:30 PM',
+      newbie_tz: 'EST (Eastern)',
+    },
+  });
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="newbie-gcal"]').click();
+    view.container.querySelector('[data-testid="newbie-continue"]').click();
+    await flushPromises();
+  });
+
+  expect(open).toHaveBeenCalledTimes(1);
+  const calendar = new URL(open.mock.calls[0][0]);
+  expect(calendar.searchParams.get('text')).toBe('Supervisor Test Call - Taylor E.');
+  expect(calendar.searchParams.get('dates')).toBe('20260915T023000Z/20260915T030000Z');
+  expect(calendar.searchParams.get('ctz')).toBe('America/New_York');
+  expect(api.updateSession).toHaveBeenCalledWith(expect.objectContaining({
+    newbie_shift_data: { newbie_date: '09/14/2026', newbie_time: '10:30 PM', newbie_tz: 'EST (Eastern)' },
+    newbie_shift_scheduled_at: '2026-09-14T22:30:00-04:00',
+    newbie_shift_timezone: 'EST (Eastern)',
+  }));
+  expect(view.onNavigate).toHaveBeenCalledWith('review');
+  open.mockRestore();
+  await view.unmount();
+});
+
+test('invalid wall time cannot create a calendar event or persist a different appointment', async () => {
+  const open = jest.spyOn(window, 'open').mockImplementation(() => null);
+  const view = await renderPage({
+    newbie_shift_request_type: 'initial',
+    newbie_shift_data: { newbie_date: '03/08/2026', newbie_time: '2:30 AM', newbie_tz: 'EST (Eastern)' },
+  });
+  await act(async () => {
+    view.container.querySelector('[data-testid="newbie-gcal"]').click();
+    view.container.querySelector('[data-testid="newbie-continue"]').click();
+    await flushPromises();
+  });
+  expect(open).not.toHaveBeenCalled();
+  expect(api.updateSession).not.toHaveBeenCalled();
+  expect(view.onNavigate).not.toHaveBeenCalled();
+  expect(mockModal.warning).toHaveBeenCalledWith('Notice', 'Enter a valid date and time in the selected timezone.');
+  open.mockRestore();
+  await view.unmount();
+});
+
+test('active candidate remains visible in Newbie Shift header', async () => {
+  const view = await renderPage({ newbie_shift_request_type: 'initial' });
+  expect(view.container.querySelector('.candidate-header').textContent).toBe('Candidate: Taylor Example');
+  await view.unmount();
+});
+
 test('shows one persistent Final Attempt banner during Newbie Shift', async () => {
   const view = await renderPage({
     final_attempt: true,

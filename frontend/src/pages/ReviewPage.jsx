@@ -121,6 +121,17 @@ function computeCalculatedStatus(session) {
 export const SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE =
   'The final readiness judgment is Incomplete as the supervisor test call is needed to complete certification.';
 
+// Readiness belongs to the deterministic card, including older AI text loaded
+// from History. Transform the current view without rewriting saved History.
+export function stripFinalReadinessNarration(text) {
+  return String(text || '')
+    .replace(/(?:the\s+)?final readiness judgment\s+is\b[^.!?\n]*(?:[.!?]|$)/gi, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
 export function isIncompleteAwaitingSupervisorCall(session) {
   if (!session || typeof session !== 'object') return false;
   const status = computeFinalStatus(session);
@@ -131,7 +142,7 @@ export function isIncompleteAwaitingSupervisorCall(session) {
   const supsFailed = [session.sup_transfer_1, session.sup_transfer_2].filter(
     (s) => s && (s.result === 'Fail' || s.result === 'FAIL')
   ).length;
-  if (supsPassed >= 1 || supsFailed >= 2) return false;
+  if (supsPassed >= 1 || (supsFailed >= 2 && !session.supervisor_retry_required)) return false;
   const callsPassed = [session.call_1, session.call_2, session.call_3].filter(
     (s) => s && (s.result === 'Pass' || s.result === 'PASS')
   ).length;
@@ -441,6 +452,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const [summaryNotice, setSummaryNotice] = useState('');
   const reviewHydratedRef = useRef(false);
   const summaryStartedRef = useRef(false);
+  const generationInFlightRef = useRef(false);
   const historyRecord = navigationState?.historyRecord || null;
   const reviewSessionPayload = navigationState?.reviewSession || navigationState?.session || null;
   const isHistoricalReview = Boolean(historyRecord);
@@ -531,6 +543,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           return;
         }
         summaryStartedRef.current = true;
+        generationInFlightRef.current = true;
 
         setCoaching(hasSavedCoaching ? savedCoaching : getFallbackCoachingSummary(resolvedSession));
         setFail(hasSavedFail ? statusSafeSavedFail : getFallbackFailSummary(resolvedSession));
@@ -542,7 +555,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         api.generateSummaries(resolvedSession)
           .then((summaries) => {
             if (cancelled) return;
-            const nextCoaching = hasSavedCoaching ? savedCoaching : (summaries.coaching || getFallbackCoachingSummary(resolvedSession));
+            const nextCoaching = stripFinalReadinessNarration(hasSavedCoaching ? savedCoaching : (summaries.coaching || getFallbackCoachingSummary(resolvedSession)));
             const nextFail = hasSavedFail ? statusSafeSavedFail : (shouldPopulateFailSummary(finalStatus) ? (summaries.fail || getFallbackFailSummary(resolvedSession)) : 'N/A');
             setCoaching(nextCoaching);
             setFail(nextFail);
@@ -563,6 +576,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             setFail((current) => (hasSavedFail || !isSummaryPlaceholder(current) ? current : getFallbackFailSummary(resolvedSession)));
           })
           .finally(() => {
+            generationInFlightRef.current = false;
             if (!cancelled) setSummaryLoading(false);
           });
       } catch (err) {
@@ -585,7 +599,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         const autosaveJudgment = normalizeFinalReadinessJudgment(session.finalReadinessJudgment, autosaveCalculated);
         const autosaveFinalStatus = computeFinalStatus({ ...session, finalReadinessJudgment: autosaveJudgment });
         api.updateSession({
-          coaching_summary: getSafeSummaryForSubmit(appendReadinessOverrideSummary(coaching, autosaveJudgment), ''),
+          coaching_summary: getSafeSummaryForSubmit(appendReadinessOverrideSummary(stripFinalReadinessNarration(coaching), autosaveJudgment), ''),
           fail_summary: getSafeSummaryForSubmit(getStatusSafeFailSummary(fail, autosaveFinalStatus, autosaveJudgment), ''),
         }).catch(() => {});
       }
@@ -610,7 +624,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   const calculatedStatus = computeCalculatedStatus(s);
   const finalReadinessJudgment = normalizeFinalReadinessJudgment(s.finalReadinessJudgment, calculatedStatus);
   const finalStatus = computeFinalStatus({ ...s, finalReadinessJudgment });
-  const coachingForDisplay = appendReadinessOverrideSummary(coaching, finalReadinessJudgment);
+  const coachingForDisplay = appendReadinessOverrideSummary(stripFinalReadinessNarration(coaching), finalReadinessJudgment);
   const failForDisplay = ensureFinalAttemptSummary(getStatusSafeFailSummary(fail, finalStatus, finalReadinessJudgment), s);
   const incompleteReason = finalStatus === 'Incomplete' ? getIncompleteReason(s) : '';
   const currentTechIssue = getCurrentSessionTechIssue(s);
@@ -639,13 +653,14 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   };
 
   const refreshSummariesForSession = async (nextSession, notice = SUMMARY_PENDING_MESSAGE) => {
-    if (isHistoricalReview || !nextSession?.candidate_name) return;
+    if (isHistoricalReview || !nextSession?.candidate_name || generationInFlightRef.current) return;
+    generationInFlightRef.current = true;
     summaryStartedRef.current = true;
     setSummaryLoading(true);
     setSummaryNotice(notice);
     try {
       const summaries = await api.generateSummaries(nextSession);
-      const nextCoaching = summaries.coaching || getFallbackCoachingSummary(nextSession);
+      const nextCoaching = stripFinalReadinessNarration(summaries.coaching || getFallbackCoachingSummary(nextSession));
       const nextFinalStatus = computeFinalStatus(nextSession);
       const nextFail = shouldPopulateFailSummary(nextFinalStatus) ? (summaries.fail || getFallbackFailSummary(nextSession)) : 'N/A';
       setCoaching(nextCoaching);
@@ -669,6 +684,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         setFail((current) => (isSummaryPlaceholder(current) ? SUMMARY_TIMEOUT_MESSAGE : appendReadinessOverrideSummary(current, nextSession.finalReadinessJudgment)));
       }
     } finally {
+      generationInFlightRef.current = false;
       setSummaryLoading(false);
     }
   };
@@ -683,7 +699,9 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         final_status: nextFinalStatus,
         finalReadinessJudgment: normalized,
       }).catch(() => {});
-      await refreshSummariesForSession(nextSession, 'Final Readiness Judgment changed. Regenerating summaries...');
+      // Readiness is product state. Updating a selector or typing an explanation
+      // must not send a new Gemini request for every input event.
+      setFail(getFallbackFailSummary(nextSession));
     }
   };
 
@@ -733,11 +751,13 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   };
 
   const handleClearNotes = async () => {
+    if (generationInFlightRef.current) return;
     const confirmed = await modal.confirmDanger(
       'Clear Final Notes',
       'Are you sure you want to remove all final evaluator notes and regenerate summaries?'
     );
     if (!confirmed) return;
+    if (generationInFlightRef.current) return;
 
     const clearedNotes = {
       notes: '',
@@ -768,21 +788,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
       fail_summary: ''
     });
     
-    setSummaryLoading(true);
-    setSummaryNotice(SUMMARY_PENDING_MESSAGE);
-    try {
-      const summaries = await api.generateSummaries(nextSession);
-      setCoaching(summaries.coaching || getFallbackCoachingSummary(nextSession));
-      setFail(shouldPopulateFailSummary(computeFinalStatus(nextSession)) ? (summaries.fail || getFallbackFailSummary(nextSession)) : 'N/A');
-      setSummaryDiagnostics(summaries);
-      setSummaryNotice(summaries.gemini_error ? getSummaryFailureMessage({ message: summaries.gemini_error }) : '');
-    } catch (error) {
-      const message = getSummaryFailureMessage(error);
-      setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
-      setSummaryNotice(message);
-    } finally {
-      setSummaryLoading(false);
-    }
+    await refreshSummariesForSession(nextSession);
   };
 
   const handleStartEditNotesSummary = () => {
@@ -798,15 +804,15 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
   };
 
   const handleRegen = async (type) => {
-    if (isHistoricalReview) return;
-    if (regenerating) return;
+    if (isHistoricalReview || generationInFlightRef.current) return;
+    generationInFlightRef.current = true;
     setRegenerating(type);
     setSummaryNotice('');
     try {
       const r = await api.regenerateSummary(type);
       if (r.ok && r.text && !isSummaryPlaceholder(r.text)) {
         if (type === 'coaching') {
-          setCoaching(r.text);
+          setCoaching(stripFinalReadinessNarration(r.text));
           setIsEditingCoaching(false);
         } else {
           setFail(r.text);
@@ -832,23 +838,24 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         buttons: [{ label: 'OK', cls: 'btn-primary', value: true }]
       });
     } finally {
+      generationInFlightRef.current = false;
       setRegenerating('');
     }
   };
 
   const handleRegenWithInstructions = async () => {
+    if (isHistoricalReview || generationInFlightRef.current) return;
+    generationInFlightRef.current = true;
     setShowRegenInstructionsModal(false);
-    if (isHistoricalReview) return;
-    if (regenerating) return;
     setRegenerating(regenType);
     setSummaryNotice('');
     
-    const currentVal = regenType === 'coaching' ? coaching : fail;
+    const currentVal = regenType === 'coaching' ? stripFinalReadinessNarration(coaching) : fail;
     try {
       const r = await api.regenerateSummary(regenType, regenInstructions, currentVal);
       if (r.ok && r.text && !isSummaryPlaceholder(r.text)) {
         if (regenType === 'coaching') {
-          setCoaching(r.text);
+          setCoaching(stripFinalReadinessNarration(r.text));
           setIsEditingCoaching(false);
         } else {
           setFail(r.text);
@@ -866,7 +873,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         });
       }
     } catch (e) {
-      console.error('[REVIEW] Summary regeneration failed:', e);
+      console.error('[REVIEW] Summary regeneration failed');
       await modal.showModal({
         type: 'alert',
         title: 'Regeneration Failed',
@@ -875,28 +882,13 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
         buttons: [{ label: 'OK', cls: 'btn-primary', value: true }]
       });
     } finally {
+      generationInFlightRef.current = false;
       setRegenerating('');
     }
   };
 
   const handleRetrySummaries = async () => {
-    if (isHistoricalReview || summaryLoading || regenerating) return;
-    setSummaryLoading(true);
-    setSummaryNotice('Generating summaries...');
-    try {
-      const r = await api.generateSummaries(session);
-      setSummaryDiagnostics(r);
-      setCoaching(r.coaching || getFallbackCoachingSummary(session));
-      setFail(shouldPopulateFailSummary(finalStatus) ? (r.fail || getFallbackFailSummary(session)) : 'N/A');
-      setSummaryNotice(r.gemini_error ? getSummaryFailureMessage({ message: r.gemini_error }) : '');
-    } catch (e) {
-      const message = getSummaryFailureMessage(e);
-      console.log('[REVIEW] retry summary generation failed', { message });
-      setSummaryDiagnostics({ used_gemini: false, used_fallback: true, gemini_error: message });
-      setSummaryNotice(message);
-    } finally {
-      setSummaryLoading(false);
-    }
+    await refreshSummariesForSession(session);
   };
 
   const runFillForm = async ({ showSuccess = true } = {}) => {
@@ -1292,7 +1284,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                 type="button"
                 className="btn btn-ghost btn-sm"
                 onClick={handleRetrySummaries}
-                disabled={Boolean(regenerating)}
+                disabled={summaryLoading || Boolean(regenerating)}
                 data-testid="review-retry-summary"
               >
                 Retry Summary
@@ -1327,10 +1319,11 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
               <button
                 className="btn btn-success btn-sm"
                 onClick={async () => {
-                  setCoaching(tempCoaching);
+                  const editedCoaching = stripFinalReadinessNarration(tempCoaching);
+                  setCoaching(editedCoaching);
                   setIsEditingCoaching(false);
                   setCoachingEdited(true);
-                  await api.updateSession({ coaching_summary: tempCoaching });
+                  await api.updateSession({ coaching_summary: editedCoaching });
                 }}
               >
                 Save
@@ -1352,7 +1345,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                 <button
                   className="btn btn-ghost btn-sm"
                   onClick={() => {
-                    setTempCoaching(coaching);
+                    setTempCoaching(stripFinalReadinessNarration(coaching));
                     setIsEditingCoaching(true);
                   }}
                 >
@@ -1363,7 +1356,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                 <button
                   className="btn btn-ghost btn-sm"
                   onClick={() => handleRegen('coaching')}
-                  disabled={Boolean(regenerating)}
+                  disabled={summaryLoading || Boolean(regenerating)}
                   data-testid="review-regen-coaching"
                 >
                   {regenerating === 'coaching' ? 'Regenerating...' : 'Regenerate'}
@@ -1377,7 +1370,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                     setRegenInstructions('');
                     setShowRegenInstructionsModal(true);
                   }}
-                  disabled={Boolean(regenerating)}
+                  disabled={summaryLoading || Boolean(regenerating)}
                 >
                   Regenerate with Instructions
                 </button>
@@ -1459,7 +1452,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                 <button
                   className="btn btn-ghost btn-sm"
                   onClick={() => handleRegen('fail')}
-                  disabled={Boolean(regenerating)}
+                  disabled={summaryLoading || Boolean(regenerating)}
                   data-testid="review-regen-fail"
                 >
                   {regenerating === 'fail' ? 'Regenerating...' : 'Regenerate'}
@@ -1473,7 +1466,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
                     setRegenInstructions('');
                     setShowRegenInstructionsModal(true);
                   }}
-                  disabled={Boolean(regenerating)}
+                  disabled={summaryLoading || Boolean(regenerating)}
                 >
                   Regenerate with Instructions
                 </button>
@@ -1548,7 +1541,7 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             </div>
             <div className="modal-footer cmodal-btns" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
               <button className="btn btn-muted" onClick={() => setShowRegenInstructionsModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleRegenWithInstructions}>Regenerate</button>
+              <button className="btn btn-primary" onClick={handleRegenWithInstructions} disabled={summaryLoading || Boolean(regenerating)}>Regenerate</button>
             </div>
           </div>
         </div>

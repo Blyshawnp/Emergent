@@ -1,7 +1,7 @@
 import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import ReviewPage from './ReviewPage';
+import ReviewPage, { SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE } from './ReviewPage';
 import api from '../api';
 
 const mockModal = {
@@ -80,7 +80,9 @@ async function renderReview(session = passingSession, navigationState = null, op
   api.getCurrentSession.mockResolvedValue({ session });
   api.getSettings.mockResolvedValue({});
   api.updateSession.mockResolvedValue({ ok: true, session });
-  if (options.generateSummariesError) {
+  if (options.generateSummariesPromise) {
+    api.generateSummaries.mockReturnValue(options.generateSummariesPromise);
+  } else if (options.generateSummariesError) {
     api.generateSummaries.mockRejectedValue(options.generateSummariesError);
   } else {
     api.generateSummaries.mockResolvedValue(options.generateSummariesResult || {
@@ -97,13 +99,20 @@ async function renderReview(session = passingSession, navigationState = null, op
   mockModal.showModal.mockResolvedValue(true);
 
   await act(async () => {
-    root.render(<ReviewPage onNavigate={onNavigate} navigationState={navigationState} />);
+    const page = <ReviewPage onNavigate={onNavigate} navigationState={navigationState} />;
+    root.render(options.strict ? <React.StrictMode>{page}</React.StrictMode> : page);
     await flushPromises();
   });
 
   return {
     container,
     onNavigate,
+    rerender: async () => {
+      await act(async () => {
+        root.render(<ReviewPage onNavigate={onNavigate} navigationState={navigationState} />);
+        await flushPromises();
+      });
+    },
     unmount: async () => {
       await act(async () => {
         root.unmount();
@@ -132,6 +141,188 @@ test('defaults final readiness judgment to calculated result', async () => {
   expect(view.container.textContent).toContain('Calculated result: Pass');
   expect(view.container.querySelector('[name="final-readiness-mode"]').checked).toBe(true);
 
+  await view.unmount();
+});
+
+const awaitingSupervisor = {
+  ...passingSession,
+  sup_transfer_1: {},
+  sup_transfer_2: {},
+  final_status: 'Incomplete',
+  newbie_shift_data: { newbie_date: '09/14/2026', newbie_time: '10:30 PM', newbie_tz: 'Eastern' },
+};
+const oldReadinessSentence = 'The final readiness judgment is Incomplete, as a successful supervisor test call is required to complete certification.';
+const duplicatedCoaching = `Call 1: Accurate verification. ${oldReadinessSentence}\nCall 2: Good pacing. ${SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE}`;
+
+function assertOneReadiness(view) {
+  const statements = view.container.querySelectorAll('[data-testid="final-readiness-judgment-sentence"]');
+  expect(statements).toHaveLength(1);
+  expect(statements[0].textContent).toBe(SUPERVISOR_CALL_NEEDED_INCOMPLETE_SENTENCE);
+  expect(view.container.querySelector('[data-testid="review-coaching"]').value).not.toMatch(/final readiness judgment/i);
+}
+
+test.each(['saved current', 'history', 'Gemini', 'local fallback'])(
+  '%s coaching does not duplicate the deterministic readiness sentence', async (source) => {
+    const session = { ...awaitingSupervisor, coaching_summary: duplicatedCoaching };
+    let navigation = null;
+    let options = {};
+    if (source === 'history') navigation = { historyRecord: session };
+    if (source === 'Gemini') {
+      session.coaching_summary = '';
+      options = { generateSummariesResult: { coaching: duplicatedCoaching, fail: 'N/A', used_gemini: true } };
+    }
+    if (source === 'local fallback') {
+      session.coaching_summary = '';
+      session.call_1 = { result: 'Pass', coach_notes: duplicatedCoaching };
+      options = { generateSummariesError: new Error('Gemini unavailable') };
+    }
+    const view = await renderReview(session, navigation, options);
+    await act(flushPromises);
+    assertOneReadiness(view);
+    expect(view.container.querySelector('[data-testid="review-coaching"]').value).toContain('Accurate verification');
+    if (source === 'history') {
+      expect(api.updateSession).not.toHaveBeenCalled();
+      expect(session.coaching_summary).toBe(duplicatedCoaching);
+    }
+    await view.unmount();
+  }
+);
+
+test.each([
+  ['resolved supervisor', { ...awaitingSupervisor, sup_transfer_1: { result: 'Pass' } }],
+  ['unrelated incomplete', { ...passingSession, call_1: {}, call_2: {}, sup_transfer_1: {}, final_status: 'Incomplete' }],
+])('%s has no stale supervisor readiness sentence', async (_label, session) => {
+  const view = await renderReview({ ...session, coaching_summary: duplicatedCoaching });
+  expect(view.container.querySelector('[data-testid="final-readiness-judgment-sentence"]')).toBeNull();
+  expect(view.container.querySelector('[data-testid="review-coaching"]').value).not.toMatch(/final readiness judgment/i);
+  await view.unmount();
+});
+
+test('one initial generation survives StrictMode and blocks regeneration while in flight', async () => {
+  let resolveGeneration;
+  const pending = new Promise((resolve) => { resolveGeneration = resolve; });
+  const view = await renderReview({ ...awaitingSupervisor, coaching_summary: '' }, null, {
+    strict: true, generateSummariesPromise: pending,
+  });
+  expect(api.generateSummaries).toHaveBeenCalledTimes(1);
+  const button = view.container.querySelector('[data-testid="review-regen-coaching"]');
+  expect(button.disabled).toBe(true);
+  await act(async () => {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    resolveGeneration({ coaching: duplicatedCoaching, fail: 'N/A' });
+    await flushPromises();
+  });
+  expect(api.regenerateSummary).not.toHaveBeenCalled();
+  assertOneReadiness(view);
+  expect(button.disabled).toBe(false);
+  await view.unmount();
+});
+
+test('rerenders do not generate again and rapid Regenerate clicks create one new request', async () => {
+  const view = await renderReview({ ...awaitingSupervisor, coaching_summary: '' });
+  await act(flushPromises);
+  await view.rerender();
+  expect(api.generateSummaries).toHaveBeenCalledTimes(1);
+  let resolveRegen;
+  api.regenerateSummary.mockReturnValue(new Promise((resolve) => { resolveRegen = resolve; }));
+  const button = view.container.querySelector('[data-testid="review-regen-coaching"]');
+  await act(async () => {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  expect(api.regenerateSummary).toHaveBeenCalledTimes(1);
+  expect(button.disabled).toBe(true);
+  await act(async () => {
+    resolveRegen({ ok: true, text: duplicatedCoaching });
+    await flushPromises();
+  });
+  assertOneReadiness(view);
+  expect(button.disabled).toBe(false);
+  api.regenerateSummary.mockResolvedValue({ ok: true, text: 'Explicit new revision.' });
+  await act(async () => {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(api.regenerateSummary).toHaveBeenCalledTimes(2);
+  await view.unmount();
+});
+
+test('Regenerate with Instructions double click calls only the instructed handler and suppresses readiness', async () => {
+  const view = await renderReview({ ...awaitingSupervisor, coaching_summary: duplicatedCoaching });
+  api.regenerateSummary.mockResolvedValue({ ok: true, text: duplicatedCoaching });
+  await act(async () => {
+    Array.from(view.container.querySelectorAll('button')).find((button) => button.textContent === 'Regenerate with Instructions').click();
+  });
+  const modal = view.container.querySelector('.modal-overlay');
+  await act(async () => {
+    const input = modal.querySelector('textarea');
+    setNativeValue(input, 'Make it shorter.');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => {
+    const button = modal.querySelector('.btn-primary');
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+  expect(api.regenerateSummary).toHaveBeenCalledTimes(1);
+  expect(api.regenerateSummary).toHaveBeenCalledWith('coaching', 'Make it shorter.', expect.not.stringMatching(/final readiness judgment/i));
+  expect(api.generateSummaries).not.toHaveBeenCalled();
+  assertOneReadiness(view);
+  await view.unmount();
+});
+
+test('pending supervisor retry still has exactly one deterministic readiness sentence', async () => {
+  const view = await renderReview({
+    ...awaitingSupervisor,
+    supervisor_retry_required: true,
+    sup_transfer_1: { result: 'Fail' },
+    sup_transfer_2: { result: 'Fail' },
+    coaching_summary: duplicatedCoaching,
+  });
+  assertOneReadiness(view);
+  await view.unmount();
+});
+
+test('generation error releases the shared guard for a later intentional retry', async () => {
+  const view = await renderReview(awaitingSupervisor);
+  api.regenerateSummary.mockRejectedValueOnce(new Error('rate limited'));
+  const button = view.container.querySelector('[data-testid="review-regen-coaching"]');
+  await act(async () => {
+    button.click();
+    await flushPromises();
+  });
+  expect(button.disabled).toBe(false);
+  api.regenerateSummary.mockResolvedValueOnce({ ok: true, text: 'New revision after error.' });
+  await act(async () => {
+    button.click();
+    await flushPromises();
+  });
+  expect(api.regenerateSummary).toHaveBeenCalledTimes(2);
+  expect(view.container.querySelector('[data-testid="review-coaching"]').value).toBe('New revision after error.');
+  await view.unmount();
+});
+
+test('rapid Retry Summary clicks share one request and block Regenerate until it finishes', async () => {
+  const view = await renderReview({ ...awaitingSupervisor, coaching_summary: '' }, null, {
+    generateSummariesError: new Error('Gemini unavailable'),
+  });
+  await act(flushPromises);
+  let resolveRetry;
+  api.generateSummaries.mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve; }));
+  const retry = view.container.querySelector('[data-testid="review-retry-summary"]');
+  await act(async () => {
+    retry.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    retry.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    view.container.querySelector('[data-testid="review-regen-coaching"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  expect(api.generateSummaries).toHaveBeenCalledTimes(2);
+  expect(api.regenerateSummary).not.toHaveBeenCalled();
+  await act(async () => {
+    resolveRetry({ coaching: duplicatedCoaching, fail: 'N/A' });
+    await flushPromises();
+  });
+  assertOneReadiness(view);
   await view.unmount();
 });
 
@@ -490,14 +681,7 @@ test('override to fail updates final result and fill form payload', async () => 
       }),
     })
   );
-  expect(api.generateSummaries).toHaveBeenCalledWith(expect.objectContaining({
-    final_status: 'Fail',
-    finalReadinessJudgment: expect.objectContaining({
-      overrideResult: 'Fail',
-      primaryReason: 'Accuracy/detail concerns',
-      explanation: 'Evaluator observed repeated detail issues.',
-    }),
-  }));
+  expect(api.generateSummaries).not.toHaveBeenCalled();
 
   await view.unmount();
 });
