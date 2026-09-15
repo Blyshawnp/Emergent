@@ -28,6 +28,7 @@ jest.mock('../api', () => ({
     requestHistorySessionDeletion: jest.fn(),
     requestHistorySessionCorrection: jest.fn(),
     updateHistorySessionFormStatus: jest.fn(),
+    retryHistorySessionSync: jest.fn(),
     logHeadsetReview: jest.fn(),
     clearHistory: jest.fn(),
   },
@@ -672,5 +673,97 @@ test('headset review retry uses the stable history identity instead of the trans
     review_id: 'review-1',
     source_session_id: 'stable-1',
   }));
+  await view.unmount();
+});
+
+test('history renders Synced badge for canonically synced session', async () => {
+  const row = {
+    ...historyRows[0],
+    history_id: 'synced-1',
+    sync_status: 'synced',
+  };
+  const view = await renderPage([row]);
+
+  const syncStatus = view.container.querySelector('[data-testid="history-sync-status-0"]');
+  expect(syncStatus).not.toBeNull();
+  expect(syncStatus.textContent).toBe('Synced');
+  expect(view.container.querySelector('[data-testid="history-retry-sync-0"]')).toBeNull();
+
+  await view.unmount();
+});
+
+test('history renders Local Only / Sync Failed badge and Retry Hosted Sync button for failed sync', async () => {
+  const row = {
+    ...historyRows[0],
+    history_id: 'failed-1',
+    sync_status: 'local_only',
+  };
+  const view = await renderPage([row]);
+
+  const syncStatus = view.container.querySelector('[data-testid="history-sync-status-0"]');
+  expect(syncStatus).not.toBeNull();
+  expect(syncStatus.textContent).toBe('Local Only / Sync Failed');
+  const retryBtn = view.container.querySelector('[data-testid="history-retry-sync-0"]');
+  expect(retryBtn).not.toBeNull();
+  expect(retryBtn.textContent).toBe('Retry Hosted Sync');
+
+  await view.unmount();
+});
+
+test('clicking Retry Hosted Sync calls retryHistorySessionSync and updates status to Synced on success', async () => {
+  api.retryHistorySessionSync.mockResolvedValueOnce({
+    ok: true,
+    sync_status: 'synced',
+    message: 'Session synchronized successfully.',
+  });
+  const row = {
+    ...historyRows[0],
+    history_id: 'failed-retry-1',
+    sync_status: 'local_only',
+  };
+  const view = await renderPage([row]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-retry-sync-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.retryHistorySessionSync).toHaveBeenCalledWith('failed-retry-1');
+  const syncStatus = view.container.querySelector('[data-testid="history-sync-status-0"]');
+  expect(syncStatus.textContent).toBe('Synced');
+  expect(view.container.querySelector('[data-testid="history-retry-sync-0"]')).toBeNull();
+  expect(mockModal.alert).toHaveBeenCalledWith(
+    'Hosted Sync Succeeded',
+    'Session synchronized successfully.',
+    'check-circle',
+    'success'
+  );
+
+  await view.unmount();
+});
+
+test('clicking Retry Hosted Sync remains Local Only / Sync Failed on failure', async () => {
+  api.retryHistorySessionSync.mockResolvedValueOnce({
+    ok: false,
+    sync_status: 'local_only',
+    error: 'Hosted database timeout',
+  });
+  const row = {
+    ...historyRows[0],
+    history_id: 'failed-retry-2',
+    sync_status: 'local_only',
+  };
+  const view = await renderPage([row]);
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="history-retry-sync-0"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(api.retryHistorySessionSync).toHaveBeenCalledWith('failed-retry-2');
+  const syncStatus = view.container.querySelector('[data-testid="history-sync-status-0"]');
+  expect(syncStatus.textContent).toBe('Local Only / Sync Failed');
+  expect(mockModal.error).toHaveBeenCalledWith('Hosted Sync Failed', 'Hosted database timeout');
+
   await view.unmount();
 });

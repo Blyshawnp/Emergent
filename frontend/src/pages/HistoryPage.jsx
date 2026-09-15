@@ -9,6 +9,7 @@ import {
   formatNewbieScheduleParts,
   formatNewbieSchedule,
   getNewbieShiftEligibility,
+  historySyncStatusMeta,
   newbieShiftStatusMeta,
   NEWBIE_REQUEST_STATUS,
   sessionStatusMeta,
@@ -132,6 +133,7 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
   const [correctionDraft, setCorrectionDraft] = useState(null);
   const [rescheduleDraft, setRescheduleDraft] = useState(null);
   const [rescheduleSubmitting, setRescheduleSubmitting] = useState(false);
+  const [retryingSyncId, setRetryingSyncId] = useState(null);
   const [showAdminHistoryControls] = useState(() => adminHistoryControlsEnabled());
   const rescheduleTriggerRef = useRef(null);
   const restoreRescheduleFocusRef = useRef(false);
@@ -240,6 +242,45 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       await modal.error('Reschedule Failed', error.message || 'Unable to save the reschedule details. Your selections were preserved.');
     } finally {
       setRescheduleSubmitting(false);
+    }
+  };
+
+  const handleRetrySync = async (record) => {
+    if (!record) return;
+    const historyId = getHistoryIdentity(record);
+    setRetryingSyncId(historyId);
+    try {
+      const response = await api.retryHistorySessionSync(historyId);
+      if (response?.ok) {
+        const nextRecord = {
+          ...record,
+          sync_status: 'synced',
+          sync_error: '',
+          synced_at: new Date().toISOString(),
+        };
+        setDetail((current) => (current && getHistoryIdentity(current) === historyId ? { ...current, ...nextRecord } : current));
+        setHistory((current) => current.map((item) => (
+          getHistoryIdentity(item) === historyId ? { ...item, ...nextRecord } : item
+        )));
+        await modal.alert('Hosted Sync Succeeded', response.message || 'The session was synchronized to the shared system successfully.', 'check-circle', 'success');
+      } else {
+        const errorReason = response?.error || 'Unknown error during synchronization.';
+        const nextRecord = {
+          ...record,
+          sync_status: 'local_only',
+          sync_error: errorReason,
+        };
+        setDetail((current) => (current && getHistoryIdentity(current) === historyId ? { ...current, ...nextRecord } : current));
+        setHistory((current) => current.map((item) => (
+          getHistoryIdentity(item) === historyId ? { ...item, ...nextRecord } : item
+        )));
+        await modal.error('Hosted Sync Failed', errorReason);
+      }
+    } catch (err) {
+      const errorMsg = err?.response?.data?.error || err?.message || 'Unable to retry hosted sync.';
+      await modal.error('Hosted Sync Failed', errorMsg);
+    } finally {
+      setRetryingSyncId(null);
     }
   };
 
@@ -558,11 +599,26 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                   </div>
                   <div className="hist-cell hist-status" role="cell" data-label="Session Status">
                     <StatusChip meta={sessionStatusMeta(s.status)} />
+                    {(() => {
+                      const syncMeta = historySyncStatusMeta(s);
+                      return syncMeta ? <StatusChip meta={syncMeta} data-testid={`history-sync-status-${i}`} /> : null;
+                    })()}
                     {s.candidate_correction_pending ? <StatusChip meta={{ label: 'Correction Pending', tone: 'pending' }} title="Candidate information correction pending SAM review" /> : null}
                   </div>
                   <div className="hist-cell hist-actions" role="cell" data-label="Actions">
                     <div className="hist-actions-group">
                       <button className="btn btn-primary btn-sm" onClick={() => setDetail(s)} data-testid={`history-view-${i}`}>View</button>
+                      {String(s.sync_status || '').toLowerCase() === 'local_only' && (
+                        <button
+                          type="button"
+                          className="btn btn-warning btn-sm"
+                          onClick={() => handleRetrySync(s)}
+                          data-testid={`history-retry-sync-${i}`}
+                          disabled={retryingSyncId === getHistoryIdentity(s)}
+                        >
+                          {retryingSyncId === getHistoryIdentity(s) ? 'Syncing…' : 'Retry Hosted Sync'}
+                        </button>
+                      )}
                       {canRescheduleNewbieShift(s) && <button className="btn btn-warning btn-sm" onClick={() => handleRescheduleSession(s)} data-testid={`history-reschedule-${i}`}>Reschedule</button>}
                       {s.headset_review_sync_status === 'failed' && <button className="btn btn-warning btn-sm" onClick={() => retryHeadsetReview(s)} data-testid={`history-headset-retry-${i}`}>Retry Headset Review</button>}
                       <button className="btn btn-danger btn-sm" onClick={() => handleDeleteSession(s)} data-testid={`history-delete-${i}`}>Delete</button>
@@ -685,6 +741,15 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 <div className="text-sm"><strong>Candidate:</strong> {detail.candidate || detail.candidate_name || 'Unknown'}</div>
                 <div className="text-sm"><strong>Tester:</strong> {detail.tester_name || 'N/A'}</div>
                 <div className="text-sm"><strong>Status:</strong> <StatusChip meta={sessionStatusMeta(detail.status || detail.final_status)} /></div>
+                {(() => {
+                  const syncMeta = historySyncStatusMeta(detail);
+                  return syncMeta ? (
+                    <div className="text-sm" data-testid="history-detail-sync-status">
+                      <strong>Sync Status:</strong> <StatusChip meta={syncMeta} />
+                      {detail.sync_error && <span className="text-muted" style={{ marginLeft: 8 }}>({detail.sync_error})</span>}
+                    </div>
+                  ) : null;
+                })()}
                 {readinessJudgment(detail).calculatedResult && (
                   <div className="text-sm"><strong>Calculated Result:</strong> {readinessJudgment(detail).calculatedResult}</div>
                 )}
@@ -782,6 +847,17 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 <button type="button" className="btn btn-secondary" onClick={() => openCorrectionRequest(detail)} disabled={detail.candidate_correction_pending} data-testid="history-correction-action" aria-label="Correct Candidate Information">
                   {detail.candidate_correction_pending ? 'Correction Pending' : 'Correct Candidate Info'}
                 </button>
+                {String(detail.sync_status || '').toLowerCase() === 'local_only' && (
+                  <button
+                    type="button"
+                    className="btn btn-warning"
+                    onClick={() => handleRetrySync(detail)}
+                    data-testid="history-detail-retry-sync"
+                    disabled={retryingSyncId === getHistoryIdentity(detail)}
+                  >
+                    {retryingSyncId === getHistoryIdentity(detail) ? 'Syncing…' : 'Retry Hosted Sync'}
+                  </button>
+                )}
                 <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>
                 <button type="button" className="btn btn-secondary" onClick={() => handleToggleFormFillStatus(detail)} data-testid="history-toggle-form-status">{detail.form_fill_status === 'filled' ? 'Mark Not Sent' : 'Mark Form Filled'}</button>
                 <button className="btn btn-warning" onClick={() => handleHistoricalFillForm(detail)} data-testid="history-fill-form">{detail.form_fill_status === 'filled' ? 'Refill Cert Form' : 'Fill Cert Form'}</button>
@@ -806,10 +882,10 @@ function SC({ label, value, color }) {
   return <div className="stat-card"><div className="stat-label">{label}</div><div className="stat-value" style={color ? { color } : {}}>{value ?? 0}</div></div>;
 }
 
-function StatusChip({ meta }) {
+function StatusChip({ meta, ...rest }) {
   const safe = meta || { label: 'Unknown', title: 'Unknown', ariaLabel: 'Status: Unknown', className: 'status-chip-form-legacy' };
   return (
-    <span className={`status-chip ${safe.className}`} title={safe.title || safe.label} aria-label={safe.ariaLabel || safe.label}>
+    <span className={`status-chip ${safe.className}`} title={safe.title || safe.label} aria-label={safe.ariaLabel || safe.label} {...rest}>
       <span className="status-chip-icon" aria-hidden="true" />
       <span className="status-chip-label">{safe.label}</span>
     </span>

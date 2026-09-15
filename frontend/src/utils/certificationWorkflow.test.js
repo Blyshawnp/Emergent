@@ -17,14 +17,36 @@ import {
   buildHeadsetAutoFailReason,
   getHeadsetAutoFailReasons,
   sessionStatusMeta,
+  historySyncStatusMeta,
 } from './certificationWorkflow';
 
 test('scheduled timestamps use the selected region DST offset and exact 24-hour boundary', () => {
   expect(parseScheduledDateTime('03/07/2026', '10:00 AM', 'EST (Eastern)')).toBe('2026-03-07T10:00:00-05:00');
   expect(parseScheduledDateTime('03/09/2026', '10:00 AM', 'EST (Eastern)')).toBe('2026-03-09T10:00:00-04:00');
+  expect(parseScheduledDateTime('03/07/2026', '10:00 AM', 'ET (Eastern Time)')).toBe('2026-03-07T10:00:00-05:00');
+  expect(parseScheduledDateTime('03/09/2026', '10:00 AM', 'ET (Eastern Time)')).toBe('2026-03-09T10:00:00-04:00');
+  expect(parseScheduledDateTime('03/07/2026', '10:00 AM', 'CT (Central Time)')).toBe('2026-03-07T10:00:00-06:00');
+  expect(parseScheduledDateTime('03/07/2026', '10:00 AM', 'MT (Mountain Time)')).toBe('2026-03-07T10:00:00-07:00');
+  expect(parseScheduledDateTime('03/07/2026', '10:00 AM', 'PT (Pacific Time)')).toBe('2026-03-07T10:00:00-08:00');
   expect(computeWithin24Hours('2026-03-09T10:00:00-04:00', '2026-03-08T10:00:00-04:00')).toBe(false);
   expect(computeWithin24Hours('2026-03-09T09:59:59-04:00', '2026-03-08T10:00:00-04:00')).toBe(true);
 });
+
+test('historySyncStatusMeta returns appropriate badge configuration for synced and local_only', () => {
+  expect(historySyncStatusMeta('synced')).toMatchObject({
+    label: 'Synced',
+    className: 'status-chip-synced',
+    tone: 'success',
+  });
+  expect(historySyncStatusMeta('local_only')).toMatchObject({
+    label: 'Local Only / Sync Failed',
+    className: 'status-chip-sync-failed',
+    tone: 'warning',
+  });
+  expect(historySyncStatusMeta(null)).toBeNull();
+});
+
+
 
 test('invalid wall-clock values are rejected', () => {
   expect(parseScheduledDateTime('07/21/2026', '13:00 PM', 'EST (Eastern)')).toBeNull();

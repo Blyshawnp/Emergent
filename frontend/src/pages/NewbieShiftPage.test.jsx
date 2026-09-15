@@ -468,3 +468,21 @@ test('submission failure category shows a safe actionable message and does not n
   expect(view.onNavigate).not.toHaveBeenCalledWith('review');
   await view.unmount();
 });
+
+test('timezone selector defaults to ET (Eastern Time) and provides neutral regional options', async () => {
+  const view = await renderPage({
+    newbie_shift_request_type: 'initial',
+    newbie_shift_data: {},
+  });
+  const tzSelect = view.container.querySelector('[data-testid="newbie-tz"]');
+  expect(tzSelect).not.toBeNull();
+  expect(tzSelect.value).toBe('ET (Eastern Time)');
+  const options = Array.from(tzSelect.querySelectorAll('option')).map((o) => o.value);
+  expect(options).toEqual([
+    'ET (Eastern Time)',
+    'CT (Central Time)',
+    'MT (Mountain Time)',
+    'PT (Pacific Time)',
+  ]);
+  await view.unmount();
+});

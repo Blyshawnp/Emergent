@@ -10774,6 +10774,38 @@ def _filter_current_pending_sup_transfers(pending_rows, candidate_rows):
     return filtered
 
 
+_canonical_session_cache = {
+    "ids": set(),
+    "expires_at": 0.0,
+}
+
+
+def _get_canonical_session_ids():
+    now = time.monotonic()
+    if _canonical_session_cache["expires_at"] > now and _canonical_session_cache["ids"]:
+        return _canonical_session_cache["ids"]
+    try:
+        if configured_provider_mode() == "supabase":
+            provider = _get_active_data_provider()
+            sessions_raw = provider.list_resource("candidate_sessions", limit=5000)
+            ids = set()
+            for row in sessions_raw or []:
+                sid = str(row.get("source_session_id") or row.get("session_id") or "").strip()
+                if sid:
+                    ids.add(sid)
+                payload = row.get("source_payload") or {}
+                if isinstance(payload, dict):
+                    psid = str(payload.get("session_id") or payload.get("history_id") or "").strip()
+                    if psid:
+                        ids.add(psid)
+            _canonical_session_cache["ids"] = ids
+            _canonical_session_cache["expires_at"] = now + 15.0
+            return ids
+    except Exception as exc:
+        logger.debug("[MTS-SYNC] Failed to fetch canonical session IDs: %s", exc)
+    return _canonical_session_cache.get("ids") or set()
+
+
 def _lookup_shared_candidate_sessions(candidate_name):
     query = " ".join(str(candidate_name or "").lower().split())
     if len(query) < 2:
@@ -10798,12 +10830,12 @@ def _lookup_shared_candidate_sessions(candidate_name):
                 (),
             )
             for lrec in local_history_records or []:
-                raw_data = lrec.get("data")
+                try:
+                    raw_data = lrec["data"] if hasattr(lrec, "keys") and "data" in lrec.keys() else (lrec.get("data") if hasattr(lrec, "get") else None)
+                except Exception:
+                    raw_data = None
                 if isinstance(raw_data, str):
-                    try:
-                        doc = json.loads(raw_data)
-                    except Exception:
-                        doc = {}
+                    doc = SQLiteCollection.decode(raw_data)
                 elif isinstance(raw_data, dict):
                     doc = raw_data
                 else:
@@ -10815,20 +10847,23 @@ def _lookup_shared_candidate_sessions(candidate_name):
                     continue
                 score = _shared_candidate_match_score(query, cname)
                 if score > 0:
+                    lrec_id = str(lrec["id"] if hasattr(lrec, "keys") and "id" in lrec.keys() else (lrec.get("id") if hasattr(lrec, "get") else "") or "").strip()
                     normalized = _normalize_shared_row(doc)
                     normalized.update({
                         "candidate_name": cname,
                         "status": str(doc.get("status") or doc.get("result") or "").strip(),
                         "created_at": str(doc.get("created_at") or doc.get("timestamp") or "").strip(),
-                        "session_id": str(doc.get("session_id") or doc.get("id") or lrec.get("id") or "").strip(),
-                        "history_id": str(doc.get("history_id") or lrec.get("id") or "").strip(),
+                        "session_id": str(doc.get("session_id") or doc.get("id") or lrec_id).strip(),
+                        "history_id": str(doc.get("history_id") or lrec_id).strip(),
                         "attempt_number": str(doc.get("attempt_number") or doc.get("attempt") or "").strip(),
                         "final_attempt": str(doc.get("final_attempt") or "").strip(),
                         "completed_at": str(doc.get("completed_at") or doc.get("timestamp") or "").strip(),
                         "source_candidate_id": str(doc.get("source_candidate_id") or doc.get("candidate_id") or "").strip(),
                         "candidate_id": str(doc.get("candidate_id") or doc.get("source_candidate_id") or "").strip(),
+                        "sync_status": str(doc.get("sync_status") or "local_only").strip(),
                     })
                     local_rows.append(normalized)
+
     except Exception as exc:
         logger.warning("[SHARED] Local history lookup encountered error: %s", exc)
 
@@ -10855,6 +10890,7 @@ def _lookup_shared_candidate_sessions(candidate_name):
                     "withdrawn": str(row.get("withdrawn") or row.get("Withdrawn") or "").strip(),
                     "extra_attempt_granted": str(row.get("extra_attempt_granted") or row.get("ExtraAttemptGranted") or row.get("Extra Attempt Granted") or "").strip(),
                     "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
+                    "sync_status": "synced",
                 })
                 rows.append(row)
         except Exception as exc:
@@ -10894,11 +10930,15 @@ def _lookup_shared_candidate_sessions(candidate_name):
                             "withdrawn": str(row.get("withdrawn") or row.get("Withdrawn") or "").strip(),
                             "extra_attempt_granted": str(row.get("extra_attempt_granted") or row.get("ExtraAttemptGranted") or row.get("Extra Attempt Granted") or "").strip(),
                             "archived": str(row.get("archived") or row.get("Archived") or "").strip(),
+                            "sync_status": "synced",
                         })
                         rows.append(row)
                 else:
                     sheets_api = context["service"].spreadsheets()
-                    rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+                    sheet_rows = _shared_read_rows(sheets_api, context["sheet_id"], SHARED_CANDIDATE_SESSIONS_TAB, SHARED_CANDIDATE_SESSION_HEADERS)
+                    for sr in sheet_rows or []:
+                        sr["sync_status"] = "synced"
+                        rows.append(sr)
         except Exception as exc:
             logger.warning(
                 "[SHARED] Candidate lookup failed query_len=%d duration_ms=%d error=%s",
@@ -10916,6 +10956,7 @@ def _lookup_shared_candidate_sessions(candidate_name):
     for r in rows:
         sid = str(r.get("session_id") or r.get("id") or "").strip()
         idx = len(combined_rows)
+        r["sync_status"] = "synced"
         combined_rows.append(r)
         if sid:
             session_index[sid] = idx
@@ -10926,7 +10967,9 @@ def _lookup_shared_candidate_sessions(candidate_name):
             for k, v in lr.items():
                 if v and not existing.get(k):
                     existing[k] = v
+            existing["sync_status"] = "synced"
         else:
+            lr["sync_status"] = lr.get("sync_status") or "local_only"
             combined_rows.append(lr)
             if sid:
                 session_index[sid] = len(combined_rows) - 1
@@ -10943,10 +10986,12 @@ def _lookup_shared_candidate_sessions(candidate_name):
         score = _shared_candidate_match_score(query, candidate)
         if score > 0:
             normalized = _normalize_shared_row(row)
+            normalized["sync_status"] = row.get("sync_status") or "local_only"
             normalized["matchConfidence"] = score
             normalized["matchConfirmed"] = score >= 75
             normalized["displayDate"] = normalized.get("completed_at") or normalized.get("created_at") or ""
             matches.append(normalized)
+
     matches.sort(key=lambda row: (int(row.get("matchConfidence") or 0), str(row.get("completed_at") or row.get("created_at") or "")), reverse=True)
     active_matches = [row for row in matches if not _shared_truthy(row.get("archived"))]
     confirmed_matches = [row for row in active_matches if row.get("matchConfirmed")]
@@ -15321,6 +15366,28 @@ async def finish_session_simple(request: Request):
         shared_result = _persist_candidate_lifecycle_to_supabase(saved_record, action, auth_jwt=auth_jwt)
     else:
         shared_result = _sync_shared_candidate_tracking(saved_record)
+
+    if shared_result.get("ok"):
+        sync_updates = {
+            "sync_status": "synced",
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "sync_error": None,
+        }
+        sid = str(saved_record.get("session_id") or saved_record.get("history_id") or "").strip()
+        if sid:
+            _canonical_session_cache["ids"].add(sid)
+        hid = str(saved_record.get("history_id") or "").strip()
+        if hid:
+            _canonical_session_cache["ids"].add(hid)
+    else:
+        sync_updates = {
+            "sync_status": "local_only",
+            "synced_at": None,
+            "sync_error": shared_result.get("error") or str(shared_result.get("error_code") or "sync_failed"),
+        }
+    saved_record.update(sync_updates)
+    _update_saved_history_fields(saved_record.get("history_id"), sync_updates)
+
     headset_review = None
     if _shared_truthy(saved_record.get("headset_review_requested")):
         if shared_result.get("ok"):
@@ -15369,6 +15436,7 @@ async def discard_session(request: Request):
 @api_router.get("/history")
 async def get_history():
     docs = _recent_history_docs(await db.history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500))
+    canon_ids = _get_canonical_session_ids()
     for index, doc in enumerate(docs):
         doc = _session_with_workflow_defaults(doc)
         normalized_status = normalize_history_status(doc)
@@ -15376,9 +15444,19 @@ async def get_history():
         if normalized_status != "NC/NS":
             doc["final_status"] = normalized_status
         doc["history_id"] = doc.get("history_id") or _history_identity(doc)
+        sync_status = doc.get("sync_status")
+        if not sync_status:
+            sid = str(doc.get("session_id") or doc.get("history_id") or "").strip()
+            hid = str(doc.get("history_id") or "").strip()
+            if (sid and sid in canon_ids) or (hid and hid in canon_ids) or doc.get("canonical_session_id"):
+                sync_status = "synced"
+            else:
+                sync_status = "local_only"
+        doc["sync_status"] = sync_status
         docs[index] = doc
     _schedule_shadow_domains("history", "candidate_sessions")
     return docs
+
 
 
 @api_router.post("/history/reconcile")
@@ -15584,6 +15662,12 @@ async def update_history_session_form_status(history_id: str, request: Request):
         sheets_result = _persist_candidate_lifecycle_to_supabase(target, "updated", auth_jwt=auth_jwt)
     else:
         sheets_result = _sync_shared_candidate_tracking(target)
+    if sheets_result.get("ok"):
+        _update_saved_history_fields(target.get("history_id"), {
+            "sync_status": "synced",
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "sync_error": None,
+        })
     return {
         "ok": True,
         "form_fill_status": requested_status,
@@ -15592,8 +15676,73 @@ async def update_history_session_form_status(history_id: str, request: Request):
     }
 
 
+@api_router.post("/history/session/{history_id:path}/retry-sync")
+async def retry_history_session_sync(history_id: str, request: Request):
+    history_id = str(history_id or "").strip()
+    if not history_id:
+        return {"ok": False, "error": "History ID is required.", "sync_status": "local_only"}
+
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC")
+    target_record = None
+    for row in rows:
+        existing = SQLiteCollection.decode(row["data"])
+        if _history_record_matches_identifier(existing, history_id) or str((existing or {}).get("session_id") or "").strip() == history_id:
+            target_record = existing
+            break
+
+    if not target_record:
+        return {"ok": False, "error": f"Session not found for history ID {history_id}", "sync_status": "local_only"}
+
+    auth_header = ""
+    if request and hasattr(request, "headers") and hasattr(request.headers, "get"):
+        raw_header = request.headers.get("Authorization", "")
+        if isinstance(raw_header, str):
+            auth_header = raw_header.strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+
+    action = "updated" if target_record.get("resumed_from_history") else "appended"
+    if configured_provider_mode() == "supabase":
+        sync_res = _persist_candidate_lifecycle_to_supabase(target_record, action, auth_jwt=auth_jwt)
+    else:
+        sync_res = _sync_shared_candidate_tracking(target_record)
+
+    if sync_res.get("ok"):
+        sync_updates = {
+            "sync_status": "synced",
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "sync_error": None,
+        }
+        _update_saved_history_fields(target_record.get("history_id"), sync_updates)
+        sid = str(target_record.get("session_id") or target_record.get("history_id") or "").strip()
+        if sid:
+            _canonical_session_cache["ids"].add(sid)
+        hid = str(target_record.get("history_id") or "").strip()
+        if hid:
+            _canonical_session_cache["ids"].add(hid)
+        return {
+            "ok": True,
+            "sync_status": "synced",
+            "message": "Hosted sync succeeded.",
+            "sharedTracking": sync_res,
+        }
+    else:
+        sync_updates = {
+            "sync_status": "local_only",
+            "synced_at": None,
+            "sync_error": sync_res.get("error") or str(sync_res.get("error_code") or "sync_failed"),
+        }
+        _update_saved_history_fields(target_record.get("history_id"), sync_updates)
+        return {
+            "ok": False,
+            "sync_status": "local_only",
+            "error": sync_res.get("error") or "Hosted sync failed.",
+            "sharedTracking": sync_res,
+        }
+
+
 @api_router.post("/history/session/{history_id:path}/correction-request")
 async def request_history_session_correction(history_id: str, request: Request):
+
     try:
         payload = await request.json()
     except Exception:
@@ -18210,12 +18359,35 @@ async def finish_all(payload: dict, request: Request):
         shared_result = _persist_candidate_lifecycle_to_supabase(_saved_record, action, auth_jwt=auth_jwt)
     else:
         shared_result = _sync_shared_candidate_tracking(_saved_record)
+
+    if shared_result.get("ok"):
+        sync_updates = {
+            "sync_status": "synced",
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "sync_error": None,
+        }
+        sid = str(_saved_record.get("session_id") or _saved_record.get("history_id") or "").strip()
+        if sid:
+            _canonical_session_cache["ids"].add(sid)
+        hid = str(_saved_record.get("history_id") or "").strip()
+        if hid:
+            _canonical_session_cache["ids"].add(hid)
+    else:
+        sync_updates = {
+            "sync_status": "local_only",
+            "synced_at": None,
+            "sync_error": shared_result.get("error") or str(shared_result.get("error_code") or "sync_failed"),
+        }
+    _saved_record.update(sync_updates)
+    _update_saved_history_fields(_saved_record.get("history_id"), sync_updates)
+
     await db.sessions.delete_one({"_id": "active_session"})
     db.backup("after-finish-session")
     message = "Resumed session updated successfully!" if action == "updated" else "Session saved successfully!"
     if not shared_result.get("ok"):
         if configured_provider_mode() == "supabase":
             message = f"{message} Session saved locally, but shared candidate history could not be updated. Retry or sync from History."
+
         else:
             message = f"{message} Session saved locally, but shared Google Sheet update failed."
     return {"ok": True, "message": message, "action": action, "sharedTracking": shared_result}

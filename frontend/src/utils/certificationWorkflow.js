@@ -144,6 +144,32 @@ export function followUpStatusMeta(value) {
   return { category: 'follow_up', label: 'No follow-up', title: 'No follow-up', ariaLabel: 'Follow-up status: No follow-up', className: 'status-chip-followup-none', tone: 'neutral' };
 }
 
+export function historySyncStatusMeta(value) {
+  const raw = typeof value === 'object' && value !== null ? value.sync_status : value;
+  const status = String(raw || '').trim().toLowerCase();
+  if (status === 'synced') {
+    return {
+      category: 'sync',
+      label: 'Synced',
+      title: 'Synced to shared system',
+      ariaLabel: 'Sync status: Synced',
+      className: 'status-chip-synced',
+      tone: 'success',
+    };
+  }
+  if (status === 'local_only' || status === 'sync_failed' || status === 'failed') {
+    return {
+      category: 'sync',
+      label: 'Local Only / Sync Failed',
+      title: 'Saved locally; not synchronized to shared system',
+      ariaLabel: 'Sync status: Local Only / Sync Failed',
+      className: 'status-chip-sync-failed',
+      tone: 'warning',
+    };
+  }
+  return null;
+}
+
 const TERMINAL_NEWBIE_STATUS_TOKENS = new Set([
   'pass',
   'resumed pass',
@@ -318,9 +344,9 @@ function offsetForWallTime(timeZone, isoDate, hour, minute) {
 
 export function timezoneOffsetForLabel(label = '', isoDate = '', hour = 12, minute = 0) {
   const text = String(label || '').toUpperCase();
-  const region = text.includes('PST') || text.includes('PACIFIC') ? 'PACIFIC'
-    : text.includes('MST') || text.includes('MOUNTAIN') ? 'MOUNTAIN'
-      : text.includes('CST') || text.includes('CENTRAL') ? 'CENTRAL'
+  const region = /\b(PT|PST|PDT)\b|PACIFIC/.test(text) ? 'PACIFIC'
+    : /\b(MT|MST|MDT)\b|MOUNTAIN/.test(text) ? 'MOUNTAIN'
+      : /\b(CT|CST|CDT)\b|CENTRAL/.test(text) ? 'CENTRAL'
         : 'EASTERN';
   if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
     try {

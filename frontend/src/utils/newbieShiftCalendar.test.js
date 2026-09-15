@@ -35,6 +35,26 @@ test.each(['CST (Central)', 'MST (Mountain)', 'PST (Pacific)'])('preserves exist
 });
 
 test.each([
+  ['ET (Eastern Time)', 'America/New_York'],
+  ['CT (Central Time)', 'America/Chicago'],
+  ['MT (Mountain Time)', 'America/Denver'],
+  ['PT (Pacific Time)', 'America/Los_Angeles'],
+])('supports neutral regional label %s', (zone, expectedIana) => {
+  const appointment = buildNewbieShiftAppointment('09/14/2026', '10:30 PM', zone);
+  expect(appointment.timeZone).toBe(expectedIana);
+  expect(new Date(appointment.scheduledAt).toISOString()).toBe(appointment.startUtc);
+});
+
+test('09/14/2026 10:30 PM ET produces 20260915T023000Z for Google Calendar', () => {
+  const appointment = buildNewbieShiftAppointment('09/14/2026', '10:30 PM', 'ET (Eastern Time)');
+  expect(appointment.startUtc).toBe('2026-09-15T02:30:00.000Z');
+  const url = new URL(buildNewbieShiftCalendarUrl(appointment, 'Supervisor Test Call', 'Notes'));
+  expect(url.searchParams.get('dates')).toBe('20260915T023000Z/20260915T030000Z');
+  expect(url.searchParams.get('ctz')).toBe('America/New_York');
+});
+
+
+test.each([
   ['03/08/2026', '2:30 AM'],
   ['02/30/2026', '10:30 AM'],
   ['09/14/2026', '13:30 PM'],

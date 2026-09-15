@@ -3,14 +3,14 @@ import { parseScheduledDateTime } from './certificationWorkflow';
 export const NEWBIE_SHIFT_DURATION_MINUTES = 30;
 
 const ZONES = [
-  { zone: 'America/New_York', label: 'EST (Eastern)', match: /eastern|est|edt|new_york/i },
-  { zone: 'America/Chicago', label: 'CST (Central)', match: /central|cst|cdt|chicago/i },
-  { zone: 'America/Denver', label: 'MST (Mountain)', match: /mountain|mst|mdt|denver/i },
-  { zone: 'America/Los_Angeles', label: 'PST (Pacific)', match: /pacific|pst|pdt|los_angeles/i },
+  { zone: 'America/New_York', label: 'ET (Eastern Time)', match: /eastern|est|edt|\bet\b|new_york/i },
+  { zone: 'America/Chicago', label: 'CT (Central Time)', match: /central|cst|cdt|\bct\b|chicago/i },
+  { zone: 'America/Denver', label: 'MT (Mountain Time)', match: /mountain|mst|mdt|\bmt\b|denver/i },
+  { zone: 'America/Los_Angeles', label: 'PT (Pacific Time)', match: /pacific|pst|pdt|\bpt\b|los_angeles/i },
 ];
 
 // Both persistence and Calendar consume this appointment, never browser-local dates.
-export function buildNewbieShiftAppointment(date, time, timezone = 'EST (Eastern)', durationMinutes = NEWBIE_SHIFT_DURATION_MINUTES) {
+export function buildNewbieShiftAppointment(date, time, timezone = 'ET (Eastern Time)', durationMinutes = NEWBIE_SHIFT_DURATION_MINUTES) {
   const zone = ZONES.find((entry) => entry.match.test(timezone));
   if (!zone || !Number.isFinite(durationMinutes) || durationMinutes <= 0) return null;
   const scheduledAt = parseScheduledDateTime(date, time, zone.label);

@@ -54,7 +54,7 @@ export default function NewbieShiftPage({ onNavigate }) {
   const [date, setDate] = useState(tomorrow.toISOString().split('T')[0]);
   const [time, setTime] = useState('');
   const [ampm, setAmpm] = useState('AM');
-  const [tz, setTz] = useState('EST (Eastern)');
+  const [tz, setTz] = useState('ET (Eastern Time)');
 
   useEffect(() => {
     let cancelled = false;
@@ -321,7 +321,7 @@ export default function NewbieShiftPage({ onNavigate }) {
           <div>
             <label className="text-sm font-bold text-muted" style={{ display: 'block', marginBottom: 6 }}>TIMEZONE</label>
             <select value={tz} onChange={e => setTz(e.target.value)} style={{ maxWidth: 200 }} data-testid="newbie-tz">
-              <option>EST (Eastern)</option><option>CST (Central)</option><option>MST (Mountain)</option><option>PST (Pacific)</option>
+              <option>ET (Eastern Time)</option><option>CT (Central Time)</option><option>MT (Mountain Time)</option><option>PT (Pacific Time)</option>
             </select>
           </div>
         </div>

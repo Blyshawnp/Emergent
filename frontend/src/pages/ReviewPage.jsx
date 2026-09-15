@@ -1003,14 +1003,26 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
             console.log('[REVIEW] history refresh after session completion failed', { error: error?.message || String(error) });
           });
         }
-        await modal.showModal({
-          type: 'alert',
-          title: 'Session Saved',
-          body: r.message || 'Your session has been saved successfully!',
-          graphic: 'save',
-          sound: 'success',
-          buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
-        });
+        const sharedOk = r.sharedTracking ? Boolean(r.sharedTracking.ok) : true;
+        if (sharedOk) {
+          await modal.showModal({
+            type: 'alert',
+            title: 'Session Saved',
+            body: r.message || 'Your session has been saved successfully!',
+            graphic: 'save',
+            sound: 'success',
+            buttons: [{ label: 'OK', cls: 'btn-primary', value: true }],
+          });
+        } else {
+          await modal.showModal({
+            type: 'alert',
+            title: 'Saved Locally — Hosted Sync Failed',
+            body: 'The session was saved on this computer, but it could not be synchronized to the shared system. Other testers and SAM may not see this session until synchronization succeeds.<br><br>Retry synchronization from History or notify an administrator.',
+            graphic: 'warning',
+            sound: null,
+            buttons: [{ label: 'OK', cls: 'btn-warning', value: true }],
+          });
+        }
         onNavigate('home');
       }
       else { await modal.error('Error', r.error || 'Unknown'); }

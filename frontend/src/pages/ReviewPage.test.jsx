@@ -783,3 +783,62 @@ test('renders exact supervisor test call sentence in Final Readiness Judgment fo
 
   await view.unmount();
 });
+
+test('finish session with hosted sync success shows Session Saved alert with success sound', async () => {
+  api.finishSession.mockResolvedValueOnce({
+    ok: true,
+    message: 'Session saved successfully!',
+    sharedTracking: { ok: true },
+  });
+  mockModal.showModal
+    .mockResolvedValueOnce('skip')
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(true);
+
+  const view = await renderReview();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="review-finish"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      title: 'Session Saved',
+      sound: 'success',
+      graphic: 'save',
+    })
+  );
+
+  await view.unmount();
+});
+
+test('finish session with hosted sync failure shows Saved Locally — Hosted Sync Failed warning without success sound', async () => {
+  api.finishSession.mockResolvedValueOnce({
+    ok: true,
+    message: 'Session saved locally, but shared candidate history could not be updated.',
+    sharedTracking: { ok: false, error: 'Hosted persistence error' },
+  });
+  mockModal.showModal
+    .mockResolvedValueOnce('skip')
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(true);
+
+  const view = await renderReview();
+
+  await act(async () => {
+    view.container.querySelector('[data-testid="review-finish"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushPromises();
+  });
+
+  expect(mockModal.showModal).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      title: 'Saved Locally — Hosted Sync Failed',
+      sound: null,
+      graphic: 'warning',
+      body: expect.stringContaining('Retry synchronization from History or notify an administrator.'),
+    })
+  );
+
+  await view.unmount();
+});

@@ -176,6 +176,7 @@ const api = {
   requestHistorySessionDeletion: (historyId, reason) => request('POST', `/history/session/${encodeURIComponent(historyId)}/deletion-request`, { reason }),
   requestHistorySessionCorrection: (historyId, changes, reason) => request('POST', `/history/session/${encodeURIComponent(historyId)}/correction-request`, { changes, reason }),
   updateHistorySessionFormStatus: (historyId, formFillStatus) => request('POST', `/history/session/${encodeURIComponent(historyId)}/form-status`, { form_fill_status: formFillStatus }),
+  retryHistorySessionSync: (historyId) => request('POST', `/history/session/${encodeURIComponent(historyId)}/retry-sync`),
   lookupSharedCandidate: (name) => request('GET', `/shared/candidates/lookup?name=${encodeURIComponent(name || '')}`),
   getSharedPendingSupTransfers: () => request('GET', '/shared/pending-sup-transfers'),
   getSharedAdminCandidates: () => request('GET', '/shared/admin/candidates'),
