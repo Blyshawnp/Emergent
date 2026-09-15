@@ -12250,17 +12250,70 @@ def _get_gemini_prompt(settings, prompt_type):
     prompt, _source = _get_gemini_prompt_details(settings, prompt_type)
     return prompt
 
-PREFERRED_GEMINI_TEXT_MODELS = (
+GEMINI_MODEL_CHAIN = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
 )
+PREFERRED_GEMINI_TEXT_MODELS = GEMINI_MODEL_CHAIN
 GEMINI_REQUEST_TIMEOUT_SECONDS = 20
 GEMINI_TEST_TIMEOUT_SECONDS = 10
-GEMINI_RETRY_ATTEMPTS = 2
-GEMINI_RETRY_DELAY_SECONDS = 0.6
-_gemini_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gemini-summary")
+_gemini_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gemini-summary")
+
+# In-flight deduplication registry
+_gemini_in_flight_lock = threading.Lock()
+_gemini_in_flight_futures = {}
+
+_cached_gemini_model = None
+_cached_gemini_model_key = None
+
+
+def _build_gemini_dedup_key(session_id: str, summary_type: str, operation: str, instructions: str = "") -> str:
+    """Constructs a fine-grained deduplication key for in-flight requests.
+
+    Key format: session_id:summary_type:operation:instruction_fingerprint
+    Prevents coalescing between coaching and fail, or between different instructions.
+    """
+    fingerprint = ""
+    if instructions and str(instructions).strip():
+        norm = " ".join(str(instructions).strip().lower().split())
+        fingerprint = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+    return f"{str(session_id or 'unknown').strip()}:{summary_type}:{operation}:{fingerprint}"
+
+
+def _run_with_in_flight_coalescing(dedup_key: str, generator_fn, *args, **kwargs):
+    """Executes generator_fn while coalescing identical concurrent in-flight requests.
+
+    If an identical request is already running, awaits its result without making a duplicate call.
+    Automatically unregisters upon completion so subsequent explicit requests are not blocked or cached.
+    """
+    from concurrent.futures import Future
+
+    with _gemini_in_flight_lock:
+        existing_future = _gemini_in_flight_futures.get(dedup_key)
+        if existing_future is not None and not existing_future.done():
+            logger.info("[GEMINI DEDUP] Coalescing duplicate in-flight request for key: %s", dedup_key)
+            is_creator = False
+            future = existing_future
+        else:
+            future = Future()
+            _gemini_in_flight_futures[dedup_key] = future
+            is_creator = True
+
+    if not is_creator:
+        return future.result()
+
+    try:
+        result = generator_fn(*args, **kwargs)
+        future.set_result(result)
+        return result
+    except Exception as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _gemini_in_flight_lock:
+            if _gemini_in_flight_futures.get(dedup_key) is future:
+                del _gemini_in_flight_futures[dedup_key]
 
 
 def _extract_gemini_text(response):
@@ -12291,46 +12344,158 @@ def _gemini_response_finish_reasons(response):
             reasons.append(str(reason))
     return reasons
 
-_cached_gemini_model = None
-_cached_gemini_model_key = None
 
-def _select_supported_gemini_model(api_key: str) -> str:
-    global _cached_gemini_model, _cached_gemini_model_key
-    if _cached_gemini_model and _cached_gemini_model_key == api_key:
-        return _cached_gemini_model
+def _classify_gemini_error(exc, api_key: str = "") -> tuple[bool, str, str]:
+    """Classifies a Gemini API exception for fallback decisions.
 
-    if not api_key:
-        raise RuntimeError("Gemini is enabled, but no API key is saved.")
+    Returns:
+        (is_retriable, error_class, sanitized_detail)
+    """
+    raw_text = str(exc or "").lower()
+    text = _safe_gemini_error_message(exc, api_key)
+    lowered = text.lower()
 
+    # Non-retriable: Invalid API key, auth, permission
+    if (
+        ("api key" in raw_text or "api key" in lowered or "apikey" in raw_text)
+        and ("invalid" in raw_text or "not valid" in raw_text or "expired" in raw_text or "[redacted] valid" in lowered or "invalid" in lowered)
+        or "permission" in raw_text
+        or "unauthorized" in raw_text
+        or "forbidden" in raw_text
+        or "401" in raw_text
+        or "403" in raw_text
+    ):
+        return False, "invalid_key", "Invalid Gemini API key or unauthorized"
+
+    # Non-retriable: Safety blocks
+    if "safety" in lowered or "finishreason.safety" in lowered or "blockedprompt" in lowered:
+        return False, "safety_block", "Response blocked by safety policy"
+
+    # Non-retriable: Malformed prompt or bad argument
+    if "400" in lowered and "invalid_argument" in lowered and "not supported" not in lowered:
+        return False, "invalid_argument", "Invalid argument in request"
+
+    # Retriable: 429 / RESOURCE_EXHAUSTED / rate limit / quota
+    if (
+        "429" in lowered
+        or "resource_exhausted" in lowered
+        or "resource exhausted" in lowered
+        or "rate limit" in lowered
+        or "quota" in lowered
+    ):
+        return True, "rate_limit", "Gemini rate limit reached (429 / RESOURCE_EXHAUSTED)"
+
+    # Retriable: Timeout
+    if "timeout" in lowered or "timed out" in lowered or isinstance(exc, (FutureTimeoutError, TimeoutError)):
+        return True, "timeout", "Gemini request timed out"
+
+    # Retriable: 5xx / UNAVAILABLE / INTERNAL / Overloaded
+    if (
+        "500" in lowered
+        or "502" in lowered
+        or "503" in lowered
+        or "504" in lowered
+        or "unavailable" in lowered
+        or "internal" in lowered
+        or "overloaded" in lowered
+        or "service unavailable" in lowered
+    ):
+        return True, "server_error", "Gemini service temporarily unavailable"
+
+    # Retriable: Model not found / not supported for this version
+    if "404" in lowered or "not found" in lowered or "not supported" in lowered:
+        return True, "model_unavailable", "Model not supported or unavailable"
+
+    # Retriable: Network errors
+    if "network" in lowered or "connect" in lowered or "connection" in lowered or "dns" in lowered:
+        return True, "network_error", "Network error connecting to Gemini"
+
+    return True, "unknown_error", text or "Unknown Gemini error"
+
+
+def _select_supported_gemini_model(api_key: str = "") -> str:
+    """Returns primary model from GEMINI_MODEL_CHAIN without caching/pinning."""
+    return GEMINI_MODEL_CHAIN[0]
+
+
+def _call_single_gemini_model_content(model_name: str, prompt: str, api_key: str, generation_config=None):
     import google.generativeai as genai
-
     genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+    if generation_config:
+        return model.generate_content(prompt, generation_config=generation_config)
+    return model.generate_content(prompt)
 
-    try:
-        models = list(genai.list_models())
-    except Exception as exc:
-        raise RuntimeError(f"Unable to list Gemini models for this API key: {exc}") from exc
 
-    supported = {}
-    for model in models:
-        name = (getattr(model, "name", "") or "").strip()
-        methods = set(getattr(model, "supported_generation_methods", []) or [])
-        if not name or "generateContent" not in methods:
+def _execute_gemini_with_fallback(
+    prompt: str,
+    api_key: str,
+    summary_type: str = "summary",
+    generation_config=None,
+    timeout_seconds: int = GEMINI_REQUEST_TIMEOUT_SECONDS,
+) -> tuple[str, str, dict]:
+    """Executes a Gemini prompt sequentially across GEMINI_MODEL_CHAIN.
+
+    Each model is attempted at most once.
+    Advances to the next model immediately upon 429/timeout/5xx without hammering the same model.
+    Stops immediately on non-retriable errors (invalid API key, safety block).
+    Returns:
+        (text, model_used, diagnostics)
+    """
+    models_attempted = []
+    last_error_detail = ""
+    last_error_class = ""
+
+    for model_name in GEMINI_MODEL_CHAIN:
+        models_attempted.append(model_name)
+        future = _gemini_executor.submit(
+            _call_single_gemini_model_content,
+            model_name,
+            prompt,
+            api_key,
+            generation_config=generation_config,
+        )
+        try:
+            logger.info("[GEMINI] Attempting model %s for %s", model_name, summary_type)
+            response = future.result(timeout=timeout_seconds)
+            finish_reasons = _gemini_response_finish_reasons(response)
+            if any(reason in {"2", "FinishReason.SAFETY", "SAFETY"} or "SAFETY" in str(reason).upper() for reason in finish_reasons):
+                raise RuntimeError(f"Gemini safety block: {', '.join(finish_reasons)}")
+            text = _extract_gemini_text(response)
+            if not text:
+                raise RuntimeError(f"Gemini returned an empty {summary_type} summary from {model_name}.")
+
+            logger.info("[GEMINI] Model %s succeeded for %s", model_name, summary_type)
+            return text, model_name, {
+                "models_attempted": models_attempted,
+                "model_used": model_name,
+                "error_class": "",
+                "status": "success",
+            }
+        except FutureTimeoutError as exc:
+            future.cancel()
+            is_retriable, error_class, detail = True, "timeout", f"Model {model_name} timed out after {timeout_seconds} seconds."
+            last_error_class = error_class
+            last_error_detail = detail
+            logger.warning("[GEMINI] Model %s timed out for %s. Falling back to next model.", model_name, summary_type)
             continue
-        supported[name.split("/", 1)[-1]] = model
+        except Exception as exc:
+            is_retriable, error_class, detail = _classify_gemini_error(exc, api_key)
+            last_error_class = error_class
+            last_error_detail = detail
+            logger.warning(
+                "[GEMINI] Model %s failed for %s with %s: %s",
+                model_name, summary_type, error_class, detail
+            )
+            if not is_retriable:
+                logger.error("[GEMINI] Non-retriable error on %s; stopping fallback chain.", model_name)
+                raise RuntimeError(detail) from exc
+            # Retriable: advance to next model in GEMINI_MODEL_CHAIN immediately
+            continue
 
-    for preferred_model in PREFERRED_GEMINI_TEXT_MODELS:
-        if preferred_model in supported:
-            logger.info("[GEMINI] Using supported model %s", preferred_model)
-            _cached_gemini_model = preferred_model
-            _cached_gemini_model_key = api_key
-            return preferred_model
-
-    discovered = ", ".join(sorted(supported.keys())) or "none"
-    raise RuntimeError(
-        "No supported Gemini text model was found for generateContent. "
-        f"Available generateContent models for this API key: {discovered}"
-    )
+    error_msg = f"All Gemini models failed ({', '.join(models_attempted)}): {last_error_detail}"
+    logger.warning("[GEMINI] %s", error_msg)
+    raise RuntimeError(error_msg)
 
 
 def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type, final_notes_text="", instructions="", current_summary=""):
@@ -12343,10 +12508,6 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
             "Summary source looked like approved-headset data instead of selected session items."
         )
 
-    import google.generativeai as genai
-
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(_select_supported_gemini_model(api_key))
     prompt_template = f"{prompt_template}\n\n{GEMINI_READINESS_PROHIBITION_RULE}"
     current_summary = _strip_readiness_narration(current_summary)
     if instructions:
@@ -12370,37 +12531,21 @@ def _generate_gemini_summary(source_text, prompt_template, api_key, summary_type
             prompt += f"\nEvaluator's final notes:\n{final_notes_text}\n"
         prompt += "\nReturn only the final summary text with no heading, markdown, or extra commentary."
 
-    response = model.generate_content(prompt)
-    text = _extract_gemini_text(response)
-    if not text:
-        raise RuntimeError(f"Gemini returned an empty {summary_type} summary.")
+    text, model_used, diag = _execute_gemini_with_fallback(prompt, api_key, summary_type=summary_type)
     text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
     return _strip_readiness_narration(text)
 
 
 def _generate_gemini_summary_with_timeout(source_text, prompt_template, api_key, summary_type, final_notes_text="", instructions="", current_summary=""):
-    last_error = None
-    for attempt in range(1, GEMINI_RETRY_ATTEMPTS + 1):
-        future = _gemini_executor.submit(
-            _generate_gemini_summary,
-            source_text,
-            prompt_template,
-            api_key,
-            summary_type,
-            final_notes_text,
-            instructions,
-            current_summary
-        )
-        try:
-            return future.result(timeout=GEMINI_REQUEST_TIMEOUT_SECONDS)
-        except FutureTimeoutError as exc:
-            future.cancel()
-            last_error = RuntimeError(f"Gemini {summary_type} summary timed out after {GEMINI_REQUEST_TIMEOUT_SECONDS} seconds.")
-        except Exception as exc:
-            last_error = exc
-        if attempt < GEMINI_RETRY_ATTEMPTS:
-            time.sleep(GEMINI_RETRY_DELAY_SECONDS)
-    raise last_error or RuntimeError(f"Gemini {summary_type} summary failed.")
+    return _generate_gemini_summary(
+        source_text,
+        prompt_template,
+        api_key,
+        summary_type,
+        final_notes_text=final_notes_text,
+        instructions=instructions,
+        current_summary=current_summary,
+    )
 
 
 def _classify_gemini_test_error(exc, api_key=""):
@@ -12423,55 +12568,38 @@ def _perform_gemini_connection_test(api_key):
     if not api_key:
         return {"ok": False, "code": "no_key", "message": "No Gemini API key configured"}
 
-    import google.generativeai as genai
+    prompt = "Return ONLY the word: OK"
+    generation_config = {"max_output_tokens": 4, "temperature": 0}
+    try:
+        text, model_used, diag = _execute_gemini_with_fallback(
+            prompt,
+            api_key,
+            summary_type="connection_test",
+            generation_config=generation_config,
+            timeout_seconds=GEMINI_TEST_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        code, message = _classify_gemini_test_error(exc, api_key)
+        detail = _safe_gemini_error_message(exc, api_key)
+        logger.warning("[Gemini] Connection test failed: %s", detail)
+        return {"ok": False, "code": code, "message": message, "detail": detail}
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(_select_supported_gemini_model(api_key))
-    response = model.generate_content(
-        "Return ONLY the word: OK",
-        generation_config={"max_output_tokens": 4, "temperature": 0},
-    )
-    text = _extract_gemini_text(response).strip()
-    if not text:
-        finish_reasons = _gemini_response_finish_reasons(response)
-        if any(reason in {"2", "FinishReason.SAFETY", "SAFETY"} or "SAFETY" in reason.upper() for reason in finish_reasons):
-            return {
-                "ok": False,
-                "code": "blocked_or_empty",
-                "message": "Gemini connected, but the test response was blocked or empty. Try a simpler test prompt or check Gemini safety/API settings.",
-                "detail": f"Gemini finish reason: {', '.join(finish_reasons)}",
-            }
+    text = text.strip()
+    if text.upper().strip(" .\n\t") != "OK":
         return {
             "ok": False,
-            "code": "blocked_or_empty",
-            "message": "Gemini connected, but the test response was blocked or empty. Try a simpler test prompt or check Gemini safety/API settings.",
-            "detail": "Gemini returned no text for the connection test.",
+            "code": "unexpected_response",
+            "message": "Gemini returned an unexpected test response.",
+            "detail": f"Response from {model_used}: {text[:50]}",
         }
-    if text.upper().strip(" .\n\t") != "OK":
-        raise RuntimeError("Gemini returned an unexpected test response.")
-    return {"ok": True, "code": "success", "message": "Gemini connection successful"}
+    return {"ok": True, "code": "success", "message": f"Gemini connection successful ({model_used})"}
 
 
 def test_gemini_connection_with_timeout(api_key):
     api_key = str(api_key or "").strip()
     if not api_key:
         return {"ok": False, "code": "no_key", "message": "No Gemini API key configured"}
-
-    future = _gemini_executor.submit(_perform_gemini_connection_test, api_key)
-    try:
-        return future.result(timeout=GEMINI_TEST_TIMEOUT_SECONDS)
-    except FutureTimeoutError as exc:
-        future.cancel()
-        code, message = _classify_gemini_test_error(
-            RuntimeError(f"Gemini request timed out after {GEMINI_TEST_TIMEOUT_SECONDS} seconds."),
-            api_key,
-        )
-        return {"ok": False, "code": code, "message": message, "detail": f"Gemini request timed out after {GEMINI_TEST_TIMEOUT_SECONDS} seconds."}
-    except Exception as exc:
-        code, message = _classify_gemini_test_error(exc, api_key)
-        detail = _safe_gemini_error_message(exc, api_key)
-        logger.warning("[Gemini] Connection test failed: %s", detail)
-        return {"ok": False, "code": code, "message": message, "detail": detail}
+    return _perform_gemini_connection_test(api_key)
 
 
 def generate_summaries(session, api_key="", settings=None, instructions="", current_summary="", summary_type=None):
@@ -12600,30 +12728,41 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
     gemini_error = ""
     used_gemini = False
 
+    session_id = str(
+        session.get("session_id")
+        or session.get("id")
+        or session.get("source_session_id")
+        or session.get("candidate_name")
+        or "default_session"
+    ).strip()
+
     # Generate coaching summary if needed
     if summary_type is None or summary_type == "coaching":
         if coaching == "No coaching data recorded." and not instructions:
             res_coaching = coaching
         else:
+            coaching_operation = (
+                "regenerate_with_instructions" if (instructions and summary_type == "coaching")
+                else ("regenerate" if summary_type == "coaching" else "initial")
+            )
+            coaching_dedup_key = _build_gemini_dedup_key(
+                session_id,
+                "coaching",
+                coaching_operation,
+                instructions=instructions if summary_type == "coaching" else "",
+            )
             try:
-                if instructions and summary_type == "coaching":
-                    res_coaching = _generate_gemini_summary_with_timeout(
-                        coaching,
-                        coaching_prompt,
-                        api_key,
-                        "coaching",
-                        final_notes_text=coaching_notes_text,
-                        instructions=instructions,
-                        current_summary=current_summary
-                    )
-                else:
-                    res_coaching = _generate_gemini_summary_with_timeout(
-                        coaching,
-                        coaching_prompt,
-                        api_key,
-                        "coaching",
-                        final_notes_text=coaching_notes_text
-                    )
+                res_coaching = _run_with_in_flight_coalescing(
+                    coaching_dedup_key,
+                    _generate_gemini_summary,
+                    coaching,
+                    coaching_prompt,
+                    api_key,
+                    "coaching",
+                    final_notes_text=coaching_notes_text,
+                    instructions=instructions if summary_type == "coaching" else "",
+                    current_summary=current_summary if summary_type == "coaching" else "",
+                )
                 used_gemini = True
             except Exception as exc:
                 logger.exception("[GEMINI] Coaching summary generation failed: %s", exc)
@@ -12635,25 +12774,28 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
         if fail == "N/A" and not instructions:
             res_fail = fail
         else:
+            fail_operation = (
+                "regenerate_with_instructions" if (instructions and summary_type == "fail")
+                else ("regenerate" if summary_type == "fail" else "initial")
+            )
+            fail_dedup_key = _build_gemini_dedup_key(
+                session_id,
+                "fail",
+                fail_operation,
+                instructions=instructions if summary_type == "fail" else "",
+            )
             try:
-                if instructions and summary_type == "fail":
-                    res_fail = _generate_gemini_summary_with_timeout(
-                        fail,
-                        fail_prompt,
-                        api_key,
-                        "fail",
-                        final_notes_text=fail_notes_text,
-                        instructions=instructions,
-                        current_summary=current_summary
-                    )
-                else:
-                    res_fail = _generate_gemini_summary_with_timeout(
-                        fail,
-                        fail_prompt,
-                        api_key,
-                        "fail",
-                        final_notes_text=fail_notes_text
-                    )
+                res_fail = _run_with_in_flight_coalescing(
+                    fail_dedup_key,
+                    _generate_gemini_summary,
+                    fail,
+                    fail_prompt,
+                    api_key,
+                    "fail",
+                    final_notes_text=fail_notes_text,
+                    instructions=instructions if summary_type == "fail" else "",
+                    current_summary=current_summary if summary_type == "fail" else "",
+                )
                 used_gemini = True
             except Exception as exc:
                 logger.exception("[GEMINI] Fail summary generation failed: %s", exc)
@@ -12667,6 +12809,7 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
         **diagnostics,
         "used_gemini": used_gemini,
         "used_fallback": not used_gemini,
+        "model_chain": list(GEMINI_MODEL_CHAIN),
     }
     if res_coaching is not None:
         ret["coaching"] = _strip_readiness_narration(res_coaching)
