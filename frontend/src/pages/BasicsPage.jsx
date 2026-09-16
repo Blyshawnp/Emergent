@@ -8,6 +8,7 @@ import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import ActiveCandidateHeader from '../components/ActiveCandidateHeader';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
 import { buildHeadsetAutoFailReason, CERTIFICATION_SUPPORT_EMAIL, followUpStatusMeta } from '../utils/certificationWorkflow';
+import { automaticFinalAttempt, isCertificationAllowanceExhausted, shouldConfirmFinalAttemptOverride } from '../utils/certificationAttemptPolicy';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
 const HEADSET_LIST_VERSION_KEY = 'mts_approved_headset_list_seen_hash';
 const HEADSET_SYNC_ACK_KEY = 'mts_headset_sync_ack_signature';
@@ -301,7 +302,7 @@ export default function BasicsPage({ onNavigate }) {
   const candidateLookupFailureCountRef = useRef(0);
   const candidateLookupLastQueryRef = useRef('');
   const [form, setForm] = useState({
-    candidate_name: '', tester_name: '', final_attempt: false,
+    candidate_name: '', tester_name: '', final_attempt: false, auto_final_attempt: false, final_attempt_overridden: false,
     headset_usb: null, noise_cancel: null, headset_brand: '',
     vpn_on: null, vpn_off: null, chrome_default: null, extensions_disabled: null, popups_allowed: null,
   });
@@ -348,6 +349,11 @@ export default function BasicsPage({ onNavigate }) {
             candidate_name: session.candidate_name || '',
             tester_name: session.tester_name || currentSettings.tester_name || '',
             final_attempt: !!session.final_attempt,
+            auto_final_attempt: !!session.auto_final_attempt,
+            final_attempt_overridden: !!session.final_attempt_overridden,
+            final_attempt_override_reason: session.final_attempt_override_reason || '',
+            attempt_state: session.attempt_state || null,
+            attempt_number: session.attempt_number || 1,
             headset_usb: session.headset_usb ?? null,
             noise_cancel: session.noise_cancel ?? null,
             headset_brand: session.headset_brand || '',
@@ -557,15 +563,50 @@ export default function BasicsPage({ onNavigate }) {
     if (!confirmedCandidateMatch || !candidateLookup.finalAttempt || !candidateName || finalAttemptNoticeShownFor === candidateName) {
       return;
     }
-    setForm((current) => ({ ...current, final_attempt: true }));
+    setForm((current) => ({
+      ...current,
+      final_attempt: true,
+      auto_final_attempt: true,
+      final_attempt_overridden: false,
+      final_attempt_override_reason: '',
+    }));
     setFinalAttemptNoticeShownFor(candidateName);
     modal.warning(
       'Final Attempt Detected',
-      'Shared records show two prior qualifying failures for this candidate. Final Attempt has been set to Yes.'
+      `This is certification attempt ${candidateLookup.attemptState?.current_attempt || ''}, the candidate's final currently authorized attempt. Final Attempt has been set to Yes.`
     );
   }, [candidateLookup.finalAttempt, confirmedCandidateMatch, finalAttemptNoticeShownFor, form.candidate_name, modal]);
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
+  const setFinalAttempt = async (nextValue) => {
+    if (shouldConfirmFinalAttemptOverride(form.auto_final_attempt, form.final_attempt, nextValue)) {
+      const confirmed = await modal.showModal({
+        type: 'confirm',
+        title: 'Confirm Final Attempt Override',
+        body: "This is the candidate's final currently authorized certification attempt. Changing Final Attempt to No will be recorded and will notify SAM. This does not grant the candidate another attempt.",
+        graphic: 'warning',
+        buttons: [
+          { label: 'Cancel', cls: 'btn-muted', value: false },
+          { label: 'Confirm', cls: 'btn-danger', value: true },
+        ],
+      });
+      if (!confirmed) return;
+      setForm((current) => ({
+        ...current,
+        final_attempt: false,
+        final_attempt_overridden: true,
+        final_attempt_override_reason: 'Tester confirmed Final Attempt Yes to No override.',
+      }));
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      final_attempt: nextValue,
+      final_attempt_overridden: false,
+      final_attempt_override_reason: '',
+    }));
+  };
 
   const currentHeadsetIsApproved = useMemo(() => {
     const value = String(form.headset_brand || '').trim();
@@ -729,11 +770,15 @@ export default function BasicsPage({ onNavigate }) {
   };
 
   const handleCandidateBlockOrOverride = async (match) => {
-    if (form.candidate_override_used) {
-      return { allowed: true, override: true };
-    }
     const candidateName = match?.candidate_name || form.candidate_name.trim() || 'This candidate';
     const extraAttemptGranted = sheetTruthy(candidateLookup.extraAttemptGranted) || sheetTruthy(match?.extra_attempt_granted);
+    if (isCertificationAllowanceExhausted(candidateLookup.attemptState, { supervisor_only: supervisorOnlyMode })) {
+      await modal.warning(
+        'No Authorized Attempts Remaining',
+        'No additional certification attempts are currently authorized for this candidate. An administrator must grant another attempt in SAM before a new session can be started.'
+      );
+      return { allowed: false };
+    }
     if (candidateIsWithdrawn(match) && !extraAttemptGranted) {
       await modal.showModal({
         type: 'warning',
@@ -910,6 +955,9 @@ export default function BasicsPage({ onNavigate }) {
     attempt_state: candidateLookup.attemptState || null,
     prior_counted_attempts: candidateLookup.attemptState?.counted_attempts || 0,
     attempt_number: candidateLookup.attemptState?.current_attempt || source?.attempt_number || 1,
+    auto_final_attempt: automaticFinalAttempt(candidateLookup.attemptState, { supervisor_only: supervisorOnlyMode }),
+    final_attempt_overridden: false,
+    final_attempt_override_reason: '',
   });
 
   const startConfirmedCandidate = async (match) => {
@@ -924,7 +972,8 @@ export default function BasicsPage({ onNavigate }) {
     const blockResult = await handleCandidateBlockOrOverride(match);
     if (!blockResult.allowed) return;
 
-    const finalAttempt = sheetTruthy(candidateLookup.finalAttempt) || sheetTruthy(match.final_attempt) || sheetTruthy(form.final_attempt);
+    const autoFinalAttempt = automaticFinalAttempt(candidateLookup.attemptState, { supervisor_only: supervisorOnlyMode });
+    const finalAttempt = autoFinalAttempt || sheetTruthy(match.final_attempt) || sheetTruthy(form.final_attempt);
     let basicsSource = match;
     if (candidateIsNcns(match) || !hasUsableBasicsInfo(match)) {
       let history = [];
@@ -952,6 +1001,9 @@ export default function BasicsPage({ onNavigate }) {
           attempt_state: candidateLookup.attemptState || null,
           prior_counted_attempts: candidateLookup.attemptState?.counted_attempts || 0,
           attempt_number: candidateLookup.attemptState?.current_attempt || match.attempt_number || 1,
+          auto_final_attempt: autoFinalAttempt,
+          final_attempt_overridden: false,
+          final_attempt_override_reason: '',
           candidate_override_used: Boolean(blockResult.override),
           candidate_override_reason: blockResult.override ? 'Tester override after shared final-attempt block.' : '',
         };
@@ -1285,7 +1337,7 @@ export default function BasicsPage({ onNavigate }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} data-tour="basics-final-attempt">
             <label className="text-sm font-bold" style={{ minWidth: 130, color: 'var(--color-danger)', fontWeight: 800 }}>Final Attempt</label>
             <div>
-              <RadioGroup name="b-final-attempt" value={form.final_attempt} onChange={v => set('final_attempt', v)} />
+              <RadioGroup name="b-final-attempt" value={form.final_attempt} onChange={setFinalAttempt} />
               <div className="text-xs" style={{ marginTop: 2, color: 'var(--color-danger)', fontWeight: 800 }}>Select Yes only if this is the candidate&apos;s last allowed attempt.</div>
             </div>
           </div>

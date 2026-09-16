@@ -6954,6 +6954,47 @@ def calculate_candidate_attempt_state(rows, active_session=None):
     }
 
 
+def apply_certification_start_policy(session, attempt_state):
+    """Apply canonical certification allowance without counting completion-only flows."""
+    result = dict(session or {})
+    request_type = str(result.get("newbie_shift_request_type") or "").strip().lower()
+    existing_completion = (
+        _shared_truthy(result.get("supervisor_only"))
+        or _shared_truthy(result.get("resumed_sup_transfer_only"))
+        or (request_type in {"reschedule", "newbie_shift_reschedule"} and not _shared_truthy(result.get("newbie_shift_counts_as_attempt")))
+    )
+    if existing_completion:
+        return {"ok": True, "session": result, "existing_session_completion": True}
+    state = dict(attempt_state or {})
+    if not state.get("retry_allowed", False):
+        return {
+            "ok": False,
+            "error_code": "CERTIFICATION_ATTEMPTS_EXHAUSTED",
+            "error": "No additional certification attempts are currently authorized for this candidate. An administrator must grant another attempt in SAM before a new session can be started.",
+        }
+    automatic_final = bool(state.get("final_attempt"))
+    committed_override = bool(
+        automatic_final
+        and result.get("final_attempt") is False
+        and _shared_truthy(result.get("final_attempt_overridden"))
+    )
+    result.update({
+        "attempt_state": state,
+        "prior_counted_attempts": int(state.get("counted_attempts") or 0),
+        "attempt_number": int(state.get("current_attempt") or 1),
+        "current_attempt_number": int(state.get("current_attempt") or 1),
+        "allowed_attempt_count": int(state.get("max_attempts") or CERTIFICATION_BASE_MAX_ATTEMPTS),
+        "extra_attempts_granted": int(state.get("extra_attempts_granted") or 0),
+        "auto_final_attempt": automatic_final,
+        "final_attempt": False if committed_override else automatic_final,
+        "final_attempt_overridden": committed_override,
+        "final_attempt_override_reason": (
+            str(result.get("final_attempt_override_reason") or "").strip() if committed_override else ""
+        ),
+    })
+    return {"ok": True, "session": result, "existing_session_completion": False}
+
+
 def _candidate_attempt_summary(rows):
     state = calculate_candidate_attempt_state(rows)
     return {
@@ -10339,6 +10380,9 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
                     "allowed_attempt_count": session_payload.get("allowed_attempt_count"),
                     "extra_attempts_granted": session_payload.get("extra_attempts_granted"),
                     "final_attempt": session_payload.get("final_attempt"),
+                    "auto_final_attempt": session_payload.get("auto_final_attempt"),
+                    "final_attempt_overridden": session_payload.get("final_attempt_overridden"),
+                    "final_attempt_override_reason": session_payload.get("final_attempt_override_reason"),
                     "raw_status": session_payload.get("raw_status"),
                     "calculated_result": session_payload.get("calculated_result"),
                     "final_result": session_payload.get("final_result"),
@@ -14724,6 +14768,18 @@ async def get_shared_admin_snapshot(request: Request):
 async def post_shared_admin_candidate_action(payload: dict, request: Request):
     _require_admin_token(request)
     auth_payload = payload or {}
+    if str(auth_payload.get("action") or "").strip().lower() == "grant_extra_attempt":
+        auth_header = request.headers.get("Authorization", "").strip()
+        auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+        if not auth_jwt:
+            raise HTTPException(status_code=401, detail="Authenticated SAM administrator session required.")
+        rpc_payload = {
+            "p_session_id": str(auth_payload.get("session_id") or auth_payload.get("history_id") or "").strip(),
+            "p_expected_allowed_count": int(auth_payload.get("expected_allowed_count") or 0),
+            "p_reason": str(auth_payload.get("reason") or "").strip() or None,
+            "p_caller_auth_uid": str(auth_payload.get("caller_auth_uid") or "").strip() or None,
+        }
+        return await asyncio.to_thread(_supabase_anon_rpc, "grant_sam_extra_attempt", rpc_payload, auth_jwt)
     auth_result, _ = await asyncio.to_thread(
         get_dual_write_manager().execute_dual_write,
         domain="candidate_sessions",
@@ -15376,6 +15432,21 @@ def _update_saved_history_fields(history_id, updates):
 async def start_session(payload: dict, request: Request, background_tasks: BackgroundTasks):
     session = empty_session()
     session.update(payload)
+    completion_policy = apply_certification_start_policy(session, {})
+    if completion_policy.get("existing_session_completion"):
+        session = completion_policy["session"]
+    else:
+        candidate_name = str(session.get("candidate_name") or "").strip()
+        lookup = await asyncio.to_thread(_lookup_shared_candidate_sessions, candidate_name)
+        if candidate_name and lookup.get("ok") is False:
+            raise HTTPException(
+                status_code=503,
+                detail="Current certification-attempt authorization could not be verified. Retry when shared candidate records are available.",
+            )
+        policy = apply_certification_start_policy(session, lookup.get("attemptState") or calculate_candidate_attempt_state([]))
+        if not policy.get("ok"):
+            raise HTTPException(status_code=409, detail=policy.get("error"))
+        session = policy["session"]
     session["session_id"] = str(session.get("session_id") or uuid.uuid4())
     session["history_id"] = _candidate_session_identity(session) or session["session_id"]
     if str(session.get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE:
@@ -16471,22 +16542,22 @@ def _normalize_notification_manager_item(item):
 def _notification_item_from_row(row, fallback_index=1):
     row_data = {
         "Enabled": _notification_cell(row, "enabled"),
-        "ID": _notification_cell(row, "id"),
-        "Type": _notification_cell(row, "type", "category"),
+        "ID": _notification_cell(row, "id", "notification_id"),
+        "Type": _notification_cell(row, "type", "category", "notification_type"),
         "Title": _notification_cell(row, "title"),
         "Message": _notification_cell(row, "message"),
-        "ShowPopup": _notification_cell(row, "show popup", "showpopup", "popup"),
-        "ShowTicker": _notification_cell(row, "show ticker", "showticker", "ticker"),
-        "ShowBanner": _notification_cell(row, "show banner", "showbanner", "banner"),
+        "ShowPopup": _notification_cell(row, "show popup", "showpopup", "popup", "show_popup"),
+        "ShowTicker": _notification_cell(row, "show ticker", "showticker", "ticker", "show_ticker"),
+        "ShowBanner": _notification_cell(row, "show banner", "showbanner", "banner", "show_banner"),
         "Persistent": _notification_cell(row, "persistent"),
-        "StartDate": _notification_cell(row, "start date", "startdate"),
+        "StartDate": _notification_cell(row, "start date", "startdate", "starts_at"),
         "StartTime": _notification_cell(row, "start time", "starttime"),
-        "EndDate": _notification_cell(row, "end date", "enddate"),
+        "EndDate": _notification_cell(row, "end date", "enddate", "ends_at"),
         "EndTime": _notification_cell(row, "end time", "endtime"),
-        "ActionText": _notification_cell(row, "action text", "actiontext"),
-        "ActionURL": _notification_cell(row, "action url", "actionurl"),
-        "CreatedAt": _notification_cell(row, "created at", "createdat"),
-        "UpdatedAt": _notification_cell(row, "updated at", "updatedat"),
+        "ActionText": _notification_cell(row, "action text", "actiontext", "action_text"),
+        "ActionURL": _notification_cell(row, "action url", "actionurl", "action_url"),
+        "CreatedAt": _notification_cell(row, "created at", "createdat", "created_at"),
+        "UpdatedAt": _notification_cell(row, "updated at", "updatedat", "updated_at"),
     }
     dismissible_value = _notification_cell(row, "dismissible")
     if row_data["Persistent"] is None and dismissible_value is not None:
@@ -18045,6 +18116,21 @@ async def get_ticker():
 @api_router.get("/notifications")
 async def get_notifications():
     groups = await _fetch_notifications_from_sheet()
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            rows = await asyncio.to_thread(provider.list_resource, "notifications", limit=5000)
+            canonical = _group_notification_manager_items([
+                item for index, row in enumerate(rows or [], start=1)
+                if (item := _notification_item_from_row(row, index)) is not None
+            ])
+            for key in ("tickerMessages", "banners", "popups"):
+                existing = {str(item.get("ID") or "") for item in groups.get(key, [])}
+                groups.setdefault(key, []).extend(
+                    item for item in canonical.get(key, []) if str(item.get("ID") or "") not in existing
+                )
+        except Exception as exc:
+            logger.warning("[NOTIFICATIONS] Canonical notification read failed: %s", exc)
     result = {
         **groups,
         "source": _ticker_fetch_status.get("source") or "unknown",

@@ -21,6 +21,9 @@ interface RequestPayload {
     allowed_attempt_count?: number;
     extra_attempts_granted?: number;
     final_attempt?: boolean;
+    auto_final_attempt?: boolean;
+    final_attempt_overridden?: boolean;
+    final_attempt_override_reason?: string;
     raw_status?: string;
     calculated_result?: string;
     final_result?: string;
@@ -240,6 +243,18 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    const overrideCommitted = session.final_attempt_overridden === true;
+    if (
+      overrideCommitted &&
+      (session.auto_final_attempt !== true || session.final_attempt !== false ||
+        String(session.session_type || "").trim().toLowerCase() === "sup_transfer_only")
+    ) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Invalid Final Attempt override metadata." }),
+        { status: 400, headers: corsHeaders }
+      );
+    }
+
     // Connect to database using service-role client
     const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false },
@@ -280,6 +295,20 @@ Deno.serve(async (req: Request) => {
     }
 
     const installationId = instVerifyResult.installation_id;
+    const trustedSessionFields = { ...session };
+    delete trustedSessionFields.source_payload;
+    const canonicalSession = {
+      ...trustedSessionFields,
+      source_payload: {
+        ...trustedSessionFields,
+        auto_final_attempt: session.auto_final_attempt === true,
+        final_attempt_overridden: overrideCommitted,
+        final_attempt_override_reason: overrideCommitted
+          ? String(session.final_attempt_override_reason || "").trim() || null
+          : null,
+        actor_installation_id: installationId,
+      },
+    };
 
     // 3. Invoke service-role-only transactional PostgreSQL RPC
     const { data: rpcResult, error: rpcError } = await adminClient
@@ -287,7 +316,7 @@ Deno.serve(async (req: Request) => {
       .rpc("persist_candidate_lifecycle", {
         p_payload: {
           candidate: candidate,
-          session: session,
+          session: canonicalSession,
           attempts: body.attempts || [],
           headset_review: body.headset_review || null,
           newbie_shift_request: body.newbie_shift_request || null,

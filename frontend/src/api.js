@@ -181,7 +181,10 @@ const api = {
   getSharedPendingSupTransfers: () => request('GET', '/shared/pending-sup-transfers'),
   getSharedAdminCandidates: () => request('GET', '/shared/admin/candidates'),
   getSharedAdminSnapshot: () => request('GET', '/shared/admin/snapshot'),
-  updateSharedAdminCandidate: (payload) => request('POST', '/shared/admin/candidates/action', payload),
+  updateSharedAdminCandidate: (payload, accessToken = '') => request('POST', '/shared/admin/candidates/action', {
+    ...payload,
+    ...(accessToken ? { access_token: accessToken } : {}),
+  }),
   getSharedAdminPendingRequests: () => request('GET', '/shared/admin/pending-requests'),
   updateSharedAdminPendingRequest: (payload) => request('POST', '/shared/admin/pending-requests/action', payload),
   getTicker: () => request('GET', '/ticker', null, 5000),

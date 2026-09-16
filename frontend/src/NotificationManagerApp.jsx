@@ -33,6 +33,7 @@ import {
   Settings as SettingsIcon,
 } from 'lucide-react';
 import './notification-manager.css';
+import { additionalAttemptContext, canGrantAdditionalAttempt } from './utils/certificationAttemptPolicy';
 import './polish-sam.css';
 import api from './api';
 import {
@@ -2925,7 +2926,7 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
   );
 }
 
-function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault, showStatusModal }) {
+function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault, showStatusModal, allowAdditionalAttemptGrant }) {
   const [detailKey, setDetailKey] = useState(null);
   const [selectedTargets, setSelectedTargets] = useState({});
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
@@ -3121,13 +3122,20 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
   };
 
   const handleExtraAttempt = async (row) => {
-    const confirmed = await onConfirm(`Grant an additional attempt for ${row.candidate_name || 'this candidate'}?`, { confirmLabel: 'Grant' });
+    const context = additionalAttemptContext({
+      ...row,
+      counted_attempts: row.counted_attempts ?? row.attempt_state?.counted_attempts,
+    });
+    const confirmed = await onConfirm(
+      `Grant one additional certification attempt for ${row.candidate_name || 'this candidate'}?\n\nUsed certification attempts: ${context.used}\nNormal allowance: ${context.normalAllowance}\nAdditional attempts already granted: ${context.additional}\nCurrent authorized maximum: ${context.maximum}\nRemaining authorized attempts: ${context.remaining}`,
+      { confirmLabel: 'Grant Additional Attempt' }
+    );
     if (!confirmed) return;
     const reason = '';
     await onAction({
       action: 'grant_extra_attempt', candidate_name: row.candidate_name,
       session_id: row.session_id || row.latest_session_id, pending_id: row.pending_id, reason, actor,
-      expected_extra_attempts_granted: Number(row.extra_attempts_granted || (sheetTruthy(row.extra_attempt_granted) ? 1 : 0)),
+      expected_allowed_count: context.maximum,
     });
   };
 
@@ -3317,7 +3325,9 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
       if (isPendingTransfer) {
         statusActions.push({ label: 'Mark Incomplete', kind: 'action', onClick: () => handleManualCorrection(row, 'remove_pending_sup_transfer', 'Mark Incomplete') });
       }
-      statusActions.push({ label: 'Grant Extra Attempt', kind: 'info', onClick: () => handleExtraAttempt(row) });
+      if (allowAdditionalAttemptGrant) {
+        statusActions.push({ label: 'Grant Additional Attempt', kind: 'info', onClick: () => handleExtraAttempt(row) });
+      }
     }
 
     const moreActions = [];
@@ -4989,7 +4999,12 @@ export default function NotificationManagerApp() {
 
   const runCandidateAction = useCallback(async (payload) => {
     try {
-      const result = await api.updateSharedAdminCandidate(payload);
+      const isAttemptGrant = payload?.action === 'grant_extra_attempt';
+      const accessToken = isAttemptGrant ? String(samSetupStatus?.session?.access_token || '').trim() : '';
+      const authorizedPayload = isAttemptGrant
+        ? { ...payload, caller_auth_uid: samSetupStatus?.authUid || undefined }
+        : payload;
+      const result = await api.updateSharedAdminCandidate(authorizedPayload, accessToken);
       if (!result?.ok) {
         const message = getCandidateUpdateErrorMessage(result);
         setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: message }));
@@ -5043,7 +5058,7 @@ export default function NotificationManagerApp() {
       showStatusModal(message, 'error');
       return { ok: false, error: message };
     }
-  }, [loadCandidateTracking, playSamActionSound, showStatusModal]);
+  }, [loadCandidateTracking, playSamActionSound, samSetupStatus?.authUid, samSetupStatus?.session?.access_token, showStatusModal]);
 
   useEffect(() => {
     const root = document.getElementById('root');
@@ -6409,6 +6424,7 @@ export default function NotificationManagerApp() {
             actor={samSetupStatus.userName || samSetupStatus.userRole || 'SAM'}
             includeArchivedDefault={samSettings.includeArchivedInSearchDefault}
             showStatusModal={showStatusModal}
+            allowAdditionalAttemptGrant={canGrantAdditionalAttempt(samSetupStatus.userRole)}
           />
         ) : null}
         {activeSection === 'headsets' ? (
