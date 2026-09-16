@@ -5,6 +5,7 @@ import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
+import ActiveCandidateHeader from '../components/ActiveCandidateHeader';
 import { getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 import { mergeAndOrderFailReasons } from '../utils/failReasons';
 const DEFAULT_SUP_COACHING = [
@@ -159,8 +160,8 @@ export default function SupTransferPage({ onNavigate, navigationState, settings:
       try {
         const cachedSession = navigationState?.session
           ? { session: navigationState.session }
-          : initialCurrentSessionRef.current;
-        const { session } = cachedSession && Object.prototype.hasOwnProperty.call(cachedSession, 'session')
+          : (initialCurrentSessionRef.current?.session ? initialCurrentSessionRef.current : null);
+        const { session } = cachedSession?.session
           ? cachedSession
           : await api.getCurrentSession();
         if (cancelled) return;
@@ -550,11 +551,7 @@ export default function SupTransferPage({ onNavigate, navigationState, settings:
       />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 8 }}>
         <h1 style={{ marginBottom: 0 }}>Supervisor Transfer #{transferNum}</h1>
-        {candidateName && (
-          <div className="candidate-header">
-            <span className="candidate-header-label">Candidate:</span> {candidateName}
-          </div>
-        )}
+        <ActiveCandidateHeader candidateName={candidateName} />
       </div>
       {isSupervisorOnly && (
         <div className="banner banner-incomplete" style={{ fontSize: 'var(--font-size-sm)', marginBottom: 12 }} data-testid="sup-only-mode-banner">

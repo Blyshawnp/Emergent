@@ -16,6 +16,14 @@ import {
 } from '../utils/certificationWorkflow';
 import { buildNewbieShiftRescheduleSession } from '../utils/newbieShiftWorkflow';
 import { getCandidateHeadset } from '../utils/headsetDisplay';
+import {
+  buildResumedSession,
+  buildFailedCandidateRetrySession,
+  canHistoryStartSession,
+  canHistorySupervisorTransferOnly,
+  normalizeName,
+} from '../utils/sessionResume';
+import { findBestBasicsRecord } from '../utils/sessionBasics';
 
 function adminHistoryControlsEnabled() {
   try {
@@ -122,8 +130,9 @@ export function buildHistoryCorrectionChanges(record = {}, draft = {}) {
   ));
 }
 
-export default function HistoryPage({ onNavigate, navigationState, onHistoryRefresh, history: initialHistory = [], historyStats: initialStats = {} }) {
+export default function HistoryPage({ onNavigate, navigationState, onHistoryRefresh, history: initialHistory = [], historyStats: initialStats = {}, settings = {} }) {
   const modal = useModal();
+  const currentTester = settings?.tester_name || settings?.display_name || '';
   const [stats, setStats] = useState(() => initialStats || {});
   const [history, setHistory] = useState(() => (Array.isArray(initialHistory) ? initialHistory.map(applyFormRecoveryMarker) : []));
   const [search, setSearch] = useState('');
@@ -283,6 +292,99 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
       setRetryingSyncId(null);
     }
   };
+
+  const handleStartSessionFromHistory = async (record) => {
+    if (!record) return;
+    const candidate = record.candidate || record.candidate_name || 'this candidate';
+    const confirmed = await modal.confirm(
+      'Start New Session',
+      `Start a new certification attempt for <b>${escapeHtml(candidate)}</b>? This will begin at The Basics with prior attempt history preserved.`,
+      'play-circle',
+      'info'
+    );
+    if (!confirmed) return;
+
+    try {
+      const candidateName = record.candidate_name || record.candidate || '';
+      const basicsResult = findBestBasicsRecord(history, candidateName, record);
+      const basicsSource = basicsResult?.record || record;
+      const tester = currentTester || record.tester_name || '';
+      const newSession = buildFailedCandidateRetrySession(record, tester, basicsSource);
+      await api.startSession(newSession);
+      setDetail(null);
+      onNavigate('basics', { session: newSession });
+    } catch (error) {
+      await modal.error('Start Session Failed', error.response?.data?.detail || error.message || 'Unable to start certification session.');
+    }
+  };
+
+  const handleSupervisorTransferOnlyFromHistory = async (record) => {
+    if (!record) return;
+    const candidate = record.candidate || record.candidate_name || 'this candidate';
+
+    let pendingResponse;
+    try {
+      pendingResponse = await api.getSharedPendingSupTransfers();
+    } catch (_error) {
+      await modal.warning('Revalidation Failed', 'Unable to check current pending supervisor transfer status. Please try again.');
+      return;
+    }
+
+    if (!pendingResponse?.ok) {
+      await modal.warning('Revalidation Failed', pendingResponse?.error || 'Unable to check current pending supervisor transfer status. Please try again.');
+      return;
+    }
+
+    const items = Array.isArray(pendingResponse.items) ? pendingResponse.items : [];
+    const normName = normalizeName(candidate);
+    const match = items.find((item) => {
+      if (record.newbie_shift_request_id && (item.newbie_shift_request_id === record.newbie_shift_request_id || item.request_id === record.newbie_shift_request_id)) {
+        return true;
+      }
+      if (record.history_id && (item.original_session_id === record.history_id || item.source_session_id === record.history_id)) {
+        return true;
+      }
+      if (record.session_id && (item.original_session_id === record.session_id || item.source_session_id === record.session_id)) {
+        return true;
+      }
+      return normalizeName(item.candidate_name) === normName;
+    });
+
+    const isPending = match && ['pending', 'resumed'].includes(String(match.status || '').trim().toLowerCase()) && !match.completed_status;
+    if (!isPending) {
+      await modal.warning(
+        'Supervisor Transfer Unavailable',
+        'This supervisor transfer request has already been completed, resolved, or is no longer pending.'
+      );
+      await loadLocal();
+      void reconcile();
+      return;
+    }
+
+    const confirmed = await modal.confirm(
+      'Confirm Supervisor Transfer',
+      `Continue supervisor transfer for <b>${escapeHtml(candidate)}</b>?`,
+      'phone-forwarded',
+      'info'
+    );
+    if (!confirmed) return;
+
+    try {
+      const mergedRecord = {
+        ...record,
+        ...match,
+        newbie_shift_request_id: record.newbie_shift_request_id || match.newbie_shift_request_id || match.request_id || '',
+      };
+      const tester = currentTester || record.tester_name || '';
+      const resumedSession = buildResumedSession(mergedRecord, tester);
+      await api.startSession(resumedSession);
+      setDetail(null);
+      onNavigate('suptransfer', { session: resumedSession });
+    } catch (error) {
+      await modal.error('Resume Failed', error.response?.data?.detail || error.message || 'Unable to resume supervisor transfer.');
+    }
+  };
+
 
   const colorResult = (r) => {
     if (r === 'Pass') return <span style={{ color: 'var(--color-success)', fontWeight: 700 }}>PASS</span>;
@@ -619,6 +721,26 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                           {retryingSyncId === getHistoryIdentity(s) ? 'Syncing…' : 'Retry Hosted Sync'}
                         </button>
                       )}
+                      {canHistoryStartSession(s, history) && (
+                        <button
+                          type="button"
+                          className="btn btn-success btn-sm"
+                          onClick={() => handleStartSessionFromHistory(s)}
+                          data-testid={`history-start-session-${i}`}
+                        >
+                          Start Session
+                        </button>
+                      )}
+                      {canHistorySupervisorTransferOnly(s, history) && (
+                        <button
+                          type="button"
+                          className="btn btn-warning btn-sm"
+                          onClick={() => handleSupervisorTransferOnlyFromHistory(s)}
+                          data-testid={`history-sup-transfer-only-${i}`}
+                        >
+                          Supervisor Transfer Only
+                        </button>
+                      )}
                       {canRescheduleNewbieShift(s) && <button className="btn btn-warning btn-sm" onClick={() => handleRescheduleSession(s)} data-testid={`history-reschedule-${i}`}>Reschedule</button>}
                       {s.headset_review_sync_status === 'failed' && <button className="btn btn-warning btn-sm" onClick={() => retryHeadsetReview(s)} data-testid={`history-headset-retry-${i}`}>Retry Headset Review</button>}
                       <button className="btn btn-danger btn-sm" onClick={() => handleDeleteSession(s)} data-testid={`history-delete-${i}`}>Delete</button>
@@ -856,6 +978,26 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                     disabled={retryingSyncId === getHistoryIdentity(detail)}
                   >
                     {retryingSyncId === getHistoryIdentity(detail) ? 'Syncing…' : 'Retry Hosted Sync'}
+                  </button>
+                )}
+                {canHistoryStartSession(detail, history) && (
+                  <button
+                    type="button"
+                    className="btn btn-success"
+                    onClick={() => handleStartSessionFromHistory(detail)}
+                    data-testid="history-detail-start-session"
+                  >
+                    Start Session
+                  </button>
+                )}
+                {canHistorySupervisorTransferOnly(detail, history) && (
+                  <button
+                    type="button"
+                    className="btn btn-warning"
+                    onClick={() => handleSupervisorTransferOnlyFromHistory(detail)}
+                    data-testid="history-detail-sup-transfer-only"
+                  >
+                    Supervisor Transfer Only
                   </button>
                 )}
                 <button className="btn btn-danger" onClick={() => handleDeleteSession(detail)} data-testid="history-detail-delete">Delete Session</button>

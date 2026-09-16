@@ -3,6 +3,7 @@ import api from '../api';
 import { useModal } from '../components/ModalProvider';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
+import ActiveCandidateHeader from '../components/ActiveCandidateHeader';
 import geminiActiveGraphic from '../assets/images/Gemini2.png';
 import { buildBasicsFromRecord, mergeBasicsIntoSession } from '../utils/sessionBasics';
 import { displaySummaryLabel } from '../utils/summaryDisplayLabels';
@@ -1119,7 +1120,10 @@ export default function ReviewPage({ onNavigate, navigationState, onHistoryRefre
           })}
         />
       )}
-      <h1 style={{ marginBottom: 24 }}>{isHistoricalReview ? 'Historical Review & Summary' : 'Session Review & Summary'}</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
+        <h1 style={{ marginBottom: 0 }}>{isHistoricalReview ? 'Historical Review & Summary' : 'Session Review & Summary'}</h1>
+        <ActiveCandidateHeader candidateName={s.candidate_name} />
+      </div>
       <FinalAttemptBanner visible={s.final_attempt && finalStatus !== 'FAIL-Final Attempt'} attemptState={s.attempt_state} />
       {isHistoricalReview && (
         <div className="card" style={{ marginBottom: 16, background: 'var(--bg-card-hover)' }}>

@@ -5,6 +5,7 @@ import CandidateIpIntelligencePanel from '../components/CandidateIpIntelligence'
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
+import ActiveCandidateHeader from '../components/ActiveCandidateHeader';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
 import { buildHeadsetAutoFailReason, CERTIFICATION_SUPPORT_EMAIL, followUpStatusMeta } from '../utils/certificationWorkflow';
 const SUP_ONLY_MODE_KEY = 'mts_sup_transfer_only_mode';
@@ -1202,7 +1203,10 @@ export default function BasicsPage({ onNavigate }) {
   return (
     <div className="page-with-sticky-actions" data-testid="basics-page">
       <WorkflowProgress {...getWorkflowProgress({ page: 'basics', supervisorOnly: supervisorOnlyMode })} />
-      <h1 style={{ marginBottom: 16 }}>The Basics</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 16 }}>
+        <h1 style={{ marginBottom: 0 }}>The Basics</h1>
+        <ActiveCandidateHeader candidateName={form.candidate_name} />
+      </div>
       <FinalAttemptBanner visible={form.final_attempt} attemptState={form.attempt_state} />
       {supervisorOnlyMode && (
         <div className="banner banner-incomplete" style={{ fontSize: 'var(--font-size-sm)', marginBottom: 12 }} data-testid="basics-sup-only-mode">

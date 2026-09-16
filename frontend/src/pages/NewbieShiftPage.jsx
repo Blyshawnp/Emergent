@@ -4,6 +4,7 @@ import { useModal } from '../components/ModalProvider';
 import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
+import ActiveCandidateHeader from '../components/ActiveCandidateHeader';
 import { buildNewbieShiftAppointment, buildNewbieShiftCalendarUrl } from '../utils/newbieShiftCalendar';
 import {
   buildNewbieShiftDiscordPost,
@@ -286,16 +287,13 @@ export default function NewbieShiftPage({ onNavigate }) {
     else onNavigate('review');
   }, [candidateName, handleContinue, isReschedule, modal, onNavigate]);
 
+
   return (
     <div className="page-with-sticky-actions" data-testid="newbieshift-page">
       <WorkflowProgress {...getWorkflowProgress({ page: 'newbieshift' })} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
         <h1 style={{ marginBottom: 0 }}>{isReschedule ? 'Reschedule Newbie Shift' : 'Schedule Newbie Shift'}</h1>
-        {candidateName && (
-          <div className="candidate-header">
-            <span className="candidate-header-label">Candidate:</span> {candidateName}
-          </div>
-        )}
+        <ActiveCandidateHeader candidateName={candidateName} />
       </div>
       <FinalAttemptBanner visible={isFinal} attemptState={session?.attempt_state} />
       {isReschedule && (

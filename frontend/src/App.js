@@ -1157,6 +1157,13 @@ function AppShell() {
   const navigate = useCallback((p, nextState = null) => {
     setPage(p);
     setPageState(nextState);
+    if (nextState?.session) {
+      setCurrentSession({ session: nextState.session });
+    } else if (nextState?.clearSession) {
+      setCurrentSession(null);
+    } else if (p === 'home') {
+      api.getCurrentSession(5000).then(s => setCurrentSession(s)).catch(() => {});
+    }
     if (page === 'settings') {
       api.getSettings().then(s => {
         setSettings(s);

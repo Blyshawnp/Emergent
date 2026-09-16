@@ -5,6 +5,7 @@ import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FailReasonGrid from '../components/FailReasonGrid';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
+import ActiveCandidateHeader from '../components/ActiveCandidateHeader';
 import { formatDonationAmountLabel, getPaymentOptionsFromSettings } from '../utils/paymentOptions';
 import { mergeAndOrderFailReasons } from '../utils/failReasons';
 const REQUIRED_CALL_COACHING = [
@@ -419,8 +420,8 @@ export default function CallsPage({ onNavigate, navigationState, settings: initi
       try {
         const cachedSession = navigationState?.session
           ? { session: navigationState.session }
-          : initialCurrentSessionRef.current;
-        const { session } = cachedSession && Object.prototype.hasOwnProperty.call(cachedSession, 'session')
+          : (initialCurrentSessionRef.current?.session ? initialCurrentSessionRef.current : null);
+        const { session } = cachedSession?.session
           ? cachedSession
           : await api.getCurrentSession();
         if (cancelled) return;
@@ -687,11 +688,7 @@ export default function CallsPage({ onNavigate, navigationState, settings: initi
       <WorkflowProgress {...getWorkflowProgress({ page: 'calls', callNum })} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 24 }}>
         <h1 style={{ marginBottom: 0 }}>Call #{callNum}</h1>
-        {candidateName && (
-          <div className="candidate-header">
-            <span className="candidate-header-label">Candidate:</span> {candidateName}
-          </div>
-        )}
+        <ActiveCandidateHeader candidateName={candidateName} />
       </div>
       <FinalAttemptBanner visible={isFinal} />
       <div className="split-layout">

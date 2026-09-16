@@ -12754,7 +12754,7 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
             try:
                 res_coaching = _run_with_in_flight_coalescing(
                     coaching_dedup_key,
-                    _generate_gemini_summary,
+                    _generate_gemini_summary_with_timeout,
                     coaching,
                     coaching_prompt,
                     api_key,
@@ -12787,7 +12787,7 @@ def generate_summaries(session, api_key="", settings=None, instructions="", curr
             try:
                 res_fail = _run_with_in_flight_coalescing(
                     fail_dedup_key,
-                    _generate_gemini_summary,
+                    _generate_gemini_summary_with_timeout,
                     fail,
                     fail_prompt,
                     api_key,
