@@ -14,6 +14,8 @@ from server import (
     _filter_obsolete_pending_newbie_requests,
     _candidate_terminal_for_newbie_shift,
     _public_newbie_request,
+    _normalize_timezone_display,
+    _shared_pending_request_action,
 )
 
 
@@ -148,6 +150,127 @@ class TestSamQueueCorrectness(unittest.TestCase):
         filtered = _filter_obsolete_pending_newbie_requests(requests, candidate_tracking)
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["id"], "req-past")
+
+    def test_normalize_timezone_display(self):
+        self.assertEqual(_normalize_timezone_display("EST (Eastern)"), "ET (Eastern Time)")
+        self.assertEqual(_normalize_timezone_display("Eastern"), "ET (Eastern Time)")
+        self.assertEqual(_normalize_timezone_display("EDT"), "ET (Eastern Time)")
+        self.assertEqual(_normalize_timezone_display("CST (Central)"), "CT (Central Time)")
+        self.assertEqual(_normalize_timezone_display("Central"), "CT (Central Time)")
+        self.assertEqual(_normalize_timezone_display("MST (Mountain)"), "MT (Mountain Time)")
+        self.assertEqual(_normalize_timezone_display("Mountain"), "MT (Mountain Time)")
+        self.assertEqual(_normalize_timezone_display("PST (Pacific)"), "PT (Pacific Time)")
+        self.assertEqual(_normalize_timezone_display("Pacific"), "PT (Pacific Time)")
+        self.assertEqual(_normalize_timezone_display("ET (Eastern Time)"), "ET (Eastern Time)")
+
+    def test_public_newbie_request_fallbacks_and_tz(self):
+        row = {
+            "request_id": "req-test-1",
+            "request_type": "newbie_shift_initial",
+            "candidate_name": "Canary AlphaTest-20260914",
+            "tester": "Jane Doe",
+            "submitted_at": "2026-09-14T22:30:00Z",
+            "timezone": "EST (Eastern)",
+        }
+        pub = _public_newbie_request(row)
+        self.assertEqual(pub["tester"], "Jane Doe")
+        self.assertEqual(pub["created_at"], "2026-09-14T22:30:00Z")
+        self.assertEqual(pub["timezone"], "ET (Eastern Time)")
+
+    def test_supabase_shared_pending_request_action_not_found_and_already_resolved(self):
+        mock_provider = MagicMock()
+        # 1. Not found case
+        mock_provider.list_resource.return_value = []
+        with patch("server.configured_provider_mode", return_value="supabase"), \
+             patch("server._get_active_data_provider", return_value=mock_provider):
+            res = _shared_pending_request_action({
+                "requestId": "missing-id",
+                "category": "newbie_initial",
+                "decision": "approved",
+            })
+            self.assertFalse(res["ok"])
+            self.assertEqual(res["error"], "Request was not found.")
+
+        # 2. Already approved case
+        mock_provider.list_resource.return_value = [{
+            "request_id": "newbie-8f0006b2",
+            "request_status": "approved",
+        }]
+        with patch("server.configured_provider_mode", return_value="supabase"), \
+             patch("server._get_active_data_provider", return_value=mock_provider):
+            res = _shared_pending_request_action({
+                "requestId": "newbie-8f0006b2",
+                "category": "newbie_initial",
+                "decision": "approved",
+            })
+            self.assertFalse(res["ok"])
+            self.assertIn("already been approved", res["error"])
+
+        # 3. Successful approval case
+        mock_provider.list_resource.side_effect = lambda table, filters=None: (
+            [{
+                "request_id": "newbie-8f0006b2",
+                "request_status": "pending",
+            }] if table == "newbie_shift_requests" else []
+        )
+        with patch("server.configured_provider_mode", return_value="supabase"), \
+             patch("server._get_active_data_provider", return_value=mock_provider):
+            res = _shared_pending_request_action({
+                "requestId": "newbie-8f0006b2",
+                "category": "newbie_initial",
+                "decision": "approved",
+                "newbieShiftNumber": "NS-1234",
+            })
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["status"], "approved")
+            mock_provider.upsert_rows.assert_called()
+
+    def test_list_request_projection_canonical_precedence(self):
+        from data_providers.supabase import SupabaseDataProvider
+        provider = SupabaseDataProvider.__new__(SupabaseDataProvider)
+        # Mock _cached_read to return generic pending_requests and canonical newbie_shift_requests
+        def fake_cached_read(table, params):
+            if table == "pending_requests":
+                return [
+                    {
+                        "id": "gen-1",
+                        "request_id": "newbie-8f0006b2",
+                        "request_type": "initial_newbie_shift",
+                        "category": "newbie-shift-requests",
+                        "status": "pending",
+                        "updated_at": "2026-09-14T22:30:00Z",
+                    }
+                ]
+            elif table == "newbie_shift_requests":
+                return [
+                    {
+                        "id": "can-1",
+                        "request_id": "newbie-8f0006b2",
+                        "request_type": "newbie_shift_initial",
+                        "request_status": "approved",
+                        "updated_at": "2026-09-15T10:00:00Z",
+                    }
+                ]
+            return []
+
+        provider._cached_read = fake_cached_read
+        results = provider._list_request_projection(limit=100, offset=0)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["request_id"], "newbie-8f0006b2")
+        # Canonical approved status must win over stale generic pending status
+        self.assertEqual(results[0]["status"], "approved")
+        self.assertEqual(results[0]["request_status"], "approved")
+
+    def test_admin_pending_requests_action_authorization_required(self):
+        from fastapi import HTTPException
+        from server import _require_admin_token
+        req = MagicMock()
+        req.headers = {}
+        with patch.dict(os.environ, {"MTS_ADMIN_TOKEN": "secret-token"}):
+            with self.assertRaises(HTTPException) as ctx:
+                _require_admin_token(req)
+            self.assertEqual(ctx.exception.status_code, 403)
+            self.assertIn("Admin access is required", ctx.exception.detail)
 
 
 if __name__ == "__main__":

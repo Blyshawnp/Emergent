@@ -7291,6 +7291,20 @@ def _approval_label(status):
     return "Pending"
 
 
+def _normalize_timezone_display(value):
+    text = str(value or "").strip()
+    upper = text.upper()
+    if "EASTERN" in upper or re.search(r"\b(ET|EST|EDT)\b", upper):
+        return "ET (Eastern Time)"
+    if "CENTRAL" in upper or re.search(r"\b(CT|CST|CDT)\b", upper):
+        return "CT (Central Time)"
+    if "MOUNTAIN" in upper or re.search(r"\b(MT|MST|MDT)\b", upper):
+        return "MT (Mountain Time)"
+    if "PACIFIC" in upper or re.search(r"\b(PT|PST|PDT)\b", upper):
+        return "PT (Pacific Time)"
+    return text
+
+
 def _normalize_newbie_shift_number(value):
     text = re.sub(r"[\x00-\x1f\x7f]", "", str(value or "")).strip()
     return text[:64]
@@ -7299,6 +7313,18 @@ def _normalize_newbie_shift_number(value):
 def _public_newbie_request(row):
     request_type = str(row.get("request_type") or "").strip().lower()
     requested_by = str(row.get("requested_by") or "").strip().lower()
+    tester = (
+        row.get("tester_name")
+        or row.get("tester")
+        or (row.get("requested_by") if requested_by not in {"candidate", "other"} else "")
+        or ""
+    )
+    created_at = (
+        row.get("request_created_at")
+        or row.get("created_at")
+        or row.get("submitted_at")
+        or ""
+    )
     return {
         "id": row.get("request_id") or "",
         "request_id": row.get("request_id") or "",
@@ -7308,11 +7334,11 @@ def _public_newbie_request(row):
         "category": "newbie_reschedule" if request_type == NEWBIE_REQUEST_RESCHEDULE else "newbie_initial",
         "categoryLabel": "Newbie Shift — Reschedule" if request_type == NEWBIE_REQUEST_RESCHEDULE else "Newbie Shift — Initial",
         "candidate": row.get("candidate_name") or "",
-        "tester": row.get("tester_name") or "",
-        "created_at": row.get("request_created_at") or "",
+        "tester": tester,
+        "created_at": created_at,
         "requested_schedule": row.get("scheduled_at") or row.get("rescheduled_at") or row.get("requested_scheduled_at") or "",
         "original_schedule": row.get("original_scheduled_at") or row.get("original_schedule") or row.get("newbie_shift_original_scheduled_at") or "",
-        "timezone": row.get("timezone") or "",
+        "timezone": _normalize_timezone_display(row.get("timezone") or ""),
         "newbie_shift_number": str(row.get("newbie_shift_number") or "").strip(),
         "requester": "Candidate" if requested_by == NEWBIE_REQUESTED_BY_CANDIDATE else "Tester/Trainer" if requested_by == NEWBIE_REQUESTED_BY_TESTER else "Other" if requested_by == "other" else "",
         "reason": row.get("request_reason") or "",
@@ -8641,13 +8667,13 @@ def _update_candidate_request_fields(sheets_api, sheet_id, session_id, request_i
 
 
 def _shared_pending_request_action(payload):
-    request_id = str((payload or {}).get("request_id") or "").strip()
-    category = str((payload or {}).get("category") or "").strip()
-    decision_input = str((payload or {}).get("decision") or "").strip().lower()
+    request_id = str((payload or {}).get("request_id") or (payload or {}).get("requestId") or (payload or {}).get("id") or "").strip()
+    category = str((payload or {}).get("category") or (payload or {}).get("categoryId") or "").strip()
+    decision_input = str((payload or {}).get("decision") or (payload or {}).get("action") or "").strip().lower()
     actor = str((payload or {}).get("actor") or (payload or {}).get("admin") or "SAM").strip() or "SAM"
-    denial_reason = str((payload or {}).get("denial_reason") or "").strip()
-    expected_status = str((payload or {}).get("expected_status") or "pending").strip().lower()
-    newbie_shift_number = _normalize_newbie_shift_number((payload or {}).get("newbie_shift_number"))
+    denial_reason = str((payload or {}).get("denial_reason") or (payload or {}).get("denialReason") or (payload or {}).get("reason") or "").strip()
+    expected_status = str((payload or {}).get("expected_status") or (payload or {}).get("expectedStatus") or "pending").strip().lower()
+    newbie_shift_number = _normalize_newbie_shift_number((payload or {}).get("newbie_shift_number") or (payload or {}).get("newbieShiftNumber"))
     if decision_input in {"approve", "approved"}:
         decision_cmd = "approve"
         decision = "approved"
@@ -8660,6 +8686,95 @@ def _shared_pending_request_action(payload):
         return {"ok": False, "error": "A denial reason is required."}
     if not request_id:
         return {"ok": False, "error": "Request id is required."}
+
+    if configured_provider_mode() == "supabase":
+        provider = _get_active_data_provider()
+        decided_at = datetime.now(timezone.utc).isoformat()
+        try:
+            if category in {"newbie_initial", "newbie_reschedule"}:
+                rows = provider.list_resource("newbie_shift_requests", filters={"request_id": request_id})
+                if not rows:
+                    return {"ok": False, "error": "Request was not found."}
+                row = rows[0]
+                current_status = _request_status_value(row.get("request_status") or row.get("status"))
+                if current_status != expected_status:
+                    return {"ok": False, "error": f"Request has already been {_approval_label(current_status).lower()}."}
+                updated_row = dict(row)
+                updated_row["request_status"] = decision
+                updated_row["decision_at"] = decided_at
+                updated_row["decision_by"] = actor
+                updated_row["updated_at"] = decided_at
+                if decision == "denied":
+                    updated_row["denial_reason"] = denial_reason
+                if decision == "approved" and newbie_shift_number:
+                    updated_row["newbie_shift_number"] = newbie_shift_number
+                provider.upsert_rows("newbie_shift_requests", [updated_row], on_conflict="request_id")
+                try:
+                    p_rows = provider.list_resource("pending_requests", filters={"request_id": request_id})
+                    if p_rows:
+                        p_updated = dict(p_rows[0])
+                        p_updated["status"] = decision
+                        p_updated["updated_at"] = decided_at
+                        provider.upsert_rows("pending_requests", [p_updated], on_conflict="request_id")
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "request_id": request_id,
+                    "category": category,
+                    "status": decision,
+                    "candidateUpdates": 1,
+                }
+
+            if category == "candidate_deletion":
+                rows = provider.list_resource("pending_requests", filters={"request_id": request_id})
+                if not rows:
+                    return {"ok": False, "error": "Request was not found."}
+                row = rows[0]
+                current_status = _request_status_value(row.get("status") or row.get("request_status"))
+                if current_status != expected_status:
+                    return {"ok": False, "error": f"Request has already been {_approval_label(current_status).lower()}."}
+                updated_row = dict(row)
+                updated_row["status"] = decision
+                updated_row["updated_at"] = decided_at
+                provider.upsert_rows("pending_requests", [updated_row], on_conflict="request_id")
+                return {
+                    "ok": True,
+                    "request_id": request_id,
+                    "category": category,
+                    "status": decision,
+                    "deletion_action_required": False,
+                    "candidate_deletion_applied": decision == "approved",
+                }
+
+            if category == "candidate_correction":
+                rows = provider.list_resource("candidate_corrections", filters={"id": request_id})
+                if not rows:
+                    return {"ok": False, "error": "Request was not found.", "error_code": "correction_target_not_found"}
+                row = rows[0]
+                current_status = _request_status_value(row.get("status") or row.get("request_status"))
+                if current_status != expected_status:
+                    return {"ok": False, "error": "Request has already been resolved.", "error_code": "correction_already_resolved"}
+                updated_row = dict(row)
+                updated_row["status"] = decision
+                updated_row["decision_at"] = decided_at
+                updated_row["decision_by"] = actor
+                updated_row["updated_at"] = decided_at
+                if decision == "denied":
+                    updated_row["denial_reason"] = denial_reason
+                provider.upsert_rows("candidate_corrections", [updated_row], on_conflict="id")
+                return {
+                    "ok": True,
+                    "request_id": request_id,
+                    "category": category,
+                    "status": decision,
+                    "candidate_session_updated": decision == "approved",
+                }
+
+            return {"ok": False, "error": "Unsupported request category."}
+        except Exception as exc:
+            logger.exception("[REQUESTS] Failed to apply pending request decision in Supabase: %s", exc)
+            return {"ok": False, "error": _candidate_tracking_temporary_unavailable_message()}
 
     context = _shared_sheet_context()
     if not context.get("ok"):

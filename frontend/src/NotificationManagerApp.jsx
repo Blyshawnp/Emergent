@@ -50,7 +50,7 @@ import PostSetupQuickStart from './components/PostSetupQuickStart';
 import { TutorialVideoLibrary } from './components/TutorialVideoPlayer';
 import { normalizeTutorialVideos } from './utils/tutorialVideos';
 import { createSamSnapshotCoordinator } from './utils/samSnapshotCoordinator';
-import { newbieShiftStatusMeta } from './utils/certificationWorkflow';
+import { newbieShiftStatusMeta, normalizeTimezoneDisplay } from './utils/certificationWorkflow';
 import { buildHeadsetDisplayLabel, getCandidateHeadset } from './utils/headsetDisplay';
 import { playSound, setSoundSettings } from './utils/sound';
 import {
@@ -2686,7 +2686,12 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
           ? { newbie_shift_number: approvalShiftNumber.trim() }
           : {}),
       });
-      if (!result?.ok) setDecisionError(result?.error || 'The request decision could not be saved.');
+      if (!result?.ok) {
+        setDecisionError(result?.error || 'The request decision could not be saved.');
+        if (/not found|missing|already resolved|already approved|already denied/i.test(result?.error || '')) {
+          onRefresh?.();
+        }
+      }
     } finally {
       setSubmittingRequestId('');
       setApprovalRequest(null);
@@ -2726,6 +2731,9 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
       });
       if (!result?.ok) {
         setDenialError(result?.error || 'The request decision could not be saved.');
+        if (/not found|missing|already resolved|already approved|already denied/i.test(result?.error || '')) {
+          onRefresh?.();
+        }
         return;
       }
       setDenialRequest(null);
@@ -2835,7 +2843,7 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
                   </> : <>
                     <div><strong>Tester/Requester</strong><span>{request.tester || 'N/A'}</span></div>
                     <div><strong>Request Submitted</strong><span>{formatRequestTime(request.created_at)}</span></div>
-                    <div><strong>Requested Schedule</strong><span>{formatRequestTime(getPendingRequestSchedules(request).requested)} {request.timezone || ''}</span></div>
+                    <div><strong>Requested Schedule</strong><span>{formatRequestTime(getPendingRequestSchedules(request).requested)} {normalizeTimezoneDisplay(request.timezone) || ''}</span></div>
                     {request.category === 'newbie_reschedule' ? <div><strong>Previous Schedule</strong><span>{formatRequestTime(getPendingRequestSchedules(request).original)}</span></div> : null}
                     <div><strong>{request.category === 'newbie_reschedule' ? 'Who Needs the Reschedule' : 'Requested By'}</strong><span>{request.requester || 'N/A'}</span></div>
                     <div className="nm-request-grid-wide"><strong>Reason</strong><span>{request.reason || 'No reason provided.'}{request.details ? ` — ${request.details}` : ''}</span></div>

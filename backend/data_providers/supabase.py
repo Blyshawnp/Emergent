@@ -442,6 +442,7 @@ class SupabaseDataProvider(DataProvider):
                     "candidate_deletion": "candidate-deletion-requests",
                     "candidate_information_correction": "candidate-information-correction-requests",
                     "initial_newbie_shift": "newbie-shift-requests",
+                    "newbie_shift_reschedule": "newbie-shift-requests",
                 }.get(str(request_type).strip().casefold(), request_type)
             projected.append({
                 **row,
@@ -472,8 +473,14 @@ class SupabaseDataProvider(DataProvider):
         for row in projected:
             request_id = str(row.get("request_id") or "").strip()
             category = str(row.get("category") or "").strip()
-            if request_id and category:
-                by_request[(category, request_id)] = row
+            if not request_id:
+                continue
+            canonical_domain = (
+                "newbie-shift-requests" if category in {"newbie-shift-requests", "initial_newbie_shift", "newbie_initial", "newbie_reschedule"}
+                else "candidate-information-correction-requests" if category in {"candidate-information-correction-requests", "candidate_correction", "candidate_information_correction"}
+                else category or "generic"
+            )
+            by_request[(canonical_domain, request_id)] = row
         ordered = sorted(
             by_request.values(),
             key=lambda row: str(row.get("updated_at") or row.get("decision_at") or row.get("created_at") or ""),

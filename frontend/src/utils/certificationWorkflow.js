@@ -367,6 +367,16 @@ export function computeWithin24Hours(originalIso, requestedAtIso) {
   return original.getTime() - requested.getTime() < 24 * 60 * 60 * 1000;
 }
 
+export function normalizeTimezoneDisplay(value = '') {
+  const raw = String(value || '').trim();
+  const upper = raw.toUpperCase();
+  if (upper.includes('EASTERN') || /\b(ET|EST|EDT)\b/.test(upper)) return 'ET (Eastern Time)';
+  if (upper.includes('CENTRAL') || /\b(CT|CST|CDT)\b/.test(upper)) return 'CT (Central Time)';
+  if (upper.includes('MOUNTAIN') || /\b(MT|MST|MDT)\b/.test(upper)) return 'MT (Mountain Time)';
+  if (upper.includes('PACIFIC') || /\b(PT|PST|PDT)\b/.test(upper)) return 'PT (Pacific Time)';
+  return raw;
+}
+
 export function formatTimezoneLabel(value = '') {
   const raw = String(value || '').trim();
   const match = raw.match(/\(([^)]+)\)/);
