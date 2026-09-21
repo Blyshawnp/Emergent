@@ -275,6 +275,16 @@ class ReleaseCandidateWorkflowLogicTests(unittest.TestCase):
                 "**Welcome to ACDD! Have a fabulous remainder of your day!**\n\n"
                 "https://gyazo.com/54533787846921462083e8029c028304"
             ),
+            "Fail Session": (
+                "It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing "
+                "requirements. Please review the feedback given and schedule another session in the next two days. "
+                "You can email the certification team with any questions."
+            ),
+            "Fail Final Attempt": (
+                "It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing "
+                "requirements, and it looks like this was your final attempt. Please reach out to the certification "
+                "team by email — they'll be able to walk you through your next steps."
+            ),
         }
         first_line = "We are now going to proceed with the instructions for the Supervisor transfer."
 

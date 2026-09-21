@@ -10307,6 +10307,52 @@ def _sync_newbie_shift_request_only(session):
         return {"ok": False, "errorCode": error_code, "error": _newbie_request_error_message(error_code)}
 
 
+def _canonical_lifecycle_final_result(value):
+    """Normalize session result to match authoritative hosted contract in mts-candidate-lifecycle-write.
+    ALLOWED_FINAL_RESULTS = {
+      'Pass', 'Fail', 'Incomplete', 'Withdrawn', 'NC-NS',
+      'Pending Sup Transfer', 'Resumed-Pass', 'Fail-Final Attempt'
+    }
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return "Incomplete"
+
+    cleaned = re.sub(r"[\u2013\u2014_]+", "-", raw).strip()
+    normalized = re.sub(r"\s+", " ", cleaned).upper()
+
+    mapping = {
+        "PASS": "Pass",
+        "PASSED": "Pass",
+        "RESUMED-PASS": "Resumed-Pass",
+        "RESUMED PASS": "Resumed-Pass",
+        "RESUME-PASS": "Resumed-Pass",
+        "RESUME PASS": "Resumed-Pass",
+        "FAIL": "Fail",
+        "FAILED": "Fail",
+        "FAIL-FINAL ATTEMPT": "Fail-Final Attempt",
+        "FAILED-FINAL ATTEMPT": "Fail-Final Attempt",
+        "FAIL FINAL ATTEMPT": "Fail-Final Attempt",
+        "FAILED FINAL ATTEMPT": "Fail-Final Attempt",
+        "NC/NS": "NC-NS",
+        "NC-NS": "NC-NS",
+        "NC NS": "NC-NS",
+        "NO SHOW": "NC-NS",
+        "INCOMPLETE": "Incomplete",
+        "NEEDS RETEST / ADDITIONAL COACHING": "Incomplete",
+        "WITHDRAWN": "Withdrawn",
+        "WITHDREW": "Withdrawn",
+        "WITHDREW FROM CERTIFICATION": "Withdrawn",
+        "PENDING SUP TRANSFER": "Pending Sup Transfer",
+        "PENDING-SUP-TRANSFER": "Pending Sup Transfer",
+    }
+
+    if normalized in mapping:
+        return mapping[normalized]
+
+    return raw
+
+
 def _build_candidate_lifecycle_payloads(session, candidate_action="updated"):
     """Extract and build canonical candidate lifecycle payloads.
     Shared by both primary Supabase write path and dual-write mirror path.
@@ -10339,6 +10385,9 @@ def _build_candidate_lifecycle_payloads(session, candidate_action="updated"):
     status = compute_final_status(session)
     shared_status = _shared_status(status)
 
+    candidate_result = session.get("final_result") or session.get("final_status") or status
+    canonical_result = _canonical_lifecycle_final_result(candidate_result)
+
     session_payload = {
         "session_id": session_id,
         "candidate_name": candidate_name,
@@ -10347,13 +10396,18 @@ def _build_candidate_lifecycle_payloads(session, candidate_action="updated"):
         "tester_name": session.get("tester_name") or "",
         "session_type": "sup_transfer_only" if session.get("supervisor_only") else "mock_session",
         "status": shared_status,
-        "final_result": session.get("final_result") or shared_status,
+        "raw_status": str(session.get("raw_status") or session.get("status") or status or "").strip(),
+        "final_result": canonical_result,
         "attempt_number": session.get("attempt_number") or 1,
         "created_at": str(session.get("timestamp_iso") or session.get("created_at") or datetime.now(timezone.utc).isoformat()),
         "completed_at": str(session.get("completed_at") or session.get("timestamp_iso") or datetime.now(timezone.utc).isoformat()),
         "is_new": is_new,
         **session,
     }
+
+    # Ensure canonical final_result and raw_status override any unnormalized values from **session
+    session_payload["final_result"] = canonical_result
+    session_payload["raw_status"] = str(session.get("raw_status") or session.get("status") or status or "").strip()
 
     # Collect all completed call attempts
     call_results = [
@@ -10362,9 +10416,9 @@ def _build_candidate_lifecycle_payloads(session, candidate_action="updated"):
         (3, (session.get("call_3") or {}).get("result") or session.get("call_3_result")),
     ]
     valid_calls = [(num, res) for num, res in call_results if res not in (None, "")]
-    if not valid_calls:
+    if not valid_calls and session.get("supervisor_only"):
         attempt_number = session.get("attempt_number") or session.get("current_attempt_number") or 1
-        valid_calls = [(attempt_number, session.get("final_result") or shared_status or "Pass")]
+        valid_calls = [(attempt_number, canonical_result or "Pass")]
 
     attempt_payloads = []
     for num, res in valid_calls:

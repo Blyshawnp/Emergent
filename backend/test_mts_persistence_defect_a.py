@@ -704,6 +704,138 @@ class MtsAuthenticatedPersistenceTests(unittest.TestCase):
         fn_name, forwarded_dto, _ = mock_edge_fn.call_args[0]
         self.assertEqual(forwarded_dto.get("headset_review"), headset_payload)
 
+    def test_april_johnson_nc_ns_result_normalization(self):
+        """April Johnson: session with NC/NS status (e.g. Same Day Drop, 0 calls completed).
+        Should produce final_result='NC-NS', raw_status='NC/NS', and fallback attempt result='NC-NS'.
+        Must NOT convert to 'Fail' or 'FAIL'.
+        """
+        april_session = {
+            "session_id": "7c449bb1-7769-475e-8dab-9dde54a91fed",
+            "candidate_name": "April Johnson",
+            "status": "NC/NS",
+            "final_status": "NC/NS",
+            "auto_fail_reason": "Same Day Drop",
+            "tester_name": "Test Evaluator",
+            "attempt_number": 1,
+            "call_1": None,
+            "call_2": None,
+            "call_3": None,
+        }
+
+        built = server._build_candidate_lifecycle_payloads(april_session, "appended")
+        self.assertTrue(built["ok"])
+
+        sess_payload = built["session_payload"]
+        self.assertEqual(sess_payload["final_result"], "NC-NS")
+        self.assertEqual(sess_payload["raw_status"], "NC/NS")
+        self.assertNotEqual(sess_payload["final_result"], "FAIL")
+        self.assertNotEqual(sess_payload["final_result"], "Fail")
+
+        # Zero-call NC/NS session must NOT invent a mock_call attempt
+        attempts = built["attempt_payloads"]
+        self.assertEqual(len(attempts), 0)
+
+    def test_reeva_hunter_resumed_pass_result_normalization(self):
+        """Reeva Hunter: session with RESUMED-PASS status (supervisor transfer only).
+        Should produce final_result='Resumed-Pass', raw_status='RESUMED-PASS'.
+        Must NOT leave raw uppercase 'RESUMED-PASS'.
+        """
+        reeva_session = {
+            "session_id": "c4b9939d-e73f-4be9-8f6f-f840ca264816",
+            "candidate_name": "Reeva Hunter",
+            "status": "RESUMED-PASS",
+            "final_status": "RESUMED-PASS",
+            "supervisor_only": True,
+            "resumed_sup_transfer_only": True,
+            "tester_name": "Test Evaluator",
+            "attempt_number": 2,
+            "call_1": {"result": "Pass"},
+            "call_2": {"result": "Fail"},
+            "call_3": {"result": "Pass"},
+            "sup_transfer_1": {"result": "Pass"},
+        }
+
+        built = server._build_candidate_lifecycle_payloads(reeva_session, "updated")
+        self.assertTrue(built["ok"])
+
+        sess_payload = built["session_payload"]
+        self.assertEqual(sess_payload["final_result"], "Resumed-Pass")
+        self.assertEqual(sess_payload["raw_status"], "RESUMED-PASS")
+        self.assertNotEqual(sess_payload["final_result"], "RESUMED-PASS")
+
+    def test_all_canonical_lifecycle_outcomes(self):
+        """Verifies normalization of all allowed canonical outcomes in mts-candidate-lifecycle-write."""
+        allowed_results = {
+            "Pass",
+            "Fail",
+            "Incomplete",
+            "Withdrawn",
+            "NC-NS",
+            "Pending Sup Transfer",
+            "Resumed-Pass",
+            "Fail-Final Attempt",
+        }
+
+        test_cases = [
+            ("Pass", "Pass"),
+            ("PASS", "Pass"),
+            ("Fail", "Fail"),
+            ("FAIL", "Fail"),
+            ("Incomplete", "Incomplete"),
+            ("INCOMPLETE", "Incomplete"),
+            ("Withdrawn", "Withdrawn"),
+            ("WITHDRAWN", "Withdrawn"),
+            ("WITHDREW FROM CERTIFICATION", "Withdrawn"),
+            ("NC-NS", "NC-NS"),
+            ("NC/NS", "NC-NS"),
+            ("nc/ns", "NC-NS"),
+            ("NO SHOW", "NC-NS"),
+            ("Pending Sup Transfer", "Pending Sup Transfer"),
+            ("PENDING SUP TRANSFER", "Pending Sup Transfer"),
+            ("Resumed-Pass", "Resumed-Pass"),
+            ("RESUMED-PASS", "Resumed-Pass"),
+            ("RESUMED PASS", "Resumed-Pass"),
+            ("Fail-Final Attempt", "Fail-Final Attempt"),
+            ("FAIL-FINAL ATTEMPT", "Fail-Final Attempt"),
+            ("FAIL FINAL ATTEMPT", "Fail-Final Attempt"),
+            ("Needs Retest / Additional Coaching", "Incomplete"),
+        ]
+
+        for input_val, expected_val in test_cases:
+            normalized = server._canonical_lifecycle_final_result(input_val)
+            self.assertEqual(normalized, expected_val, f"Failed for input: {input_val}")
+            self.assertIn(normalized, allowed_results, f"Normalized value not in ALLOWED_FINAL_RESULTS: {normalized}")
+
+    def test_save_and_retry_sync_payload_parity(self):
+        """Ensures that initial save and retry-sync build identical normalized final_result and raw_status."""
+        session_record = {
+            "session_id": "sess-parity-101",
+            "candidate_name": "Taylor Morgan",
+            "status": "NC/NS",
+            "auto_fail_reason": "Same Day Drop",
+            "tester_name": "Alex Smith",
+            "attempt_number": 1,
+        }
+
+        # Path 1: Initial save build (action='appended')
+        built_initial = server._build_candidate_lifecycle_payloads(session_record, "appended")
+        self.assertTrue(built_initial["ok"])
+
+        # Path 2: Retry sync build (action='updated')
+        built_retry = server._build_candidate_lifecycle_payloads(session_record, "updated")
+        self.assertTrue(built_retry["ok"])
+
+        self.assertEqual(
+            built_initial["session_payload"]["final_result"],
+            built_retry["session_payload"]["final_result"],
+        )
+        self.assertEqual(
+            built_initial["session_payload"]["raw_status"],
+            built_retry["session_payload"]["raw_status"],
+        )
+        self.assertEqual(built_initial["session_payload"]["final_result"], "NC-NS")
+        self.assertEqual(built_initial["session_payload"]["raw_status"], "NC/NS")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -91,10 +91,8 @@ Failure Outcomes,Failed 1st Sup Transfer,Unfortunately our call did not result i
 Failure Outcomes,Failed Both Sup Transfers,"Unfortunately our call did not result in a successful transfer to a supervisor. Please review the steps in the presentation. Since both attempts at supervisor transfers this session were not successful, we will need to schedule a time to meet again to complete your Supervisor Transfers.
 
 You will not need to schedule anything on your end. Please give me a moment to check availability."
-Failure Outcomes,Fail Session,"It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. I think you will benefit from further practice in the WXYZ Certification script. Please reschedule for another Mock session in Gateway as soon as possible (within 24 hours).
-
-If you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then."
-Failure Outcomes,Fail Final Attempt,"Thank you for your time and interest in becoming a phone agent for ACD Direct and it was a pleasure working with you today. Unfortunately, based on our session, I'm unable to pass you. At this time you have exceeded the amount of Mock Call session attempts allowed. We wish you luck in your future endeavors and have a nice day."
+Failure Outcomes,Fail Session,"It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing requirements. Please review the feedback given and schedule another session in the next two days. You can email the certification team with any questions."
+Failure Outcomes,Fail Final Attempt,"It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing requirements, and it looks like this was your final attempt. Please reach out to the certification team by email — they'll be able to walk you through your next steps."
 Failure Outcomes,VPN Fail,"It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. Using a VPN is not accepted when contracting with ACD. Your VPN must be turned off or be able to be turned off for your mock session as well as when taking calls.
 
 Any further questions should be directed to certification@acdsupport.com.
