@@ -123,6 +123,10 @@ class SupabaseDataProvider(DataProvider):
             raise SupabaseProviderError(f"Supabase {name} RPC returned a malformed response")
         return result
 
+    def call_rpc(self, name: str, body: Mapping[str, Any] | None = None) -> Any:
+        """Call any service-role or accessible RPC in mts_sam."""
+        return self._request(f"rpc/{name}", method="POST", body=dict(body or {}))
+
     def begin_reconciliation_execution(self, plan, items):
         return self._reconciliation_rpc(
             "begin_reconciliation_execution", self._reconciliation_execution_body(plan, items)

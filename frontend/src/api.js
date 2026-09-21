@@ -168,6 +168,7 @@ const api = {
   saveSupTransfer: (data) => savedRequest('POST', '/session/sup', data),
   finishSessionSimple: () => savedRequest('POST', '/session/finish'),
   discardSession: () => savedRequest('POST', '/session/discard'),
+  cancelOverrideReservation: (sessionId) => savedRequest('POST', '/session/cancel-override', { session_id: sessionId }),
   getHistory: (timeout) => request('GET', '/history', null, timeout),
   getHistoryStats: (timeout) => request('GET', '/history/stats', null, timeout),
   reconcileHistory: (timeout) => request('POST', '/history/reconcile', null, timeout),
@@ -222,6 +223,9 @@ const api = {
   fillForm: (coaching, fail, session = null) => request('POST', '/form/fill', { coaching, fail_reason: fail, session }, 120000),
   finishSession: (coaching, fail) => savedRequest('POST', '/finish-session', { coaching_summary: coaching, fail_summary: fail }),
   checkForUpdate: (app = 'mts') => request('GET', `/update?app=${encodeURIComponent(app)}`, null, 5000),
+  getPendingOverrides: () => request('GET', '/shared/admin/overrides/pending', null, 15000),
+  decideAdditionalAttemptOverride: (payload) => request('POST', '/shared/admin/overrides/decide', payload, 15000),
+  resolveOfflineOverrideConflict: (payload) => request('POST', '/shared/admin/overrides/resolve-conflict', payload, 15000),
 };
 
 export default api;

@@ -6844,6 +6844,35 @@ def _candidate_qualifying_failure(row):
     return _candidate_attempt_disposition(row)[0]
 
 
+def _is_session_certification_authorized(row, max_attempts=None):
+    """Safeguard 2: Historical Certification Compatibility with Positive Clearance.
+    Only explicit 'approved' or 'not_required' grant certification clearance.
+    Pending, denied, abandoned, conflict, and local_pending_sync are blocked.
+    For legacy rows with missing/NULL authorization_status:
+    Clearance is derived from canonical history and attempt allowance:
+    Within-allowance standard attempts (attempts 1..3, or supervisor-only) are authorized ('not_required').
+    Attempts exceeding allowance without extra_attempt_grants or unauthorized overrides are blocked.
+    """
+    if not isinstance(row, dict):
+        return False
+    auth_status = str(row.get("authorization_status") or "").strip().lower()
+    if auth_status in ("approved", "not_required"):
+        return True
+    if auth_status in ("pending_admin_authorization", "denied", "abandoned", "conflict", "local_pending_sync"):
+        return False
+    # Legacy row without explicit authorization_status
+    if _shared_truthy(row.get("additional_attempt_overridden")):
+        return False
+    if row.get("supervisor_only"):
+        return True
+    try:
+        att_num = int(row.get("attempt_number") or row.get("current_attempt_number") or 1)
+    except (TypeError, ValueError):
+        att_num = 1
+    allowed = max_attempts or int(row.get("allowed_attempt_count") or CERTIFICATION_BASE_MAX_ATTEMPTS)
+    return att_num <= allowed
+
+
 def calculate_candidate_attempt_state(rows, active_session=None):
     """Authoritative attempt state for candidate lookup, retry routing, and history."""
     records = [dict(row or {}) for row in (rows or []) if isinstance(row, dict)]
@@ -6901,7 +6930,7 @@ def calculate_candidate_attempt_state(rows, active_session=None):
     max_attempts = max(CERTIFICATION_BASE_MAX_ATTEMPTS + extra_attempts_granted, stored_max)
 
     withdrawn = any(_candidate_row_withdrawn(row) for row in all_records)
-    passed = any(_shared_status_upper(row) in {"PASS", "PASSED", "RESUMED-PASS"} for row in all_records)
+    passed = any(_shared_status_upper(row) in {"PASS", "PASSED", "RESUMED-PASS"} and _is_session_certification_authorized(row, max_attempts) for row in all_records)
     final_attempt_failed = any(
         _shared_status_upper(row) == "FAIL-FINAL ATTEMPT"
         or (
@@ -6967,6 +6996,28 @@ def apply_certification_start_policy(session, attempt_state):
         return {"ok": True, "session": result, "existing_session_completion": True}
     state = dict(attempt_state or {})
     if not state.get("retry_allowed", False):
+        if _shared_truthy(result.get("additional_attempt_overridden")):
+            reason = str(result.get("additional_attempt_override_reason") or "").strip()
+            if not reason:
+                return {
+                    "ok": False,
+                    "error_code": "REASON_REQUIRED",
+                    "error": "A written reason is required for Additional Attempt Override.",
+                }
+            result.update({
+                "attempt_state": state,
+                "prior_counted_attempts": int(state.get("counted_attempts") or 0),
+                "attempt_number": int(state.get("counted_attempts") or 0) + 1,
+                "current_attempt_number": int(state.get("counted_attempts") or 0) + 1,
+                "allowed_attempt_count": int(state.get("max_attempts") or CERTIFICATION_BASE_MAX_ATTEMPTS),
+                "extra_attempts_granted": int(state.get("extra_attempts_granted") or 0),
+                "auto_final_attempt": False,
+                "final_attempt": False,
+                "final_attempt_overridden": False,
+                "additional_attempt_overridden": True,
+                "additional_attempt_override_reason": reason,
+            })
+            return {"ok": True, "session": result, "existing_session_completion": False}
         return {
             "ok": False,
             "error_code": "CERTIFICATION_ATTEMPTS_EXHAUSTED",
@@ -6978,6 +7029,14 @@ def apply_certification_start_policy(session, attempt_state):
         and result.get("final_attempt") is False
         and _shared_truthy(result.get("final_attempt_overridden"))
     )
+    if committed_override:
+        final_reason = str(result.get("final_attempt_override_reason") or "").strip()
+        if final_reason.lower() == "tester confirmed final attempt yes to no override.":
+            return {
+                "ok": False,
+                "error_code": "REASON_REQUIRED",
+                "error": "A mandatory written explanation is required to change Final Attempt from Yes to No.",
+            }
     result.update({
         "attempt_state": state,
         "prior_counted_attempts": int(state.get("counted_attempts") or 0),
@@ -7515,14 +7574,16 @@ def _public_correction_request(row):
     }
 
 
-def _request_category_counts(requests, headset_pending_count=0):
+def _request_category_counts(requests, headset_pending_count=0, override_pending_count=0):
     pending = [item for item in requests if item.get("raw_status") == "pending"]
     workflow_count = len(pending)
+    override_count = sum(1 for item in pending if "override" in str(item.get("category") or "").lower()) or override_pending_count
     return {
         "newbieInitial": sum(1 for item in pending if item.get("category") == "newbie_initial"),
         "reschedules": sum(1 for item in pending if item.get("category") == "newbie_reschedule"),
         "candidateDeletions": sum(1 for item in pending if item.get("category") == "candidate_deletion"),
         "candidateCorrections": sum(1 for item in pending if item.get("category") == "candidate_correction"),
+        "additionalAttemptOverrides": override_count,
         "headsetReviews": headset_pending_count,
         "workflowRequests": workflow_count,
         "actionableTotal": workflow_count + headset_pending_count,
@@ -8320,13 +8381,43 @@ def _shared_pending_request_snapshot(headset_snapshot=None, context=None, candid
                     requests.append(_public_deletion_request(payload))
                 else:
                     requests.append(_public_newbie_request(payload))
+            overrides = []
+            try:
+                overrides = _get_pending_overrides_list()
+                for ov in overrides:
+                    requests.append({
+                        "category": "additional_attempt_override_conflict" if ov.get("authorization_status") == "conflict" else "additional_attempt_override",
+                        "categoryLabel": "Additional Attempt Override Conflict" if ov.get("authorization_status") == "conflict" else "Additional Attempt Override",
+                        "request_id": str(ov.get("id") or ov.get("override_id")),
+                        "candidate": ov.get("candidate_name"),
+                        "candidate_name": ov.get("candidate_name"),
+                        "candidate_id": ov.get("candidate_id"),
+                        "source_session_id": ov.get("source_session_id"),
+                        "session_id": ov.get("source_session_id"),
+                        "tester": ov.get("tester_name"),
+                        "requester": ov.get("tester_name"),
+                        "reason": ov.get("reason"),
+                        "attempt_number": ov.get("attempt_number"),
+                        "max_attempts": ov.get("authorized_max_attempts"),
+                        "authorization_status": ov.get("authorization_status"),
+                        "is_in_progress": bool((ov.get("session") or {}).get("is_in_progress", True)),
+                        "final_result": (ov.get("session") or {}).get("final_result"),
+                        "created_at": ov.get("occurred_at") or ov.get("created_at"),
+                        "raw_status": "pending",
+                        "status": "Pending Authorization",
+                        "override_data": ov,
+                    })
+            except Exception as ov_exc:
+                logger.warning("[REQUESTS] Failed to append overrides to pending requests: %s", ov_exc)
+
             requests = _filter_obsolete_pending_newbie_requests(requests, candidate_tracking)
             requests.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
             return {
                 "ok": True,
                 "requests": requests,
                 "headsetReviews": (headset_snapshot or {}).get("pending") or [],
-                "counts": _request_category_counts(requests, headset_pending_count),
+                "additionalAttemptOverrides": overrides,
+                "counts": _request_category_counts(requests, headset_pending_count, len(overrides)),
                 "targeting": {
                     "mode": "all_authorized_admins",
                     "message": "Per-admin request targeting is not available from the current SAM identity source; all authorized SAM administrators can see pending requests.",
@@ -10498,6 +10589,19 @@ def _persist_candidate_lifecycle_to_supabase(session, candidate_action="updated"
     Idempotent across retries and partial failures.
     Returns structured diagnostics on failure without leaking secrets.
     """
+    # Safeguard 1 & Offline Reconciliation: Reconcile emergency offline override if present
+    if _shared_truthy(session.get("additional_attempt_overridden")):
+        if _shared_truthy(session.get("emergency_offline_override")) or session.get("authorization_status") in ("local_pending_sync", None, ""):
+            reconcile_res = _reconcile_offline_emergency_reservation(session, auth_jwt=auth_jwt)
+            if not reconcile_res.get("ok"):
+                return {
+                    "ok": False,
+                    "stage": "override_reconciliation",
+                    "resource": "additional_attempt_overrides",
+                    "safe_identifier": str(session.get("session_id") or ""),
+                    "error_code": reconcile_res.get("error_code") or "RECONCILIATION_FAILED",
+                    "error": reconcile_res.get("error") or "Failed to reconcile offline emergency reservation.",
+                }
     built = _build_candidate_lifecycle_payloads(session, candidate_action)
     if not built.get("ok"):
         return {
@@ -15597,6 +15701,565 @@ def _update_saved_history_fields(history_id, updates):
     return True
 
 
+def _has_session_test_activity(session_dict):
+    """Safeguard 3: Account for both canonical and locally recorded test activity.
+    An offline session with Call 1 activity must not be abandoned as an unused draft.
+    """
+    if not isinstance(session_dict, dict):
+        return False
+    for i in range(1, 4):
+        call = session_dict.get(f"call_{i}")
+        if isinstance(call, dict) and bool(call.get("result") or call.get("status") or call.get("completed")):
+            return True
+        if str(session_dict.get(f"call_{i}_result") or "").strip():
+            return True
+    for i in range(1, 3):
+        sup = session_dict.get(f"sup_transfer_{i}")
+        if isinstance(sup, dict) and bool(sup.get("result") or sup.get("status")):
+            return True
+        if str(session_dict.get(f"sup_transfer_{i}_result") or "").strip():
+            return True
+    try:
+        if int(session_dict.get("mock_calls_completed") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    try:
+        if int(session_dict.get("sup_transfers_completed") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def _reserve_additional_attempt_session(
+    candidate_name,
+    source_candidate_id,
+    session_id,
+    tester_name,
+    reason,
+    emergency_offline=False,
+):
+    """Safeguard 1 & Option B: Reserve an additional attempt session.
+    Online: calls mts_sam.reserve_additional_attempt_session via Supabase provider.
+    Offline (Option B): if unreachable and emergency_offline is True, returns local reservation.
+    """
+    session_id = str(session_id or "").strip()
+    source_candidate_id = str(source_candidate_id or "").strip()
+    reason = str(reason or "").strip()
+
+    if not session_id:
+        return {"ok": False, "error_code": "INVALID_REQUEST", "error": "Session identity is required."}
+    if not source_candidate_id:
+        return {"ok": False, "error_code": "INVALID_REQUEST", "error": "Candidate identity is required."}
+    if not reason:
+        return {"ok": False, "error_code": "REASON_REQUIRED", "error": "A written reason is required for Additional Attempt Override."}
+
+    installation_id = str(_get_mts_installation_credential().get("installation_id") or "local-installation").strip()
+
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            res = provider.call_rpc("reserve_additional_attempt_session", {
+                "p_candidate_name": candidate_name,
+                "p_source_candidate_id": source_candidate_id,
+                "p_session_id": session_id,
+                "p_tester_name": tester_name,
+                "p_actor_installation_id": installation_id,
+                "p_reason": reason,
+                "p_is_offline_emergency": bool(emergency_offline),
+            })
+            if isinstance(res, dict):
+                return res
+            return {"ok": True, "reservation_id": f"reservation-{session_id}"}
+        except Exception as exc:
+            err_msg = str(exc)
+            for code in (
+                "CANDIDATE_ALREADY_CERTIFIED",
+                "CANDIDATE_WITHDRAWN",
+                "OUTSTANDING_OVERRIDE_PENDING",
+                "REASON_REQUIRED",
+                "ALREADY_DECIDED",
+            ):
+                if code in err_msg:
+                    return {"ok": False, "error_code": code, "error": err_msg}
+
+            if not emergency_offline:
+                return {
+                    "ok": False,
+                    "error_code": "NETWORK_UNAVAILABLE",
+                    "error": "Shared reservation server is unreachable. Emergency Offline Override requires explicit acknowledgement to proceed offline.",
+                    "offline_available": True,
+                }
+
+    # Option B: Emergency Offline Override acknowledged
+    return {
+        "ok": True,
+        "offline_emergency": True,
+        "reservation_id": f"local-override-{session_id}",
+        "authorization_status": "local_pending_sync",
+    }
+
+
+def _cancel_additional_attempt_reservation(session_id, local_session=None):
+    """Safeguard 3: Cancel/abandon an Additional Attempt Override reservation.
+    Before abandoning any reservation, account for both canonical and locally recorded test activity.
+    An offline session with Call 1 activity must not be cancelled as an unused draft.
+    """
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        return {"ok": False, "error_code": "INVALID_REQUEST", "error": "Session identity is required."}
+
+    has_local_activity = _has_session_test_activity(local_session)
+    if has_local_activity:
+        return {
+            "ok": False,
+            "error_code": "SESSION_IN_PROGRESS",
+            "error": "This session has test activity and cannot be cancelled as an unused draft. Incomplete work and session identity are preserved.",
+        }
+
+    installation_id = str(_get_mts_installation_credential().get("installation_id") or "local-installation").strip()
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            res = provider.call_rpc("cancel_additional_attempt_reservation", {
+                "p_session_id": session_id,
+                "p_actor_installation_id": installation_id,
+                "p_has_local_call_activity": has_local_activity,
+            })
+            if isinstance(res, dict):
+                return res
+        except Exception as exc:
+            err_msg = str(exc)
+            if "SESSION_IN_PROGRESS" in err_msg:
+                return {
+                    "ok": False,
+                    "error_code": "SESSION_IN_PROGRESS",
+                    "error": "This session has test activity and cannot be cancelled. Complete or finish the session.",
+                }
+            logger.warning("[OVERRIDE-CANCEL] Remote cancellation failed: %s", exc)
+
+    return {"ok": True, "abandoned": True}
+
+
+def _extract_auth_jwt(request: Request) -> str:
+    if request and hasattr(request, "headers") and hasattr(request.headers, "get"):
+        raw_header = request.headers.get("Authorization", "")
+        if isinstance(raw_header, str) and raw_header.startswith("Bearer "):
+            return raw_header[7:].strip()
+    return ""
+
+
+def _reconcile_offline_emergency_reservation(session, auth_jwt=None):
+    """Safeguard 1 & Offline Reconciliation:
+    One shared reconciliation mechanism used by initial hosted persistence,
+    background sync, and History Retry Hosted Sync.
+    Executes in the required 10-step order:
+    1. Check if session is an offline emergency override
+    2. Preserve the exact local session_id
+    3. Validate mandatory written reason
+    4. Attempt canonical reservation/reconciliation via RPC reserve_additional_attempt_session (p_is_offline_emergency=True)
+    5. Handle cross-workstation conflicts: if conflict, authorization_status='conflict'
+    6. Handle successful reservation: authorization_status='pending_admin_authorization'
+    7. Update session dict in-place so subsequent lifecycle persistence carries reconciled authorization_status
+    8. candidate_sessions will link to override record via DB trigger
+    9. Update local SQLite/History record with reconciled authorization_status (and sync status stays independent)
+    10. Return reconciliation result {ok, status, reservation_id, conflict}
+    """
+    if not isinstance(session, dict):
+        return {"ok": False, "error": "Invalid session object"}
+
+    is_offline_emergency = (
+        _shared_truthy(session.get("emergency_offline_override"))
+        or session.get("authorization_status") == "local_pending_sync"
+    )
+    if not is_offline_emergency:
+        return {"ok": True, "reconciled": False, "authorization_status": session.get("authorization_status")}
+
+    session_id = _candidate_session_identity(session) or str(session.get("session_id") or "").strip()
+    if not session_id:
+        return {"ok": False, "error_code": "INVALID_REQUEST", "error": "Missing session identity for offline reconciliation."}
+
+    candidate_name = str(session.get("candidate_name") or session.get("candidate") or "").strip()
+    source_cand_id = str(session.get("candidate_id") or f"cand-{candidate_name.lower().replace(' ', '-')}").strip()
+    tester_name = str(session.get("tester_name") or "").strip()
+    reason = str(session.get("additional_attempt_override_reason") or "").strip()
+
+    if not reason:
+        return {"ok": False, "error_code": "REASON_REQUIRED", "error": "A written reason is required for Additional Attempt Override."}
+
+    installation_id = str(_get_mts_installation_credential().get("installation_id") or "local-installation").strip()
+
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            res = provider.call_rpc("reserve_additional_attempt_session", {
+                "p_candidate_name": candidate_name,
+                "p_source_candidate_id": source_cand_id,
+                "p_session_id": session_id,
+                "p_tester_name": tester_name,
+                "p_actor_installation_id": installation_id,
+                "p_reason": reason,
+                "p_is_offline_emergency": True,
+            })
+            if not isinstance(res, dict) or not res.get("ok"):
+                err_msg = res.get("error") if isinstance(res, dict) else "RPC reservation failed"
+                err_code = (res or {}).get("error_code") if isinstance(res, dict) else "RPC_ERROR"
+                logger.warning("[OVERRIDE-RECONCILE] Reservation failed for session %s: %s", session_id, err_msg)
+                return {"ok": False, "error": err_msg, "error_code": err_code}
+
+            if res.get("conflict") or res.get("authorization_status") == "conflict":
+                reconciled_status = "conflict"
+            else:
+                reconciled_status = res.get("authorization_status") or "pending_admin_authorization"
+
+            session["authorization_status"] = reconciled_status
+            session["reservation_id"] = res.get("reservation_id")
+            if res.get("attempt_number"):
+                session["attempt_number"] = res["attempt_number"]
+                session["current_attempt_number"] = res["attempt_number"]
+            if res.get("max_attempts"):
+                session["allowed_attempt_count"] = res["max_attempts"]
+
+            hid = session.get("history_id") or session_id
+            _update_saved_history_fields(hid, {
+                "authorization_status": reconciled_status,
+                "reservation_id": res.get("reservation_id"),
+            })
+
+            return {
+                "ok": True,
+                "reconciled": True,
+                "authorization_status": reconciled_status,
+                "reservation_id": res.get("reservation_id"),
+                "conflict": bool(res.get("conflict")),
+            }
+        except Exception as exc:
+            logger.exception("[OVERRIDE-RECONCILE] Exception during offline reservation reconciliation: %s", exc)
+            return {"ok": False, "error": str(exc), "error_code": "RECONCILIATION_EXCEPTION"}
+    else:
+        # Local / test mode fallback
+        reconciled_status = "pending_admin_authorization"
+        session["authorization_status"] = reconciled_status
+        hid = session.get("history_id") or session_id
+        _update_saved_history_fields(hid, {
+            "authorization_status": reconciled_status,
+        })
+        return {
+            "ok": True,
+            "reconciled": True,
+            "authorization_status": reconciled_status,
+        }
+
+
+def _get_local_pending_overrides_list():
+    """Inspect local SQLite history and active session for pending or conflict overrides."""
+    results = []
+    seen_ids = set()
+    try:
+        active_doc = db.sessions._read_document("active_session")
+        if active_doc:
+            if _shared_truthy(active_doc.get("additional_attempt_overridden")):
+                sid = str(active_doc.get("session_id") or "").strip()
+                cname = str(active_doc.get("candidate_name") or "Unknown Candidate").strip()
+                cid = str(active_doc.get("candidate_id") or f"cand-{cname.lower().replace(' ', '-')}").strip()
+                auth_status = active_doc.get("authorization_status") or "pending_admin_authorization"
+                if sid:
+                    seen_ids.add(sid)
+                results.append({
+                    "id": active_doc.get("reservation_id") or f"ov-{sid}",
+                    "override_id": active_doc.get("reservation_id") or f"ov-{sid}",
+                    "candidate_id": cid,
+                    "candidate_name": cname,
+                    "tester_name": active_doc.get("tester_name") or "Tester",
+                    "source_session_id": sid,
+                    "session_id": sid,
+                    "attempt_number": active_doc.get("attempt_number") or 4,
+                    "authorized_max_attempts": active_doc.get("allowed_attempt_count") or 3,
+                    "reason": active_doc.get("additional_attempt_override_reason") or "",
+                    "authorization_status": auth_status,
+                    "occurred_at": active_doc.get("created_at") or active_doc.get("timestamp_iso"),
+                    "created_at": active_doc.get("created_at") or active_doc.get("timestamp_iso"),
+                    "is_offline_emergency": bool(active_doc.get("emergency_offline_override") or auth_status == "conflict"),
+                    "session": {
+                        "is_in_progress": True,
+                        "final_result": None,
+                        "raw_status": "In Progress",
+                        "mock_calls_completed": int(active_doc.get("mock_calls_completed") or 0),
+                        "sup_transfers_completed": int(active_doc.get("sup_transfers_completed") or 0),
+                        "call_results": {},
+                        "supervisor_transfer_results": {},
+                        "evaluator_notes_summary": None,
+                    },
+                    "prior_history": [],
+                    "conflict_data": None,
+                })
+
+        rows = db.history.store.fetchall("SELECT data FROM history_documents ORDER BY id DESC", ())
+        for r in rows:
+            doc = json.loads(r["data"])
+            if not _shared_truthy(doc.get("additional_attempt_overridden")):
+                continue
+            auth_status = doc.get("authorization_status") or "pending_admin_authorization"
+            if auth_status not in ("pending_admin_authorization", "conflict", "local_pending_sync"):
+                continue
+            sid = str(doc.get("session_id") or doc.get("history_id") or "").strip()
+            if sid in seen_ids:
+                continue
+            seen_ids.add(sid)
+            cname = str(doc.get("candidate_name") or "Unknown Candidate").strip()
+            cid = str(doc.get("candidate_id") or f"cand-{cname.lower().replace(' ', '-')}").strip()
+            final_res = doc.get("final_result") or doc.get("final_status") or doc.get("status")
+            is_in_progress = not bool(final_res)
+
+            results.append({
+                "id": doc.get("reservation_id") or f"ov-{sid}",
+                "override_id": doc.get("reservation_id") or f"ov-{sid}",
+                "candidate_id": cid,
+                "candidate_name": cname,
+                "tester_name": doc.get("tester_name") or "Tester",
+                "source_session_id": sid,
+                "session_id": sid,
+                "attempt_number": doc.get("attempt_number") or 4,
+                "authorized_max_attempts": doc.get("allowed_attempt_count") or 3,
+                "reason": doc.get("additional_attempt_override_reason") or "",
+                "authorization_status": auth_status,
+                "occurred_at": doc.get("completed_at") or doc.get("created_at") or doc.get("timestamp_iso"),
+                "created_at": doc.get("created_at") or doc.get("timestamp_iso"),
+                "is_offline_emergency": bool(doc.get("emergency_offline_override") or auth_status == "conflict"),
+                "session": {
+                    "is_in_progress": is_in_progress,
+                    "final_result": final_res,
+                    "raw_status": doc.get("raw_status") or doc.get("status"),
+                    "mock_calls_completed": int(doc.get("mock_calls_completed") or 0),
+                    "sup_transfers_completed": int(doc.get("sup_transfers_completed") or 0),
+                    "call_results": {
+                        "call_1": doc.get("call_1_result") or (doc.get("call_1") or {}).get("result"),
+                        "call_2": doc.get("call_2_result") or (doc.get("call_2") or {}).get("result"),
+                        "call_3": doc.get("call_3_result") or (doc.get("call_3") or {}).get("result"),
+                    },
+                    "supervisor_transfer_results": {
+                        "sup_1": doc.get("sup_transfer_1_result") or (doc.get("sup_transfer_1") or {}).get("result"),
+                        "sup_2": doc.get("sup_transfer_2_result") or (doc.get("sup_transfer_2") or {}).get("result"),
+                    },
+                    "evaluator_notes_summary": doc.get("evaluator_notes_summary") or doc.get("notes"),
+                },
+                "prior_history": [],
+                "conflict_data": None,
+            })
+    except Exception as exc:
+        logger.warning("[OVERRIDES] Failed to load local overrides: %s", exc)
+    return results
+
+
+def _get_pending_overrides_list(auth_jwt=None):
+    """Retrieve all Additional Attempt Overrides awaiting administrator authorization
+    or flagged as conflict, enriched with session and evaluation data.
+    """
+    overrides = []
+    if configured_provider_mode() == "supabase":
+        try:
+            provider = _get_active_data_provider()
+            raw_overrides = provider.list_resource("additional_attempt_overrides", limit=500)
+            candidate_tracking = _shared_admin_candidate_snapshot()
+            candidates = (candidate_tracking or {}).get("candidates") or []
+            cand_by_id = {str(c.get("candidate_id") or c.get("id") or ""): c for c in candidates}
+            all_overrides_by_id = {str(ov.get("id")): ov for ov in (raw_overrides or []) if isinstance(ov, dict)}
+
+            for ov in raw_overrides or []:
+                if not isinstance(ov, dict):
+                    continue
+                auth_status = ov.get("authorization_status")
+                if auth_status not in ("pending_admin_authorization", "conflict"):
+                    continue
+
+                cid = str(ov.get("candidate_id") or "")
+                cand = cand_by_id.get(cid) or {}
+                cname = (
+                    cand.get("candidate_name")
+                    or cand.get("display_name")
+                    or ov.get("candidate_name")
+                    or "Unknown Candidate"
+                )
+
+                prior_attempts = []
+                for att in cand.get("attempts") or []:
+                    att_sid = str(att.get("session_id") or att.get("source_session_id") or "")
+                    if att_sid and att_sid != str(ov.get("source_session_id") or ""):
+                        prior_attempts.append({
+                            "session_id": att_sid,
+                            "attempt_number": att.get("attempt_number"),
+                            "final_result": att.get("final_result") or att.get("result"),
+                            "status": att.get("status"),
+                            "created_at": att.get("created_at") or att.get("occurred_at"),
+                        })
+
+                session_data = None
+                for s in cand.get("sessions") or []:
+                    if str(s.get("session_id") or s.get("source_session_id") or "") == str(ov.get("source_session_id") or ""):
+                        session_data = s
+                        break
+
+                final_res = (session_data or {}).get("final_result")
+                is_in_progress = not bool(final_res)
+
+                conflict_data = None
+                if ov.get("conflict_source_override_id"):
+                    src_ov = all_overrides_by_id.get(str(ov["conflict_source_override_id"]))
+                    if src_ov:
+                        conflict_data = {
+                            "conflicting_override_id": src_ov.get("id"),
+                            "conflicting_session_id": src_ov.get("source_session_id"),
+                            "conflicting_tester_name": src_ov.get("tester_name"),
+                            "conflicting_reason": src_ov.get("reason"),
+                            "conflicting_occurred_at": src_ov.get("occurred_at"),
+                            "conflicting_authorization_status": src_ov.get("authorization_status"),
+                        }
+
+                overrides.append({
+                    "id": ov.get("id"),
+                    "override_id": ov.get("id"),
+                    "candidate_id": cid,
+                    "candidate_name": cname,
+                    "tester_name": ov.get("tester_name") or "Unknown Tester",
+                    "source_session_id": ov.get("source_session_id"),
+                    "session_id": ov.get("source_session_id"),
+                    "attempt_number": ov.get("attempt_number") or 4,
+                    "authorized_max_attempts": ov.get("authorized_max_attempts") or 3,
+                    "reason": ov.get("reason") or "",
+                    "authorization_status": auth_status,
+                    "occurred_at": ov.get("occurred_at") or ov.get("created_at"),
+                    "created_at": ov.get("created_at"),
+                    "is_offline_emergency": auth_status == "conflict" or bool(ov.get("conflict_source_override_id")),
+                    "session": {
+                        "is_in_progress": is_in_progress,
+                        "final_result": final_res,
+                        "raw_status": (session_data or {}).get("raw_status"),
+                        "mock_calls_completed": (session_data or {}).get("mock_calls_completed"),
+                        "sup_transfers_completed": (session_data or {}).get("sup_transfers_completed"),
+                        "call_results": (session_data or {}).get("call_results") or {},
+                        "supervisor_transfer_results": (session_data or {}).get("supervisor_transfer_results") or {},
+                        "evaluator_notes_summary": (session_data or {}).get("evaluator_notes_summary"),
+                    },
+                    "prior_history": prior_attempts,
+                    "conflict_data": conflict_data,
+                })
+        except Exception as exc:
+            logger.exception("[OVERRIDES] Failed to fetch overrides list from Supabase: %s", exc)
+
+    if not overrides:
+        overrides = _get_local_pending_overrides_list()
+
+    return overrides
+
+
+def _decide_local_override(override_id, decision, reason):
+    """Local / mock mode decision helper."""
+    override_id = str(override_id or "").strip()
+    decision = str(decision or "").strip().lower()
+    if decision not in ("approved", "denied"):
+        return {"ok": False, "error": "Decision must be 'approved' or 'denied'."}
+
+    rows = db.history.store.fetchall("SELECT id, data FROM history_documents ORDER BY id DESC", ())
+    for row in rows:
+        record = json.loads(row["data"])
+        rec_ov_id = str(record.get("reservation_id") or f"ov-{record.get('session_id')}" or "")
+        rec_sid = str(record.get("session_id") or record.get("history_id") or "")
+        if override_id in (rec_ov_id, rec_sid, str(row["id"])):
+            final_res = record.get("final_result") or record.get("final_status") or record.get("status")
+            if not final_res:
+                return {
+                    "ok": False,
+                    "error_code": "SESSION_IN_PROGRESS",
+                    "error": "Session in Progress — Evaluation Not Yet Available. The tester has not yet completed and submitted the session evaluation.",
+                }
+            record["authorization_status"] = decision
+            record["decision"] = decision
+            record["decision_reason"] = reason or None
+            record["decision_at"] = datetime.now(timezone.utc).isoformat()
+            db.history.store.execute(
+                "UPDATE history_documents SET data = ? WHERE id = ?",
+                (json.dumps(record, ensure_ascii=False, default=str), row["id"]),
+            )
+            return {
+                "ok": True,
+                "replayed": False,
+                "authorization_status": decision,
+                "override_id": override_id,
+                "session_final_result": final_res,
+                "certification_cleared": (decision == "approved" and str(final_res).strip().upper() in ("PASS", "RESUMED-PASS")),
+            }
+
+    active_doc = db.sessions._read_document("active_session")
+    if active_doc:
+        act_ov_id = str(active_doc.get("reservation_id") or f"ov-{active_doc.get('session_id')}" or "")
+        act_sid = str(active_doc.get("session_id") or "")
+        if override_id in (act_ov_id, act_sid):
+            return {
+                "ok": False,
+                "error_code": "SESSION_IN_PROGRESS",
+                "error": "Session in Progress — Evaluation Not Yet Available. The tester has not yet completed and submitted the session evaluation.",
+            }
+
+    return {"ok": False, "error_code": "OVERRIDE_NOT_FOUND", "error": "Override record not found."}
+
+
+@api_router.get("/shared/admin/overrides/pending")
+async def get_shared_admin_pending_overrides(request: Request):
+    _require_admin_token(request)
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    return await asyncio.to_thread(_get_pending_overrides_list, auth_jwt=auth_jwt)
+
+
+@api_router.post("/shared/admin/overrides/decide")
+async def post_shared_admin_override_decide(payload: dict, request: Request):
+    _require_admin_token(request)
+    auth_payload = payload or {}
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    override_id = str(auth_payload.get("override_id") or "").strip()
+    decision = str(auth_payload.get("decision") or "").strip().lower()
+    reason = str(auth_payload.get("reason") or "").strip() or None
+    caller_auth_uid = str(auth_payload.get("caller_auth_uid") or "").strip() or None
+
+    if configured_provider_mode() == "supabase":
+        if not auth_jwt:
+            raise HTTPException(status_code=401, detail="Authenticated SAM administrator session required.")
+        rpc_payload = {
+            "p_override_id": override_id,
+            "p_decision": decision,
+            "p_reason": reason,
+            "p_caller_auth_uid": caller_auth_uid,
+        }
+        return await asyncio.to_thread(_supabase_anon_rpc, "decide_additional_attempt_override", rpc_payload, auth_jwt)
+    return await asyncio.to_thread(_decide_local_override, override_id, decision, reason)
+
+
+@api_router.post("/shared/admin/overrides/resolve-conflict")
+async def post_shared_admin_override_resolve_conflict(payload: dict, request: Request):
+    _require_admin_token(request)
+    auth_payload = payload or {}
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    conflict_id = str(auth_payload.get("conflict_override_id") or auth_payload.get("override_id") or "").strip()
+    decision = str(auth_payload.get("decision") or "").strip().lower()
+    reason = str(auth_payload.get("reason") or "").strip() or None
+    caller_auth_uid = str(auth_payload.get("caller_auth_uid") or "").strip() or None
+
+    if configured_provider_mode() == "supabase":
+        if not auth_jwt:
+            raise HTTPException(status_code=401, detail="Authenticated SAM administrator session required.")
+        rpc_payload = {
+            "p_conflict_override_id": conflict_id,
+            "p_decision": decision,
+            "p_reason": reason,
+            "p_caller_auth_uid": caller_auth_uid,
+        }
+        return await asyncio.to_thread(_supabase_anon_rpc, "resolve_offline_override_conflict", rpc_payload, auth_jwt)
+    return await asyncio.to_thread(_decide_local_override, conflict_id, decision, reason)
+
+
 @api_router.post("/session/start")
 async def start_session(payload: dict, request: Request, background_tasks: BackgroundTasks):
     session = empty_session()
@@ -15608,15 +16271,65 @@ async def start_session(payload: dict, request: Request, background_tasks: Backg
         candidate_name = str(session.get("candidate_name") or "").strip()
         lookup = await asyncio.to_thread(_lookup_shared_candidate_sessions, candidate_name)
         if candidate_name and lookup.get("ok") is False:
-            raise HTTPException(
-                status_code=503,
-                detail="Current certification-attempt authorization could not be verified. Retry when shared candidate records are available.",
-            )
+            if _shared_truthy(session.get("additional_attempt_overridden")):
+                if not _shared_truthy(payload.get("emergency_offline_acknowledged")):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Current certification-attempt authorization could not be verified. Emergency Offline Override requires explicit acknowledgement to proceed offline.",
+                    )
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Current certification-attempt authorization could not be verified. Retry when shared candidate records are available.",
+                )
         policy = apply_certification_start_policy(session, lookup.get("attemptState") or calculate_candidate_attempt_state([]))
         if not policy.get("ok"):
             raise HTTPException(status_code=409, detail=policy.get("error"))
         session = policy["session"]
+
+    if bool(session.get("final_attempt_overridden")) and session.get("final_attempt") is False:
+        final_reason = str(session.get("final_attempt_override_reason") or "").strip()
+        if not final_reason or final_reason.lower() == "tester confirmed final attempt yes to no override.":
+            raise HTTPException(
+                status_code=409,
+                detail="A mandatory written explanation is required to change Final Attempt from Yes to No.",
+            )
+
     session["session_id"] = str(session.get("session_id") or uuid.uuid4())
+    session["history_id"] = _candidate_session_identity(session) or session["session_id"]
+
+    # Start-Time Reservation for Additional Attempt Override (Option B supported)
+    if _shared_truthy(session.get("additional_attempt_overridden")):
+        candidate_name = str(session.get("candidate_name") or "").strip()
+        source_cand_id = str(session.get("candidate_id") or f"cand-{candidate_name.lower().replace(' ', '-')}").strip()
+        emergency_offline = bool(payload.get("emergency_offline_acknowledged"))
+        reserve_res = await asyncio.to_thread(
+            _reserve_additional_attempt_session,
+            candidate_name=candidate_name,
+            source_candidate_id=source_cand_id,
+            session_id=session["session_id"],
+            tester_name=str(session.get("tester_name") or "").strip(),
+            reason=str(session.get("additional_attempt_override_reason") or "").strip(),
+            emergency_offline=emergency_offline,
+        )
+        if not reserve_res.get("ok"):
+            err_code = reserve_res.get("error_code")
+            if err_code == "NETWORK_UNAVAILABLE":
+                raise HTTPException(status_code=503, detail=reserve_res.get("error"))
+            raise HTTPException(status_code=409, detail=reserve_res.get("error"))
+
+        if reserve_res.get("offline_emergency"):
+            session["sync_status"] = "local_only"
+            session["authorization_status"] = "local_pending_sync"
+            session["emergency_offline_override"] = True
+        else:
+            session["authorization_status"] = reserve_res.get("authorization_status") or "pending_admin_authorization"
+            session["reservation_id"] = reserve_res.get("reservation_id")
+        if reserve_res.get("attempt_number"):
+            session["attempt_number"] = reserve_res["attempt_number"]
+            session["current_attempt_number"] = reserve_res["attempt_number"]
+        if reserve_res.get("max_attempts"):
+            session["allowed_attempt_count"] = reserve_res["max_attempts"]
     session["history_id"] = _candidate_session_identity(session) or session["session_id"]
     if str(session.get("newbie_shift_request_type") or "").strip().lower() == NEWBIE_REQUEST_RESCHEDULE:
         if not str(session.get("newbie_shift_request_id") or "").strip():

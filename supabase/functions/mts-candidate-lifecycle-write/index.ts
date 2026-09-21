@@ -24,6 +24,8 @@ interface RequestPayload {
     auto_final_attempt?: boolean;
     final_attempt_overridden?: boolean;
     final_attempt_override_reason?: string;
+    additional_attempt_overridden?: boolean;
+    additional_attempt_override_reason?: string;
     raw_status?: string;
     calculated_result?: string;
     final_result?: string;
@@ -255,6 +257,18 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Validate Additional Attempt Override: reason must be nonblank
+    const additionalAttemptOverridden = session.additional_attempt_overridden === true;
+    if (additionalAttemptOverridden) {
+      const additionalReason = String(session.additional_attempt_override_reason || "").trim();
+      if (!additionalReason) {
+        return new Response(
+          JSON.stringify({ ok: false, error: "A written reason is required for Additional Attempt Override." }),
+          { status: 400, headers: corsHeaders }
+        );
+      }
+    }
+
     // Connect to database using service-role client
     const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
       auth: { persistSession: false },
@@ -294,11 +308,14 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Revision 9: Use verified installation identity from credential, NOT client-submitted value
     const installationId = instVerifyResult.installation_id;
     const trustedSessionFields = { ...session };
     delete trustedSessionFields.source_payload;
     const canonicalSession = {
       ...trustedSessionFields,
+      // For additional attempt override sessions, set authorization_status to pending
+      authorization_status: additionalAttemptOverridden ? "pending_admin_authorization" : "not_required",
       source_payload: {
         ...trustedSessionFields,
         auto_final_attempt: session.auto_final_attempt === true,
@@ -306,6 +323,11 @@ Deno.serve(async (req: Request) => {
         final_attempt_override_reason: overrideCommitted
           ? String(session.final_attempt_override_reason || "").trim() || null
           : null,
+        additional_attempt_overridden: additionalAttemptOverridden,
+        additional_attempt_override_reason: additionalAttemptOverridden
+          ? String(session.additional_attempt_override_reason || "").trim() || null
+          : null,
+        // Revision 9: Authoritative installation ID from verified credential
         actor_installation_id: installationId,
       },
     };

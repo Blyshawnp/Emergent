@@ -706,6 +706,21 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                       return syncMeta ? <StatusChip meta={syncMeta} data-testid={`history-sync-status-${i}`} /> : null;
                     })()}
                     {s.candidate_correction_pending ? <StatusChip meta={{ label: 'Correction Pending', tone: 'pending' }} title="Candidate information correction pending SAM review" /> : null}
+                    {s.authorization_status === 'pending_admin_authorization' && (
+                      <StatusChip meta={{ label: 'Override Pending Authorization', tone: 'pending' }} title="Additional Attempt Override pending SAM administrator authorization" />
+                    )}
+                    {s.authorization_status === 'local_pending_sync' && (
+                      <StatusChip meta={{ label: 'Offline Override Pending Sync', tone: 'warning' }} title="Emergency offline override pending sync to SAM" />
+                    )}
+                    {s.authorization_status === 'conflict' && (
+                      <StatusChip meta={{ label: 'Override Conflict Pending Review', tone: 'danger' }} title="Emergency offline override conflict pending SAM review" />
+                    )}
+                    {s.authorization_status === 'denied' && (
+                      <StatusChip meta={{ label: 'Override Denied', tone: 'danger' }} title="Additional Attempt Override denied by administrator" />
+                    )}
+                    {s.authorization_status === 'approved' && s.additional_attempt_overridden && (
+                      <StatusChip meta={{ label: 'Override Approved', tone: 'approved' }} title="Additional Attempt Override approved by administrator" />
+                    )}
                   </div>
                   <div className="hist-cell hist-actions" role="cell" data-label="Actions">
                     <div className="hist-actions-group">
@@ -883,6 +898,41 @@ export default function HistoryPage({ onNavigate, navigationState, onHistoryRefr
                 )}
                 <div className="text-sm"><strong>Date:</strong> {detailDate(detail) || 'Unknown'}</div>
                 <div className="text-sm"><strong>Final Attempt:</strong> {detail.final_attempt ? 'Yes' : 'No'}</div>
+                {detail.additional_attempt_overridden && (
+                  <div className="text-sm">
+                    <strong>Additional Attempt Override:</strong> Yes
+                  </div>
+                )}
+                {detail.additional_attempt_override_reason && (
+                  <div className="text-sm">
+                    <strong>Override Reason:</strong> {detail.additional_attempt_override_reason}
+                  </div>
+                )}
+                {detail.authorization_status && detail.authorization_status !== 'not_required' && (
+                  <div className="text-sm">
+                    <strong>Authorization Status:</strong>{' '}
+                    <StatusChip
+                      meta={{
+                        label: detail.authorization_status === 'pending_admin_authorization'
+                          ? 'Pending Administrator Authorization'
+                          : detail.authorization_status === 'local_pending_sync'
+                            ? 'Offline Pending Sync'
+                            : detail.authorization_status === 'conflict'
+                              ? 'Conflict Pending SAM Review'
+                              : detail.authorization_status === 'approved'
+                                ? 'Approved'
+                                : detail.authorization_status === 'denied'
+                                  ? 'Denied'
+                                  : detail.authorization_status,
+                        tone: detail.authorization_status === 'approved'
+                          ? 'approved'
+                          : detail.authorization_status === 'denied' || detail.authorization_status === 'conflict'
+                            ? 'denied'
+                            : 'pending',
+                      }}
+                    />
+                  </div>
+                )}
                 {getCandidateHeadset(detail).label && <div className="text-sm"><strong>Headset:</strong> {getCandidateHeadset(detail).label}</div>}
                 {detail.newbie_shift_number ? <div className="text-sm"><strong>Newbie Shift Number:</strong> Shift #{detail.newbie_shift_number}</div> : null}
                 <div className="text-sm"><strong>Form Fill:</strong> <StatusChip meta={formFillStatusMeta(detail.form_fill_status, { legacy: !detail.form_fill_status })} /></div>

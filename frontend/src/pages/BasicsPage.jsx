@@ -6,6 +6,9 @@ import TechIssueDialog from '../components/TechIssueDialog';
 import WorkflowProgress, { getWorkflowProgress } from '../components/WorkflowProgress';
 import FinalAttemptBanner from '../components/FinalAttemptBanner';
 import ActiveCandidateHeader from '../components/ActiveCandidateHeader';
+import AdditionalAttemptModal from '../components/AdditionalAttemptModal';
+import EmergencyOfflineAcknowledgement from '../components/EmergencyOfflineAcknowledgement';
+import FinalAttemptReasonModal from '../components/FinalAttemptReasonModal';
 import { buildBasicsFromRecord, findBestBasicsRecord, mergeBasicsIntoSession, sessionIdOf } from '../utils/sessionBasics';
 import { buildHeadsetAutoFailReason, CERTIFICATION_SUPPORT_EMAIL, followUpStatusMeta } from '../utils/certificationWorkflow';
 import { automaticFinalAttempt, isCertificationAllowanceExhausted, shouldConfirmFinalAttemptOverride } from '../utils/certificationAttemptPolicy';
@@ -289,6 +292,10 @@ export default function BasicsPage({ onNavigate }) {
   const [suppressedCandidateLookupName, setSuppressedCandidateLookupName] = useState('');
   const [previousSessionOpen, setPreviousSessionOpen] = useState(false);
   const [finalAttemptNoticeShownFor, setFinalAttemptNoticeShownFor] = useState('');
+  const [additionalAttemptModalOpen, setAdditionalAttemptModalOpen] = useState(false);
+  const [emergencyOfflineModalOpen, setEmergencyOfflineModalOpen] = useState(false);
+  const [finalAttemptModalOpen, setFinalAttemptModalOpen] = useState(false);
+  const [pendingOverrideData, setPendingOverrideData] = useState(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const dropdownRef = useRef(null);
@@ -581,23 +588,7 @@ export default function BasicsPage({ onNavigate }) {
 
   const setFinalAttempt = async (nextValue) => {
     if (shouldConfirmFinalAttemptOverride(form.auto_final_attempt, form.final_attempt, nextValue)) {
-      const confirmed = await modal.showModal({
-        type: 'confirm',
-        title: 'Confirm Final Attempt Override',
-        body: "This is the candidate's final currently authorized certification attempt. Changing Final Attempt to No will be recorded and will notify SAM. This does not grant the candidate another attempt.",
-        graphic: 'warning',
-        buttons: [
-          { label: 'Cancel', cls: 'btn-muted', value: false },
-          { label: 'Confirm', cls: 'btn-danger', value: true },
-        ],
-      });
-      if (!confirmed) return;
-      setForm((current) => ({
-        ...current,
-        final_attempt: false,
-        final_attempt_overridden: true,
-        final_attempt_override_reason: 'Tester confirmed Final Attempt Yes to No override.',
-      }));
+      setFinalAttemptModalOpen(true);
       return;
     }
     setForm((current) => ({
@@ -606,6 +597,16 @@ export default function BasicsPage({ onNavigate }) {
       final_attempt_overridden: false,
       final_attempt_override_reason: '',
     }));
+  };
+
+  const handleConfirmFinalAttemptOverride = (reason) => {
+    setForm((current) => ({
+      ...current,
+      final_attempt: false,
+      final_attempt_overridden: true,
+      final_attempt_override_reason: reason,
+    }));
+    setFinalAttemptModalOpen(false);
   };
 
   const currentHeadsetIsApproved = useMemo(() => {
@@ -772,13 +773,6 @@ export default function BasicsPage({ onNavigate }) {
   const handleCandidateBlockOrOverride = async (match) => {
     const candidateName = match?.candidate_name || form.candidate_name.trim() || 'This candidate';
     const extraAttemptGranted = sheetTruthy(candidateLookup.extraAttemptGranted) || sheetTruthy(match?.extra_attempt_granted);
-    if (isCertificationAllowanceExhausted(candidateLookup.attemptState, { supervisor_only: supervisorOnlyMode })) {
-      await modal.warning(
-        'No Authorized Attempts Remaining',
-        'No additional certification attempts are currently authorized for this candidate. An administrator must grant another attempt in SAM before a new session can be started.'
-      );
-      return { allowed: false };
-    }
     if (candidateIsWithdrawn(match) && !extraAttemptGranted) {
       await modal.showModal({
         type: 'warning',
@@ -789,39 +783,6 @@ export default function BasicsPage({ onNavigate }) {
       });
       await discardWithoutConfirmation();
       return { allowed: false };
-    }
-
-    if ((candidateLookup.finalAttemptUsed || candidateHasFinalAttemptUsed(match)) && !extraAttemptGranted) {
-      const choice = await modal.showModal({
-        type: 'warning',
-        title: 'Final Attempt Already Used',
-        body: `${candidateName} has already used their last attempt and is no longer able to continue. Please have the candidate email ${CERTIFICATION_SUPPORT_EMAIL} if there are any issues. You can also post in the Discord Tester Room for further assistance. This session will be discarded.`,
-        graphic: 'warning',
-        buttons: [
-          { label: 'OK', cls: 'btn-primary', value: 'discard' },
-          { label: 'Override', cls: 'btn-danger', value: 'override' },
-        ],
-      });
-      if (choice !== 'override') {
-        await discardWithoutConfirmation();
-        return { allowed: false };
-      }
-      const confirmed = await modal.showModal({
-        type: 'confirm',
-        title: 'Confirm Override',
-        body: `Are you sure that you want to continue testing ${candidateName} with an additional attempt?`,
-        graphic: 'warning',
-        buttons: [
-          { label: 'No', cls: 'btn-muted', value: false },
-          { label: 'Yes', cls: 'btn-danger', value: true },
-        ],
-      });
-      if (!confirmed) return { allowed: false };
-      await modal.warning(
-        'Override Logged',
-        'Override should only be used if there is an error or with permission from the Admin. If you have not yet done so, please notify Admin in the Discord Tester Room that an override was used for this candidate. This session will be logged as an override.'
-      );
-      return { allowed: true, override: true };
     }
 
     if ((candidateLookup.passedCertification || candidateHasPassed(match)) && !extraAttemptGranted) {
@@ -836,20 +797,116 @@ export default function BasicsPage({ onNavigate }) {
       return { allowed: false };
     }
 
+    const isExhausted = isCertificationAllowanceExhausted(candidateLookup.attemptState, { supervisor_only: supervisorOnlyMode }) ||
+      ((candidateLookup.finalAttemptUsed || candidateHasFinalAttemptUsed(match)) && !extraAttemptGranted);
+
+    if (isExhausted) {
+      const nextAttemptNumber = (candidateLookup.attemptState?.counted_attempts || 0) + 1;
+      return new Promise((resolve) => {
+        setPendingOverrideData({
+          match,
+          candidateName,
+          nextAttemptNumber,
+          resolve,
+        });
+        setAdditionalAttemptModalOpen(true);
+      });
+    }
+
     return { allowed: true, override: false };
+  };
+
+  const handleProceedAdditionalAttempt = (writtenReason) => {
+    setAdditionalAttemptModalOpen(false);
+    if (!pendingOverrideData) return;
+    const { nextAttemptNumber, resolve } = pendingOverrideData;
+    setForm((current) => ({
+      ...current,
+      additional_attempt_overridden: true,
+      additional_attempt_override_reason: writtenReason,
+      attempt_number: nextAttemptNumber,
+      current_attempt_number: nextAttemptNumber,
+      final_attempt: true,
+      auto_final_attempt: true,
+      candidate_override_used: true,
+      candidate_override_reason: writtenReason,
+    }));
+    resolve({
+      allowed: true,
+      override: true,
+      additional_attempt_overridden: true,
+      additional_attempt_override_reason: writtenReason,
+    });
+    setPendingOverrideData(null);
+  };
+
+  const handleCancelAdditionalAttempt = async () => {
+    setAdditionalAttemptModalOpen(false);
+    if (pendingOverrideData) {
+      pendingOverrideData.resolve({ allowed: false });
+      setPendingOverrideData(null);
+    }
+    await discardWithoutConfirmation();
+  };
+
+  const handleAcknowledgeEmergencyOffline = async () => {
+    setEmergencyOfflineModalOpen(false);
+    if (!pendingOverrideData) return;
+    try {
+      const result = await api.startSession({
+        ...pendingOverrideData.payload,
+        emergency_offline_acknowledged: true,
+      });
+      if (result?.warning) {
+        await modal.warning('Headset Review Not Submitted', result.warning);
+      }
+      pendingOverrideData.resolve(result);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Failed to start emergency offline session.';
+      await modal.warning('Start Session Failed', detail);
+      pendingOverrideData.resolve(null);
+    } finally {
+      setPendingOverrideData(null);
+    }
+  };
+
+  const handleCancelEmergencyOffline = async () => {
+    setEmergencyOfflineModalOpen(false);
+    if (pendingOverrideData) {
+      pendingOverrideData.resolve(null);
+      setPendingOverrideData(null);
+    }
+    await discardWithoutConfirmation();
   };
 
   const startSessionWithHeadsetReview = async (sessionData) => {
     const headsetModel = String(sessionData?.headset_brand || '').trim();
     const shouldRequestReview = Boolean(headsetModel) && !headsetIsApproved(headsetModel, approvedHeadsets);
-    const result = await api.startSession({
+    const payload = {
       ...sessionData,
       headset_review_requested: shouldRequestReview,
-    });
-    if (result?.warning) {
-      await modal.warning('Headset Review Not Submitted', result.warning);
+    };
+    try {
+      const result = await api.startSession(payload);
+      if (result?.warning) {
+        await modal.warning('Headset Review Not Submitted', result.warning);
+      }
+      return result;
+    } catch (error) {
+      const status = error?.response?.status;
+      const detail = error?.response?.data?.detail || error?.message || '';
+      if (status === 503 && /emergency offline/i.test(detail)) {
+        return new Promise((resolve) => {
+          setPendingOverrideData({
+            payload,
+            resolve,
+          });
+          setEmergencyOfflineModalOpen(true);
+        });
+      }
+      await modal.warning('Start Session Failed', detail || 'Failed to start session.');
+      throw error;
     }
-    return result;
   };
 
   const researchUnknownHeadset = async () => {
@@ -1643,6 +1700,27 @@ export default function BasicsPage({ onNavigate }) {
         <span className="spacer" />
         <button className="btn btn-primary" onClick={handleContinue} data-testid="basics-continue">Continue</button>
       </div>
+      {finalAttemptModalOpen && (
+        <FinalAttemptReasonModal
+          onCancel={() => setFinalAttemptModalOpen(false)}
+          onConfirm={handleConfirmFinalAttemptOverride}
+        />
+      )}
+      {additionalAttemptModalOpen && (
+        <AdditionalAttemptModal
+          candidateName={pendingOverrideData?.candidateName || form.candidate_name}
+          attemptNumber={pendingOverrideData?.nextAttemptNumber || 4}
+          onCancel={handleCancelAdditionalAttempt}
+          onProceed={handleProceedAdditionalAttempt}
+        />
+      )}
+      {emergencyOfflineModalOpen && (
+        <EmergencyOfflineAcknowledgement
+          candidateName={pendingOverrideData?.payload?.candidate_name || form.candidate_name}
+          onCancel={handleCancelEmergencyOffline}
+          onAcknowledge={handleAcknowledgeEmergencyOffline}
+        />
+      )}
     </div>
   );
 }

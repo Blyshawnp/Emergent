@@ -46,6 +46,7 @@ import {
   signOutAuth,
 } from './utils/supabaseAuth';
 import PendingRequestAlert from './components/PendingRequestAlert';
+import AdditionalAttemptReviewModal from './components/AdditionalAttemptReviewModal';
 import PostSetupQuickStart from './components/PostSetupQuickStart';
 import { TutorialVideoLibrary } from './components/TutorialVideoPlayer';
 import { normalizeTutorialVideos } from './utils/tutorialVideos';
@@ -2449,6 +2450,7 @@ const REQUEST_FILTERS = [
   { key: 'reschedules', label: 'Reschedules' },
   { key: 'deletions', label: 'Candidate Deletions' },
   { key: 'corrections', label: 'Information Corrections' },
+  { key: 'overrides', label: 'Additional Attempt Overrides' },
   { key: 'headsets', label: 'Headset Reviews' },
   { key: 'resolved', label: 'Resolved Requests' },
   { key: 'approved', label: 'Approved' },
@@ -2541,6 +2543,7 @@ export function getVisiblePendingRequests(requests = [], filter = 'pending') {
     if (filter === 'reschedules') return status === 'pending' && request.category === 'newbie_reschedule';
     if (filter === 'deletions') return status === 'pending' && request.category === 'candidate_deletion';
     if (filter === 'corrections') return status === 'pending' && request.category === 'candidate_correction';
+    if (filter === 'overrides') return status === 'pending' && ['additional_attempt_override', 'additional_attempt_override_conflict'].includes(request.category);
     if (filter === 'resolved') return status === 'approved' || status === 'denied';
     if (filter === 'approved') return status === 'approved';
     if (filter === 'denied') return status === 'denied';
@@ -2556,6 +2559,8 @@ export function applyPendingRequestDecision(data = {}, payload = {}, result = {}
     newbie_reschedule: 'reschedules',
     candidate_deletion: 'candidateDeletions',
     candidate_correction: 'candidateCorrections',
+    additional_attempt_override: 'additionalAttemptOverrides',
+    additional_attempt_override_conflict: 'additionalAttemptOverrides',
   };
   let changedCategory = '';
   const requests = (Array.isArray(data.requests) ? data.requests : []).map((request) => {
@@ -2660,7 +2665,7 @@ export function getHeadsetReviewDisplayTitle(item = {}) {
   return requestedLabel && !isTimestampLikeHeadsetLabel(requestedLabel) ? requestedLabel : 'Unknown headset';
 }
 
-function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh, onDecision, onOpenHeadsets, actor }) {
+function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh, onDecision, onOpenHeadsets, onReviewOverride, actor }) {
   const [approvalRequest, setApprovalRequest] = useState(null);
   const [approvalShiftNumber, setApprovalShiftNumber] = useState('');
   const [denialRequest, setDenialRequest] = useState(null);
@@ -2864,8 +2869,21 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
               </div>
               {String(request.raw_status || '').toLowerCase() === 'pending' ? (
                 <div className="nm-note-card-actions">
-                  <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={Boolean(submittingRequestId)} onClick={() => approve(request)}>{submittingRequestId === request.request_id ? 'Approving...' : 'Approve'}</button>
-                  <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={Boolean(submittingRequestId)} onClick={() => openDeny(request)}>Deny</button>
+                  {['additional_attempt_override', 'additional_attempt_override_conflict'].includes(request.category) ? (
+                    <button
+                      type="button"
+                      className="nm-btn nm-btn-primary nm-btn-table"
+                      onClick={() => onReviewOverride?.(request.override_data || request)}
+                      data-testid="review-override-action-btn"
+                    >
+                      {request.category === 'additional_attempt_override_conflict' ? 'Review Conflict' : 'Review Override'}
+                    </button>
+                  ) : (
+                    <>
+                      <button type="button" className="nm-btn nm-btn-primary nm-btn-table" disabled={Boolean(submittingRequestId)} onClick={() => approve(request)}>{submittingRequestId === request.request_id ? 'Approving...' : 'Approve'}</button>
+                      <button type="button" className="nm-btn nm-btn-danger nm-btn-table" disabled={Boolean(submittingRequestId)} onClick={() => openDeny(request)}>Deny</button>
+                    </>
+                  )}
                 </div>
               ) : null}
             </article>
@@ -2934,7 +2952,7 @@ function PendingRequestsPanel({ data, filter, onFilterChange, loading, onRefresh
   );
 }
 
-function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault, showStatusModal, allowAdditionalAttemptGrant }) {
+function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, onAction, onConfirm, search, onSearchChange, actor, includeArchivedDefault, showStatusModal, allowAdditionalAttemptGrant, onReviewOverride }) {
   const [detailKey, setDetailKey] = useState(null);
   const [selectedTargets, setSelectedTargets] = useState({});
   const [includeArchivedSearch, setIncludeArchivedSearch] = useState(Boolean(includeArchivedDefault));
@@ -3323,6 +3341,19 @@ function CandidateTrackingPanel({ data, view, onViewChange, loading, onRefresh, 
     };
     const statusActions = [];
     if (!isArchived) {
+      if (row.authorization_status === 'pending_admin_authorization' || row.has_pending_override) {
+        statusActions.push({
+          label: 'Review Override',
+          kind: 'warning',
+          onClick: () => onReviewOverride?.(row.override_data || row),
+        });
+      } else if (row.authorization_status === 'conflict' || row.has_override_conflict) {
+        statusActions.push({
+          label: 'Review Conflict',
+          kind: 'danger',
+          onClick: () => onReviewOverride?.(row.override_data || row),
+        });
+      }
       statusActions.push(
         { label: 'Mark Passed', kind: 'success', onClick: () => handleManualCorrection(row, 'mark_passed', 'Mark Passed') },
         { label: 'Mark Failed', kind: 'danger', onClick: () => handleManualCorrection(row, 'mark_failed', 'Mark Failed') },
@@ -4561,6 +4592,8 @@ export default function NotificationManagerApp() {
   const [candidateTracking, setCandidateTracking] = useState({ ok: true, views: {}, candidates: [], pending: [], error: '' });
   const [candidateTrackingLoading, setCandidateTrackingLoading] = useState(false);
   const [headsetReviews, setHeadsetReviews] = useState({ ok: true, pending: [], approved: [], denied: [], error: '' });
+  const [activeOverrideReview, setActiveOverrideReview] = useState(null);
+  const [overrideReviewLoading, setOverrideReviewLoading] = useState(false);
   const [headsetReviewsLoading, setHeadsetReviewsLoading] = useState(false);
   const [pendingRequests, setPendingRequests] = useState({ ok: true, loaded: false, requests: [], headsetReviews: [], counts: {}, error: '', targeting: {} });
   const [pendingRequestsLoading, setPendingRequestsLoading] = useState(false);
@@ -4916,7 +4949,65 @@ export default function NotificationManagerApp() {
     return snapshot?.headsetReviews || null;
   }, [loadSamSnapshot]);
 
-  const loadPendingRequests = useCallback(async ({ silent = false, force = !silent } = {}) => {
+  const handleDecideOverride = useCallback(async ({ override_id, decision, reason }) => {
+    try {
+      setOverrideReviewLoading(true);
+      const accessToken = String(samSetupStatus?.session?.access_token || '').trim();
+      const res = await api.decideAdditionalAttemptOverride({
+        override_id,
+        decision,
+        reason,
+        caller_auth_uid: samSetupStatus?.authUid || samSetupStatus?.authUserId || null,
+        access_token: accessToken || undefined,
+      });
+      if (res?.ok) {
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'success',
+          statusMessage: `Additional Attempt Override ${decision === 'approved' ? 'approved' : 'denied'} successfully.`,
+        }));
+        loadPendingRequests();
+        loadCandidateTracking();
+        return { ok: true };
+      }
+      return { ok: false, error: res?.error || 'Failed to apply decision.' };
+    } catch (err) {
+      return { ok: false, error: err.message || 'An unexpected error occurred.' };
+    } finally {
+      setOverrideReviewLoading(false);
+    }
+  }, [samSetupStatus?.authUid, samSetupStatus?.authUserId, samSetupStatus?.session?.access_token]);
+
+  const handleResolveConflict = useCallback(async ({ conflict_override_id, decision, reason }) => {
+    try {
+      setOverrideReviewLoading(true);
+      const accessToken = String(samSetupStatus?.session?.access_token || '').trim();
+      const res = await api.resolveOfflineOverrideConflict({
+        conflict_override_id,
+        decision,
+        reason,
+        caller_auth_uid: samSetupStatus?.authUid || samSetupStatus?.authUserId || null,
+        access_token: accessToken || undefined,
+      });
+      if (res?.ok) {
+        setSheetState((current) => ({
+          ...current,
+          statusKind: 'success',
+          statusMessage: `Offline Override Conflict resolved successfully (${decision === 'approved' ? 'approved' : 'denied'}).`,
+        }));
+        loadPendingRequests();
+        loadCandidateTracking();
+        return { ok: true };
+      }
+      return { ok: false, error: res?.error || 'Failed to resolve conflict.' };
+    } catch (err) {
+      return { ok: false, error: err.message || 'An unexpected error occurred.' };
+    } finally {
+      setOverrideReviewLoading(false);
+    }
+  }, [samSetupStatus?.authUid, samSetupStatus?.authUserId, samSetupStatus?.session?.access_token]);
+
+  const loadPendingRequests = useCallback(async ({ silent = false, showPendingNotice = false } = {}) => {
     const snapshot = await loadSamSnapshot({ silent, force });
     return snapshot?.pendingRequests || null;
   }, [loadSamSnapshot]);
@@ -6263,6 +6354,10 @@ export default function NotificationManagerApp() {
           onViewHeadsets={() => setActiveSection('headsets')}
           onAlertSound={() => playSamActionSound('error')}
           onView={(request) => {
+            if (['additional_attempt_override', 'additional_attempt_override_conflict'].includes(request.category)) {
+              setActiveOverrideReview(request.override_data || request);
+              return;
+            }
             setActiveSection('requests');
             setPendingRequestFilter(request.category === 'newbie_reschedule'
               ? 'reschedules'
@@ -6384,6 +6479,16 @@ export default function NotificationManagerApp() {
                       </div>
                     </button>
                     <div className="nm-note-card-actions">
+                      {['Additional Attempt Override', 'Additional Attempt Override Conflict'].includes(normalized.Type) || (normalized.source_payload && ['additional_attempt_override', 'additional_attempt_override_conflict'].includes(normalized.source_payload.category)) ? (
+                        <button
+                          type="button"
+                          className="nm-btn nm-btn-primary nm-btn-table"
+                          onClick={() => setActiveOverrideReview(normalized.source_payload || normalized)}
+                          data-testid="notification-review-override-btn"
+                        >
+                          Review Override
+                        </button>
+                      ) : null}
                       <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => openEditor(index)}>Edit</button>
                       <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleDuplicate(index)}>Duplicate</button>
                       <button type="button" className="nm-btn nm-btn-secondary nm-btn-table" onClick={() => handleToggleEnabled(index)}>
@@ -6433,6 +6538,7 @@ export default function NotificationManagerApp() {
             includeArchivedDefault={samSettings.includeArchivedInSearchDefault}
             showStatusModal={showStatusModal}
             allowAdditionalAttemptGrant={canGrantAdditionalAttempt(samSetupStatus.userRole)}
+            onReviewOverride={(override) => setActiveOverrideReview(override)}
           />
         ) : null}
         {activeSection === 'headsets' ? (
@@ -6454,6 +6560,7 @@ export default function NotificationManagerApp() {
             onRefresh={() => loadPendingRequests()}
             onDecision={runPendingRequestDecision}
             onOpenHeadsets={() => setActiveSection('headsets')}
+            onReviewOverride={(override) => setActiveOverrideReview(override)}
             actor={samSetupStatus.userName || samSetupStatus.userRole || 'SAM'}
           />
         ) : null}
@@ -6496,6 +6603,14 @@ export default function NotificationManagerApp() {
         onSubmit={handleSubmit}
         onDelete={handleDelete}
         onClose={closeEditor}
+      />
+      <AdditionalAttemptReviewModal
+        open={Boolean(activeOverrideReview)}
+        override={activeOverrideReview}
+        onClose={() => setActiveOverrideReview(null)}
+        onDecide={handleDecideOverride}
+        onResolveConflict={handleResolveConflict}
+        loading={overrideReviewLoading}
       />
       {settingsOpen ? (
         <SettingsModal

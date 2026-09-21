@@ -354,6 +354,7 @@ export function canHistoryStartSession(record, history = []) {
   const latestStatus = latest.status || latest.final_status || '';
   if (['Pass', 'RESUMED-PASS'].includes(latestStatus)) return false;
   if (latest.final_attempt || latestStatus === 'FAIL-Final Attempt') return false;
+  if (latest.authorization_status === 'pending_admin_authorization' || record.authorization_status === 'pending_admin_authorization') return false;
   return latestStatus === 'Fail';
 }
 

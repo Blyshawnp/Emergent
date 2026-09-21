@@ -23,6 +23,8 @@ RESOURCE_TABLES = {
     "extra_attempts": "extra_attempt_grants",
     "extra_attempt_grants": "extra_attempt_grants",
     "notifications": "notifications",
+    "additional_attempt_overrides": "additional_attempt_overrides",
+    "overrides": "additional_attempt_overrides",
     "history": "candidate_sessions",
     "recent_activity": "recent_activity_view",
     "callers": "caller_roster",
@@ -81,3 +83,6 @@ class DataProvider(ABC):
         offset: int = 0,
     ) -> Sequence[Mapping[str, Any]]:
         raise NotImplementedError
+
+    def call_rpc(self, name: str, body: Mapping[str, Any] | None = None) -> Any:
+        raise NotImplementedError(f"RPC {name} not supported by {self.__class__.__name__}")
