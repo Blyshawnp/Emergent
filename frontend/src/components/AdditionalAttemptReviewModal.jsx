@@ -198,16 +198,34 @@ export default function AdditionalAttemptReviewModal({
               <dt>Started / Occurred At</dt>
               <dd>{formatTimestamp(override.occurred_at || override.created_at)}</dd>
             </div>
+            <div>
+              <dt>Workstation / Installation</dt>
+              <dd data-testid="workstation-attribution">
+                {override.actor_installation_id ? (
+                  <code style={{ fontSize: '12px', background: '#ecfdf5', color: '#065f46', padding: '2px 6px', borderRadius: '4px' }}>
+                    {override.actor_installation_id} (Verified)
+                  </code>
+                ) : override.unverified_actor_installation_id ? (
+                  <span style={{ fontSize: '12px', color: '#b45309' }}>
+                    Unverified (<code>{override.unverified_actor_installation_id}</code>)
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '12px', color: '#64748b', fontStyle: 'italic' }}>
+                    Unknown / Unverified
+                  </span>
+                )}
+              </dd>
+            </div>
             <div style={{ gridColumn: '1 / -1' }}>
               <dt>Exact Session ID</dt>
               <dd><code style={{ fontSize: '12px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px' }}>{override.source_session_id || override.session_id}</code></dd>
             </div>
           </dl>
 
-          {/* Mandatory Written Reason */}
+          {/* Mandatory Written Reason (Tester Attribution) */}
           <div className="nm-detail-section" style={{ marginBottom: '16px' }}>
             <div className="nm-detail-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <FileText size={15} /> Mandatory Written Reason for Override
+              <FileText size={15} /> Mandatory Written Reason for Override (Tester)
             </div>
             <div
               style={{
@@ -219,10 +237,63 @@ export default function AdditionalAttemptReviewModal({
                 fontStyle: 'italic',
                 marginTop: '6px',
               }}
+              data-testid="tester-written-reason"
             >
-              "{override.reason || 'No written explanation provided.'}"
+              {override.tester_override_reason || override.reason ? (
+                `"${override.tester_override_reason || override.reason}"`
+              ) : (
+                <span style={{ color: '#64748b', fontStyle: 'normal' }}>
+                  Missing — No tester explanation was submitted with this session.
+                </span>
+              )}
             </div>
           </div>
+
+          {/* System Conflict Diagnostic (Distinguishable from Tester Reason) */}
+          {override.system_conflict_reason ? (
+            <div className="nm-detail-section" style={{ marginBottom: '16px' }}>
+              <div className="nm-detail-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#b45309' }}>
+                <AlertTriangle size={15} /> System Conflict Diagnostic
+              </div>
+              <div
+                style={{
+                  background: '#fffbeb',
+                  borderLeft: '4px solid #f59e0b',
+                  padding: '10px 14px',
+                  borderRadius: '0 6px 6px 0',
+                  fontSize: '13px',
+                  color: '#92400e',
+                  marginTop: '6px',
+                }}
+                data-testid="system-conflict-diagnostic"
+              >
+                {override.system_conflict_reason}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Administrator Decision Reason */}
+          {override.decision_reason ? (
+            <div className="nm-detail-section" style={{ marginBottom: '16px' }}>
+              <div className="nm-detail-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#15803d' }}>
+                <CheckCircle size={15} /> Administrator Decision Reason
+              </div>
+              <div
+                style={{
+                  background: '#f0fdf4',
+                  borderLeft: '4px solid #22c55e',
+                  padding: '10px 14px',
+                  borderRadius: '0 6px 6px 0',
+                  fontSize: '13px',
+                  color: '#166534',
+                  marginTop: '6px',
+                }}
+                data-testid="admin-decision-reason"
+              >
+                {override.decision_reason}
+              </div>
+            </div>
+          ) : null}
 
           {/* Evaluation / Actual Result Status */}
           <div className="nm-detail-section" style={{ marginBottom: '16px' }}>

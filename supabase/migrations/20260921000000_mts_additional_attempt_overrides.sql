@@ -29,8 +29,10 @@ create table mts_sam.additional_attempt_overrides (
   attempt_number integer not null check (attempt_number > 0),
   authorized_max_attempts integer not null check (authorized_max_attempts > 0),
   tester_name text,
-  actor_installation_id text not null references mts_sam.mts_installations(installation_id) on delete restrict,
-  reason text not null check (btrim(reason) <> ''),
+  actor_installation_id text references mts_sam.mts_installations(installation_id) on delete restrict,
+  unverified_actor_installation_id text,
+  reason text check (reason is null or btrim(reason) <> ''),
+  system_conflict_reason text,
   authorization_status text not null default 'pending_admin_authorization'
     check (authorization_status in (
       'pending_admin_authorization', 'approved', 'denied',
@@ -43,8 +45,40 @@ create table mts_sam.additional_attempt_overrides (
   conflict_source_override_id uuid references mts_sam.additional_attempt_overrides(id) on delete set null,
   occurred_at timestamptz not null,
   created_at timestamptz not null default clock_timestamp(),
-  updated_at timestamptz not null default clock_timestamp()
+  updated_at timestamptz not null default clock_timestamp(),
+  constraint check_actor_installation check (
+    actor_installation_id is not null
+    or system_conflict_reason is not null
+    or authorization_status = 'conflict'
+  ),
+  constraint check_tester_reason check (
+    (reason is not null and btrim(reason) <> '')
+    or system_conflict_reason is not null
+    or authorization_status = 'conflict'
+  ),
+  constraint check_system_conflict check (
+    authorization_status <> 'conflict'
+    or system_conflict_reason is not null
+  )
 );
+
+comment on table mts_sam.additional_attempt_overrides is
+  'Structured Additional Attempt overrides, emergency offline Option B, and administrative decisions.';
+
+comment on column mts_sam.additional_attempt_overrides.actor_installation_id is
+  'Authoritative verified installation identity. Null if unverified in registry.';
+
+comment on column mts_sam.additional_attempt_overrides.unverified_actor_installation_id is
+  'Raw submitted installation identifier preserved when unverified against registry. Never attributed to another workstation.';
+
+comment on column mts_sam.additional_attempt_overrides.reason is
+  'Mandatory written override explanation provided by the tester. Null if unprovided by tester.';
+
+comment on column mts_sam.additional_attempt_overrides.system_conflict_reason is
+  'System diagnostic description of conflict or discrepancy. Never attributed to the tester.';
+
+comment on column mts_sam.additional_attempt_overrides.decision_reason is
+  'Written justification provided by the SAM administrator upon deciding or resolving the override.';
 
 create index additional_attempt_overrides_candidate_idx
   on mts_sam.additional_attempt_overrides (candidate_id, occurred_at desc);
@@ -52,6 +86,10 @@ create index additional_attempt_overrides_candidate_idx
 create index additional_attempt_overrides_pending_idx
   on mts_sam.additional_attempt_overrides (candidate_id)
   where authorization_status = 'pending_admin_authorization';
+
+create index additional_attempt_overrides_conflict_idx
+  on mts_sam.additional_attempt_overrides (candidate_id)
+  where authorization_status = 'conflict';
 
 alter table mts_sam.additional_attempt_overrides enable row level security;
 alter table mts_sam.additional_attempt_overrides force row level security;
@@ -77,8 +115,11 @@ declare
   v_prior_counted integer := 0;
   v_extra_grants integer := 0;
   v_max_attempts integer := 3;
-  v_installation_id text;
-  v_reason text;
+  v_raw_installation_id text;
+  v_verified_installation_id text;
+  v_unverified_installation_id text;
+  v_tester_reason text;
+  v_system_conflict_reason text;
   v_notification_id uuid;
   v_message text;
 begin
@@ -175,84 +216,117 @@ begin
 
     -- Safely record the conflict in additional_attempt_overrides if candidate exists
     if new.candidate_id is not null then
-      v_reason := coalesce(
+      -- 1. Extract tester written reason without fabricating fallback text
+      v_tester_reason := coalesce(
         nullif(btrim(new.source_payload->>'additional_attempt_override_reason'), ''),
-        nullif(btrim(new.source_payload->'source_payload'->>'additional_attempt_override_reason'), ''),
-        'Unreconciled Additional Attempt Override'
+        nullif(btrim(new.source_payload->'source_payload'->>'additional_attempt_override_reason'), '')
       );
 
-      -- Resolve actor installation ID
-      v_installation_id := coalesce(
+      -- 2. Extract and verify installation identity without fabricating attribution
+      v_raw_installation_id := coalesce(
         nullif(btrim(new.source_payload->>'actor_installation_id'), ''),
         nullif(btrim(new.source_payload->'source_payload'->>'actor_installation_id'), '')
       );
 
-      -- Check if installation exists in registry
-      if v_installation_id is not null and not exists (
-        select 1 from mts_sam.mts_installations where installation_id = v_installation_id
+      if v_raw_installation_id is not null and exists (
+        select 1 from mts_sam.mts_installations
+        where installation_id = v_raw_installation_id
+          and active = true
+          and revoked_at is null
       ) then
-        v_installation_id := null;
+        v_verified_installation_id := v_raw_installation_id;
+        v_unverified_installation_id := null;
+      else
+        v_verified_installation_id := null;
+        v_unverified_installation_id := v_raw_installation_id;
       end if;
 
-      -- If not found, use first active installation or omit insert if none
-      if v_installation_id is null then
-        select installation_id into v_installation_id
-        from mts_sam.mts_installations
-        where active = true and revoked_at is null
-        order by created_at asc limit 1;
+      -- 3. Construct system diagnostic conflict description (distinguishable from tester reason)
+      if v_tester_reason is null then
+        v_system_conflict_reason := 'Session submitted without pre-existing reservation; tester override reason was not provided.';
+      else
+        v_system_conflict_reason := 'Session submitted without pre-existing reservation; unverified additional attempt requiring administrator review.';
       end if;
 
-      if v_installation_id is not null then
-        v_override_key := 'additional-attempt-override:' || btrim(new.session_id);
-        insert into mts_sam.additional_attempt_overrides (
-          override_key, candidate_id, source_session_id, session_id,
-          attempt_number, authorized_max_attempts, tester_name,
-          actor_installation_id, reason, authorization_status, occurred_at
-        ) values (
-          v_override_key, new.candidate_id, btrim(new.session_id), new.id,
-          coalesce(new.attempt_number, v_prior_counted + 1), v_max_attempts,
-          btrim(coalesce(new.tester_name, '')),
-          v_installation_id, v_reason, 'conflict', clock_timestamp()
-        ) on conflict (override_key) do update
-          set session_id = coalesce(mts_sam.additional_attempt_overrides.session_id, new.id),
-              authorization_status = 'conflict',
-              updated_at = clock_timestamp();
+      if v_prior_counted >= v_max_attempts then
+        v_system_conflict_reason := v_system_conflict_reason
+          || ' Candidate prior counted attempts (' || v_prior_counted::text
+          || ') reached or exceeded allowed maximum (' || v_max_attempts::text || ').';
+      end if;
 
-        -- Post conflict notification to administrators
-        v_message := 'Unreconciled Additional Attempt Override Conflict: Session '
-          || btrim(new.session_id)
-          || ' for ' || coalesce(nullif(btrim(new.candidate_name), ''), 'the candidate')
-          || ' was submitted without a pre-existing reservation. Administrative review required.';
+      if v_unverified_installation_id is not null then
+        v_system_conflict_reason := v_system_conflict_reason
+          || ' Installation identity ''' || v_unverified_installation_id || ''' is unverified in registry.';
+      elsif v_verified_installation_id is null then
+        v_system_conflict_reason := v_system_conflict_reason
+          || ' No installation identity was provided.';
+      end if;
 
-        insert into mts_sam.notifications (
-          notification_id, enabled, notification_type, title, message,
-          show_ticker, show_popup, show_banner, persistent, starts_at,
-          created_at, updated_at, source_checksum, source_payload
-        ) values (
-          'conflict-override:' || btrim(new.session_id), true, 'warning',
-          'Additional Attempt Override Conflict', v_message,
-          false, true, true, true, clock_timestamp(), clock_timestamp(), clock_timestamp(),
-          encode(extensions.digest(convert_to('conflict-override:' || btrim(new.session_id) || ':' || v_message, 'UTF8'), 'sha256'), 'hex'),
-          jsonb_build_object(
-            'category', 'Additional Attempt Override Conflict',
-            'candidate_id', new.candidate_id,
-            'source_session_id', btrim(new.session_id),
-            'tester_name', btrim(coalesce(new.tester_name, ''))
-          )
-        ) on conflict (notification_id) do nothing
-        returning id into v_notification_id;
+      -- 4. Record conflict in additional_attempt_overrides with true audit attribution
+      v_override_key := 'additional-attempt-override:' || btrim(new.session_id);
+      insert into mts_sam.additional_attempt_overrides (
+        override_key, candidate_id, source_session_id, session_id,
+        attempt_number, authorized_max_attempts, tester_name,
+        actor_installation_id, unverified_actor_installation_id,
+        reason, system_conflict_reason, authorization_status, occurred_at
+      ) values (
+        v_override_key, new.candidate_id, btrim(new.session_id), new.id,
+        coalesce(new.attempt_number, v_prior_counted + 1), v_max_attempts,
+        btrim(coalesce(new.tester_name, '')),
+        v_verified_installation_id, v_unverified_installation_id,
+        v_tester_reason, v_system_conflict_reason, 'conflict', clock_timestamp()
+      ) on conflict (override_key) do update
+        set session_id = coalesce(mts_sam.additional_attempt_overrides.session_id, new.id),
+            actor_installation_id = coalesce(mts_sam.additional_attempt_overrides.actor_installation_id, excluded.actor_installation_id),
+            unverified_actor_installation_id = coalesce(mts_sam.additional_attempt_overrides.unverified_actor_installation_id, excluded.unverified_actor_installation_id),
+            reason = coalesce(mts_sam.additional_attempt_overrides.reason, excluded.reason),
+            system_conflict_reason = coalesce(mts_sam.additional_attempt_overrides.system_conflict_reason, excluded.system_conflict_reason),
+            authorization_status = 'conflict',
+            updated_at = clock_timestamp();
 
-        if v_notification_id is not null then
-          insert into mts_sam.notification_deliveries (
-            notification_id, recipient_user_id, delivery_status, metadata
-          )
-          select distinct v_notification_id, u.id, 'pending',
-            jsonb_build_object('category', 'Additional Attempt Override Conflict', 'source_session_id', btrim(new.session_id))
-          from mts_sam.app_users u
-          join mts_sam.user_role_assignments ura on ura.user_id = u.id
-          where u.active = true and ura.role_key = 'administrator' and ura.revoked_at is null
-          on conflict do nothing;
-        end if;
+      -- 5. Post conflict notification to administrators (idempotent, no duplicates on replay)
+      v_message := 'Unreconciled Additional Attempt Override Conflict: Session '
+        || btrim(new.session_id)
+        || ' for ' || coalesce(nullif(btrim(new.candidate_name), ''), 'the candidate')
+        || ' was submitted without a pre-existing reservation.'
+        || case
+             when v_tester_reason is not null then ' Tester reason: ' || v_tester_reason
+             else ' Tester reason: [Not Provided].'
+           end
+        || ' Administrative review required.';
+
+      insert into mts_sam.notifications (
+        notification_id, enabled, notification_type, title, message,
+        show_ticker, show_popup, show_banner, persistent, starts_at,
+        created_at, updated_at, source_checksum, source_payload
+      ) values (
+        'conflict-override:' || btrim(new.session_id), true, 'warning',
+        'Additional Attempt Override Conflict', v_message,
+        false, true, true, true, clock_timestamp(), clock_timestamp(), clock_timestamp(),
+        encode(extensions.digest(convert_to('conflict-override:' || btrim(new.session_id) || ':' || v_message, 'UTF8'), 'sha256'), 'hex'),
+        jsonb_build_object(
+          'category', 'Additional Attempt Override Conflict',
+          'candidate_id', new.candidate_id,
+          'source_session_id', btrim(new.session_id),
+          'tester_name', btrim(coalesce(new.tester_name, '')),
+          'tester_override_reason', v_tester_reason,
+          'system_conflict_reason', v_system_conflict_reason,
+          'verified_installation_id', v_verified_installation_id,
+          'unverified_installation_id', v_unverified_installation_id
+        )
+      ) on conflict (notification_id) do nothing
+      returning id into v_notification_id;
+
+      if v_notification_id is not null then
+        insert into mts_sam.notification_deliveries (
+          notification_id, recipient_user_id, delivery_status, metadata
+        )
+        select distinct v_notification_id, u.id, 'pending',
+          jsonb_build_object('category', 'Additional Attempt Override Conflict', 'source_session_id', btrim(new.session_id))
+        from mts_sam.app_users u
+        join mts_sam.user_role_assignments ura on ura.user_id = u.id
+        where u.active = true and ura.role_key = 'administrator' and ura.revoked_at is null
+        on conflict do nothing;
       end if;
     end if;
 
@@ -392,15 +466,18 @@ begin
       insert into mts_sam.additional_attempt_overrides (
         override_key, candidate_id, source_session_id, session_id,
         attempt_number, authorized_max_attempts, tester_name,
-        actor_installation_id, reason, authorization_status,
+        actor_installation_id, reason, system_conflict_reason, authorization_status,
         conflict_source_override_id, occurred_at
       ) values (
         v_override_key, v_candidate_id, btrim(p_session_id), null,
         v_counted_attempts + 1, v_max_attempts, btrim(coalesce(p_tester_name, '')),
-        btrim(p_actor_installation_id), v_reason, 'conflict',
+        btrim(p_actor_installation_id), v_reason,
+        'Offline emergency session submitted while outstanding override for session ' || v_existing.source_session_id || ' is already pending.',
+        'conflict',
         v_existing.id, clock_timestamp()
       ) on conflict (override_key) do update
         set conflict_source_override_id = coalesce(mts_sam.additional_attempt_overrides.conflict_source_override_id, v_existing.id),
+            system_conflict_reason = coalesce(mts_sam.additional_attempt_overrides.system_conflict_reason, excluded.system_conflict_reason),
             updated_at = clock_timestamp()
       returning id into v_override_id;
 
@@ -731,6 +808,8 @@ begin
     'authorization_status', p_decision,
     'override_id', p_override_id,
     'session_final_result', v_linked_session.final_result,
+    'tester_override_reason', v_override.reason,
+    'decision_reason', nullif(btrim(coalesce(p_reason, '')), ''),
     'certification_cleared', (
       p_decision = 'approved'
       and upper(btrim(coalesce(v_linked_session.final_result, ''))) in ('PASS', 'RESUMED-PASS')
@@ -856,6 +935,9 @@ begin
     'authorization_status', p_decision,
     'override_id', p_conflict_override_id,
     'session_final_result', v_linked_session.final_result,
+    'tester_override_reason', v_override.reason,
+    'system_conflict_reason', v_override.system_conflict_reason,
+    'decision_reason', nullif(btrim(coalesce(p_reason, '')), ''),
     'certification_cleared', (
       p_decision = 'approved'
       and upper(btrim(coalesce(v_linked_session.final_result, ''))) in ('PASS', 'RESUMED-PASS')

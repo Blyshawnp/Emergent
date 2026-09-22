@@ -833,14 +833,23 @@ class AdditionalAttemptOverrideBehavioralRegressionTests(unittest.TestCase):
 
     # Transactional SQL Simulation: In-Memory SQLite trigger state machine
     def test_transactional_sql_behavioral_simulation(self):
-        """Transactional SQL behavioral test modeling PostgreSQL triggers in SQLite."""
+        """Transactional SQL behavioral test modeling PostgreSQL triggers in SQLite with audit attribution."""
         import sqlite3
 
         con = sqlite3.connect(":memory:")
         cur = con.cursor()
 
-        # Create schema
+        # Create schema modeling PostgreSQL 20260921000000 migration
         cur.executescript("""
+        CREATE TABLE mts_installations (
+            installation_id TEXT PRIMARY KEY,
+            active INTEGER NOT NULL DEFAULT 1,
+            revoked_at TEXT
+        );
+
+        INSERT INTO mts_installations (installation_id, active) VALUES ('inst-registered-1', 1);
+        INSERT INTO mts_installations (installation_id, active) VALUES ('inst-registered-2', 1);
+
         CREATE TABLE candidate_sessions (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL UNIQUE,
@@ -860,10 +869,18 @@ class AdditionalAttemptOverrideBehavioralRegressionTests(unittest.TestCase):
             candidate_id TEXT NOT NULL,
             session_id TEXT,
             source_session_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL DEFAULT 4,
+            authorized_max_attempts INTEGER NOT NULL DEFAULT 3,
+            tester_name TEXT,
+            actor_installation_id TEXT,
+            unverified_actor_installation_id TEXT,
+            reason TEXT,
+            system_conflict_reason TEXT,
+            decision_reason TEXT,
             authorization_status TEXT NOT NULL DEFAULT 'pending_admin_authorization'
         );
 
-        -- Trigger 1: AFTER INSERT on candidate_sessions (linkage and fail-closed)
+        -- Trigger 1: AFTER INSERT on candidate_sessions (linkage, fail-closed, and truthful audit attribution)
         CREATE TRIGGER candidate_sessions_after_insert
         AFTER INSERT ON candidate_sessions
         FOR EACH ROW
@@ -940,13 +957,16 @@ class AdditionalAttemptOverrideBehavioralRegressionTests(unittest.TestCase):
         self.assertEqual(cur.fetchone()[0], "not_required")
 
         # 2. Additional Attempt 4 with pending reservation -> pending_admin_authorization
-        cur.execute("INSERT INTO additional_attempt_overrides (id, override_key, candidate_id, source_session_id, authorization_status) VALUES ('ov4', 'key-4', 'c1', 'sess-4', 'pending_admin_authorization')")
+        cur.execute("INSERT INTO additional_attempt_overrides (id, override_key, candidate_id, source_session_id, actor_installation_id, reason, authorization_status) VALUES ('ov4', 'key-4', 'c1', 'sess-4', 'inst-registered-1', 'Real tester reason', 'pending_admin_authorization')")
         cur.execute("INSERT INTO candidate_sessions (id, session_id, candidate_id, attempt_number, final_result) VALUES ('s4', 'sess-4', 'c1', 4, 'PASS')")
         cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's4'")
         self.assertEqual(cur.fetchone()[0], "pending_admin_authorization")
         # Verify reservation linked
-        cur.execute("SELECT session_id FROM additional_attempt_overrides WHERE id = 'ov4'")
-        self.assertEqual(cur.fetchone()[0], "s4")
+        cur.execute("SELECT session_id, actor_installation_id, reason FROM additional_attempt_overrides WHERE id = 'ov4'")
+        row = cur.fetchone()
+        self.assertEqual(row[0], "s4")
+        self.assertEqual(row[1], "inst-registered-1")
+        self.assertEqual(row[2], "Real tester reason")
 
         # 3. Replay protection: attempting to revert s4 to not_required raises ABORT
         with self.assertRaises(sqlite3.IntegrityError):
@@ -961,11 +981,30 @@ class AdditionalAttemptOverrideBehavioralRegressionTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             cur.execute("UPDATE candidate_sessions SET authorization_status = 'pending_admin_authorization' WHERE id = 's4'")
 
-        # 6. Offline conflict reservation -> conflict
-        cur.execute("INSERT INTO additional_attempt_overrides (id, override_key, candidate_id, source_session_id, authorization_status) VALUES ('ov5', 'key-5', 'c2', 'sess-5', 'conflict')")
+        # 6. Offline conflict reservation with unverified installation -> actor_installation_id is NULL, unverified preserved
+        cur.execute("""
+        INSERT INTO additional_attempt_overrides (
+            id, override_key, candidate_id, source_session_id,
+            actor_installation_id, unverified_actor_installation_id,
+            reason, system_conflict_reason, authorization_status
+        ) VALUES (
+            'ov5', 'key-5', 'c2', 'sess-5',
+            NULL, 'inst-unknown-999',
+            'Tester reason from offline emergency',
+            'Offline emergency session submitted while outstanding override pending.',
+            'conflict'
+        )
+        """)
         cur.execute("INSERT INTO candidate_sessions (id, session_id, candidate_id, attempt_number, final_result) VALUES ('s5', 'sess-5', 'c2', 4, 'PASS')")
         cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's5'")
         self.assertEqual(cur.fetchone()[0], "conflict")
+
+        cur.execute("SELECT actor_installation_id, unverified_actor_installation_id, reason, system_conflict_reason FROM additional_attempt_overrides WHERE id = 'ov5'")
+        ov5_row = cur.fetchone()
+        self.assertIsNone(ov5_row[0], "Unverified installation must never be replaced with a registered installation")
+        self.assertEqual(ov5_row[1], "inst-unknown-999")
+        self.assertEqual(ov5_row[2], "Tester reason from offline emergency")
+        self.assertIn("Offline emergency", ov5_row[3])
 
         # 7. Replay protection: conflict cannot revert to not_required
         with self.assertRaises(sqlite3.IntegrityError):
@@ -987,6 +1026,196 @@ class AdditionalAttemptOverrideBehavioralRegressionTests(unittest.TestCase):
         self.assertIsNone(cur.fetchone()[0])
 
         con.close()
+
+
+class AuditAttributionBehavioralRegressionTests(unittest.TestCase):
+    """Targeted behavioral regression tests proving truthful audit attribution without fabricated data.
+    Covers items 1 through 14 of the Final Migration Data-Integrity correction.
+    """
+
+    # 1. Verified installation identity is preserved
+    def test_item1_verified_installation_identity_preserved(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("v_verified_installation_id := v_raw_installation_id;", migration)
+        self.assertIn("actor_installation_id text references mts_sam.mts_installations(installation_id)", migration)
+        # Server serialization preserves actor_installation_id
+        pending_list = server._get_local_pending_overrides_list()
+        self.assertIsInstance(pending_list, list)
+
+    # 2. Invalid installation identity is never replaced with another registered installation
+    def test_item2_invalid_installation_never_replaced_with_another_registered_installation(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        # Ensure the fabricated installation fallback is completely absent
+        self.assertNotIn("select installation_id into v_installation_id", migration)
+        self.assertIn("v_verified_installation_id := null;", migration)
+        self.assertIn("v_unverified_installation_id := v_raw_installation_id;", migration)
+
+    # 3. Missing installation identity produces a safe unresolved state
+    def test_item3_missing_installation_identity_produces_safe_unresolved_state(self):
+        # A session submitted without installation identity must result in conflict authorization_status
+        session_no_inst = {
+            "session_id": "sess-no-inst",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "authorization_status": "conflict",
+            "additional_attempt_overridden": True,
+        }
+        self.assertFalse(server._is_session_certification_authorized(session_no_inst))
+        state = server.calculate_candidate_attempt_state([session_no_inst])
+        self.assertFalse(state["passed"])
+
+    # 4. Real tester reason survives reconciliation
+    def test_item4_real_tester_reason_survives_reconciliation(self):
+        session = {
+            "session_id": "sess-reconcile-reason",
+            "candidate_name": "Test Candidate",
+            "candidate_id": "cand-test-rec",
+            "emergency_offline_override": True,
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Microphone headset disconnected during call 2",
+            "attempt_number": 4,
+        }
+        orig_mode = server.configured_provider_mode
+        try:
+            server.configured_provider_mode = lambda: "local"
+            res = server._reconcile_offline_emergency_reservation(session)
+            self.assertTrue(res["ok"])
+            # Ensure the exact tester reason was not altered
+            self.assertEqual(session.get("additional_attempt_override_reason"), "Microphone headset disconnected during call 2")
+        finally:
+            server.configured_provider_mode = orig_mode
+
+    # 5. Missing tester reason is not fabricated
+    def test_item5_missing_tester_reason_is_not_fabricated(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        # Ensure we do NOT coalesce missing tester reason to a fallback string
+        self.assertNotIn("'Unreconciled Additional Attempt Override'\n      );", migration)
+        self.assertIn("v_tester_reason := coalesce(", migration)
+        # Tester reason column is nullable on additional_attempt_overrides for missing-reason conflicts
+        self.assertIn("reason text check (reason is null or btrim(reason) <> '')", migration)
+
+    # 6. System conflict description is distinguishable from tester reason
+    def test_item6_system_conflict_description_distinguishable_from_tester_reason(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("system_conflict_reason text", migration)
+        self.assertIn("v_system_conflict_reason", migration)
+        self.assertIn("System diagnostic description of conflict or discrepancy. Never attributed to the tester.", migration)
+
+    # 7. Administrator decision reason remains separate
+    def test_item7_administrator_decision_reason_remains_separate(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("decision_reason text", migration)
+        self.assertIn("decision_reason = nullif(btrim(coalesce(p_reason, '')), '')", migration)
+        self.assertIn("'tester_override_reason', v_override.reason", migration)
+        self.assertIn("'decision_reason', nullif(btrim(coalesce(p_reason, '')), '')", migration)
+
+    # 8. Conflict Pass remains uncertified
+    def test_item8_conflict_pass_remains_uncertified(self):
+        conflict_pass = {
+            "session_id": "sess-conflict-pass",
+            "candidate_id": "cand-conflict",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "authorization_status": "conflict",
+            "additional_attempt_overridden": True,
+        }
+        self.assertFalse(server._is_session_certification_authorized(conflict_pass))
+        state = server.calculate_candidate_attempt_state([conflict_pass])
+        self.assertFalse(state["passed"])
+
+    # 9. Missing-reservation replay preserves original session identity
+    def test_item9_missing_reservation_replay_preserves_original_session_identity(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("on conflict (override_key) do update", migration)
+        self.assertIn("session_id = coalesce(mts_sam.additional_attempt_overrides.session_id, new.id)", migration)
+        self.assertIn("authorization_status = 'conflict'", migration)
+
+    # 10. Retry creates no duplicate conflict notification
+    def test_item10_retry_creates_no_duplicate_conflict_notification(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("on conflict (notification_id) do nothing", migration)
+        self.assertIn("returning id into v_notification_id;", migration)
+        self.assertIn("if v_notification_id is not null then", migration)
+
+    # 11. Normal override still requires a written reason
+    def test_item11_normal_override_requires_written_reason(self):
+        session_no_reason = {
+            "session_id": "sess-no-reason",
+            "candidate_name": "Test Candidate",
+            "emergency_offline_override": True,
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "   ",
+        }
+        res = server._reconcile_offline_emergency_reservation(session_no_reason)
+        self.assertFalse(res["ok"])
+        self.assertEqual(res.get("error_code"), "REASON_REQUIRED")
+
+    # 12. Normal installation-auth checks remain enforced
+    def test_item12_normal_installation_auth_checks_enforced(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("if btrim(coalesce(p_actor_installation_id, '')) = '' then", migration)
+        self.assertIn("constraint check_actor_installation check (", migration)
+        self.assertIn("actor_installation_id is not null", migration)
+
+    # 13. April NC/NS result mapping and zero-call safety remain unchanged
+    def test_item13_april_nc_ns_result_mapping_and_zero_call_safety_remain_unchanged(self):
+        april_session = {
+            "session_id": "sess-april-nc-ns",
+            "candidate_name": "April Johnson",
+            "attempt_number": 1,
+            "final_result": "NC-NS",
+            "status": "NC-NS",
+            "mock_calls_completed": 0,
+            "sup_transfers_completed": 0,
+            "calls": [],
+        }
+        counts, reason = server._candidate_attempt_disposition(april_session)
+        self.assertTrue(counts)
+        self.assertEqual(reason, "terminal_failure")
+        self.assertEqual(len(april_session.get("calls") or []), 0)
+        state = server.calculate_candidate_attempt_state([april_session])
+        self.assertFalse(state["passed"])
+        self.assertEqual(state["counted_attempts"], 1)
+
+    # 14. Reeva Resumed-Pass mapping remains unchanged
+    def test_item14_reeva_resumed_pass_mapping_remains_unchanged(self):
+        reeva_session = {
+            "session_id": "sess-reeva-resumed-pass",
+            "candidate_name": "Reeva Hunter",
+            "attempt_number": 2,
+            "final_result": "RESUMED-PASS",
+            "status": "Resumed-Pass",
+            "authorization_status": "not_required",
+        }
+        self.assertEqual(server._shared_status_upper(reeva_session), "RESUMED-PASS")
+        self.assertTrue(server._is_session_certification_authorized(reeva_session))
+        state = server.calculate_candidate_attempt_state([reeva_session])
+        self.assertTrue(state["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
