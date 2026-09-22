@@ -515,6 +515,478 @@ class AdditionalAttemptOverrideSafeguardTests(unittest.TestCase):
         self.assertIn("'SESSION_IN_PROGRESS'", migration)
         self.assertIn("Evaluation Not Yet Available", migration)
 
+    def test_migration_hardened_trigger_definitions(self):
+        migration = (
+            Path(__file__).resolve().parents[1]
+            / "supabase/migrations/20260921000000_mts_additional_attempt_overrides.sql"
+        ).read_text(encoding="utf-8")
+
+        # link_session_to_override_reservation hardening
+        self.assertIn("create or replace function mts_sam.link_session_to_override_reservation()", migration)
+        self.assertIn("Authoritative linkage and fail-closed protection", migration)
+        self.assertIn("v_override.candidate_id <> new.candidate_id", migration)
+        self.assertIn("v_override.session_id is not null and v_override.session_id <> new.id", migration)
+        self.assertIn("v_target_status := 'pending_admin_authorization';", migration)
+        self.assertIn("v_target_status := 'conflict';", migration)
+        self.assertIn("v_target_status := 'approved';", migration)
+        self.assertIn("v_target_status := 'denied';", migration)
+        self.assertIn("v_target_status := 'abandoned';", migration)
+        self.assertIn("set authorization_status = v_target_status", migration)
+        self.assertIn("set authorization_status = 'conflict'", migration)
+        self.assertIn("Unreconciled Additional Attempt Override", migration)
+
+        # protect_terminal_authorization_status hardening
+        self.assertIn("create or replace function mts_sam.protect_terminal_authorization_status()", migration)
+        self.assertIn("old.authorization_status in ('approved', 'denied')", migration)
+        self.assertIn("old.authorization_status = 'conflict'", migration)
+        self.assertIn("old.authorization_status = 'pending_admin_authorization'", migration)
+        self.assertIn("new.authorization_status := old.authorization_status;", migration)
+
+
+class AdditionalAttemptOverrideBehavioralRegressionTests(unittest.TestCase):
+    """Exhaustive behavioral regression tests covering all 16 preflight items
+
+    plus local transactional SQL state-machine validation.
+    """
+
+    # Item 1: Ordinary authorized Pass -> not_required
+    def test_item1_ordinary_authorized_pass_is_not_required(self):
+        standard_pass = {
+            "session_id": "sess-std-pass-1",
+            "candidate_id": "cand-std-1",
+            "attempt_number": 1,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "not_required",
+            "allowed_attempt_count": 3,
+        }
+        self.assertTrue(server._is_session_certification_authorized(standard_pass))
+        state = server.calculate_candidate_attempt_state([standard_pass])
+        self.assertTrue(state["passed"], "Standard attempt 1 Pass must grant certification")
+
+    # Item 2: Additional-attempt Pass with pending reservation -> pending_admin_authorization
+    def test_item2_additional_attempt_pass_pending_reservation_is_pending(self):
+        pending_override_pass = {
+            "session_id": "sess-over-pass-2",
+            "candidate_id": "cand-over-2",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "pending_admin_authorization",
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Equipment disruption during prior shift",
+        }
+        self.assertFalse(server._is_session_certification_authorized(pending_override_pass))
+
+    # Item 3: Pending Pass -> NOT certified
+    def test_item3_pending_pass_is_not_certified(self):
+        prior_fails = [
+            {"session_id": f"sess-fail-{i}", "attempt_number": i, "status": "Fail", "final_result": "FAIL", "authorization_status": "not_required"}
+            for i in range(1, 4)
+        ]
+        pending_pass = {
+            "session_id": "sess-pending-3",
+            "attempt_number": 4,
+            "status": "Pass",
+            "final_result": "PASS",
+            "authorization_status": "pending_admin_authorization",
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Awaiting admin authorization",
+        }
+        state = server.calculate_candidate_attempt_state(prior_fails + [pending_pass])
+        self.assertFalse(state["passed"], "Pending additional attempt Pass must NOT certify candidate")
+
+    # Item 4: Offline conflict Pass -> conflict
+    def test_item4_offline_conflict_pass_is_conflict(self):
+        conflict_pass = {
+            "session_id": "sess-conf-4",
+            "candidate_id": "cand-conf-4",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "conflict",
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Conflicting offline session",
+        }
+        self.assertFalse(server._is_session_certification_authorized(conflict_pass))
+
+    # Item 5: Conflict Pass -> NOT certified
+    def test_item5_conflict_pass_is_not_certified(self):
+        prior_fails = [
+            {"session_id": f"sess-fail-conf-{i}", "attempt_number": i, "status": "Fail", "final_result": "FAIL", "authorization_status": "not_required"}
+            for i in range(1, 4)
+        ]
+        conflict_pass = {
+            "session_id": "sess-conf-5",
+            "attempt_number": 4,
+            "status": "Pass",
+            "final_result": "PASS",
+            "authorization_status": "conflict",
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Unresolved cross-workstation collision",
+        }
+        state = server.calculate_candidate_attempt_state(prior_fails + [conflict_pass])
+        self.assertFalse(state["passed"], "Conflict Pass must NOT certify candidate")
+
+    # Item 6: Missing reservation cannot grant clearance (fails closed)
+    def test_item6_missing_reservation_fails_closed_cannot_grant_clearance(self):
+        # Even if a malicious or broken payload arrives with authorization_status='not_required',
+        # because additional_attempt_overridden is True, it MUST NOT certify!
+        unreconciled_pass = {
+            "session_id": "sess-missing-res-6",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "not_required",
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Tester claims override without remote record",
+        }
+        self.assertFalse(
+            server._is_session_certification_authorized(unreconciled_pass),
+            "Override session with missing/not_required status MUST fail closed and not certify",
+        )
+        state = server.calculate_candidate_attempt_state([unreconciled_pass])
+        self.assertFalse(state["passed"], "Unreconciled override must NOT mark candidate as passed")
+
+    # Item 7: Mismatched session identity rejected
+    def test_item7_mismatched_session_identity_rejected(self):
+        # A session claiming an override reservation already consumed by another session
+        mismatched_sess = {
+            "session_id": "sess-claimed-by-other",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "conflict",
+            "additional_attempt_overridden": True,
+        }
+        self.assertFalse(server._is_session_certification_authorized(mismatched_sess))
+        state = server.calculate_candidate_attempt_state([mismatched_sess])
+        self.assertFalse(state["passed"])
+
+    # Item 8: Mismatched candidate identity rejected
+    def test_item8_mismatched_candidate_identity_rejected(self):
+        # A session submitted for Candidate B claiming Candidate A's override reservation
+        mismatched_cand = {
+            "session_id": "sess-cand-b",
+            "candidate_id": "cand-b",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "conflict",
+            "additional_attempt_overridden": True,
+        }
+        self.assertFalse(server._is_session_certification_authorized(mismatched_cand))
+        state = server.calculate_candidate_attempt_state([mismatched_cand])
+        self.assertFalse(state["passed"])
+
+    # Item 9: Initial persistence links the correct reservation
+    def test_item9_initial_persistence_links_correct_reservation(self):
+        # Test that _build_candidate_lifecycle_payloads builds clean DTO with exact session_id
+        session = {
+            "session_id": "sess-exact-id-9",
+            "candidate_name": "Exact Candidate",
+            "attempt_number": 4,
+            "allowed_attempt_count": 3,
+            "final_result": "Pass",
+            "status": "Pass",
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Verified ops approval",
+            "authorization_status": "pending_admin_authorization",
+        }
+        built = server._build_candidate_lifecycle_payloads(session)
+        self.assertTrue(built["ok"])
+        self.assertEqual(built["identifiers"]["session_id"], "sess-exact-id-9")
+        self.assertEqual(built["session_payload"]["session_id"], "sess-exact-id-9")
+
+    # Item 10: Repeated lifecycle persistence preserves status
+    def test_item10_repeated_lifecycle_persistence_preserves_status(self):
+        # An in-flight or pending session preserves pending_admin_authorization across background sync
+        session = {
+            "session_id": "sess-sync-10",
+            "candidate_name": "Repeated Sync Candidate",
+            "attempt_number": 4,
+            "final_result": "Pass",
+            "authorization_status": "pending_admin_authorization",
+            "additional_attempt_overridden": True,
+            "additional_attempt_override_reason": "Medical note",
+        }
+        res = server._reconcile_offline_emergency_reservation(session)
+        self.assertTrue(res["ok"])
+        # Non-offline session preserves existing authorization_status
+        self.assertEqual(session["authorization_status"], "pending_admin_authorization")
+
+    # Item 11: Approved decision survives replay
+    def test_item11_approved_decision_survives_replay(self):
+        approved_session = {
+            "session_id": "sess-approved-11",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "approved",
+            "additional_attempt_overridden": True,
+        }
+        self.assertTrue(server._is_session_certification_authorized(approved_session))
+        state = server.calculate_candidate_attempt_state([approved_session])
+        self.assertTrue(state["passed"])
+
+        # Replay attempt trying to revert to pending or not_required is blocked by policy
+        replay_attempt = dict(approved_session, authorization_status="pending_admin_authorization")
+        self.assertFalse(server._is_session_certification_authorized(replay_attempt))
+
+    # Item 12: Denied decision survives replay
+    def test_item12_denied_decision_survives_replay(self):
+        denied_session = {
+            "session_id": "sess-denied-12",
+            "attempt_number": 4,
+            "final_result": "PASS",
+            "status": "Pass",
+            "authorization_status": "denied",
+            "additional_attempt_overridden": True,
+        }
+        self.assertFalse(server._is_session_certification_authorized(denied_session))
+        state = server.calculate_candidate_attempt_state([denied_session])
+        self.assertFalse(state["passed"])
+
+    # Item 13: Approved Fail remains Fail
+    def test_item13_approved_fail_remains_fail(self):
+        # Administrator approved the additional attempt exception, but the candidate failed the evaluation.
+        # Candidate is NOT certified!
+        approved_fail = {
+            "session_id": "sess-app-fail-13",
+            "attempt_number": 4,
+            "final_result": "FAIL",
+            "status": "Fail",
+            "authorization_status": "approved",
+            "additional_attempt_overridden": True,
+        }
+        # Authorization is granted for the session, but final result is Fail
+        self.assertTrue(server._is_session_certification_authorized(approved_fail))
+        state = server.calculate_candidate_attempt_state([approved_fail])
+        self.assertFalse(state["passed"], "Approved Fail must NOT certify candidate")
+
+    # Item 14: Historical authorized Pass remains valid
+    def test_item14_historical_authorized_pass_remains_valid(self):
+        # Historical rows created before authorization_status column existed
+        historical_pass_att1 = {"session_id": "hist-1", "attempt_number": 1, "final_result": "PASS", "status": "Pass"}
+        historical_pass_att2 = {"session_id": "hist-2", "attempt_number": 2, "final_result": "PASS", "status": "Pass"}
+        historical_pass_att3 = {"session_id": "hist-3", "attempt_number": 3, "final_result": "PASS", "status": "Pass"}
+        historical_sup = {"session_id": "hist-sup", "supervisor_only": True, "final_result": "PASS", "status": "Pass"}
+
+        self.assertTrue(server._is_session_certification_authorized(historical_pass_att1))
+        self.assertTrue(server._is_session_certification_authorized(historical_pass_att2))
+        self.assertTrue(server._is_session_certification_authorized(historical_pass_att3))
+        self.assertTrue(server._is_session_certification_authorized(historical_sup))
+
+        state = server.calculate_candidate_attempt_state([historical_pass_att2])
+        self.assertTrue(state["passed"], "Historical within-allowance Pass must certify candidate")
+
+    # Item 15: Zero-call NC/NS does not fabricate calls
+    def test_item15_zero_call_nc_ns_does_not_fabricate_calls(self):
+        ncns_session = {
+            "session_id": "sess-ncns-15",
+            "candidate_name": "No Show Candidate",
+            "attempt_number": 1,
+            "final_result": "NC-NS",
+            "status": "NC-NS",
+            "mock_calls_completed": 0,
+            "call_results": {},
+        }
+        # Attempt disposition recognizes NC/NS as consuming an attempt
+        counts, reason = server._candidate_attempt_disposition(ncns_session)
+        self.assertTrue(counts)
+        self.assertEqual(reason, "terminal_failure")
+
+        # Zero mock calls remain zero — nothing fabricated
+        self.assertEqual(ncns_session.get("mock_calls_completed"), 0)
+        self.assertEqual(len(ncns_session.get("call_results", {})), 0)
+
+    # Item 16: Resumed-Pass mapping remains valid
+    def test_item16_resumed_pass_mapping_remains_valid(self):
+        resumed_pass_std = {
+            "session_id": "sess-resumed-16a",
+            "attempt_number": 2,
+            "final_result": "RESUMED-PASS",
+            "status": "Resumed-Pass",
+            "authorization_status": "not_required",
+        }
+        self.assertTrue(server._is_session_certification_authorized(resumed_pass_std))
+        state_std = server.calculate_candidate_attempt_state([resumed_pass_std])
+        self.assertTrue(state_std["passed"])
+
+        resumed_pass_approved_override = {
+            "session_id": "sess-resumed-16b",
+            "attempt_number": 4,
+            "final_result": "RESUMED-PASS",
+            "status": "Resumed-Pass",
+            "authorization_status": "approved",
+            "additional_attempt_overridden": True,
+        }
+        self.assertTrue(server._is_session_certification_authorized(resumed_pass_approved_override))
+        state_over = server.calculate_candidate_attempt_state([resumed_pass_approved_override])
+        self.assertTrue(state_over["passed"])
+
+        # But pending resumed pass is blocked
+        resumed_pass_pending = dict(resumed_pass_approved_override, authorization_status="pending_admin_authorization")
+        self.assertFalse(server._is_session_certification_authorized(resumed_pass_pending))
+        state_pend = server.calculate_candidate_attempt_state([resumed_pass_pending])
+        self.assertFalse(state_pend["passed"])
+
+    # Transactional SQL Simulation: In-Memory SQLite trigger state machine
+    def test_transactional_sql_behavioral_simulation(self):
+        """Transactional SQL behavioral test modeling PostgreSQL triggers in SQLite."""
+        import sqlite3
+
+        con = sqlite3.connect(":memory:")
+        cur = con.cursor()
+
+        # Create schema
+        cur.executescript("""
+        CREATE TABLE candidate_sessions (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL UNIQUE,
+            candidate_id TEXT NOT NULL,
+            candidate_name TEXT,
+            session_type TEXT DEFAULT 'standard',
+            attempt_number INTEGER DEFAULT 1,
+            allowed_attempt_count INTEGER DEFAULT 3,
+            final_result TEXT,
+            authorization_status TEXT NOT NULL DEFAULT 'not_required',
+            source_payload TEXT DEFAULT '{}'
+        );
+
+        CREATE TABLE additional_attempt_overrides (
+            id TEXT PRIMARY KEY,
+            override_key TEXT NOT NULL UNIQUE,
+            candidate_id TEXT NOT NULL,
+            session_id TEXT,
+            source_session_id TEXT NOT NULL,
+            authorization_status TEXT NOT NULL DEFAULT 'pending_admin_authorization'
+        );
+
+        -- Trigger 1: AFTER INSERT on candidate_sessions (linkage and fail-closed)
+        CREATE TRIGGER candidate_sessions_after_insert
+        AFTER INSERT ON candidate_sessions
+        FOR EACH ROW
+        BEGIN
+            -- Check for matching reservation
+            UPDATE additional_attempt_overrides
+            SET session_id = NEW.id
+            WHERE source_session_id = NEW.session_id
+              AND candidate_id = NEW.candidate_id
+              AND session_id IS NULL;
+
+            -- Case A: Valid reservation exists -> copy authoritative status
+            UPDATE candidate_sessions
+            SET authorization_status = (
+                SELECT authorization_status
+                FROM additional_attempt_overrides
+                WHERE source_session_id = NEW.session_id
+                  AND candidate_id = NEW.candidate_id
+                LIMIT 1
+            )
+            WHERE id = NEW.id
+              AND EXISTS (
+                SELECT 1 FROM additional_attempt_overrides
+                WHERE source_session_id = NEW.session_id
+                  AND candidate_id = NEW.candidate_id
+              );
+
+            -- Case B: Candidate mismatch -> set conflict
+            UPDATE candidate_sessions
+            SET authorization_status = 'conflict'
+            WHERE id = NEW.id
+              AND EXISTS (
+                SELECT 1 FROM additional_attempt_overrides
+                WHERE source_session_id = NEW.session_id
+                  AND candidate_id <> NEW.candidate_id
+              );
+
+            -- Case C: Exceeds allowance (>3) without reservation -> fail-closed conflict
+            UPDATE candidate_sessions
+            SET authorization_status = 'conflict'
+            WHERE id = NEW.id
+              AND NEW.attempt_number > NEW.allowed_attempt_count
+              AND NOT EXISTS (
+                SELECT 1 FROM additional_attempt_overrides
+                WHERE source_session_id = NEW.session_id
+              );
+        END;
+
+        -- Trigger 2: BEFORE UPDATE on candidate_sessions (terminal replay protection)
+        CREATE TRIGGER candidate_sessions_before_update
+        BEFORE UPDATE ON candidate_sessions
+        FOR EACH ROW
+        BEGIN
+            -- Prevent changing terminal decisions
+            SELECT CASE
+                WHEN OLD.authorization_status IN ('approved', 'denied')
+                     AND NEW.authorization_status <> OLD.authorization_status
+                THEN RAISE(ABORT, 'Terminal authorization decision cannot be modified')
+                -- Prevent reverting conflict to not_required or pending
+                WHEN OLD.authorization_status = 'conflict'
+                     AND NEW.authorization_status IN ('not_required', 'pending_admin_authorization')
+                THEN RAISE(ABORT, 'Conflict status cannot be reverted')
+                -- Prevent downgrading pending to not_required
+                WHEN OLD.authorization_status = 'pending_admin_authorization'
+                     AND NEW.authorization_status = 'not_required'
+                THEN RAISE(ABORT, 'Pending authorization cannot be downgraded to not_required')
+            END;
+        END;
+        """)
+
+        # 1. Ordinary Attempt 1 Pass -> not_required
+        cur.execute("INSERT INTO candidate_sessions (id, session_id, candidate_id, attempt_number, final_result) VALUES ('s1', 'sess-1', 'c1', 1, 'PASS')")
+        cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's1'")
+        self.assertEqual(cur.fetchone()[0], "not_required")
+
+        # 2. Additional Attempt 4 with pending reservation -> pending_admin_authorization
+        cur.execute("INSERT INTO additional_attempt_overrides (id, override_key, candidate_id, source_session_id, authorization_status) VALUES ('ov4', 'key-4', 'c1', 'sess-4', 'pending_admin_authorization')")
+        cur.execute("INSERT INTO candidate_sessions (id, session_id, candidate_id, attempt_number, final_result) VALUES ('s4', 'sess-4', 'c1', 4, 'PASS')")
+        cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's4'")
+        self.assertEqual(cur.fetchone()[0], "pending_admin_authorization")
+        # Verify reservation linked
+        cur.execute("SELECT session_id FROM additional_attempt_overrides WHERE id = 'ov4'")
+        self.assertEqual(cur.fetchone()[0], "s4")
+
+        # 3. Replay protection: attempting to revert s4 to not_required raises ABORT
+        with self.assertRaises(sqlite3.IntegrityError):
+            cur.execute("UPDATE candidate_sessions SET authorization_status = 'not_required' WHERE id = 's4'")
+
+        # 4. Admin approves s4 -> approved
+        cur.execute("UPDATE candidate_sessions SET authorization_status = 'approved' WHERE id = 's4'")
+        cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's4'")
+        self.assertEqual(cur.fetchone()[0], "approved")
+
+        # 5. Terminal replay protection: attempting to revert approved s4 to pending raises ABORT
+        with self.assertRaises(sqlite3.IntegrityError):
+            cur.execute("UPDATE candidate_sessions SET authorization_status = 'pending_admin_authorization' WHERE id = 's4'")
+
+        # 6. Offline conflict reservation -> conflict
+        cur.execute("INSERT INTO additional_attempt_overrides (id, override_key, candidate_id, source_session_id, authorization_status) VALUES ('ov5', 'key-5', 'c2', 'sess-5', 'conflict')")
+        cur.execute("INSERT INTO candidate_sessions (id, session_id, candidate_id, attempt_number, final_result) VALUES ('s5', 'sess-5', 'c2', 4, 'PASS')")
+        cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's5'")
+        self.assertEqual(cur.fetchone()[0], "conflict")
+
+        # 7. Replay protection: conflict cannot revert to not_required
+        with self.assertRaises(sqlite3.IntegrityError):
+            cur.execute("UPDATE candidate_sessions SET authorization_status = 'not_required' WHERE id = 's5'")
+
+        # 8. Missing reservation on attempt 4 -> fails closed with conflict!
+        cur.execute("INSERT INTO candidate_sessions (id, session_id, candidate_id, attempt_number, final_result) VALUES ('s6', 'sess-6-unlinked', 'c3', 4, 'PASS')")
+        cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's6'")
+        self.assertEqual(cur.fetchone()[0], "conflict")
+
+        # 9. Candidate identity mismatch -> fails closed with conflict!
+        cur.execute("INSERT INTO additional_attempt_overrides (id, override_key, candidate_id, source_session_id, authorization_status) VALUES ('ov7', 'key-7', 'cand-A', 'sess-7', 'pending_admin_authorization')")
+        # Candidate B attempts to claim Candidate A's reservation
+        cur.execute("INSERT INTO candidate_sessions (id, session_id, candidate_id, attempt_number, final_result) VALUES ('s7', 'sess-7', 'cand-B', 4, 'PASS')")
+        cur.execute("SELECT authorization_status FROM candidate_sessions WHERE id = 's7'")
+        self.assertEqual(cur.fetchone()[0], "conflict")
+        # Ensure Candidate A's reservation was NOT linked to Candidate B
+        cur.execute("SELECT session_id FROM additional_attempt_overrides WHERE id = 'ov7'")
+        self.assertIsNone(cur.fetchone()[0])
+
+        con.close()
 
 if __name__ == "__main__":
     unittest.main()

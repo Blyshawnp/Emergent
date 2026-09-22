@@ -6820,7 +6820,7 @@ def _candidate_attempt_disposition(row):
         return False, "non_counting_newbie_reschedule"
 
     status = _shared_status_upper(source)
-    if status in {"FAIL", "FAIL-FINAL ATTEMPT", "NC/NS"}:
+    if status in {"FAIL", "FAIL-FINAL ATTEMPT", "NC/NS", "NC-NS"}:
         return True, "terminal_failure"
     if source.get("auto_fail_reason"):
         return True, "auto_fail"
@@ -6846,9 +6846,10 @@ def _candidate_qualifying_failure(row):
 
 def _is_session_certification_authorized(row, max_attempts=None):
     """Safeguard 2: Historical Certification Compatibility with Positive Clearance.
-    Only explicit 'approved' or 'not_required' grant certification clearance.
-    Pending, denied, abandoned, conflict, and local_pending_sync are blocked.
-    For legacy rows with missing/NULL authorization_status:
+    Only explicit 'approved' or within-allowance 'not_required' grant certification clearance.
+    Pending, denied, abandoned, conflict, and local_pending_sync are strictly blocked.
+    For any additional attempt override, ONLY explicit 'approved' can grant clearance.
+    For standard and legacy rows with missing/NULL or 'not_required' authorization_status:
     Clearance is derived from canonical history and attempt allowance:
     Within-allowance standard attempts (attempts 1..3, or supervisor-only) are authorized ('not_required').
     Attempts exceeding allowance without extra_attempt_grants or unauthorized overrides are blocked.
@@ -6856,13 +6857,19 @@ def _is_session_certification_authorized(row, max_attempts=None):
     if not isinstance(row, dict):
         return False
     auth_status = str(row.get("authorization_status") or "").strip().lower()
-    if auth_status in ("approved", "not_required"):
+
+    # If this session is an additional attempt override, ONLY explicit 'approved' can grant certification!
+    # Even if authorization_status was mistakenly 'not_required' or missing, it MUST NOT certify without admin approval.
+    if _shared_truthy(row.get("additional_attempt_overridden")):
+        return auth_status == "approved"
+
+    # Explicit administrative decision states
+    if auth_status == "approved":
         return True
     if auth_status in ("pending_admin_authorization", "denied", "abandoned", "conflict", "local_pending_sync"):
         return False
-    # Legacy row without explicit authorization_status
-    if _shared_truthy(row.get("additional_attempt_overridden")):
-        return False
+
+    # Standard / legacy rows (auth_status is 'not_required' or empty)
     if row.get("supervisor_only"):
         return True
     try:
@@ -10972,7 +10979,7 @@ def _shared_candidate_match_score(query, candidate):
 
 
 def _shared_status_upper(row):
-    return str((row or {}).get("status") or (row or {}).get("final_status") or "").strip().upper()
+    return str((row or {}).get("status") or (row or {}).get("final_status") or (row or {}).get("final_result") or "").strip().upper()
 
 
 def _shared_row_date(row):

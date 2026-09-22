@@ -61,6 +61,7 @@ grant select on table mts_sam.additional_attempt_overrides to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 3. Trigger: link candidate_sessions to existing reservation by source_session_id
+--    Authoritative linkage and fail-closed protection for additional-attempt overrides.
 -- ---------------------------------------------------------------------------
 create or replace function mts_sam.link_session_to_override_reservation()
 returns trigger
@@ -68,15 +69,198 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_override record;
+  v_target_status text;
+  v_override_key text;
+  v_payload_declares_override boolean := false;
+  v_prior_counted integer := 0;
+  v_extra_grants integer := 0;
+  v_max_attempts integer := 3;
+  v_installation_id text;
+  v_reason text;
+  v_notification_id uuid;
+  v_message text;
 begin
-  -- When a candidate_sessions row is inserted, check if a reservation
-  -- exists with the same source_session_id and populate the FK.
-  update mts_sam.additional_attempt_overrides
-  set session_id = new.id,
-      updated_at = clock_timestamp()
-  where source_session_id = new.session_id
-    and session_id is null
-    and authorization_status in ('pending_admin_authorization', 'local_pending_sync', 'conflict');
+  -- 1. Check if session payload declares an additional attempt override
+  v_payload_declares_override := (
+    lower(btrim(coalesce(new.source_payload->>'additional_attempt_overridden', new.source_payload->'source_payload'->>'additional_attempt_overridden', ''))) in ('true', 't', '1', 'yes')
+    or btrim(coalesce(new.source_payload->>'additional_attempt_override_reason', '')) <> ''
+    or btrim(coalesce(new.source_payload->'source_payload'->>'additional_attempt_override_reason', '')) <> ''
+  );
+
+  -- 2. Check if candidate's attempt count exceeds base allowance (3 + extra grants)
+  if new.candidate_id is not null and coalesce(new.session_type, '') <> 'sup_transfer_only' then
+    select count(*) into v_prior_counted
+    from mts_sam.candidate_sessions cs
+    where cs.candidate_id = new.candidate_id
+      and cs.id <> new.id
+      and cs.session_type <> 'sup_transfer_only'
+      and cs.archived is not true
+      and cs.final_result is not null;
+
+    select coalesce(sum(eag.granted_count), 0) into v_extra_grants
+    from mts_sam.extra_attempt_grants eag
+    join mts_sam.candidate_sessions cs on cs.id = eag.session_id
+    where cs.candidate_id = new.candidate_id;
+
+    v_max_attempts := 3 + v_extra_grants;
+  end if;
+
+  -- 3. Check for existing reservation matching this session identity
+  select * into v_override
+  from mts_sam.additional_attempt_overrides
+  where source_session_id = btrim(new.session_id)
+  order by occurred_at desc
+  limit 1;
+
+  if found then
+    -- Reservation was found. Validate identity matching:
+    if v_override.candidate_id <> new.candidate_id then
+      -- Mismatched candidate identity: reservation belongs to candidate A,
+      -- but session was submitted for candidate B. Fail-closed: mark as conflict.
+      update mts_sam.candidate_sessions
+      set authorization_status = 'conflict'
+      where id = new.id;
+      return new;
+    end if;
+
+    if v_override.session_id is not null and v_override.session_id <> new.id then
+      -- Mismatched session identity: reservation already linked to a different session.
+      -- Fail-closed: mark as conflict.
+      update mts_sam.candidate_sessions
+      set authorization_status = 'conflict'
+      where id = new.id;
+      return new;
+    end if;
+
+    -- Valid reservation match. Derive authoritative authorization_status from reservation:
+    if v_override.authorization_status in ('pending_admin_authorization', 'local_pending_sync') then
+      v_target_status := 'pending_admin_authorization';
+    elsif v_override.authorization_status = 'conflict' then
+      v_target_status := 'conflict';
+    elsif v_override.authorization_status = 'approved' then
+      v_target_status := 'approved';
+    elsif v_override.authorization_status = 'denied' then
+      v_target_status := 'denied';
+    elsif v_override.authorization_status = 'abandoned' then
+      v_target_status := 'abandoned';
+    else
+      v_target_status := 'pending_admin_authorization';
+    end if;
+
+    -- Link reservation FK to candidate_sessions row
+    update mts_sam.additional_attempt_overrides
+    set session_id = new.id,
+        updated_at = clock_timestamp()
+    where id = v_override.id
+      and session_id is null;
+
+    -- Set candidate_sessions.authorization_status to authoritative reservation state
+    update mts_sam.candidate_sessions
+    set authorization_status = v_target_status
+    where id = new.id;
+
+    return new;
+  end if;
+
+  -- 4. No reservation found: check if session declared override or exceeds attempt allowance
+  if v_payload_declares_override or (v_prior_counted >= v_max_attempts and coalesce(new.session_type, '') <> 'sup_transfer_only') then
+    -- Fail-closed: This session required an additional attempt reservation,
+    -- but no reservation was found (missing, not yet reconciled, or in an incompatible state).
+    -- Never permit this session to retain 'not_required' which could grant premature Pass certification.
+    update mts_sam.candidate_sessions
+    set authorization_status = 'conflict'
+    where id = new.id;
+
+    -- Safely record the conflict in additional_attempt_overrides if candidate exists
+    if new.candidate_id is not null then
+      v_reason := coalesce(
+        nullif(btrim(new.source_payload->>'additional_attempt_override_reason'), ''),
+        nullif(btrim(new.source_payload->'source_payload'->>'additional_attempt_override_reason'), ''),
+        'Unreconciled Additional Attempt Override'
+      );
+
+      -- Resolve actor installation ID
+      v_installation_id := coalesce(
+        nullif(btrim(new.source_payload->>'actor_installation_id'), ''),
+        nullif(btrim(new.source_payload->'source_payload'->>'actor_installation_id'), '')
+      );
+
+      -- Check if installation exists in registry
+      if v_installation_id is not null and not exists (
+        select 1 from mts_sam.mts_installations where installation_id = v_installation_id
+      ) then
+        v_installation_id := null;
+      end if;
+
+      -- If not found, use first active installation or omit insert if none
+      if v_installation_id is null then
+        select installation_id into v_installation_id
+        from mts_sam.mts_installations
+        where active = true and revoked_at is null
+        order by created_at asc limit 1;
+      end if;
+
+      if v_installation_id is not null then
+        v_override_key := 'additional-attempt-override:' || btrim(new.session_id);
+        insert into mts_sam.additional_attempt_overrides (
+          override_key, candidate_id, source_session_id, session_id,
+          attempt_number, authorized_max_attempts, tester_name,
+          actor_installation_id, reason, authorization_status, occurred_at
+        ) values (
+          v_override_key, new.candidate_id, btrim(new.session_id), new.id,
+          coalesce(new.attempt_number, v_prior_counted + 1), v_max_attempts,
+          btrim(coalesce(new.tester_name, '')),
+          v_installation_id, v_reason, 'conflict', clock_timestamp()
+        ) on conflict (override_key) do update
+          set session_id = coalesce(mts_sam.additional_attempt_overrides.session_id, new.id),
+              authorization_status = 'conflict',
+              updated_at = clock_timestamp();
+
+        -- Post conflict notification to administrators
+        v_message := 'Unreconciled Additional Attempt Override Conflict: Session '
+          || btrim(new.session_id)
+          || ' for ' || coalesce(nullif(btrim(new.candidate_name), ''), 'the candidate')
+          || ' was submitted without a pre-existing reservation. Administrative review required.';
+
+        insert into mts_sam.notifications (
+          notification_id, enabled, notification_type, title, message,
+          show_ticker, show_popup, show_banner, persistent, starts_at,
+          created_at, updated_at, source_checksum, source_payload
+        ) values (
+          'conflict-override:' || btrim(new.session_id), true, 'warning',
+          'Additional Attempt Override Conflict', v_message,
+          false, true, true, true, clock_timestamp(), clock_timestamp(), clock_timestamp(),
+          encode(extensions.digest(convert_to('conflict-override:' || btrim(new.session_id) || ':' || v_message, 'UTF8'), 'sha256'), 'hex'),
+          jsonb_build_object(
+            'category', 'Additional Attempt Override Conflict',
+            'candidate_id', new.candidate_id,
+            'source_session_id', btrim(new.session_id),
+            'tester_name', btrim(coalesce(new.tester_name, ''))
+          )
+        ) on conflict (notification_id) do nothing
+        returning id into v_notification_id;
+
+        if v_notification_id is not null then
+          insert into mts_sam.notification_deliveries (
+            notification_id, recipient_user_id, delivery_status, metadata
+          )
+          select distinct v_notification_id, u.id, 'pending',
+            jsonb_build_object('category', 'Additional Attempt Override Conflict', 'source_session_id', btrim(new.session_id))
+          from mts_sam.app_users u
+          join mts_sam.user_role_assignments ura on ura.user_id = u.id
+          where u.active = true and ura.role_key = 'administrator' and ura.revoked_at is null
+          on conflict do nothing;
+        end if;
+      end if;
+    end if;
+
+    return new;
+  end if;
+
+  -- 5. Normal authorized session (attempts 1..3, sup transfer, etc.):
+  -- candidate_sessions.authorization_status remains 'not_required' (the default).
   return new;
 end;
 $$;
@@ -684,8 +868,9 @@ revoke all on function mts_sam.resolve_offline_override_conflict(uuid, text, tex
 grant execute on function mts_sam.resolve_offline_override_conflict(uuid, text, text, uuid) to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 8. Stale replay protection for persist_candidate_lifecycle
---    Prevent lifecycle replays from overwriting terminal authorization decisions.
+-- 8. Stale replay protection for candidate_sessions
+--    Prevent lifecycle replays from overwriting terminal authorization decisions
+--    or reverting conflict/pending authorization states.
 --    This trigger fires BEFORE UPDATE on candidate_sessions.
 -- ---------------------------------------------------------------------------
 create or replace function mts_sam.protect_terminal_authorization_status()
@@ -695,13 +880,27 @@ security definer
 set search_path = ''
 as $$
 begin
-  -- If the existing row has a terminal authorization decision (approved/denied),
-  -- prevent a lifecycle replay from resetting it back to pending or any other value.
+  -- 1. Terminal decisions (approved / denied) are completely immutable against lifecycle replays
   if old.authorization_status in ('approved', 'denied')
      and new.authorization_status is distinct from old.authorization_status then
-    -- Preserve the terminal decision; allow all other column updates
     new.authorization_status := old.authorization_status;
+    return new;
   end if;
+
+  -- 2. Offline conflict status cannot be reverted to not_required or pending
+  if old.authorization_status = 'conflict'
+     and new.authorization_status in ('not_required', 'pending_admin_authorization', 'local_pending_sync') then
+    new.authorization_status := old.authorization_status;
+    return new;
+  end if;
+
+  -- 3. Pending authorization cannot be silently downgraded to not_required
+  if old.authorization_status = 'pending_admin_authorization'
+     and new.authorization_status = 'not_required' then
+    new.authorization_status := old.authorization_status;
+    return new;
+  end if;
+
   return new;
 end;
 $$;
