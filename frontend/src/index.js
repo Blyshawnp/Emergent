@@ -9,8 +9,19 @@ const root = ReactDOM.createRoot(document.getElementById("root"));
 const isElectronNotificationManager =
   Boolean(window.electronAPI?.isNotificationManager?.());
 
+// Deep Slate redesign / preview support:
+// In the packaged Electron apps the renderer is selected via electronAPI or the
+// URL hash/query. When running SAM in a plain browser preview (e.g. Emergent),
+// REACT_APP_DEFAULT_APP=sam forces the SAM renderer so reviewers see SAM by
+// default. This flag is opt-in via env only and never affects production builds
+// (where it is unset), so MTS remains the default there.
+const forcedDefaultApp = String(process.env.REACT_APP_DEFAULT_APP || '').trim().toLowerCase();
+const forceNotificationManager =
+  forcedDefaultApp === 'sam' || forcedDefaultApp === 'notification-manager';
+
 const isNotificationManager =
   isElectronNotificationManager ||
+  forceNotificationManager ||
   Boolean(
     window.location.hash.startsWith("#/notification-manager") ||
     window.location.search.includes("notification-manager=1")

@@ -2503,7 +2503,7 @@ function samSidebarItemActive(item, activeSection, candidateView, headsetTab) {
   return true;
 }
 
-function SamSidebar({ activeSection, candidateView, headsetTab, counts = {}, appVersion, samBannerSrc, onNavigate, onSettings, onHelp, onExit }) {
+function SamSidebar({ activeSection, candidateView, headsetTab, counts = {}, appVersion, samBannerSrc, collapsed = false, onToggleCollapse, onNavigate, onSettings, onHelp, onExit }) {
   return (
     <aside className="sam-sidebar" aria-label="SAM navigation">
       <div className="sam-sidebar-brand">
@@ -2516,6 +2516,19 @@ function SamSidebar({ activeSection, candidateView, headsetTab, counts = {}, app
           <em>CERTIFY · MONITOR · EMPOWER</em>
         </div>
       </div>
+      {onToggleCollapse ? (
+        <button
+          type="button"
+          className="sam-collapse-toggle"
+          onClick={onToggleCollapse}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-pressed={collapsed}
+        >
+          <span className="sam-nav-icon"><ChevronRight size={16} aria-hidden="true" className="sam-collapse-icon" /></span>
+          <span className="sam-nav-label">Collapse</span>
+        </button>
+      ) : null}
       <nav className="sam-nav">
         {SAM_SIDEBAR_PRIMARY.map((item) => {
           const Icon = item.icon;
@@ -2527,6 +2540,7 @@ function SamSidebar({ activeSection, candidateView, headsetTab, counts = {}, app
               type="button"
               className={`sam-nav-item ${active ? 'is-active' : ''}`}
               aria-current={active ? 'page' : undefined}
+              title={item.label}
               onClick={() => onNavigate(item)}
             >
               <span className="sam-nav-icon"><Icon size={18} aria-hidden="true" /></span>
@@ -4880,6 +4894,9 @@ export default function NotificationManagerApp() {
   const [updaterStatus, setUpdaterStatus] = useState(null);
   const [activeSection, setActiveSection] = useState('dashboard');
   const [headsetInitialTab, setHeadsetInitialTab] = useState('pending');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('sam_sidebar_collapsed') === '1'; } catch (_e) { return false; }
+  });
   const [samSettings, setSamSettings] = useState(() => loadSamSettings());
   const [candidateView, setCandidateView] = useState(() => loadSamSettings().defaultCandidateView);
   const [candidateSearch, setCandidateSearch] = useState('');
@@ -6424,11 +6441,17 @@ export default function NotificationManagerApp() {
         <SamSetupWizard status={samSetupStatus} onComplete={handleSamSetupComplete} />
       ) : (
         <>
-          <div className="nm-shell sam-layout">
+          <div className={`nm-shell sam-layout ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
             <SamSidebar
               activeSection={activeSection}
               candidateView={candidateView}
               headsetTab={headsetInitialTab}
+              collapsed={sidebarCollapsed}
+              onToggleCollapse={() => setSidebarCollapsed((value) => {
+                const next = !value;
+                try { localStorage.setItem('sam_sidebar_collapsed', next ? '1' : '0'); } catch (_e) { /* ignore */ }
+                return next;
+              })}
               counts={{ headsets: pendingHeadsetCount, requests: pendingWorkflowRequestCount, candidates: pendingCandidateCount, notifications: activeNotificationCount }}
               appVersion={appVersion}
               samBannerSrc={samBannerSrc}

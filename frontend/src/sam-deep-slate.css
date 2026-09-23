@@ -608,3 +608,198 @@
   .sam-content .nm-ops-metrics { grid-template-columns: 1fr; }
 }
 .sam-nav-item { position: relative; }
+
+/* ============================================================
+   SIDEBAR COLLAPSE (manual, on-demand)
+   ============================================================ */
+.sam-collapse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 2px 0 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--sam-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--sam-text-mute);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.sam-collapse-toggle:hover { background: var(--sam-accent-soft); color: #eaf6ff; border-color: rgba(56, 189, 248, 0.3); }
+.sam-collapse-icon { transition: transform 0.2s ease; transform: rotate(180deg); }
+
+.sam-layout.is-collapsed .sam-sidebar { flex: 0 0 66px; width: 66px; padding: 14px 8px; }
+.sam-layout.is-collapsed .sam-brand-text,
+.sam-layout.is-collapsed .sam-nav-label,
+.sam-layout.is-collapsed .sam-sidebar-tagline,
+.sam-layout.is-collapsed .sam-sidebar-version { display: none; }
+.sam-layout.is-collapsed .sam-sidebar-brand { justify-content: center; padding: 4px 0 14px; }
+.sam-layout.is-collapsed .sam-nav-item,
+.sam-layout.is-collapsed .sam-collapse-toggle { justify-content: center; padding: 11px 0; gap: 0; }
+.sam-layout.is-collapsed .sam-nav-item.is-active { box-shadow: inset 3px 0 0 var(--sam-accent); }
+.sam-layout.is-collapsed .sam-collapse-icon { transform: rotate(0deg); }
+.sam-layout.is-collapsed .sam-nav-badge {
+  position: absolute;
+  top: 5px;
+  right: 9px;
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+}
+
+/* ============================================================
+   SECTION POLISH PASS — Candidate Tracking & Pending Requests
+   ============================================================ */
+/* Table shell + header */
+.sam-content .nm-table-wrap {
+  border: 1px solid var(--sam-border);
+  border-radius: var(--sam-radius);
+  overflow: hidden;
+  background: rgba(8, 14, 26, 0.35);
+}
+.sam-content .nm-table thead th {
+  background: rgba(15, 26, 44, 0.9);
+  color: var(--sam-text-mute);
+  font-size: 0.66rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--sam-border-strong);
+}
+.sam-content .nm-table tbody td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--sam-border);
+  vertical-align: middle;
+}
+.sam-content .nm-table tbody tr {
+  transition: background 0.14s ease, box-shadow 0.14s ease;
+}
+.sam-content .nm-table tbody tr:hover {
+  background: rgba(56, 189, 248, 0.06);
+  box-shadow: inset 3px 0 0 var(--sam-accent);
+}
+.sam-content .nm-table tbody tr.is-selected {
+  background: var(--sam-accent-soft);
+  box-shadow: inset 3px 0 0 var(--sam-accent);
+}
+.sam-content .nm-candidate-table .nm-row-title {
+  font-weight: 700;
+  color: #f1f7ff;
+  font-size: 0.9rem;
+}
+.sam-content .nm-candidate-table .nm-meta { color: var(--sam-text-mute); font-size: 0.74rem; }
+
+/* Grouped, contained row actions */
+.sam-content .nm-actions-column,
+.sam-content .nm-table td[data-label="Actions"] { white-space: nowrap; }
+.sam-content .nm-table td[data-label="Actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.sam-content .nm-btn-table {
+  padding: 6px 12px;
+  font-size: 0.76rem;
+  border-radius: 8px;
+  border: 1px solid var(--sam-border);
+  transition: all 0.14s ease;
+}
+.sam-content .nm-btn-secondary.nm-btn-table:hover {
+  background: var(--sam-accent-soft);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #eaf6ff;
+}
+.sam-content .nm-btn-danger.nm-btn-table:hover {
+  background: var(--sam-error-soft);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fecaca;
+}
+
+/* Candidate / request view filter pills */
+.sam-content .nm-view-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.sam-content .nm-view-tab {
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--sam-border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--sam-text-dim);
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: all 0.14s ease;
+}
+.sam-content .nm-view-tab:hover { color: var(--sam-text); border-color: var(--sam-border-strong); }
+.sam-content .nm-view-tab.is-active {
+  background: var(--sam-accent-soft);
+  color: #eaf6ff;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+/* Note / request cards (shared by Notifications + Pending Requests) */
+.sam-content .nm-note-cards { display: flex; flex-direction: column; gap: 12px; }
+.sam-content .nm-note-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--sam-border);
+  border-radius: var(--sam-radius);
+  background: linear-gradient(160deg, var(--sam-panel-2), var(--sam-panel));
+  transition: border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+}
+.sam-content .nm-note-card:hover {
+  border-color: var(--sam-border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--sam-shadow-sm);
+}
+.sam-content .nm-note-card.is-selected { border-color: rgba(56, 189, 248, 0.4); box-shadow: inset 3px 0 0 var(--sam-accent); }
+.sam-content .nm-note-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.sam-content .nm-note-title { font-size: 0.98rem; font-weight: 700; color: #f1f7ff; }
+.sam-content .nm-note-preview { font-size: 0.84rem; color: var(--sam-text-dim); line-height: 1.5; margin-top: 2px; }
+.sam-content .nm-note-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.sam-content .nm-note-meta-chip {
+  font-size: 0.72rem;
+  color: var(--sam-text-mute);
+  background: rgba(148, 163, 184, 0.09);
+  border: 1px solid var(--sam-border);
+  border-radius: 7px;
+  padding: 3px 9px;
+}
+.sam-content .nm-note-card-actions { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; align-items: stretch; }
+.sam-content .nm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.sam-content .nm-badge-info { background: var(--sam-accent-soft); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.3); }
+.sam-content .nm-request-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 7px;
+}
+.sam-content .nm-request-status.is-pending { background: var(--sam-warn-soft); color: #fcd34d; }
+.sam-content .nm-request-status.is-approved { background: var(--sam-success-soft); color: #86efac; }
+.sam-content .nm-request-status.is-denied { background: var(--sam-error-soft); color: #fca5a5; }
+
+/* Section header inside panels */
+.sam-content .nm-section-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+.sam-content .nm-section-title h2 { font-size: 1.15rem; font-weight: 700; color: #f2f8ff; margin: 0; }
+.sam-content .nm-kicker { font-size: 0.8rem; color: var(--sam-text-dim); margin-top: 3px; }
