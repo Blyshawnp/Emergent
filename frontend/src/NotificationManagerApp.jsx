@@ -30,11 +30,15 @@ import {
   UserCheck,
   UserX,
   User,
+  LayoutDashboard,
+  FileText,
+  ChevronRight,
   Settings as SettingsIcon,
 } from 'lucide-react';
 import './notification-manager.css';
 import { additionalAttemptContext, canGrantAdditionalAttempt } from './utils/certificationAttemptPolicy';
 import './polish-sam.css';
+import './sam-deep-slate.css';
 import api from './api';
 import {
   signInWithPassword,
@@ -2446,6 +2450,291 @@ const SECTION_NAV_ITEMS = [
   { key: 'help', label: 'Help', target: 'sam-help', tone: 'help' },
 ];
 
+// ===== Deep Slate redesign: small helpers =====
+function samInitials(name = '') {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'NA';
+  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+function samRequestTitle(category = '') {
+  const value = String(category || '').toLowerCase();
+  if (value.includes('override') || value.includes('additional') || value.includes('attempt')) return 'Additional Attempt Request';
+  if (value.includes('reschedule')) return 'Newbie Shift Reschedule';
+  if (value.includes('newbie')) return 'Newbie Shift Request';
+  if (value.includes('deletion')) return 'Candidate Deletion Request';
+  if (value.includes('correction')) return 'Information Correction';
+  if (value.includes('transfer') || value === 'pending') return 'Supervisor Transfer';
+  return 'Workflow Request';
+}
+
+// ===== Deep Slate redesign: section metadata for the topbar heading =====
+const SAM_SECTION_META = {
+  dashboard: { title: 'Supervisor Dashboard', subtitle: 'Certification oversight. Actionable insights at a glance.' },
+  candidates: { title: 'Candidate Tracking', subtitle: 'Track progress, review results, and manage certifications.' },
+  notifications: { title: 'Notifications', subtitle: 'Create and manage alerts shown across MTS.' },
+  headsets: { title: 'Headset Review', subtitle: 'Review unknown headsets and keep MTS approvals in sync.' },
+  requests: { title: 'Pending Requests', subtitle: 'Workflow requests awaiting your decision.' },
+  content: { title: 'Content Management', subtitle: 'Manage the caller roster and Discord posts.' },
+  preview: { title: 'Live Preview', subtitle: 'Preview ticker, banner, and popup rendering.' },
+};
+
+// ===== Deep Slate redesign: sidebar navigation model =====
+const SAM_SIDEBAR_PRIMARY = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'dashboard' },
+  { id: 'candidates', label: 'Candidate Tracking', icon: Users, section: 'candidates', candidateView: 'allActive' },
+  { id: 'pending', label: 'Pending Sup Transfers', icon: Activity, section: 'candidates', candidateView: 'pending', countKey: 'candidates' },
+  { id: 'notifications', label: 'Notifications', icon: Bell, section: 'notifications', countKey: 'notifications' },
+  { id: 'headsets', label: 'Headset Review', icon: Headphones, section: 'headsets', headsetTab: 'pending', countKey: 'headsets' },
+  { id: 'approved', label: 'Approved Headsets', icon: CheckCircle, section: 'headsets', headsetTab: 'approved' },
+  { id: 'requests', label: 'Pending Requests', icon: Inbox, section: 'requests', countKey: 'requests' },
+  { id: 'content', label: 'Content Management', icon: FileText, section: 'content' },
+  { id: 'preview', label: 'Live Preview', icon: Eye, section: 'preview' },
+];
+
+function samSidebarItemActive(item, activeSection, candidateView, headsetTab) {
+  if (item.section !== activeSection) return false;
+  if (item.section === 'candidates') return (item.candidateView || 'allActive') === candidateView;
+  if (item.section === 'headsets') {
+    const wantApproved = item.headsetTab === 'approved';
+    const isApproved = headsetTab === 'approved';
+    return wantApproved === isApproved;
+  }
+  return true;
+}
+
+function SamSidebar({ activeSection, candidateView, headsetTab, counts = {}, appVersion, samBannerSrc, onNavigate, onSettings, onHelp, onExit }) {
+  return (
+    <aside className="sam-sidebar" aria-label="SAM navigation">
+      <div className="sam-sidebar-brand">
+        <div className="sam-brand-mark" aria-hidden="true">
+          {samBannerSrc ? <img src={samBannerSrc} alt="" /> : <span>SAM</span>}
+        </div>
+        <div className="sam-brand-text">
+          <strong>SAM</strong>
+          <span>Smart Alert Manager</span>
+          <em>CERTIFY · MONITOR · EMPOWER</em>
+        </div>
+      </div>
+      <nav className="sam-nav">
+        {SAM_SIDEBAR_PRIMARY.map((item) => {
+          const Icon = item.icon;
+          const active = samSidebarItemActive(item, activeSection, candidateView, headsetTab);
+          const badge = item.countKey ? Number(counts[item.countKey] || 0) : 0;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`sam-nav-item ${active ? 'is-active' : ''}`}
+              aria-current={active ? 'page' : undefined}
+              onClick={() => onNavigate(item)}
+            >
+              <span className="sam-nav-icon"><Icon size={18} aria-hidden="true" /></span>
+              <span className="sam-nav-label">{item.label}</span>
+              {badge ? <span className="sam-nav-badge">{badge}</span> : null}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="sam-sidebar-footer">
+        <div className="sam-sidebar-actions">
+          <button type="button" className="sam-nav-item sam-nav-secondary" onClick={onSettings}>
+            <span className="sam-nav-icon"><SettingsIcon size={18} aria-hidden="true" /></span>
+            <span className="sam-nav-label">Settings</span>
+          </button>
+          <button type="button" className="sam-nav-item sam-nav-secondary" onClick={onHelp} aria-label="Help">
+            <span className="sam-nav-icon"><HelpCircle size={18} aria-hidden="true" /></span>
+            <span className="sam-nav-label">Help</span>
+          </button>
+          <button type="button" className="sam-nav-item sam-nav-secondary sam-nav-exit" onClick={onExit} aria-label="Exit Smart Alert Manager">
+            <span className="sam-nav-icon"><LogOut size={18} aria-hidden="true" /></span>
+            <span className="sam-nav-label">Exit</span>
+          </button>
+        </div>
+        <div className="sam-sidebar-tagline">Supporting a Safer, More Competent Workforce</div>
+        <div className="sam-sidebar-version">v{appVersion}</div>
+      </div>
+    </aside>
+  );
+}
+
+// ===== Deep Slate redesign: dashboard command center (uses real SAM data) =====
+function samPriorityTone(category = '') {
+  const value = String(category).toLowerCase();
+  if (value.includes('headset')) return { label: 'High', tone: 'warn' };
+  if (value.includes('override') || value.includes('additional') || value.includes('attempt')) return { label: 'Medium', tone: 'pending' };
+  if (value.includes('deletion')) return { label: 'Medium', tone: 'pending' };
+  return { label: 'Review', tone: 'info' };
+}
+
+function SamDashboard({ candidateTracking, pendingRequests, headsetReviews, items, onOpenCandidates, onOpenPendingCandidates, onOpenHeadsets, onOpenRequests, onOpenNotifications, onReviewOverride }) {
+  const activeRows = (candidateTracking?.views?.allActive || candidateTracking?.candidates || []).filter(Boolean);
+  const recentActivity = activeRows.slice(0, 6);
+  const workflowRequests = Array.isArray(pendingRequests?.requests) ? pendingRequests.requests : [];
+  const pendingHeadsets = Array.isArray(headsetReviews?.pending) ? headsetReviews.pending : [];
+  const priorityItems = [
+    ...pendingHeadsets.slice(0, 4).map((h) => ({
+      key: `headset-${h.brand}-${h.model}`,
+      title: 'Headset Review',
+      detail: `${h.brand || 'Unknown'} ${h.model || ''}`.trim(),
+      meta: formatSamTimestamp(h.submitted_at || h.created_at) || 'Awaiting review',
+      category: 'headset',
+      onReview: onOpenHeadsets,
+    })),
+    ...workflowRequests.slice(0, 5).map((r, i) => ({
+      key: `req-${r.id || r.pending_id || i}`,
+      title: samRequestTitle(r.category),
+      detail: r.candidate_name || r.subject || r.title || 'Workflow request',
+      meta: formatSamTimestamp(r.created_at || r.requested_at) || 'Pending',
+      category: r.category || '',
+      onReview: ['additional_attempt_override', 'additional_attempt_override_conflict'].includes(r.category)
+        ? () => onReviewOverride(r.override_data || r)
+        : onOpenRequests,
+    })),
+  ].slice(0, 6);
+  const currentNotifications = (Array.isArray(items) ? items : [])
+    .map((item) => normalizeManagerNotification(item))
+    .filter(isCurrentNotification)
+    .slice(0, 6);
+
+  return (
+    <div className="sam-dash-grid">
+      <section className="nm-panel sam-dash-panel">
+        <div className="sam-panel-head">
+          <div className="sam-panel-title"><Activity size={18} aria-hidden="true" /><h3>Certification Activity</h3></div>
+          <button type="button" className="sam-panel-link" onClick={onOpenCandidates}>View All Activity <ChevronRight size={15} aria-hidden="true" /></button>
+        </div>
+        {recentActivity.length ? (
+          <div className="sam-activity-table" role="table" aria-label="Recent certification activity">
+            <div className="sam-activity-row sam-activity-head" role="row">
+              <span role="columnheader">Candidate</span>
+              <span role="columnheader">Result</span>
+              <span role="columnheader">Completed</span>
+              <span role="columnheader" className="sam-activity-actions-col">Actions</span>
+            </div>
+            {recentActivity.map((row, i) => (
+              <div className="sam-activity-row" role="row" key={`${row.candidate_name || 'row'}-${i}`}>
+                <span role="cell" className="sam-activity-name">
+                  <span className="sam-activity-avatar" aria-hidden="true">{samInitials(row.candidate_name)}</span>
+                  <span className="sam-activity-name-text">{row.candidate_name || 'Unknown'}</span>
+                </span>
+                <span role="cell"><StatusChip meta={candidateCertificationMeta(row)} /></span>
+                <span role="cell" className="sam-activity-date">{formatSamTimestamp(row.completed_at || row.last_session_date || row.created_at) || '—'}</span>
+                <span role="cell" className="sam-activity-actions-col">
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-sm" onClick={onOpenCandidates}>View</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="nm-empty nm-empty-state">
+            <div className="nm-empty-icon" aria-hidden="true"><Users size={28} /></div>
+            <div className="nm-empty-title">No recent activity</div>
+            <div className="nm-empty-text">Certification sessions will appear here once candidates are active.</div>
+          </div>
+        )}
+      </section>
+
+      <section className="nm-panel sam-dash-panel sam-dash-side">
+        <div className="sam-panel-head">
+          <div className="sam-panel-title"><AlertTriangle size={18} aria-hidden="true" /><h3>Priority Reviews</h3></div>
+          <button type="button" className="sam-panel-link" onClick={onOpenRequests}>View All <ChevronRight size={15} aria-hidden="true" /></button>
+        </div>
+        {priorityItems.length ? (
+          <ul className="sam-priority-list">
+            {priorityItems.map((item) => {
+              const tone = samPriorityTone(item.category);
+              return (
+                <li key={item.key} className="sam-priority-item">
+                  <div className="sam-priority-main">
+                    <span className="sam-priority-title">{item.title}</span>
+                    <span className="sam-priority-detail">{item.detail}</span>
+                    <span className="sam-priority-meta">{item.meta}</span>
+                  </div>
+                  <div className="sam-priority-actions">
+                    <span className={`nm-status-chip is-${tone.tone} sam-priority-badge`}>{tone.label}</span>
+                    <button type="button" className="nm-btn nm-btn-secondary nm-btn-sm" onClick={item.onReview}>Review</button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <div className="nm-empty nm-empty-state">
+            <div className="nm-empty-icon" aria-hidden="true"><CheckCircle size={28} /></div>
+            <div className="nm-empty-title">All caught up</div>
+            <div className="nm-empty-text">There are no reviews requiring your attention.</div>
+          </div>
+        )}
+      </section>
+
+      <section className="nm-panel sam-dash-panel">
+        <div className="sam-panel-head">
+          <div className="sam-panel-title"><Users size={18} aria-hidden="true" /><h3>Candidate Tracking</h3></div>
+          <button type="button" className="sam-panel-link" onClick={onOpenCandidates}>View All Candidates <ChevronRight size={15} aria-hidden="true" /></button>
+        </div>
+        {activeRows.length ? (
+          <div className="sam-activity-table" role="table" aria-label="Candidate tracking snapshot">
+            <div className="sam-activity-row sam-activity-head" role="row">
+              <span role="columnheader">Name</span>
+              <span role="columnheader">Status</span>
+              <span role="columnheader">Tester</span>
+              <span role="columnheader" className="sam-activity-actions-col">Actions</span>
+            </div>
+            {activeRows.slice(0, 6).map((row, i) => (
+              <div className="sam-activity-row" role="row" key={`ct-${row.candidate_name || 'row'}-${i}`}>
+                <span role="cell" className="sam-activity-name">
+                  <span className="sam-activity-avatar" aria-hidden="true">{samInitials(row.candidate_name)}</span>
+                  <span className="sam-activity-name-text">{row.candidate_name || 'Unknown'}</span>
+                </span>
+                <span role="cell"><StatusChip meta={candidateCertificationMeta(row)} /></span>
+                <span role="cell" className="sam-activity-date">{row.original_tester_name || row.tester_name || '—'}</span>
+                <span role="cell" className="sam-activity-actions-col">
+                  <button type="button" className="nm-btn nm-btn-secondary nm-btn-sm" onClick={onOpenCandidates}>View</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="nm-empty nm-empty-state">
+            <div className="nm-empty-icon" aria-hidden="true"><Users size={28} /></div>
+            <div className="nm-empty-title">No candidates yet</div>
+            <div className="nm-empty-text">Active candidates from shared sessions will appear here.</div>
+          </div>
+        )}
+      </section>
+
+      <section className="nm-panel sam-dash-panel sam-dash-side">
+        <div className="sam-panel-head">
+          <div className="sam-panel-title"><Bell size={18} aria-hidden="true" /><h3>Notifications &amp; Work Queue</h3></div>
+          <button type="button" className="sam-panel-link" onClick={onOpenNotifications}>View All <ChevronRight size={15} aria-hidden="true" /></button>
+        </div>
+        {currentNotifications.length ? (
+          <ul className="sam-queue-list">
+            {currentNotifications.map((note, i) => (
+              <li key={`${note.ID || 'n'}-${i}`} className="sam-queue-item">
+                <span className={`sam-queue-dot is-${getRowStatusTone(note)}`} aria-hidden="true" />
+                <div className="sam-queue-main">
+                  <span className="sam-queue-title">{note.Title || '(Untitled notification)'}</span>
+                  <span className="sam-queue-detail">{note.Message || 'No message yet.'}</span>
+                </div>
+                <span className="sam-queue-meta">{note.StartDate ? `${note.StartDate} ${note.StartTime || ''}`.trim() : 'Active'}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="nm-empty nm-empty-state">
+            <div className="nm-empty-icon" aria-hidden="true"><Bell size={28} /></div>
+            <div className="nm-empty-title">No active notifications</div>
+            <div className="nm-empty-text">Create a notification to alert testers.</div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+
 const REQUEST_FILTERS = [
   { key: 'pending', label: 'All Pending' },
   { key: 'newbie', label: 'Newbie Shifts' },
@@ -4229,12 +4518,15 @@ export function applyHeadsetDecisionToState(current, payload, result = {}) {
   return current;
 }
 
-export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus, onConfirm }) {
+export function HeadsetReviewPanel({ data, loading, onRefresh, onDecision, onStatus, onConfirm, initialTab = 'pending' }) {
   const [deferred, setDeferred] = useState({});
   const [denial, setDenial] = useState(null);
   const [editReview, setEditReview] = useState(null);
   const [lookupReview, setLookupReview] = useState(null);
-  const [activeTab, setActiveTab] = useState('pending');
+  const [activeTab, setActiveTab] = useState(initialTab || 'pending');
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
   const [pendingDecisionKeys, setPendingDecisionKeys] = useState({});
   const pendingDecisionKeysRef = useRef(new Set());
   const [decisionError, setDecisionError] = useState('');
@@ -4586,7 +4878,8 @@ export default function NotificationManagerApp() {
   const [appVersion, setAppVersion] = useState(() => getAppVersion());
   const [updateModal, setUpdateModal] = useState(null);
   const [updaterStatus, setUpdaterStatus] = useState(null);
-  const [activeSection, setActiveSection] = useState('notifications');
+  const [activeSection, setActiveSection] = useState('dashboard');
+  const [headsetInitialTab, setHeadsetInitialTab] = useState('pending');
   const [samSettings, setSamSettings] = useState(() => loadSamSettings());
   const [candidateView, setCandidateView] = useState(() => loadSamSettings().defaultCandidateView);
   const [candidateSearch, setCandidateSearch] = useState('');
@@ -6131,19 +6424,41 @@ export default function NotificationManagerApp() {
         <SamSetupWizard status={samSetupStatus} onComplete={handleSamSetupComplete} />
       ) : (
         <>
-          <div className="nm-shell">
-            {/* ===== Operations Center topbar ===== */}
-            <header className="nm-ops-topbar">
-          <div className="nm-ops-brand">
-            <div className="nm-ops-mark" aria-hidden="true">
-              {samBannerSrc ? <img src={samBannerSrc} alt="" /> : <span>SAM</span>}
-            </div>
-            <div className="nm-ops-brand-text">
-              <div className="nm-overline">{SAM_SUBTITLE}</div>
-              <h1 className="nm-ops-title">Operations Center</h1>
-              <p className="nm-ops-tagline">Manage alerts, headset reviews, and candidate tracking.</p>
-            </div>
-          </div>
+          <div className="nm-shell sam-layout">
+            <SamSidebar
+              activeSection={activeSection}
+              candidateView={candidateView}
+              headsetTab={headsetInitialTab}
+              counts={{ headsets: pendingHeadsetCount, requests: pendingWorkflowRequestCount, candidates: pendingCandidateCount, notifications: activeNotificationCount }}
+              appVersion={appVersion}
+              samBannerSrc={samBannerSrc}
+              onNavigate={(item) => {
+                setActiveSection(item.section);
+                if (item.candidateView) setCandidateView(item.candidateView);
+                if (item.headsetTab) setHeadsetInitialTab(item.headsetTab);
+              }}
+              onSettings={() => { setSettingsInitialTab('general'); setSettingsOpen(true); }}
+              onHelp={() => setHelpOpen(true)}
+              onExit={handleExitApp}
+            />
+            <div className="sam-main">
+            {/* ===== SAM topbar ===== */}
+            <header className="nm-ops-topbar sam-topbar">
+              <div className="sam-topbar-heading">
+                <h1 className="nm-ops-title">{(SAM_SECTION_META[activeSection] || SAM_SECTION_META.dashboard).title}</h1>
+                <p className="nm-ops-tagline">{(SAM_SECTION_META[activeSection] || SAM_SECTION_META.dashboard).subtitle}</p>
+              </div>
+              <div className="sam-topbar-search" role="search">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  readOnly
+                  onFocus={() => setSearchModalOpen(true)}
+                  onClick={() => setSearchModalOpen(true)}
+                  placeholder="Search candidates, notifications, or content..."
+                  aria-label="Search candidates"
+                />
+              </div>
           <div className="nm-ops-topbar-actions" data-sam-tour="help-access">
             <span className={`nm-ops-conn is-${syncTone}`}>
               {isOnline ? <Wifi size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />}
@@ -6197,38 +6512,19 @@ export default function NotificationManagerApp() {
             >
               <RefreshCw size={18} aria-hidden="true" />
             </button>
-            <button
-              type="button"
-              className="nm-ops-icon-btn"
-              onClick={() => {
-                setSettingsInitialTab('general');
-                setSettingsOpen(true);
-              }}
-              title="Settings"
-              aria-label="Settings"
-            >
-              <SettingsIcon size={18} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="nm-ops-icon-btn"
-              onClick={() => setHelpOpen(true)}
-              title="Help"
-              aria-label="Help"
-            >
-              <HelpCircle size={18} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="nm-btn nm-ops-exit"
-              onClick={handleExitApp}
-              aria-label="Exit Smart Alert Manager"
-            >
-              <LogOut size={16} aria-hidden="true" /> Exit
-            </button>
+            <div className="sam-user-chip" title={operatorName || 'SAM Administrator'}>
+              <span className="sam-user-avatar" aria-hidden="true">{samInitials(operatorName) || 'SA'}</span>
+              <span className="sam-user-meta">
+                <strong>{operatorName || 'SAM Administrator'}</strong>
+                <span>{samSetupStatus.userRole || 'Administrator'}</span>
+              </span>
+            </div>
           </div>
         </header>
+        <div className="sam-content">
 
+        {activeSection === 'dashboard' ? (
+        <>
         {/* ===== Metrics strip ===== */}
         <section className="nm-ops-metrics" aria-label="Operations overview" data-sam-tour="status-chips">
           <div className={`nm-metric nm-metric-status is-${syncTone}`}>
@@ -6317,34 +6613,20 @@ export default function NotificationManagerApp() {
             </div>
           </div>
         </section>
-
-        {/* ===== Section tabs ===== */}
-        <nav className="nm-ops-tabs" role="tablist" aria-label="SAM sections">
-          {SECTION_NAV_ITEMS.filter((item) => item.key !== 'help').map((item) => {
-            const isActive = item.key === 'candidates'
-              ? (activeSection === 'candidates' && item.candidateView === candidateView)
-              : (activeSection === item.key);
-            const badge = item.target === 'sam-headset-review'
-              ? pendingHeadsetCount
-              : item.target === 'sam-pending-requests'
-                ? pendingWorkflowRequestCount
-                : (item.candidateView === 'pending' ? pendingCandidateCount : 0);
-            return (
-              <button
-                key={`${item.target}-${item.label}`}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`nm-ops-tab is-${item.tone || 'default'} ${isActive ? 'is-active' : ''}`}
-                onClick={() => openSection(item)}
-                data-sam-tour={item.target === 'sam-candidate-tracking' && item.candidateView === 'allActive' ? 'candidate-tracking-btn' : undefined}
-              >
-                {item.label}
-                {badge ? <span className="nm-ops-tab-badge">{badge}</span> : null}
-              </button>
-            );
-          })}
-        </nav>
+        <SamDashboard
+          candidateTracking={candidateTracking}
+          pendingRequests={pendingRequests}
+          headsetReviews={headsetReviews}
+          items={items}
+          onOpenCandidates={() => { setActiveSection('candidates'); setCandidateView('allActive'); }}
+          onOpenPendingCandidates={() => { setActiveSection('candidates'); setCandidateView('pending'); }}
+          onOpenHeadsets={() => { setActiveSection('headsets'); setHeadsetInitialTab('pending'); }}
+          onOpenRequests={() => { setActiveSection('requests'); setPendingRequestFilter('pending'); }}
+          onOpenNotifications={() => setActiveSection('notifications')}
+          onReviewOverride={(override) => setActiveOverrideReview(override)}
+        />
+        </>
+        ) : null}
 
         <PendingRequestAlert
           requests={pendingRequests.requests || []}
@@ -6546,6 +6828,7 @@ export default function NotificationManagerApp() {
         {activeSection === 'headsets' ? (
       <HeadsetReviewPanel
             data={headsetReviews}
+            initialTab={headsetInitialTab}
             loading={headsetReviewsLoading}
             onRefresh={() => loadHeadsetReviews()}
             onDecision={runHeadsetDecision}
@@ -6574,6 +6857,7 @@ export default function NotificationManagerApp() {
         ) : null}
 
         {/* ===== System health / diagnostics (relocated developer detail) ===== */}
+        {activeSection !== 'dashboard' ? (
         <section className="nm-ops-diagnostics">
           <button
             type="button"
@@ -6600,6 +6884,9 @@ export default function NotificationManagerApp() {
             </div>
           ) : null}
         </section>
+        ) : null}
+      </div>
+      </div>
       </div>
       <NotificationEditorModal
         open={editorOpen}

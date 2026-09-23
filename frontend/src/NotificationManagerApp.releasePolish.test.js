@@ -595,7 +595,7 @@ test('SAM notification IDs are generated once for new and duplicated drafts', ()
 });
 
 test('SAM notification header has one help control and one destructive exit control', () => {
-  expect(appSource).toContain('className="nm-btn nm-ops-exit"');
+  expect(appSource).toContain('sam-nav-item sam-nav-secondary sam-nav-exit');
   expect(samPolishCss).toContain('.nm-ops-exit');
   expect(samPolishCss).toContain('background: #7f1d1d');
   expect((appSource.match(/aria-label="Help"/g) || [])).toHaveLength(1);
@@ -626,7 +626,10 @@ test('SAM operations cards and tabs have compact identity states', () => {
   expect(samPolishCss).toContain('width: 246px');
   expect(appSource).toContain("tone: 'notifications'");
   expect(appSource).toContain("tone: 'pending'");
-  expect(appSource).toContain("is-${item.tone || 'default'}");
+  // Deep Slate redesign: top tab strip replaced by the sidebar navigation.
+  expect(appSource).toContain('sam-nav-item');
+  expect(appSource).toContain('SAM_SIDEBAR_PRIMARY');
+  expect(appSource).toContain('samSidebarItemActive');
   expect(samPolishCss).toContain('.nm-ops-tab.is-notifications');
   expect(samPolishCss).toContain('.nm-ops-tab.is-preview');
   expect(samPolishCss).toContain('.nm-ops-tab.is-headsets');
