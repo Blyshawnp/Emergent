@@ -93,18 +93,10 @@ https://gyazo.com/54533787846921462083e8029c028304","/welcome-new-agent.png"
 You will not need to schedule anything on your end. Please give me a moment to check availability.",""
 "Failure Outcomes","Fail Session","It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing requirements. Please review the feedback given and schedule another session in the next two days. You can email the certification team with any questions.",""
 "Failure Outcomes","Fail Final Attempt","It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing requirements, and it looks like this was your final attempt. Please reach out to the certification team by email — they'll be able to walk you through your next steps.",""
-"Failure Outcomes","VPN Fail","It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. Using a VPN is not accepted when contracting with ACD. Your VPN must be turned off or be able to be turned off for your mock session as well as when taking calls.
+"Failure Outcomes","VPN Fail","It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing requirements. Using a VPN is not accepted when contracting with ACD. Your VPN must be turned off or be able to be turned off for your mock session as well as when taking calls.
 
-Any further questions should be directed to certification@acdsupport.com.
-Please reschedule for another Mock session in Gateway as soon as possible (within 24 hours).
+Please review the feedback given and schedule another session in the next two days. You can email the certification team with any questions at certification@acdsupport.com.",""
+"Failure Outcomes","Wrong Headset","It's been a pleasure working with you today! Unfortunately, this attempt didn't meet the passing requirements. A USB headset with a noise cancelling microphone is required to contract with ACD.
 
-
-
-If you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then.",""
-"Failure Outcomes","Wrong Headset","It was a pleasure working with you today. Unfortunately, based on our session today, I can’t pass you. A USB headset with a noise cancelling microphone is required to contract with ACD. Please reschedule for another Mock session in Gateway as soon as possible (within 24 hours).
-
-
-
-If you don’t see a shift, please check back periodically as the shifts will be added as soon as possible to your Shifts Calendar. You can also check out the test chat room and if we have time, we will post a message – you can come in and we can help you then.
-","/usb.png"
+Please review the feedback given and schedule another session in the next two days. You can email the certification team with any questions at certification@acdsupport.com.","/usb.png"
 "Introduction","No Candidate","@here Hello, if anyone in the chat needs to complete their mock calls and/or supervisor transfer and are not scheduled, I am available. Just reply to this message.",""

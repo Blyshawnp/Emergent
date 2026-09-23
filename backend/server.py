@@ -240,6 +240,155 @@ def _admin_token_configured():
     return bool((os.getenv("MTS_ADMIN_TOKEN") or "").strip())
 
 
+# ─── Content Domain Cutover ───────────────────────────────────────────────────
+
+def _is_content_domain_cutover(domain):
+    """Check if a content domain has been seeded, published, and explicitly enabled.
+
+    Returns True ONLY when the runtime config contains the exact string
+    'seeded_and_published' for the domain. A boolean True will NOT activate cutover.
+    """
+    config = _load_backend_runtime_config() or {}
+    cutover = config.get("content_domain_cutover") or {}
+    return str(cutover.get(domain, "")).strip() == "seeded_and_published"
+
+
+_CONTENT_RETRIEVAL_ERRORS = {
+    "NETWORK_ERROR": "network_error",
+    "CREDENTIAL_INVALID": "credential_invalid",
+    "AUTHORIZATION_DENIED": "authorization_denied",
+    "NO_PUBLICATION": "no_publication",
+    "INVALID_PAYLOAD": "invalid_payload",
+}
+
+
+def _fetch_published_content_via_edge_function(domain):
+    """Call mts-content-read Edge Function using the MTS installation credential.
+
+    Returns dict with keys: ok, domain, version_id, content_hash, item_count,
+    published_at, content, error_type, error_code, error.
+    """
+    runtime_config = _load_backend_runtime_config() or {}
+    url = str(runtime_config.get("supabase_url") or "").rstrip("/")
+    token = _get_mts_installation_token()
+
+    if not url or not token:
+        return {
+            "ok": False,
+            "error_type": "credential_invalid" if not token else "network_error",
+            "error_code": "MISSING_CONFIG",
+            "error": "Supabase URL or installation credential not configured.",
+        }
+
+    edge_url = f"{url}/functions/v1/mts-content-read"
+    req_body = json.dumps({"domain": domain}, separators=(",", ":")).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(
+            edge_url,
+            data=req_body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            if body.get("ok"):
+                return body
+            error_code = body.get("error_code", "UNKNOWN")
+            if error_code in ("MISSING_CREDENTIAL", "UNAUTHORIZED", "INSTALLATION_NOT_FOUND"):
+                error_type = "credential_invalid"
+            elif error_code in ("INSTALLATION_REVOKED", "INSTALLATION_INACTIVE"):
+                error_type = "authorization_denied"
+            elif error_code == "NO_PUBLICATION":
+                error_type = "no_publication"
+            else:
+                error_type = "invalid_payload"
+            return {"ok": False, "error_type": error_type, "error_code": error_code, "error": body.get("error", "")}
+    except urllib.error.HTTPError as e:
+        status = e.code
+        try:
+            err_body = json.loads(e.read().decode("utf-8"))
+        except Exception:
+            err_body = {}
+        error_code = err_body.get("error_code", f"HTTP_{status}")
+        if status in (401, 403):
+            error_type = "credential_invalid" if status == 401 else "authorization_denied"
+        elif status == 404:
+            error_type = "no_publication"
+        else:
+            error_type = "network_error"
+        return {"ok": False, "error_type": error_type, "error_code": error_code, "error": err_body.get("error", f"HTTP {status}")}
+    except Exception as exc:
+        logger.warning("[CONTENT] Edge Function call failed for %s: %s", domain, exc)
+        return {"ok": False, "error_type": "network_error", "error_code": "NETWORK_ERROR", "error": str(exc)}
+
+
+def _fetch_published_content_with_cache(domain, db_ref=None):
+    """Fetch published content: Edge Function → cache → fallback.
+
+    Returns dict with 'content' key (list/dict) or None on all failures.
+    Does NOT erase cache on failure. Distinguishes auth errors from network errors.
+    """
+    result = _fetch_published_content_via_edge_function(domain) or {}
+
+    if result.get("ok") and result.get("content"):
+        # Validate the response has usable content
+        content = result["content"]
+        if isinstance(content, list) and len(content) > 0:
+            # Cache in SQLite
+            try:
+                if db_ref and hasattr(db_ref, "published_content"):
+                    db_ref.published_content._write_document({
+                        "_id": domain,
+                        "version_id": result.get("version_id", ""),
+                        "content_hash": result.get("content_hash", ""),
+                        "content": content,
+                        "cached_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    logger.info(
+                        "[CONTENT] Cached published %s v%s (%d items)",
+                        domain, result.get("version_id", "?"), len(content),
+                    )
+            except Exception as cache_err:
+                logger.warning("[CONTENT] Failed to cache %s: %s", domain, cache_err)
+            return {"ok": True, "content": content, "version_id": result.get("version_id"), "source": "remote"}
+        else:
+            logger.warning("[CONTENT] Remote published %s returned empty or invalid content", domain)
+
+    # On auth/credential errors, do NOT fall back to cache silently —
+    # log the distinction but still use cache for offline operation
+    error_type = result.get("error_type", "network_error")
+    if error_type in ("credential_invalid", "authorization_denied"):
+        logger.warning(
+            "[CONTENT] %s fetch for %s rejected: %s — %s. Using cache if available.",
+            error_type.upper(), domain, result.get("error_code"), result.get("error"),
+        )
+    elif error_type == "no_publication":
+        logger.info("[CONTENT] No published content for %s on remote.", domain)
+        return None  # No cache fallback for missing publication — domain is not yet seeded
+    else:
+        logger.info("[CONTENT] Network issue fetching %s, using cache fallback.", domain)
+
+    # Cache fallback (do NOT erase on failure)
+    try:
+        if db_ref and hasattr(db_ref, "published_content"):
+            cached = db_ref.published_content._read_document(domain)
+            if cached and cached.get("content"):
+                logger.info(
+                    "[CONTENT] Serving cached published %s v%s",
+                    domain, cached.get("version_id", "?"),
+                )
+                return {"ok": True, "content": cached["content"], "version_id": cached.get("version_id"), "source": "cache"}
+    except Exception as cache_err:
+        logger.warning("[CONTENT] Failed to read cache for %s: %s", domain, cache_err)
+
+    return None
+
+
 def _is_loopback_request(request: Request):
     host = ""
     try:
@@ -1797,6 +1946,74 @@ def _normalize_callers_for_category(rows, category):
     return grouped
 
 
+def _normalize_callers_from_published(published_items):
+    """Convert Supabase-published caller JSON into the grouped callers format.
+
+    published_items is a list of dicts from the content_publications.content_json.
+    Returns dict with donors_new, donors_existing, donors_increase lists.
+    """
+    grouped = {
+        "donors_new": [],
+        "donors_existing": [],
+        "donors_increase": [],
+    }
+    for item in published_items or []:
+        if not isinstance(item, dict):
+            continue
+        category = _normalize_caller_category(item.get("category", ""))
+        first = str(item.get("first_name") or "").strip()
+        last = str(item.get("last_name") or "").strip()
+        if not category or (not first and not last):
+            continue
+        entry = [
+            first, last,
+            str(item.get("address") or "").strip(),
+            str(item.get("city") or "").strip(),
+            str(item.get("state") or "").strip(),
+            str(item.get("zip") or "").strip(),
+            str(item.get("phone") or "").strip(),
+            str(item.get("email") or "").strip(),
+            "",  # notes — not stored in published callers
+        ]
+        target = f"donors_{category}"
+        if target in grouped:
+            grouped[target].append(entry)
+    logger.info(
+        "[CONTENT] Normalized %d published callers (%d new, %d existing, %d increase)",
+        sum(len(v) for v in grouped.values()),
+        len(grouped["donors_new"]), len(grouped["donors_existing"]), len(grouped["donors_increase"]),
+    )
+    return grouped
+
+
+def _normalize_discord_from_published(published_items):
+    """Convert Supabase-published discord post JSON into the discord_templates format.
+
+    published_items is a list of dicts from the content_publications.content_json.
+    Returns list of dicts with category, title, message, suggested_screenshots.
+    """
+    items = []
+    for item in published_items or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        entry = {
+            "category": str(item.get("category") or "General").strip(),
+            "title": title,
+            "message": _normalize_discord_message(item.get("message") or ""),
+        }
+        screenshots = item.get("suggested_screenshots")
+        if isinstance(screenshots, list) and screenshots:
+            entry["suggested_screenshots"] = [str(s or "").strip() for s in screenshots if str(s or "").strip()]
+        elif title.strip().lower() in REQUIRED_DISCORD_SUGGESTED_SCREENSHOTS:
+            entry["suggested_screenshots"] = REQUIRED_DISCORD_SUGGESTED_SCREENSHOTS[title.strip().lower()]
+        items.append(entry)
+    logger.info("[CONTENT] Normalized %d published discord posts", len(items))
+    return items
+
+
 REQUIRED_DTE_SCREENSHOTS = [
     {"category": "DTE", "title": "DTE Taskbar", "image_url": "/DTE-Taskbar.png"},
     {"category": "DTE", "title": "DTE Allow", "image_url": "/DTE-allow.png"},
@@ -2316,7 +2533,15 @@ def _load_google_sheet_content(runtime_config, local_content=None):
 
     loaded = {}
     local_content = local_content or {}
+    _domain_cutover_map = {
+        "callers": "callers",
+        "discord_templates": "discord_posts",
+    }
     for content_key, tab_name in CONTENT_SHEET_TAB_MAP.items():
+        cutover_domain = _domain_cutover_map.get(content_key)
+        if cutover_domain and _is_content_domain_cutover(cutover_domain):
+            logger.info("[CONTENT] Skipping Google Sheet tab '%s' — domain '%s' is cut over to Supabase.", tab_name, cutover_domain)
+            continue
         loaded_this_key = False
         last_error = None
         for candidate_tab in _content_sheet_tab_candidates(content_key, tab_name):
@@ -2537,6 +2762,45 @@ async def _background_remote_content_task():
                 logger.info(
                     "[CONTENT] Live screenshots empty, disabled, or failed. Using packaged default screenshots."
                 )
+
+        # ── Supabase Published Content for Cutover Domains ──────────────
+        # For each content domain that has been explicitly cut over to Supabase,
+        # fetch published content and replace the Google Sheets content.
+        # Non-cutover domains continue to use Google Sheets unchanged.
+        _cutover_domains = {
+            "callers": ("callers", "donors_new", "donors_existing", "donors_increase"),
+            "discord_posts": ("discord_templates",),
+        }
+        for supabase_domain, content_keys_affected in _cutover_domains.items():
+            if _is_content_domain_cutover(supabase_domain):
+                logger.info("[CONTENT] Domain '%s' is cut over to Supabase, fetching published content.", supabase_domain)
+                pub_result = await asyncio.to_thread(
+                    _fetch_published_content_with_cache, supabase_domain
+                )
+                if pub_result and pub_result.get("ok") and pub_result.get("content"):
+                    published = pub_result["content"]
+                    if supabase_domain == "callers":
+                        # Parse published callers into the normalized format
+                        callers_content = _normalize_callers_from_published(published)
+                        for ck, cv in callers_content.items():
+                            if cv:
+                                sheet_content[ck] = cv
+                    elif supabase_domain == "discord_posts":
+                        # Parse published discord posts into the normalized format
+                        discord_content = _normalize_discord_from_published(published)
+                        if discord_content:
+                            sheet_content["discord_templates"] = discord_content
+                    _content_source_status.setdefault(supabase_domain, {})
+                    _content_source_status[supabase_domain] = {
+                        "source": "supabase_published",
+                        "count": len(published),
+                        "ok": True,
+                        "detail": f"version {pub_result.get('version_id', '?')} via {pub_result.get('source', 'remote')}",
+                        "background_status": "completed",
+                        "background_loading": False,
+                    }
+                else:
+                    logger.warning("[CONTENT] Supabase published content unavailable for %s, keeping Sheets content.", supabase_domain)
 
         # Merge sheet content
         for key, value in (sheet_content or {}).items():
@@ -15496,6 +15760,119 @@ async def post_sam_admin_installations_revoke(payload: dict, request: Request):
     if caller_auth_uid:
         rpc_body["p_caller_auth_uid"] = caller_auth_uid
     result = await asyncio.to_thread(_supabase_anon_rpc, "revoke_sam_installation", rpc_body, auth_jwt)
+    return result
+
+
+# ─── SAM Content Management Admin Endpoints ───────────────────────────────────
+
+def _extract_sam_jwt(request: Request, payload: dict = None):
+    """Extract SAM admin JWT from request. Does NOT accept client-supplied identity."""
+    auth_header = request.headers.get("Authorization", "").strip()
+    auth_jwt = auth_header[7:].strip() if auth_header.startswith("Bearer ") else ""
+    if not auth_jwt and (payload or {}).get("access_token"):
+        auth_jwt = str(payload.get("access_token")).strip()
+    return auth_jwt
+
+
+@api_router.post("/sam/admin/content/state")
+@app.post("/sam/admin/content/state")
+async def post_sam_admin_content_state(payload: dict, request: Request):
+    """Get draft items, current publication, and version history for a content domain."""
+    auth_jwt = _extract_sam_jwt(request, payload)
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    domain = str((payload or {}).get("domain") or "").strip().lower()
+    if domain not in ("callers", "discord_posts"):
+        return {"ok": False, "error": "Supported domains: callers, discord_posts."}
+    result = await asyncio.to_thread(_supabase_anon_rpc, "get_content_management_state", {"p_domain": domain}, auth_jwt)
+    return result
+
+
+@api_router.post("/sam/admin/content/save-item")
+@app.post("/sam/admin/content/save-item")
+async def post_sam_admin_content_save_item(payload: dict, request: Request):
+    """Save a single draft item with optimistic concurrency."""
+    auth_jwt = _extract_sam_jwt(request, payload)
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    domain = str((payload or {}).get("domain") or "").strip().lower()
+    if domain not in ("callers", "discord_posts"):
+        return {"ok": False, "error": "Supported domains: callers, discord_posts."}
+    rpc_body = {
+        "p_domain": domain,
+        "p_item_data": (payload or {}).get("item_data") or {},
+    }
+    item_id = (payload or {}).get("item_id")
+    if item_id:
+        rpc_body["p_item_id"] = str(item_id).strip()
+    expected = (payload or {}).get("expected_updated_at")
+    if expected:
+        rpc_body["p_expected_updated_at"] = str(expected).strip()
+    result = await asyncio.to_thread(_supabase_anon_rpc, "save_content_item", rpc_body, auth_jwt)
+    return result
+
+
+@api_router.post("/sam/admin/content/deactivate-item")
+@app.post("/sam/admin/content/deactivate-item")
+async def post_sam_admin_content_deactivate_item(payload: dict, request: Request):
+    """Explicitly deactivate a single item."""
+    auth_jwt = _extract_sam_jwt(request, payload)
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    domain = str((payload or {}).get("domain") or "").strip().lower()
+    item_id = str((payload or {}).get("item_id") or "").strip()
+    if not item_id:
+        return {"ok": False, "error": "Item ID is required."}
+    rpc_body = {"p_domain": domain, "p_item_id": item_id}
+    expected = (payload or {}).get("expected_updated_at")
+    if expected:
+        rpc_body["p_expected_updated_at"] = str(expected).strip()
+    result = await asyncio.to_thread(_supabase_anon_rpc, "deactivate_content_item", rpc_body, auth_jwt)
+    return result
+
+
+@api_router.post("/sam/admin/content/publish")
+@app.post("/sam/admin/content/publish")
+async def post_sam_admin_content_publish(payload: dict, request: Request):
+    """Publish the current working draft for a domain."""
+    auth_jwt = _extract_sam_jwt(request, payload)
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    domain = str((payload or {}).get("domain") or "").strip().lower()
+    if domain not in ("callers", "discord_posts"):
+        return {"ok": False, "error": "Supported domains: callers, discord_posts."}
+    rpc_body = {
+        "p_domain": domain,
+        "p_notes": str((payload or {}).get("notes") or "").strip(),
+    }
+    expected_version = (payload or {}).get("expected_current_version")
+    if expected_version:
+        rpc_body["p_expected_current_version"] = str(expected_version).strip()
+    result = await asyncio.to_thread(_supabase_anon_rpc, "publish_content_domain", rpc_body, auth_jwt)
+    return result
+
+
+@api_router.post("/sam/admin/content/restore")
+@app.post("/sam/admin/content/restore")
+async def post_sam_admin_content_restore(payload: dict, request: Request):
+    """Restore a historical publication version."""
+    auth_jwt = _extract_sam_jwt(request, payload)
+    if not auth_jwt:
+        return {"ok": False, "error": "Unauthorized"}
+    domain = str((payload or {}).get("domain") or "").strip().lower()
+    version_id = str((payload or {}).get("version_id") or "").strip()
+    if not version_id:
+        return {"ok": False, "error": "Version ID is required."}
+    rpc_body = {
+        "p_domain": domain,
+        "p_version_id": version_id,
+        "p_notes": str((payload or {}).get("notes") or "").strip(),
+        "p_also_restore_draft": bool((payload or {}).get("also_restore_draft")),
+    }
+    expected_version = (payload or {}).get("expected_current_version")
+    if expected_version:
+        rpc_body["p_expected_current_version"] = str(expected_version).strip()
+    result = await asyncio.to_thread(_supabase_anon_rpc, "restore_published_content_version", rpc_body, auth_jwt)
     return result
 
 

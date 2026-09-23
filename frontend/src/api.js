@@ -226,6 +226,34 @@ const api = {
   getPendingOverrides: () => request('GET', '/shared/admin/overrides/pending', null, 15000),
   decideAdditionalAttemptOverride: (payload) => request('POST', '/shared/admin/overrides/decide', payload, 15000),
   resolveOfflineOverrideConflict: (payload) => request('POST', '/shared/admin/overrides/resolve-conflict', payload, 15000),
+  getContentManagementState: (domain, accessToken = null) => request('POST', '/sam/admin/content/state', { domain, access_token: accessToken }, 15000),
+  saveContentManagementItem: (domain, itemData, itemId = null, expectedUpdatedAt = null, accessToken = null) => request('POST', '/sam/admin/content/save-item', {
+    domain,
+    item_data: itemData,
+    ...(itemId ? { item_id: itemId } : {}),
+    ...(expectedUpdatedAt ? { expected_updated_at: expectedUpdatedAt } : {}),
+    ...(accessToken ? { access_token: accessToken } : {}),
+  }, 15000),
+  deactivateContentManagementItem: (domain, itemId, expectedUpdatedAt = null, accessToken = null) => request('POST', '/sam/admin/content/deactivate-item', {
+    domain,
+    item_id: itemId,
+    ...(expectedUpdatedAt ? { expected_updated_at: expectedUpdatedAt } : {}),
+    ...(accessToken ? { access_token: accessToken } : {}),
+  }, 15000),
+  publishContentManagementDomain: (domain, notes = '', expectedCurrentVersion = null, accessToken = null) => request('POST', '/sam/admin/content/publish', {
+    domain,
+    notes,
+    ...(expectedCurrentVersion ? { expected_current_version: expectedCurrentVersion } : {}),
+    ...(accessToken ? { access_token: accessToken } : {}),
+  }, 15000),
+  restoreContentManagementVersion: (domain, versionId, notes = '', alsoRestoreDraft = false, expectedCurrentVersion = null, accessToken = null) => request('POST', '/sam/admin/content/restore', {
+    domain,
+    version_id: versionId,
+    notes,
+    also_restore_draft: alsoRestoreDraft,
+    ...(expectedCurrentVersion ? { expected_current_version: expectedCurrentVersion } : {}),
+    ...(accessToken ? { access_token: accessToken } : {}),
+  }, 15000),
 };
 
 export default api;

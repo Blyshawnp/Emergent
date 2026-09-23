@@ -56,6 +56,9 @@ RESOURCE_TABLES = {
     "gemini-fail-prompt": "ai_prompt_config",
     "ai_prompts": "ai_prompt_config",
     "ai_prompt_config": "ai_prompt_config",
+    "discord_posts": "discord_post_library",
+    "discord_post_library": "discord_post_library",
+    "content_publications": "content_publications",
 }
 
 

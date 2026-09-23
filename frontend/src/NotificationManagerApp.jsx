@@ -48,6 +48,7 @@ import {
 import PendingRequestAlert from './components/PendingRequestAlert';
 import AdditionalAttemptReviewModal from './components/AdditionalAttemptReviewModal';
 import PostSetupQuickStart from './components/PostSetupQuickStart';
+import ContentManagementApp from './components/ContentManagementApp';
 import { TutorialVideoLibrary } from './components/TutorialVideoPlayer';
 import { normalizeTutorialVideos } from './utils/tutorialVideos';
 import { createSamSnapshotCoordinator } from './utils/samSnapshotCoordinator';
@@ -2441,6 +2442,7 @@ const SECTION_NAV_ITEMS = [
   { key: 'candidates', label: 'Candidate Tracking', target: 'sam-candidate-tracking', candidateView: 'allActive', tone: 'candidates' },
   { key: 'candidates', label: 'Pending Sup Transfers', target: 'sam-candidate-tracking', candidateView: 'pending', tone: 'pending' },
   { key: 'requests', label: 'Pending Requests', target: 'sam-pending-requests', tone: 'pending' },
+  { key: 'content', label: 'Content Management', target: 'sam-content-management', tone: 'content' },
   { key: 'help', label: 'Help', target: 'sam-help', tone: 'help' },
 ];
 
@@ -6562,6 +6564,12 @@ export default function NotificationManagerApp() {
             onOpenHeadsets={() => setActiveSection('headsets')}
             onReviewOverride={(override) => setActiveOverrideReview(override)}
             actor={samSetupStatus.userName || samSetupStatus.userRole || 'SAM'}
+          />
+        ) : null}
+        {activeSection === 'content' ? (
+          <ContentManagementApp
+            accessToken={samSetupStatus?.session?.access_token || ''}
+            onError={(msg) => setSheetState((current) => ({ ...current, statusKind: 'error', statusMessage: msg }))}
           />
         ) : null}
 
