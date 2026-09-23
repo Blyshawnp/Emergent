@@ -10,14 +10,21 @@ const isElectronNotificationManager =
   Boolean(window.electronAPI?.isNotificationManager?.());
 
 // Deep Slate redesign / preview support:
-// In the packaged Electron apps the renderer is selected via electronAPI or the
-// URL hash/query. When running SAM in a plain browser preview (e.g. Emergent),
-// REACT_APP_DEFAULT_APP=sam forces the SAM renderer so reviewers see SAM by
-// default. This flag is opt-in via env only and never affects production builds
-// (where it is unset), so MTS remains the default there.
+// In the packaged Electron apps the renderer is selected via electronAPI (SAM vs
+// MTS) or the URL hash/query. When running SAM in a plain browser preview (e.g.
+// Emergent), REACT_APP_DEFAULT_APP=sam forces the SAM renderer so reviewers see
+// SAM by default.
+//
+// SAFETY: this force is gated on NOT running inside Electron. Even if the env var
+// were ever present in a packaged build, Electron always exposes window.electronAPI,
+// so the flag is ignored there and each Electron app keeps its own selection. The
+// flag therefore only affects a plain browser preview and can never change MTS
+// production behavior.
+const runningInElectron = Boolean(window.electronAPI);
 const forcedDefaultApp = String(process.env.REACT_APP_DEFAULT_APP || '').trim().toLowerCase();
 const forceNotificationManager =
-  forcedDefaultApp === 'sam' || forcedDefaultApp === 'notification-manager';
+  !runningInElectron &&
+  (forcedDefaultApp === 'sam' || forcedDefaultApp === 'notification-manager');
 
 const isNotificationManager =
   isElectronNotificationManager ||
