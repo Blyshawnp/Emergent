@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 
 class MockTestingSuiteAPITester:
-    def __init__(self, base_url="https://sam-slate-dashboard.preview.emergentagent.com/api"):
+    def __init__(self, base_url="https://operations-center-ui.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
@@ -208,7 +208,7 @@ def main():
     print("=" * 60)
     
     import sys
-    url = sys.argv[1] if len(sys.argv) > 1 else "https://sam-slate-dashboard.preview.emergentagent.com/api"
+    url = sys.argv[1] if len(sys.argv) > 1 else "https://operations-center-ui.preview.emergentagent.com/api"
     tester = MockTestingSuiteAPITester(base_url=url)
     
     # Test all required endpoints
