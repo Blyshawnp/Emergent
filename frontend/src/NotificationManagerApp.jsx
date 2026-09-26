@@ -2508,7 +2508,18 @@ function SamSidebar({ activeSection, candidateView, headsetTab, counts = {}, app
     <aside className="sam-sidebar" aria-label="SAM navigation">
       <div className="sam-sidebar-brand">
         <div className="sam-brand-mark" aria-hidden="true">
-          {samBannerSrc ? <img src={samBannerSrc} alt="" /> : <span>SAM</span>}
+          {samBannerSrc ? (
+            <img
+              src={samBannerSrc}
+              alt=""
+              onError={(event) => {
+                event.currentTarget.style.display = 'none';
+                const fallback = event.currentTarget.nextElementSibling;
+                if (fallback) fallback.style.display = 'grid';
+              }}
+            />
+          ) : null}
+          <span className="sam-brand-fallback" style={{ display: samBannerSrc ? 'none' : 'grid' }}>SAM</span>
         </div>
         <div className="sam-brand-text">
           <strong>SAM</strong>
@@ -2578,7 +2589,7 @@ function samPriorityTone(category = '') {
   if (value.includes('headset')) return { label: 'High', tone: 'warn' };
   if (value.includes('override') || value.includes('additional') || value.includes('attempt')) return { label: 'Medium', tone: 'pending' };
   if (value.includes('deletion')) return { label: 'Medium', tone: 'pending' };
-  return { label: 'Review', tone: 'info' };
+  return { label: 'Normal', tone: 'info' };
 }
 
 function SamDashboard({ candidateTracking, pendingRequests, headsetReviews, items, onOpenCandidates, onOpenPendingCandidates, onOpenHeadsets, onOpenRequests, onOpenNotifications, onReviewOverride }) {
